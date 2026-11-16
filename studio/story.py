@@ -32,7 +32,7 @@ CATEGORIES (only a corner BEYOND ITS ▼ STEP may be named — `CornerMatrix.is_
   * `two`      — the two worst ▼ corners together do;
   * `partial`  — a ▼ corner exists, but under that share: every ▼ corner is named, the rest "spread";
   * `spread`   — no corner beyond its ▼ step.
-No ▼ corner is dropped: beside the culprit(s), the others are `also` ("; also C6 ▼ +0.83 s", at most
+No ▼ corner is dropped: beside the culprit(s), the others are `also` ("; also C6 ▼ +0.82 s", at most
 ALSO_NAMED of them, then "+N more").
 STRAIGHTS ARE NEVER NAMED. A straight has no ▼ step today (the grid has corner columns only), so
 there is no honest noise gate to say "the time went on the straight after C4" — such a lap reads
@@ -87,10 +87,10 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from ._signal import fmt_signed, fmt_time, lap_label, plural
+from ._signal import fmt_time, lap_label, plural
 from .lap_race import ESTIMATED_CLOCK_TIE_S
 from .library import PB_PRECISION_S, within_timing_precision
-from .stats import MATRIX_DECIMALS, CornerMatrix
+from .stats import MATRIX_DECIMALS, CornerMatrix, fmt_pass_vs_typical, pass_vs_typical_s
 
 #: A lap is slow above its median clean lap by more than the larger of the clean laps' middle
 #: half (their IQR, the Stats page's "middle half · span") and this (s). A default picked on few
@@ -230,11 +230,9 @@ def slow_rule_text(median: float, iqr: float, margin: float) -> str:
 
 
 def _loss(matrix: CornerMatrix, row: int, col: int) -> float | None:
-    """The cell's gap to its typical pass at print resolution (`CornerMatrix.heat`'s reading)."""
-    val, med = matrix.cells[row][col], matrix.medians[col]
-    if val is None or med is None:
-        return None
-    return round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS)
+    """The cell's time against its corner's typical pass (`stats.pass_vs_typical_s`: the number
+    the Stats page and the report's CORNERS print for the same pass)."""
+    return pass_vs_typical_s(matrix.cells[row][col], matrix.medians[col])
 
 
 def _corner_loss(matrix: CornerMatrix, row: int, col: int) -> CornerLoss:
@@ -244,11 +242,11 @@ def _corner_loss(matrix: CornerMatrix, row: int, col: int) -> CornerLoss:
 
 
 def _pass(c: CornerLoss) -> str:
-    return f"C{c.cid} {fmt_signed(c.loss_s)} s"
+    return f"C{c.cid} {fmt_pass_vs_typical(c.loss_s)}"
 
 
 def _marked(c: CornerLoss) -> str:
-    return f"C{c.cid} {BEHIND_MARK} {fmt_signed(c.loss_s)} s"
+    return f"C{c.cid} {BEHIND_MARK} {fmt_pass_vs_typical(c.loss_s)}"
 
 
 def _also(rest: tuple[CornerLoss, ...]) -> str:
@@ -521,9 +519,9 @@ def moment_row(m: Moment) -> MomentRow:
             value += f" · {who} level ({span}, under {bound})"
         return MomentRow(_ROW_LABEL[BEST_LAP], value, jump, None)
     if m.kind == BIGGEST_LOSS:
-        value = (f"{_laps_text(m.lap_ids)} · C{m.cid} {fmt_signed(m.value)} s over your typical "
-                 f"pass ({BEHIND_MARK})" + "".join(
-                     f" · ≈ Lap {lap_label(t.lap_ids[0])} C{t.cid} {fmt_signed(t.value)} s"
+        value = (f"{_laps_text(m.lap_ids)} · C{m.cid} {fmt_pass_vs_typical(m.value)} over your "
+                 f"typical pass ({BEHIND_MARK})" + "".join(
+                     f" · ≈ Lap {lap_label(t.lap_ids[0])} C{t.cid} {fmt_pass_vs_typical(t.value)}"
                      for t in m.tie))
         return MomentRow(_ROW_LABEL[BIGGEST_LOSS], value, jump, m.cid)
     # It is the 5-lap MEDIANS that are level, never the laps: on the demo laps 8–14 spread 0.83 s

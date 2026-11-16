@@ -39,7 +39,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 import numpy as np
 
@@ -488,6 +488,66 @@ def corner_mark_rule(*, hover: bool = True) -> str:
         "to work on (time lost against your best lap), so the two need not agree.")
 
 
+@overload
+def printed_gap_s(a: float, b: float) -> float: ...
+@overload
+def printed_gap_s(a: float | None, b: float | None) -> float | None: ...
+def printed_gap_s(a: float | None, b: float | None) -> float | None:
+    """`a` − `b` AS PRINTED: each side rounded to `MATRIX_DECIMALS` first, then the difference
+    (rounded again only to shed float dust); None when either side is missing. The number a reader
+    gets by subtracting the two figures the page shows beside it, and the only way a surface that
+    prints both sides may print their gap."""
+    if a is None or b is None:
+        return None
+    return round(round(float(a), MATRIX_DECIMALS) - round(float(b), MATRIX_DECIMALS),
+                 MATRIX_DECIMALS)
+
+
+@overload
+def pass_vs_typical_s(val: float, typical: float) -> float: ...
+@overload
+def pass_vs_typical_s(val: float | None, typical: float | None) -> float | None: ...
+def pass_vs_typical_s(val: float | None, typical: float | None) -> float | None:
+    """ONE PASS against its corner's (or sector's) typical pass, the median of the counted passes,
+    in seconds, signed (+ = slower): the PRINTED pass minus the PRINTED typical (`printed_gap_s`).
+    None when either side is missing.
+
+    The one function that takes this gap, for the ▼ decision (`_behind_at_print`), the heat shade,
+    and every surface that prints it: the slow-lap notes, MOMENTS, the σ hover's one-pass sentence
+    and the CORNERS BY LAP / SECTORS BY LAP hovers. Before, the slow-lap note rounded only the pass
+    and the hovers rounded only the difference: on the demo, lap 6 at C6 (3.6540 against a typical
+    2.8289) read "+0.82 s" in the Laps ▼ tooltip and "+0.83 s" on Stats, on one page. The hover
+    prints "[▼ 3.65] … against your typical C6 (2.83 s)", so the number a reader can check is
+    3.65 − 2.83 = 0.82. Subtracting first and rounding once disagreed with that check in 2,356 of
+    9,127 ▼ corners on a 4,000-session hundredth-edge sweep, and printed 5 of them below their own
+    ▼ step; this rule does neither (tests/test_story.py)."""
+    return printed_gap_s(val, typical)
+
+
+def fmt_pass_vs_typical(gap: float) -> str:
+    """`pass_vs_typical_s`'s printed form, "+0.82 s" — the one formatter every surface that prints
+    a pass's time against its corner's typical pass goes through."""
+    return fmt_signed(gap, MATRIX_DECIMALS, unit="s")
+
+
+def printed_med_loss(row) -> float | None:
+    """A CORNERS row's Med loss as its cell prints it: the printed Median minus the printed Best,
+    the two cells beside it (`printed_gap_s`). The demo's C4 printed +0.07 beside 3.08 and 3.02.
+    Only the printed figure: the ◆ ranks on the unrounded `score`, which this does not touch."""
+    return printed_gap_s(getattr(row, "median_s", None), getattr(row, "best_s", None))
+
+
+def _worst_pass_gap(report) -> float:
+    """The one-pass sentence's gap: the printed pass minus the printed median (the CORNERS row's
+    Median cell), as every other surface prints this pass. The pass's time is taken back from the
+    row's own median + gap rather than stored as one more field (a field is a golden leaf): the
+    round trip moved no printed pass on 160,000 hundredth-edge cells."""
+    med, gap = getattr(report, "median_s", None), report.worst_pass_vs_median_s
+    if med is None:
+        return float(gap)
+    return pass_vs_typical_s(float(med) + float(gap), float(med))
+
+
 def corner_one_pass_note(report) -> str:
     """"" unless ONE pass carries most of a corner's σ (`CornerReport.one_pass_sigma`), which is
     why such a corner is not marked on σ's word; else the sentence naming that pass. The pass
@@ -497,7 +557,7 @@ def corner_one_pass_note(report) -> str:
     lap = getattr(report, "worst_pass_lap", None)
     name = "" if lap is None else f"L{lap_label(lap)}: "
     return (f"One pass carries most of this σ ({name}"
-            f"{fmt_signed(report.worst_pass_vs_median_s, unit='s')} against the median); "
+            f"{fmt_pass_vs_typical(_worst_pass_gap(report))} against the median); "
             f"without it σ would be {report.sigma_without_worst_s:.2f} s.")
 
 
@@ -508,7 +568,8 @@ def corner_count_note(report, *, page: bool = True) -> list[str]:
     in its laps table's corners_interpolated column instead."""
     shown = ("shown muted lap by lap" if page
              else "named lap by lap in the laps table's corners_interpolated column")
-    total = sum(r.median_loss_s for r in report if r.median_loss_s is not None)
+    # The sum of the Med loss cells AS PRINTED (`printed_med_loss`), so it adds up on the page.
+    total = sum(g for g in map(printed_med_loss, report) if g is not None)
     parts = [f"Med loss is measured against each corner's own Best above — the quickest "
              f"anyone went through it, which is usually not your best lap's corner. "
              f"Summed, that is {total:.2f} s."]
@@ -872,7 +933,7 @@ class CornerMatrix:
         scale = self.scales[col]
         if val is None or med is None or scale is None or not self.resolved[row][col]:
             return 0
-        gap = round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS)
+        gap = pass_vs_typical_s(val, med)
         level = sum(1 for f in MATRIX_HEAT_STEPS
                     if abs(gap) >= round(f * scale, MATRIX_DECIMALS))
         return level if gap > 0 else -level
@@ -1703,9 +1764,12 @@ def _typical_and_scale(values) -> tuple[float, float]:
 
 
 def _behind_at_print(val: float, med: float, scale: float) -> bool:
-    """The ▼ comparison, made on the values the reader is SHOWN (see SplitMatrix.is_behind)."""
-    return round(round(val, MATRIX_DECIMALS) - med, MATRIX_DECIMALS) >= round(scale,
-                                                                              MATRIX_DECIMALS)
+    """The ▼ comparison, made on the values the reader is SHOWN (see SplitMatrix.is_behind): the
+    printed cell minus the printed median (`pass_vs_typical_s`, the gap every hover and note prints
+    beside the ▼) against the printed step. The median is rounded too since #586: with it unrounded
+    a ▼ gap could print a hundredth below its own step (5 of 9,127 ▼ on the hundredth-edge sweep).
+    Measured: the marks move on 3 of 144,400 sweep cells and on no demo cell."""
+    return pass_vs_typical_s(val, med) >= round(scale, MATRIX_DECIMALS)
 
 
 def corner_matrix(lap_ids, cids, times_by_lap, resolved_by_lap) -> CornerMatrix | None:

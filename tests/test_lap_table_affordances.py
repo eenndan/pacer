@@ -1117,6 +1117,61 @@ def test_a_click_on_next_leaves_the_keyboard_walking_laps_from_the_row_it_found(
     print("test_a_click_on_next_leaves_the_keyboard_walking_laps_from_the_row_it_found OK")
 
 
+def test_a_key_move_after_next_takes_the_outline_off_the_old_row():
+    """QA w5: with motion off (headless, View ▸ Reduce motion), "next ›" outlined Lap 6 and ↓
+    selected Lap 7 while Lap 6 kept its outline — two rows marked, only a scroll or a press on the
+    grid cleared it. Any move of the current row or the selection ends it now, with motion off
+    (the static outline) and on (mid-fade), checked on the grid's own pixels; a pick made from
+    elsewhere (`select`, the charts' path) ends it too."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    lt.activateWindow()
+    _settle()
+    lt.table.setFocus()
+    saved = (os.environ.get("PACER_MOTION"), LT.motion._reduce_pref, LT.motion._system_reduce)
+    now = [100.0]
+    LT.motion.set_clock(lambda: now[0])
+    try:
+        for on in (False, True):
+            os.environ["PACER_MOTION"] = "1" if on else "0"
+            LT.motion._reduce_pref, LT.motion._system_reduce = None, False
+            assert LT.motion.enabled() is on
+            for move in ("down", "select"):
+                lt._slow_finder_next.click()
+                _settle()
+                landed = lt._row_for_lap(_SLOW)
+                assert lt._landed.row == landed and lt._landed.isVisible(), (on, move)
+                if on:
+                    now[0] += LT.motion.FINDER_OUTLINE_MS / 4000   # a quarter into the fade
+                    LT.motion.pump()
+                    assert 0.0 < lt._landed.strength < 1.0, lt._landed.strength
+                else:
+                    assert _outline_ink(lt) > 100, (on, move)
+                if move == "down":
+                    QTest.keyClick(lt.table, Qt.Key_Down)
+                    _settle()
+                    assert lt.table.currentRow() == landed + 1, (on, lt.table.currentRow())
+                else:
+                    lt.select([_SLOW + 2])
+                    _settle()
+                assert lt._landed.row == -1 and not lt._landed.isVisible(), (on, move)
+                assert lt._landed_tr is None and _outline_ink(lt) == 0, (on, move)
+                if on:
+                    assert LT.motion.active_count() == 0
+    finally:
+        LT.motion.finish_all()
+        LT.motion.set_clock(None)
+        if saved[0] is None:
+            os.environ.pop("PACER_MOTION", None)
+        else:
+            os.environ["PACER_MOTION"] = saved[0]
+        LT.motion._reduce_pref, LT.motion._system_reduce = saved[1], saved[2]
+    print("test_a_key_move_after_next_takes_the_outline_off_the_old_row OK")
+
+
 def test_the_finder_tooltip_carries_the_rows_trust_lines():
     """The footer speaks of the same laps the cue cells do, so it carries their trust lines, from
     the one source (`note_trust_lines`): the provisional line while the start line is unconfirmed,

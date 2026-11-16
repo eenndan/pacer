@@ -413,6 +413,65 @@ def test_the_action_notice_never_reaches_the_share_card():
     print("test_the_action_notice_never_reaches_the_share_card OK")
 
 
+def _accent_px(img, rect) -> int:
+    """Pixels inside `rect` (scene px) painted in the provisional cue's accent ink."""
+    from PySide6.QtCore import QRect
+    want = QColor(theme.C.accent)
+    box = rect.toAlignedRect().intersected(QRect(0, 0, img.width(), img.height()))
+    n = 0
+    for y in range(box.top(), box.bottom() + 1):
+        for x in range(box.left(), box.right() + 1):
+            c = img.pixelColor(x, y)
+            if (abs(c.red() - want.red()) + abs(c.green() - want.green())
+                    + abs(c.blue() - want.blue())) < 40:
+                n += 1
+    return n
+
+
+def test_the_report_map_drops_the_drag_instruction_and_the_keys_for_what_it_hides():
+    """QA w5: an exported report on a PROVISIONAL session carried the map's "drag to set
+    start/finish · lap timing provisional" caption and its dashed line — an instruction to drag, in
+    a document where nothing can be dragged — and its key still listed "Video position" for a
+    marker the grab hides. The report's own Timing row and stamps say "provisional"; the picture
+    no longer gives an order. Checked on the GRABBED IMAGE (the caption's accent ink in its own
+    box), on the scene items, and on the key rows the report grab paints; all restored after."""
+    from studio import app as app_mod
+    mv = _sized_map(_session(start_x=0.0))
+    label, line = mv._provisional_label, mv._provisional_line
+    assert label is not None and label.isVisible() and line.isVisible(), "no provisional cue"
+    box = label.sceneBoundingRect()
+    live = mv.widget.grab().toImage()
+    assert _accent_px(live, box) > 20, "the live caption is not where the test looks for it"
+    seen = {}
+
+    def grab_png(widget):
+        assert widget is mv
+        seen["img"] = mv.widget.grab().toImage()    # the canvas, in the scene's own px
+        seen["items"] = (label.isVisible(), line.isVisible())
+        seen["rows"] = [kind for kind, _label in mv._map_key._ROWS]
+        seen["key"] = not mv._map_key.isHidden()
+        return b"\x89PNG"
+    owner = SimpleNamespace(exports=SimpleNamespace(grab_png=grab_png))
+    assert app_mod.StudioWindow._grab_report_map_png(owner, mv) == b"\x89PNG"
+    assert seen["items"] == (False, False), f"the cue reached the report: {seen['items']}"
+    ink = _accent_px(seen["img"], box)
+    assert ink == 0, f"{ink} px of the provisional caption's ink in the report's map"
+    assert seen["key"], "the report lost its map key"
+    assert "marker" not in seen["rows"] and "start" not in seen["rows"], seen["rows"]
+    assert "corner" in seen["rows"], seen["rows"]
+    # This stub session draws no brake glyph, so the key does not promise one.
+    assert not mv._map_key.brake_glyphs and "brake" not in seen["rows"], seen["rows"]
+    # ...and with brake glyphs on the map, their row stays.
+    mv._map_key.brake_glyphs = [("t", "#ffffff", "#000000")]
+    app_mod.StudioWindow._grab_report_map_png(owner, mv)
+    assert "brake" in seen["rows"], seen["rows"]
+    # The live map is untouched: the cue, its line and the key's own rows are back.
+    assert label.isVisible() and line.isVisible()
+    assert "_ROWS" not in mv._map_key.__dict__ and len(mv._map_key._ROWS) == 4
+    print(f"test_the_report_map_drops_the_drag_instruction_and_the_keys_for_what_it_hides OK "
+          f"(live caption {_accent_px(live, box)} px of ink, report 0)")
+
+
 # --------------------------------------------------------------- MAP-11: even sectors
 def test_three_add_sector_clicks_divide_the_lap_evenly():
     """MAP-11. Appending one line at a time can only bisect what is LEFT, so three clicks gave
