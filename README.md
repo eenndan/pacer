@@ -98,7 +98,11 @@ official timing measures the noise floor.
 
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**
-  (correlation alone cannot catch a mis-scaled channel).
+  (correlation alone cannot catch a mis-scaled channel). PACE puts the middle half of your laps
+  beside σ, and **MOMENTS** names the best lap, the biggest single-corner loss and the best 5-lap
+  run, each a Jump, with figures inside the timing precision named as level.
+
+<img src="docs/media/moments.png" width="734" alt="Stats ▸ PACE and MOMENTS on the synthetic demo: best lap 0:44.950, median 0:45.626 over 14 clean laps, race pace · best 3-lap mean 0:45.246, σ lap 1.54 s with its middle half spanning 0.59 s, the lap-time sparkline, and three moments, each with a Jump: best lap, Lap 13 · 0:44.950; biggest single-corner loss, Lap 6 · C5 +2.84 s over your typical pass; best 5-lap run, Laps 9–13 · median 0:45.182, every 5-lap median in Laps 8–14 level within 0.07 s">
 
 <img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of the 69 laps found used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag and 26.2 ppm of clock drift, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check that agrees, the g-meter's cornering force matching the GPS path's within 9 %, and a gyroscope rotation cross-check that agrees within 2.7 % over 62 closed laps — above the friction circle, with a 1.50 g grip envelope">
 
