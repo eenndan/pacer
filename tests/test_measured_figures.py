@@ -2862,6 +2862,14 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
     for label, g in (("laps with the habit", b["habit_groups"]["habit"]),
                      ("laps without it", b["habit_groups"]["clean"])):
         row(29, label, [g["n"], g["median_m"], g["iqr_m"]], label, 1)
+    # The split must be the laps the habit really slowed. The habit costs each of its laps ~0.4 s at
+    # its corner, so every habit lap's time through it is above every spared lap's. A 1-based
+    # `clean_laps` read as 0-based ids once moved four laps between the groups and passed every row
+    # above; this is the check that catches it.
+    hg, cg = b["habit_groups"]["habit"], b["habit_groups"]["clean"]
+    if not hg["corner_s"][0] > cg["corner_s"][1]:
+        probs.append(f"§29: the habit group's C{b['habit_cid']} times {hg['corner_s']} s overlap the spared "
+                     f"laps' {cg['corner_s']} s: the split is not the generator's habit")
     if (hit := find(29, r"the recording's fix interval, (\d\.\d+) s", "the fix interval")):
         near(29, "the fix interval", hit[0], b["fix_s"], 1)
     size = _constant(_STORY_PROBE, "MAP_SIZE")
@@ -2882,10 +2890,16 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
         if b["clear"] != [int(hit[0])] or b["habit_cid"] != int(hit[0]):
             probs.append(f"§29: C{hit[0]} clears one fix, the probe: {b['clear']} (habit C{b['habit_cid']})")
     habit_fix = next(z["fix_m"] for z in zones if z["cid"] == b["habit_cid"])
-    if "two groups that each wander more than one fix" in flat[29] and not all(
-            g["iqr_m"] > habit_fix for g in b["habit_groups"].values()):
-        probs.append(f"§29 says each group wanders more than one fix ({habit_fix} m): {b['habit_groups']}")
     gap = b["habit_groups"]["clean"]["median_m"] - b["habit_groups"]["habit"]["median_m"]
+    habit_iqr = next(z["iqr_m"] for z in zones if z["cid"] == b["habit_cid"])
+    # "About one fix": each group's spread within half a fix of it. "Mostly the gap": the gap
+    # between the groups' medians is over half of the band.
+    if (hit := find(29, r"two groups that each spread\s+about one fix, so the band is mostly the gap between them",
+                    "the two groups")) is not None and not (
+            all(abs(g["iqr_m"] - habit_fix) <= habit_fix / 2 for g in b["habit_groups"].values())
+            and gap > habit_iqr / 2):
+        probs.append(f"§29 says each group spreads about one fix ({habit_fix} m) and the band ({habit_iqr} m) "
+                     f"is mostly the gap ({gap:.1f} m): {b['habit_groups']}")
     if (hit := find(29, r"the habit laps brake about (\d+) m before the clean ones", "the habit's gap")):
         if int(hit[0]) != round(gap):
             probs.append(f"§29: the habit laps brake {hit[0]} m before, the probe: {gap:.1f} m")

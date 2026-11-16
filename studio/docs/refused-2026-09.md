@@ -2227,13 +2227,14 @@ The map is the real window's, pinned at 480 × 480 as in §28, where a metre is 
 
 | C1, the planted habit's corner, split by the generator's truth | laps | median onset | middle-half spread |
 |---|---|---|---|
-| laps with the habit | 8 | 89.8 m | 3.8 m |
-| laps without it | 6 | 94.0 m | 3.3 m |
+| laps with the habit | 8 | 89.8 m | 2.9 m |
+| laps without it | 6 | 95.1 m | 2.1 m |
 
 **Six bands would not be drawn, and the seventh mixes two groups.** At six of the seven zones the
 spread is inside one fix. The one that clears it is C1, the corner of the demo's planted habit
-(`make_demo.DEMO_HABIT`): its band would be 6.7 px long, and it mixes two groups that each wander
-more than one fix. Split by the truth, the habit laps brake about 4 m before the clean ones. The
+(`make_demo.DEMO_HABIT`): its band would be 6.7 px long, and it mixes two groups that each spread
+about one fix, so the band is mostly the gap between them. Split by the truth, the habit laps brake
+about 5 m before the clean ones. The
 finding itself is already on C1's Coaching row as a measured "brake later" (ρ −0.81, Holm p 0.003),
 and BRAKING gives its σ 3.9 m and span 13.3 m; BRAKING already reads a σ at or under one fix's
 quantisation (`driving.ONSET_QUANT_M`, 1.5 m) as the receiver's, not the driver's. The design pass
