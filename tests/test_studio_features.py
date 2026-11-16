@@ -231,8 +231,9 @@ class _FakeLapSession:
         return set()
 
 
-def test_laps_page_is_grid_plus_excluded_strip_only():
-    """The Laps page carries the lap grid and the excluded strip — nothing else.
+def test_laps_page_is_grid_finder_and_excluded_strip_only():
+    """The Laps page carries the lap grid, the slow-lap finder (hidden without a ▼ cue row) and
+    the excluded strip — nothing else.
 
     It used to end in a SESSION-BESTS footer (theoretical best / best rolling) that cost the grid
     63px — two lap rows — on every recording, with no collapse and no View toggle. Both numbers now
@@ -260,7 +261,7 @@ def test_laps_page_is_grid_plus_excluded_strip_only():
     assert table._best_split == sess.session_best_splits()
     # And the fake's numbers respect the sandwich the real session guarantees.
     assert sess.theoretical_best() <= sess.best_rolling_lap() <= 68.4
-    print("test_laps_page_is_grid_plus_excluded_strip_only OK")
+    print("test_laps_page_is_grid_finder_and_excluded_strip_only OK")
 
 
 # ------------------------------------- L3: multi-select cap (no silent chart truncation)

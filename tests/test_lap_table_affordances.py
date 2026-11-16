@@ -869,14 +869,16 @@ def test_the_finder_counts_the_cue_rows_and_hides_without_one():
     tip = lt._slow_finder_next.toolTip()
     assert tip.endswith(f"\n\n{note.rule}") and "Not counted" not in tip, tip
     assert lt._slow_finder_label.toolTip() == tip
-    many = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s, uncued=(4, 7)))))
+    # Notes for laps no row holds (99, 98) count for nothing: the count is the walk's own rows.
+    many = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(
+        s, cued=(0, 1, 2, 5, 99), uncued=(4, 7, 98)))))
     many.show()
     _settle()
     assert many._slow_finder_label.text() == "4 slow laps marked ▼", many._slow_finder_label.text()
-    assert "Not counted: 2 other slow laps, whose time no single corner holds; they have no cue" \
+    assert "Not counted: 2 other slow laps, whose time no one or two corners hold; they have no cue" \
         in many._slow_finder_next.toolTip(), many._slow_finder_next.toolTip()
     one_left = LT.slow_finder_tip(note.rule, 1)
-    assert "Not counted: 1 other slow lap, whose time no single corner holds; it has no cue" \
+    assert "Not counted: 1 other slow lap, whose time no one or two corners hold; it has no cue" \
         in one_left, one_left
     # Cueless slow laps alone: nothing to land on, no footer.
     spread = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s, cued=(), uncued=(4,)))))
@@ -983,6 +985,164 @@ def test_the_finder_is_a_named_tab_stop_that_fits_a_narrow_panel():
     assert btn.width() >= btn.sizeHint().width(), (btn.width(), btn.sizeHint())
     print(f"test_the_finder_is_a_named_tab_stop_that_fits_a_narrow_panel OK "
           f"(footer {lt._slow_finder.height()} px, label {lab.width()}/{need} px)")
+
+
+def _outline_ink(lt) -> int:
+    """Pixels of the landed row's top edge painted in the outline's ink (C.text), off a grab."""
+    rect = lt._landed.row_rect()
+    if rect.isEmpty():
+        return 0
+    img = _rgb(lt.table.viewport())
+    want = np.array(QColor(theme.C.text).getRgb()[:3][::-1])   # _rgb's planes are B, G, R
+    band = img[rect.top():rect.top() + theme.FOCUS_RING_PX, :]
+    return int((np.abs(band.astype(int) - want).sum(axis=2) < 12).sum())
+
+
+def test_next_outlines_the_row_it_found_even_when_nothing_scrolls():
+    """The shipped demo: every row fits, so the scroll is a no-op and "next ›" used to do nothing
+    visible. It now outlines Lap 6's row (the overlay, in C.text, on the row's own pixels) and
+    selects nothing. Motion is off offscreen, so the outline is the static one, and it holds until
+    the reader moves: a scroll, a press on the grid, a sort or a refresh each clear it."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    assert lt.table.verticalScrollBar().maximum() == 0, "the demo grid no longer fits: retarget"
+    picked = []
+    lt.laps_selected.connect(picked.append)
+    sel = lt.selected_lap_ids()
+    assert _outline_ink(lt) == 0
+    lt._slow_finder_next.click()
+    _settle()
+    assert lt._landed.isVisible() and lt._landed.row == lt._row_for_lap(_SLOW), lt._landed.row
+    ink = _outline_ink(lt)
+    assert ink > 100, f"{ink} px of outline on the landed row"
+    assert lt.selected_lap_ids() == sel and picked == [], (lt.selected_lap_ids(), picked)
+    for clear in ("refresh", "press", "sort"):
+        lt._slow_finder_next.click()
+        _settle()
+        assert lt._landed.isVisible(), clear
+        if clear == "refresh":
+            lt.refresh()
+        elif clear == "press":
+            QTest.mousePress(lt.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(5, 5))
+            QTest.mouseRelease(lt.table.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(5, 5))
+        else:
+            lt.table.sortByColumn(_TIME_COL, Qt.DescendingOrder)
+        _settle()
+        assert not lt._landed.isVisible() and _outline_ink(lt) == 0, clear
+    # ...and a scroll the reader makes, on a grid that can scroll.
+    tall = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s))))
+    tall.resize(460, 230)
+    tall.show()
+    _settle()
+    tall._slow_finder_next.click()
+    _settle()
+    assert tall._landed.isVisible(), "the finder's own scroll cleared its outline"
+    bar = tall.table.verticalScrollBar()
+    bar.setValue(bar.maximum() if bar.value() != bar.maximum() else 0)
+    _settle()
+    assert not tall._landed.isVisible()
+    print(f"test_next_outlines_the_row_it_found_even_when_nothing_scrolls OK ({ink} px of outline)")
+
+
+def test_with_motion_on_the_outline_fades_and_ends():
+    """PACER_MOTION=1 on a fake clock: the outline starts at full strength, is part-way through its
+    fade mid-transition, and is gone at FINDER_OUTLINE_MS, with no transition left running."""
+    s = _demo()
+    lt = _keep(LT.LapTable(s))
+    lt.resize(460, 600)
+    lt.show()
+    _settle()
+    saved = (os.environ.get("PACER_MOTION"), LT.motion._reduce_pref, LT.motion._system_reduce)
+    now = [100.0]
+    LT.motion.set_clock(lambda: now[0])
+    os.environ["PACER_MOTION"] = "1"
+    LT.motion._reduce_pref, LT.motion._system_reduce = None, False
+    try:
+        assert LT.motion.enabled()
+        lt._slow_finder_next.click()
+        assert lt._landed.isVisible() and lt._landed.strength == 1.0
+        now[0] += LT.motion.FINDER_OUTLINE_MS / 2000
+        LT.motion.pump()
+        assert 0.0 < lt._landed.strength < 1.0, lt._landed.strength
+        now[0] += LT.motion.FINDER_OUTLINE_MS / 1000
+        LT.motion.pump()
+        assert not lt._landed.isVisible() and lt._landed_tr is None
+        assert LT.motion.active_count() == 0
+    finally:
+        LT.motion.finish_all()
+        LT.motion.set_clock(None)
+        if saved[0] is None:
+            os.environ.pop("PACER_MOTION", None)
+        else:
+            os.environ["PACER_MOTION"] = saved[0]
+        LT.motion._reduce_pref, LT.motion._system_reduce = saved[1], saved[2]
+    print("test_with_motion_on_the_outline_fades_and_ends OK")
+
+
+def test_a_click_on_next_leaves_the_keyboard_walking_laps_from_the_row_it_found():
+    """"next ›" is a TAB stop, not a click-focus one: a mouse click leaves the focus on the grid,
+    and the grid's CURRENT index (not its selection) is now the landed row, so ↓ picks the lap
+    after it — the one keyboard pick the reader makes, from where the finder left them. The click
+    itself emits no selection."""
+    from PySide6.QtTest import QTest
+    s = _demo()
+    box = _keep(QWidget())
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lt = LT.LapTable(_Over(s, slow_lap_notes=lambda: _planted(s)))
+    lay.addWidget(lt)
+    box.resize(460, 230)
+    box.show()
+    box.activateWindow()
+    _settle()
+    last = lt._lap_id(lt.table.rowCount() - 1)
+    lt.select([last])
+    lt.table.setFocus()
+    _settle()
+    picked = []
+    lt.laps_selected.connect(picked.append)
+    btn = lt._slow_finder_next
+    QTest.mouseClick(btn, Qt.LeftButton, Qt.NoModifier, btn.rect().center())
+    _settle()
+    assert lt._finder_lap == 0 and picked == [], (lt._finder_lap, picked)
+    assert not btn.hasFocus() and lt.table.hasFocus(), _APP.focusWidget()
+    assert lt.table.currentRow() == lt._row_for_lap(0) and lt.selected_lap_ids() == [last]
+    QTest.keyClick(lt.table, Qt.Key_Down)
+    _settle()
+    assert lt.selected_lap_ids() == [1] and picked[-1:] == [[1]], (lt.selected_lap_ids(), picked)
+    print("test_a_click_on_next_leaves_the_keyboard_walking_laps_from_the_row_it_found OK")
+
+
+def test_the_finder_tooltip_carries_the_rows_trust_lines():
+    """The footer speaks of the same laps the cue cells do, so it carries their trust lines, from
+    the one source (`note_trust_lines`): the provisional line while the start line is unconfirmed,
+    the estimated-clock line when the notes say so — and neither on trusted timing."""
+    import dataclasses
+    s = _demo()
+    plain = _keep(LT.LapTable(s))
+    tip = plain._slow_finder_next.toolTip()
+    assert LT.PROVISIONAL_TOOLTIP not in tip, tip
+    est = LT.estimated_timing_tooltip(s.timing_quality)
+    assert est not in tip, tip
+    prov = [dataclasses.replace(n, caveat=("provisional",), gap_to_best_s=None)
+            for n in s.slow_lap_notes()]
+    lt = _keep(LT.LapTable(_Over(s, timing_verified=False, slow_lap_notes=lambda: prov)))
+    tip = lt._slow_finder_next.toolTip()
+    assert tip.endswith(f"\n\n{LT.PROVISIONAL_TOOLTIP}"), tip
+    assert tip == lt._slow_finder_label.toolTip()
+    r = lt._row_for_lap(_SLOW)
+    assert lt.table.item(r, 0).toolTip().endswith(LT.PROVISIONAL_TOOLTIP)
+    from studio import story
+    estd = [dataclasses.replace(n, caveat=(story.CAVEAT_ESTIMATED,)) for n in s.slow_lap_notes()]
+    lt2 = _keep(LT.LapTable(_Over(s, slow_lap_notes=lambda: estd)))
+    tip2 = lt2._slow_finder_next.toolTip()
+    assert tip2.endswith(f"\n\n{est}") and LT.PROVISIONAL_TOOLTIP not in tip2, tip2
+    assert lt2.table.item(lt2._row_for_lap(_SLOW), 0).toolTip().endswith(est)
+    print("test_the_finder_tooltip_carries_the_rows_trust_lines OK")
 
 
 class _NoRead:

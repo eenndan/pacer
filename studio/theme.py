@@ -2250,7 +2250,7 @@ QLabel#LapExcludedBody {{
 QLabel#LapExcludedHeader[tone="warn"] {{
     color: {C.accent};
 }}
-/* the slow-lap finder footer ("2 slow laps marked ▼ · next ›", lap_table._build_slow_finder): the
+/* the slow-lap finder footer ("2 slow laps marked ▼" … "next ›", lap_table._build_slow_finder): the
    excluded strip's hairline, and "next ›" as a flat text button at HIT_MIN, the PB toast link's
    shape in the table's own ink (it finds a row; it warns of nothing, so no amber). Focus takes
    the hover treatment: a flat button has no border to ring. */
