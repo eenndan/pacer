@@ -68,27 +68,10 @@ PHASE_COL_PX = 150   # the proportional bar's stable width (its segments are sha
 # hover for the full label. Keyed by the header TEXT so the dialog's six and the panel's four share
 # one definition and can't drift.
 _HEADER_ALIGN = {"Time lost": Qt.AlignRight, "Done it?": Qt.AlignRight}
-# VIEW-9 (QA 2026-09-25): on MK_18_09 C5 read +0.13 s lost beside "net −0.01 s" and C8 +0.06
-# beside +0.19, so the header says whose number it is. Since COACHING-2 the bars are medians over
-# the laps, not the typical lap's clock, and there is no net: a sum of three medians is no lap's.
-PHASE_HEADER = "Median Δt"
-_HEADER_TIPS = {
-    "Corner": "The corner's number in track order, with an arrow for its direction — "
-              "anticlockwise is a left-hander, clockwise a right.",
-    "Time lost": "Median time lost through this corner versus your own best lap's same corner, "
-                 "over your clean laps (seconds). A lap counts at a corner only where it was "
-                 "matched to your best lap's line on track at the corner's entry and exit.",
-    "Done it?": "How many of your clean laps already matched or beat your best lap's time "
-                "through this corner, out of the laps matched on track there. Many of them — "
-                "repeat what you have already driven. Few — this is pace you have not "
-                "established yet, and it needs something new.",
-    PHASE_HEADER: "Where in the corner your laps are faster/slower than your best lap: per third, "
-                  "the MEDIAN Δt over your clean laps matched on track there (seconds). Each third "
-                  "is its own median, so the three need not add up to the row's Time lost, and "
-                  "can differ from it in sign.",
-    "How to find it": "The dominant MEASURED reason this corner is losing time, with its numbers — "
-                      "plus the ESTIMATED brake-point line when one is available for the corner.",
-}
+# The phase column's header and every header's hover are `coaching`'s (PHASE_HEADER, COLUMN_TIPS):
+# the exported report prints the same words as its column notes.
+PHASE_HEADER = coaching.PHASE_HEADER
+_HEADER_TIPS = coaching.COLUMN_TIPS
 
 
 def _style_headers(table: QTableWidget, headers: list[str]):
@@ -139,59 +122,9 @@ def _elide_header(table: QTableWidget, col: int, label: str, chrome_px: int):
 # owns only how they are laid out, coloured and hovered.
 
 
-def _lap_account(session) -> tuple[int | None, int]:
-    """(valid laps, how many of them had a GPS dropout) off `session` — the two counts the lap
-    table itself shows — or (None, 0) for a caller with no session / a double with no lap account,
-    which keeps the count-only copy."""
-    valid = getattr(session, "valid_lap_ids", None)
-    if not callable(valid):
-        return None, 0
-    dropout = getattr(session, "dropout_lap_ids", None)
-    return len(valid()), (len(dropout()) if callable(dropout) else 0)
-
-
-def empty_state_copy(opps: coaching.Opportunities, session=None) -> tuple[str, str]:
-    """(title, body) for the two no-table cases — too few clean laps, or nothing losing time.
-
-    U2 — THE REASON IS WHAT REMOVED THE LAPS, NOT ALWAYS THE DRIVER. `opps.n_laps` alone cannot
-    tell three different sessions apart, and the copy used to tell all three to "drive a few more
-    laps". Measured in the real window on hero6.mp4 and hero8.mp4: zero valid laps, and every other
-    panel on the frame said data_quality's "No complete laps in this recording." with its GPS-lock /
-    drag-the-line body while this page alone blamed the driving. So `session`'s lap account picks:
-      * no valid lap at all — data_quality's one no-laps state, word for word;
-      * enough valid laps but GPS dropouts took them under the minimum — the GPS, named with the
-        lap table's own total (constructed only: no D24 recording has a dropout lap);
-      * too few valid laps — the count is the reason, so "drive more" stays, and any dropout among
-        them is named so this page's count reconciles with the rows the lap table lists.
-
-    ONE PAIR OF CONSTANTS FOR TWO SURFACES, and this function is what makes that true rather than
-    intended. `OpportunitiesPanel._show_excluded` carried a docstring claiming it matched "the modal
-    dialog's wording so the two surfaces read the same"; measured on the same session (QA D2-08),
-    the panel said "Drive at least 3 clean (valid, GPS-dropout-free) laps to surface coaching
-    opportunities — this session has 0." and the modal said "Need at least 3 … This session has 2.
-    Drive a few more laps and reload." Same fact, different sentence, and the PANEL — the surface a
-    user actually lands on — was the one missing the NEXT ACTION. Two call sites re-authoring a
-    string is how a docstring becomes a wish; there is one author now.
-
-    The split is the app's empty-state copy contract: title = WHAT HAPPENED, body = WHY then WHAT
-    NEXT (see widgets.EmptyState)."""
-    if not opps.enough:
-        valid, dropouts = _lap_account(session)
-        if valid == 0:
-            return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body()
-        needs = (f"Coaching needs {coaching.MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
-                 f"session has {opps.n_laps}")
-        lost = (f"{dropouts} of its {plural(valid, 'lap')} had a GPS dropout" if dropouts
-                else "")
-        if lost and valid >= coaching.MIN_LAPS:
-            return ("Not enough clean laps.",
-                    f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
-                    "corner by corner. You drove the laps — the GPS lost its fix during them.")
-        return ("Not enough clean laps yet.",
-                f"{needs}{f' ({lost})' if lost else ''}. Drive a few more laps and reload.")
-    return ("No corner is losing time.",
-            "Your typical lap matches your best lap all the way round — your best-lap pace is "
-            "consistent. Nice driving.")
+# The two no-table cases' copy is `coaching.empty_state_copy` (one author: the exported report's
+# COACHING section prints it too); the name stays importable from here.
+empty_state_copy = coaching.empty_state_copy
 
 
 # The share of the page the theme may take before it starts shedding lines (see ThemeBlock.fit_into).
@@ -1518,8 +1451,7 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
                f"{coaching.BRAKE_DIRECTION_DRAWS:,} random pairings of the same laps, and still "
                f"{_p_phrase(d.p_holm)} once corrected for all {d.family} "
                f"corner{'' if d.family == 1 else 's'} tested on this recording).\n"
-               "It says which way, not how far: no braking distance measured here holds up, so "
-               "none is given.")
+               f"It {coaching.BRAKE_DIRECTION_CAVEAT}")
     item.setToolTip(tip)
     return item
 
@@ -1544,12 +1476,9 @@ JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's b
 
 # What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
 # quotes it; the live theme + actions are prepended to it (see _refresh_summary_label).
+# Its scope sentences are `coaching.scope_note`'s, which the exported report prints too.
 _SCOPE_TOOLTIP = (
-    "The biggest realistic time gains vs your own best lap, across the WHOLE session "
-    "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
-    "lap you select; the Corners tab is the per-lap view. The total is your top "
-    f"{PANEL_TOP_N} corners that cleared the evidence gate; corners that did not are listed "
-    "below with the reason. Coaching ▸ Opportunities (or the panel's maximize button) shows "
+    coaching.scope_note() + " Coaching ▸ Opportunities (or the panel's maximize button) shows "
     "this page full-window, where "
     "each row also carries where in the corner the time goes and a Jump to it.")
 
@@ -2338,7 +2267,6 @@ class OpportunitiesPanel(QWidget):
                                         self.theme_block.full_text()) if t)
         # The retired modal's title named the typical lap, and until COACHING-2 this line did: the
         # reasons (ADV-1) and the bars are medians over the clean laps now, and no lap is named.
-        typical = (" The reasons and the Entry·Apex·Exit bars are medians over your clean laps."
-                   if self._headline else "")
+        typical = " " + coaching.medians_note() if self._headline else ""
         scope = _SCOPE_TOOLTIP + typical
         self.summary_label.setToolTip(f"{story}\n\n{scope}" if story else scope)

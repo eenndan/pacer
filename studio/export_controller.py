@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
+from . import APP_NAME, export_compare, export_data, export_video, prefs, share_card, theme
 from ._signal import fmt_hms, lap_label, plural
 from .overlay import LAYOUT_PREFIX, broadcast, corner_cards, ghost
 from .session import fmt_time
@@ -81,6 +81,21 @@ def report_lapstrip_png(session, unit) -> bytes | None:
         return share_lapstrip.lapstrip_to_png(image)
     except Exception:  # noqa: BLE001 — see the docstring: the strip is optional, the page is not
         _log.exception("lap strip for the report could not be built; the report goes without it")
+        return None
+
+
+def report_card_png(win) -> bytes | None:
+    """The lap card as PNG bytes for the report's opening, or None where the card is not made: the
+    SAME build File ▸ Export ▸ "Lap card (image)…" saves (`StudioWindow._build_share_card`, its
+    PB mark, palette and unit included), so its gate is the card's own — provisional timing or no
+    valid lap gives no card, and the report then opens with no picture rather than a stand-in.
+
+    One picture of the report, not the report: a card that cannot be built is logged and left out."""
+    try:
+        image = win._build_share_card()
+        return None if image is None else share_card.card_to_png(image)
+    except Exception:  # noqa: BLE001 — the card is optional, the page is not
+        _log.exception("lap card for the report could not be built; the report goes without it")
         return None
 
 
@@ -268,13 +283,14 @@ class ExportController:
         # in the display unit, so its lap table must too — a km/h table under an mph chart put two
         # different numbers for the same lap on one page. (The CSVs stay canonical SI: they are
         # machine-readable files, and export_data's writers pass no unit.)
-        # The lap strip is the strip card's own render, under its own gate (report_lapstrip_png).
+        # The lap strip is the strip card's own render, under its own gate (report_lapstrip_png);
+        # the page's opening picture is the lap card's, under its (report_card_png).
         if self._run_export(lambda: export_data.write_report_html(
                 path, self.win.session,
                 source_label=self.win._loaded_label() or "session",
                 images=images, unit=self.win._speed_unit,
                 lapstrip=report_lapstrip_png(self.win.session, self.win._speed_unit),
-                tokens=report_tokens()), path):
+                card=report_card_png(self.win), tokens=report_tokens()), path):
             self.win.statusBar().showMessage(f"exported {os.path.basename(path)}", self._status_ms)
     #: Under a figure the report could not draw, where the figure would have been.
     FIGURE_FAILED_NOTE = ("This figure could not be drawn (the session log has the reason); the "
