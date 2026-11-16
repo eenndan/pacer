@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, gapfill, map_render, prefs, theme, units
+from . import data_quality, gapfill, map_render, motion, prefs, theme, units
 from .map_render import (
     bucket_polylines,
     bucketize,  # noqa: F401  (re-exported for tests importing from map_view)
@@ -92,6 +92,20 @@ RACE_TRAIL_S = 1.5
 RACE_TRAIL_W = 2.5
 RACE_TRAIL_ALPHA = 150
 RACE_VEIL_ALPHA = 195
+# Lap Race ▸ Follow (MapView.set_race_follow, _FollowCam): the view's ground widths (m across the
+# whole map), the share of the free area (the map right of the card) the field may fill from its
+# median dot, the dead-zone box the median never leaves (a share of the free area each way), the
+# easing time constants in RACE seconds (so 2× eases as far per metre as 1×) and the step of the
+# race clock that counts as a jump (a scrub, a restart): recentre at once.
+FOLLOW_WIDTHS_M = (30.0, 45.0, 60.0, 90.0, 120.0, 150.0)
+FOLLOW_FIELD_Q = 0.8
+FOLLOW_FILL = 0.6
+FOLLOW_SHRINK = 0.8
+FOLLOW_BOX = 0.15
+FOLLOW_TAU_S = 0.2
+FOLLOW_ZOOM_TAU_S = 0.3
+FOLLOW_JUMP_S = 1.0
+SCALE_BAR_MAX_PX = 96
 MARKER_COLOR = C.position           # video position marker — the hue no data line mode paints
 _MARKER_RGB = QColor(C.position)    # for the translucent marker brush below
 # The playhead's fading tail (_PlayheadTail): `timeline.trace_tail`, the export inset's comet, in
@@ -1454,8 +1468,8 @@ class _RaceLayer:
     base lap line, brake glyphs, rainbow, corner labels) whatever those layers rebuild meanwhile,
     so the exit is the veil's removal. Every item goes in with `ignoreBounds=True`: an item that
     joins the bounds makes every update re-run pyqtgraph's auto-range bookkeeping (measured +9 ms
-    per update on the 36-lap session), and the view never follows the field (a range change is a
-    full repaint).
+    per update on the 36-lap session). The view follows the field only under Follow (`_FollowCam`),
+    off by default.
 
     LEGIBILITY IN A BUNCH (review of #553, looked at on the 36-lap session ~25 s in): the grey dots
     are small and darker so the coloured five read on top of them; the trails sit ABOVE the grey
@@ -1547,6 +1561,147 @@ class _RaceLayer:
         for it in self.items:
             self.plot.removeItem(it)
         self.items = []
+
+
+class _FollowCam:
+    """Where the Lap Race's Follow view looks: the ground point (`cx`, `cy`) drawn at the centre of
+    the free area (the map right of the race card) and the ground width `w` (m across the whole
+    map). Qt-free; `MapView._follow_apply` turns it into one `setRange` a tick.
+
+    THE REFERENCE is the median dot, x and y apart: the bulk of the field, which one straggler or
+    one lap pulling away does not drag (the selected lap is the ring, wherever it is). THE WIDTH is
+    the narrowest of FOLLOW_WIDTHS_M that keeps the MIDDLE FOLLOW_FIELD_Q of the dots (the nearest
+    80 % to the median) and the selected lap's dot within FOLLOW_FILL of the free area from their
+    median. Fitting every dot held the demo's view at the widest step 52 % of the race for two or
+    three stragglers, at 14.8 px per 0.1 s of gap; this fit gives 22.2 px and keeps the selected
+    lap in view 99.2 % of the race (97.6 % fitting every dot; review of #576). It is a ladder, not a continuous fit, and shrinks only
+    once the field fits well inside the next step down (FOLLOW_SHRINK): a scale change re-lays the
+    corner labels, and a view that zoomed every tick would swim. THE MOTION eases in race time
+    (FOLLOW_TAU_S, FOLLOW_ZOOM_TAU_S), and the median is never let outside a dead-zone box of
+    FOLLOW_BOX round the free centre; with motion off the view holds still until the median leaves
+    that box, then recentres in one step. A step of the race clock backwards or past FOLLOW_JUMP_S
+    (a scrub, a restart) recentres at once. WHEN RACE TIME IS HELD (a pause, the finish) an
+    unfinished zoom completes at once: easing runs in race time, so a held clock would leave the
+    view half-zoomed and the corner labels laid for another scale for as long as it is held."""
+
+    def __init__(self):
+        self.cx = self.cy = self.w = self.goal = self.t = None
+        self.ref: tuple[float, float] | None = None     # the point the dead zone holds (tests)
+
+    @staticmethod
+    def reference(xs, ys) -> tuple[float, float]:
+        return float(np.median(xs)), float(np.median(ys))
+
+    @staticmethod
+    def middle(xs, ys, px: float, py: float):
+        """The FOLLOW_FIELD_Q of the dots nearest the median (all of them below five dots)."""
+        if len(xs) < 5:
+            return xs, ys
+        d = np.hypot(xs - px, ys - py)
+        keep = d <= np.quantile(d, FOLLOW_FIELD_Q)
+        return xs[keep], ys[keep]
+
+    def step(self, t: float, xs, ys, free_w: float, free_h: float, view_w: float,
+             motion_on: bool, held: bool = False, keep=None) -> None:
+        """`keep`: the selected lap's dot (x, y), fitted with the middle of the field wherever it
+        is — on the demo that holds it in view 99.2 % of the race instead of 96.3 %, for 0.2 px
+        per 0.1 s of gap."""
+        xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+        fin = np.isfinite(xs) & np.isfinite(ys)
+        if not fin.any():
+            return
+        xs, ys = self.middle(xs[fin], ys[fin], *self.reference(xs[fin], ys[fin]))
+        if keep is not None and np.isfinite(keep[0]) and np.isfinite(keep[1]):
+            xs, ys = np.append(xs, keep[0]), np.append(ys, keep[1])
+        px, py = self.ref = self.reference(xs, ys)  # the centre of the middle of the field
+        mpp = max(2 * float(np.max(np.abs(xs - px))) / (FOLLOW_FILL * free_w),
+                  2 * float(np.max(np.abs(ys - py))) / (FOLLOW_FILL * free_h))
+        need = mpp * view_w
+        goal = next((w for w in FOLLOW_WIDTHS_M if w >= need), FOLLOW_WIDTHS_M[-1])
+        jump = self.t is None or t < self.t or t - self.t > FOLLOW_JUMP_S
+        dt = 0.0 if jump else t - self.t
+        self.t = t
+        if jump:
+            self.cx, self.cy, self.w, self.goal = px, py, goal, goal
+            return
+        # Only as the race runs: a resize or a repaint while paused keeps the ground width.
+        if dt > 0 and (goal > self.goal or (goal < self.goal and need < FOLLOW_SHRINK * goal)):
+            self.goal = goal
+        if motion_on and dt > 0 and not held:
+            self.w += (self.goal - self.w) * (1.0 - np.exp(-dt / FOLLOW_ZOOM_TAU_S))
+            if abs(self.w - self.goal) < 0.005 * self.goal:
+                self.w = self.goal
+        else:                   # motion off, or race time held: the zoom completes now
+            self.w = self.goal
+        mpp = self.w / view_w
+        bx, by = FOLLOW_BOX * free_w * mpp, FOLLOW_BOX * free_h * mpp
+        if motion_on:
+            a = 1.0 - float(np.exp(-dt / FOLLOW_TAU_S))
+            self.cx = min(max(self.cx + (px - self.cx) * a, px - bx), px + bx)
+            self.cy = min(max(self.cy + (py - self.cy) * a, py - by), py + by)
+        elif abs(px - self.cx) > bx or abs(py - self.cy) > by:
+            self.cx, self.cy = px, py
+
+
+def _nice_length(max_m: float) -> float:
+    """The longest 1, 2 or 5 × 10^k metres not over `max_m`."""
+    k = 10.0 ** np.floor(np.log10(max_m))
+    return float(next(m * k for m in (5, 2, 1) if m * k <= max_m))
+
+
+class _ScaleBar(QWidget):
+    """The Follow view's distance key, bottom-right: a bar of a round length and its label ("10
+    m"), so the zoom says what a gap between two dots is on the ground. Painted, like the card."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.metres = 0.0
+        self.length_px = 0.0
+        self._font = theme.ui_font(theme.CAPTION)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.hide()
+
+    @property
+    def label(self) -> str:
+        return f"{self.metres:g} m"
+
+    def set_scale(self, m_per_px: float) -> None:
+        metres = _nice_length(SCALE_BAR_MAX_PX * m_per_px)
+        length = metres / m_per_px
+        if (metres, round(length, 2)) == (self.metres, round(self.length_px, 2)):
+            return
+        self.metres, self.length_px = metres, length
+        pad = theme.SPACE_S
+        text_w = QFontMetrics(self._font).horizontalAdvance(self.label)
+        self.setFixedSize(int(np.ceil(max(length, text_w))) + 2 * pad, 34)
+        self.reposition()
+        self.update()
+
+    def reposition(self) -> None:
+        host = self.parentWidget()
+        self.move(host.width() - self.width() - _CHROME_INSET,
+                  host.height() - self.height() - _CHROME_INSET)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        plate = QColor(C.surface)
+        plate.setAlpha(232)
+        p.setBrush(QBrush(plate))
+        p.setPen(QPen(QColor(C.border), 1))
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1),
+                          theme.RADIUS_M, theme.RADIUS_M)
+        pad = theme.SPACE_S
+        p.setFont(self._font)
+        p.setPen(QPen(QColor(C.text_dim)))
+        p.drawText(QRectF(pad, 3, self.width() - 2 * pad, 16),
+                   int(Qt.AlignVCenter | Qt.AlignLeft), self.label)
+        y = self.height() - 9.5
+        p.setPen(QPen(QColor(C.text), 1.5))
+        p.drawLine(QPointF(pad, y), QPointF(pad + self.length_px, y))
+        for x in (pad, pad + self.length_px):
+            p.drawLine(QPointF(x, y - 4), QPointF(x, y + 1))
+        p.end()
 
 
 def _ramp(lo_hi: tuple[float, float], k: int, n: int) -> float:
@@ -1755,8 +1910,7 @@ class MapView(QWidget):
         self.plot.getViewBox().sigRangeChanged.connect(self._on_range_changed)
         # The fit's label room is in px, so it is re-derived when the VIEWBOX settles on its size —
         # which lags the widget's own resizeEvent — while our fit still stands.
-        self.plot.getViewBox().sigResized.connect(
-            lambda *_: self._fit_view() if getattr(self, "_view_fitted", False) else None)
+        self.plot.getViewBox().sigResized.connect(lambda *_: self._refit_on_resize())
 
         self.marker = pg.TargetItem(
             (session.tx[0] if len(session.tx) else 0, session.ty[0] if len(session.ty) else 0),
@@ -1788,6 +1942,11 @@ class MapView(QWidget):
         self._race: _RaceLayer | None = None
         self._race_restore = (True, False)
         self._race_card: QWidget | None = None   # the race card floated on this canvas, if any
+        # Follow (set_race_follow): the camera while on, the view it put aside, the last race state.
+        self._follow: _FollowCam | None = None
+        self._follow_restore = None
+        self._race_state = None
+        self._scale_bar = _ScaleBar(self.widget)
 
         # E2: provisional start cue; declared before _rebuild (which may refresh it). None = track
         # known, no cue. See refresh_provisional_cue.
@@ -1969,13 +2128,20 @@ class MapView(QWidget):
         self._clamp_provisional_label()  # a reshaped panel can push the cue over an edge (MAP-05)
         # A panel that changed shape re-frames the track (the map fills whatever room it is given),
         # but only while the view is still OUR fit — never on top of a view the user moved.
-        if getattr(self, "_view_fitted", False):
+        self._refit_on_resize()
+
+    def _refit_on_resize(self):
+        """Re-frame after a resize: under Follow the same ground width round the same point, else
+        our fit while it still stands."""
+        if getattr(self, "_follow", None) is not None:
+            self._follow_apply()
+        elif getattr(self, "_view_fitted", False):
             self._fit_view()
 
     def eventFilter(self, obj, event):
         if (event.type() == QEvent.MouseButtonDblClick and obj is self.widget.viewport()
                 and event.button() == Qt.LeftButton):
-            self._fit_view()
+            self._fit_view()        # a no-op under Follow, which owns the view
             return True
         # Leaving the canvas sends no move, so the hover reveal is cleared here (pins and the
         # provisional / no-laps rules are untouched: _sync_timing_chrome still honours them).
@@ -2033,11 +2199,14 @@ class MapView(QWidget):
             self._circuit_memo = (key, box)
         return self._circuit_memo[1]
 
-    def _fit_view(self):
+    def _fit_view(self, force: bool = False):
         """Frame the map on its content and freeze it there (autorange off, so the video marker
         moving never drags the view around). The one place a range is set — called at build, from
         the Fit button / canvas double-click, and after a redraw or resize that left our own fit
-        standing."""
+        standing. Under Follow it does nothing: Follow owns the view, and puts back the fit (or the
+        user's own view) when it ends."""
+        if getattr(self, "_follow", None) is not None and not force:
+            return
         box = self._content_bbox()
         if box is None:
             return
@@ -2175,8 +2344,12 @@ class MapView(QWidget):
         # hide() was actually called.
         widgets = [w for w in (getattr(self, "_map_key", None), getattr(self, "_empty_state", None),
                                getattr(self, "fit_btn", None), getattr(self, "_notice", None),
-                               getattr(self, "_race_card", None))
+                               getattr(self, "_race_card", None), getattr(self, "_scale_bar", None))
                    if w is not None]
+        # …and so is Follow's zoom: the grab shows the view Follow put aside, then Follow resumes.
+        vb = self.plot.getViewBox()
+        follow = getattr(self, "_follow", None) is not None
+        follow_range = vb.viewRange() if follow else None
         # A Lap Race is a live view, never a document's map (review of #553: a report exported
         # mid-race carried the card, the veil and the dots): its items go with the chrome.
         race = getattr(self, "_race", None)
@@ -2202,6 +2375,12 @@ class MapView(QWidget):
                 it.setVisible(False)
             if race is not None:
                 race.set_visible(False)
+            if follow:
+                (xr, yr), fitted, _mouse = self._follow_restore
+                if fitted:              # our fit, at the map's size NOW (it may have been resized)
+                    self._fit_view(force=True)
+                else:
+                    vb.setRange(xRange=xr, yRange=yr, padding=0)
             # The marker is hidden for the grab, so drop any marker-dodge nudge the labels are
             # holding (see _CornerMarkers.avoid_point): on a card with no marker, a nudged label
             # just looks mis-placed. Restored below from the marker's live position.
@@ -2214,6 +2393,8 @@ class MapView(QWidget):
                 it.setVisible(was_visible)
             if race is not None and race is getattr(self, "_race", None):
                 race.set_visible(True)
+            if follow_range is not None and getattr(self, "_follow", None) is not None:
+                vb.setRange(xRange=follow_range[0], yRange=follow_range[1], padding=0)
             if getattr(self, "marker", None) is not None:
                 p = self.marker.pos()
                 self._corner_markers.avoid_point(p.x(), p.y())
@@ -2613,19 +2794,96 @@ class MapView(QWidget):
         self._sync_timing_chrome()                # the drag handles rest hidden under it
 
     def update_race(self, state):
-        """Move the field to `state` — the race tick's one map call."""
+        """Move the field to `state` — the race tick's one map call (and, under Follow, one range)."""
         if self._race is not None:
             self._race.update(state)
+            self._race_state = state
+            if self._follow is not None:
+                self._follow_apply()
 
     def set_race_selected(self, lap_id: int | None):
         """Ring another lap; drawn on the next `update_race`."""
         if self._race is not None:
             self._race.selected = lap_id
 
+    def race_following(self) -> bool:
+        return self._follow is not None
+
+    def set_race_follow(self, on: bool) -> None:
+        """Follow on: put the view aside (its range, whether it was our fit, the pan/zoom switch)
+        and let `_FollowCam` drive it, with the scale bar shown and the user's pan/zoom off (the
+        camera would undo either a tick later). Off: put all of it back EXACTLY — the user's own
+        range, or our fit re-run at the map's size now. Only while a race is on."""
+        if bool(on) == (self._follow is not None) or (on and self._race is None):
+            return
+        vb = self.plot.getViewBox()
+        if on:
+            self._follow_restore = (vb.viewRange(), self._view_fitted,
+                                    tuple(vb.state["mouseEnabled"]))
+            self._follow = _FollowCam()
+            vb.setMouseEnabled(False, False)
+            self.fit_btn.setVisible(False)
+            self._follow_apply()        # shows the scale bar once it has a scale to show
+            return
+        self._follow = None
+        (xr, yr), fitted, mouse = self._follow_restore
+        self._follow_restore = None
+        self._scale_bar.hide()
+        vb.setMouseEnabled(*mouse)
+        if fitted:
+            self._fit_view()
+        else:
+            vb.setRange(xRange=xr, yRange=yr, padding=0)
+            self._view_fitted = False
+            self._sync_fit_btn()
+
+    def _free_x0(self, view_w: float) -> float:
+        """The free area's left edge (px): right of the race card, unless the card is so wide the
+        rest would be a sliver — then the whole map."""
+        card = self._race_card
+        if card is None or not card.isVisible():
+            return 0.0
+        x0 = float(card.x() + card.width() + _CHROME_INSET)
+        return x0 if x0 < 0.55 * view_w else 0.0
+
+    def _follow_apply(self) -> None:
+        """Step the camera to the last race state and set the one range it implies: the camera's
+        point at the free area's centre, its ground width across the whole map."""
+        cam, state = self._follow, self._race_state
+        if cam is None or state is None:
+            return
+        vb = self.plot.getViewBox()
+        r = vb.rect()      # the rect the aspect lock divides by (not boundingRect)
+        w, h = r.width(), r.height()
+        if w < 8 or h < 8:
+            return
+        x0 = self._free_x0(w)
+        # At the finish race time stops: `held` completes any zoom (a pause does it through dt = 0).
+        sel = self._race.selected if self._race is not None else None
+        keep = None
+        if sel is not None and sel in state.ids:
+            k = state.ids.index(sel)
+            keep = (float(state.x[k]), float(state.y[k]))
+        cam.step(float(state.t), state.x, state.y, w - x0, h, w, motion.enabled(),
+                 held=bool(getattr(state, "over", False)), keep=keep)
+        if cam.w is None:
+            return
+        mpp = cam.w / w
+        xl = cam.cx - (x0 + (w - x0) / 2) * mpp
+        yl = cam.cy - h / 2 * mpp
+        vb.setRange(xRange=(xl, xl + w * mpp), yRange=(yl, yl + h * mpp), padding=0)
+        self._scale_bar.set_scale(mpp)
+        self._scale_bar.reposition()
+        if self._scale_bar.isHidden():
+            self._scale_bar.show()
+            self._scale_bar.raise_()
+
     def end_race(self):
-        """Remove every race item and put the marker and the key back as they were."""
+        """Remove every race item and put the marker, the key and the view back as they were."""
         if self._race is None:
             return
+        self.set_race_follow(False)
+        self._race_state = None
         self._race.remove()
         self._race = None
         marker_on, key_hidden = self._race_restore
@@ -2899,6 +3157,11 @@ class MapView(QWidget):
     def _on_range_changed(self, *_):
         cm = getattr(self, "_corner_markers", None)
         if cm is None or not cm._texts:
+            return
+        # Under Follow a zoom eases over many ticks: re-lay the labels once it settles, not on every
+        # tick of it (measured: a re-layout a tick took the Follow p95 from 13 ms to 42 ms).
+        cam = getattr(self, "_follow", None)
+        if cam is not None and cam.w != cam.goal:
             return
         (sx, sy), (lx, ly) = cm._px_per_data(), cm.layout_scale
         if abs(sx - lx) > 1e-6 * max(lx, 1e-9) or abs(sy - ly) > 1e-6 * max(ly, 1e-9):
