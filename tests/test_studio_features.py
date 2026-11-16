@@ -244,10 +244,13 @@ def test_laps_page_is_grid_plus_excluded_strip_only():
     sess = _FakeLapSession()
     table = LapTable(sess)
     assert table.table.rowCount() == 3
-    # Two children in the page layout: the table/empty-state stack, then the excluded strip.
+    # Three children in the page layout: the table/empty-state stack, the slow-lap finder, then
+    # the excluded strip. The finder is the one footer allowed back, because it costs nothing on a
+    # recording without a ▼ cue row (this one has none): hidden, it takes no pixel of the grid.
     lay = table.layout()
-    assert lay.count() == 2, [lay.itemAt(i).widget() for i in range(lay.count())]
+    assert lay.count() == 3, [lay.itemAt(i).widget() for i in range(lay.count())]
     assert lay.itemAt(0).widget() is table._stack
+    assert lay.itemAt(1).widget() is table._slow_finder and table._slow_finder.isHidden()
     # No stray "SESSION BESTS" caption, and no footer attributes to render one from.
     labels = [w.text() for w in table.findChildren(QLabel)]
     assert not any("SESSION BESTS" in t for t in labels), labels
