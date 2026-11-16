@@ -334,16 +334,22 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   waivers? The one recording on this machine is not one RUL-9 approved for publishing.
 - **Addendum, 2026-11-16: the Lap race may follow the field** (`cool/race-follow`), superseding
   "there is no follow-cam" above. That default rested on a range change per tick being a full
-  repaint; the typical tick says otherwise: on the demo at the 917×230 map of a 1440×900 window,
-  at a load of 9 to 15, a whole race at 30 Hz took a median 8.8 ms a tick plain and 12.0 ms with
-  Follow, and a live range at a fixed 30 m or 60 m kept the p95 at 12.0 and 12.6 ms against the
-  plain race's 11.2 ms. The shipped Follow's p95 was 43 ms there, over the 33 ms frame, and its
-  cause was not isolated on the shared machine; that is why it stays an option, off by default and
-  remembered once chosen (the race card's crosshair button, View ▸ Follow the race, ⇧R): the view
-  centres on the median dot at the narrowest of 30 to 150 m that holds the whole field, eased in
-  race time inside a dead-zone box, with a scale bar; with it off a race never touches the view,
-  and leaving puts the view back exactly. Open for the owner: should it be on by default, once its
-  slow ticks are found?
+  repaint, and it is not one. Measured interleaved (the plain race, Follow and fixed 30, 60, 90
+  and 150 m views each a window of their own, all advanced on the same tick in a random order;
+  the demo at the 917×230 map of a 1440×900 window; 4,605 ticks each; offscreen raster at a load
+  of 14 to 16), the main thread's CPU time per tick was 5.9 / 9.2 / 11.1 ms plain and
+  9.1 / 12.9 / 15.0 ms with Follow (median / p95 / p99), and on the same tick Follow cost
+  +3.1 / +5.9 / +7.6 ms over the plain race: the +8 ms budget holds at the median and p95 and is
+  near its edge at p99, and a fixed width costs the same to within 0.5 ms. The wall-clock p95
+  was 20.0 ms plain and 28.6 ms with Follow on that loaded machine; 141 of Follow's 156 ticks over
+  33 ms used under 16 ms of CPU (descheduled, not working). Compositing on screen was not
+  measured. It ships as an option, off by default and remembered once chosen (the race card's
+  crosshair button, View ▸ Follow the race, ⇧R): off by default as the conservative default
+  applied on the owner's instruction not to be asked, not for its cost. The view centres on the
+  middle 80 % of the dots and the selected lap's dot at the narrowest of 30 to 150 m that holds
+  them, eased in race time inside a dead-zone box (a pause or the finish completes the zoom), with
+  a scale bar; with it off a race never touches the view, and leaving puts the view back exactly.
+  Open for the owner: should it be on by default?
 
 ## 11. Recorded at the 0.10.0 release, 2026-11-16
 
