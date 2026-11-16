@@ -1196,11 +1196,14 @@ def middle_half(values) -> float | None:
 def fmt_middle_half(width: float | None, floor: float = MIDDLE_HALF_FLOOR_S) -> str | None:
     """The middle half's width as printed: `0.59 s`, or `< 0.07 s` below `floor` (the floor, not
     the value). Laps take MIDDLE_HALF_FLOOR_S, corners CORNER_MIDDLE_HALF_FLOOR_S. None passes
-    through."""
+    through. A width under the level step (MARK_MIN_MIDDLE_HALF_S) that two decimals would round up
+    TO it prints a third decimal, `0.066 s`, so no surface says "0.07 s, under 0.07 s"."""
     if width is None:
         return None
     if width < floor:
         return f"< {floor:.2f} s"
+    if width < MARK_MIN_MIDDLE_HALF_S <= round(width, 2):
+        return f"{width:.3f} s"
     return f"{width:.2f} s"
 
 

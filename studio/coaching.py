@@ -591,7 +591,7 @@ class Opportunity:
 # cool/coaching-level-step (2026-11-16) re-measured the three 0068 rows, the one recording on the
 # machine, when a row whose spread is level stopped naming consistency ("the level step" below,
 # REASON_LEVEL, which names no cause and counts towards none): 0068 chapter 2 moved from consistency
-# 74 % to coasting 26 % (two of its three ranked corners read level), and no other 0068 cell moved.
+# 74 % to coasting 26 %, and no other 0068 cell moved.
 # The four 0064 rows were not re-measured, the recording not being on that machine. The full
 # recording's should not move: its ranked rows' middle halves, in the evidence table above, are
 # 0.187-0.309 s, far over the 0.07 s step. Its chapters' rows are not re-verified, nor is the
@@ -605,8 +605,8 @@ class Opportunity:
 # ranked rows of the four working-set recordings, none of them carries a measured line difference,
 # and the row says so with the spread it reads. The axis
 # still does not survive every smaller lap set: of the five single chapters, two name no single
-# cause (0064's chapter 1, which ranks nothing, and 0068's chapter 2, two of whose three ranked
-# corners are level), so the cause line is conditional and can read
+# cause (0064's chapter 1, which ranks nothing, and 0068's chapter 2), so the cause line is
+# conditional and can read
 # "no single cause dominates".
 #
 # AND THE HONEST CAVEAT, also measured: the theme is a property of the LAP SET, and it moves with
@@ -1544,8 +1544,8 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
         # above `_pick_reason`). The width is the CORNERS table's print of the same cells.
         width = stats_service.fmt_middle_half(opp.evidence.iqr,
                                               stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
-        base = (f"no one habit explains it: your passes here are level (middle half spans "
-                f"{width}, under {LEVEL_STEP_S:.2f} s)")
+        base = ("no one habit explains it: your passes here are level with each other "
+                f"(middle half spans {width}, under {LEVEL_STEP_S:.2f} s)")
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)

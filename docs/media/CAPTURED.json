@@ -52,9 +52,9 @@
     },
     "debrief.png": {
       "captured": "2026-11-16",
-      "commit": "df26eba",
+      "commit": "1f9c54a+dirty",
       "derived": null,
-      "sha256": "ac190f9ed4b7a82abab4eea71485018765843be6b5930dd1a27e09cdd5e27394",
+      "sha256": "970c350fc2b434841a3cac057c6b5b89765b3993a4c1d802bec280879b3579c1",
       "shot": "debrief",
       "source": "synthetic demo",
       "version": "0.11.0",

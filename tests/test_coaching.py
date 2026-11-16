@@ -3102,7 +3102,7 @@ def test_coaching_never_prints_consistency_where_corners_calls_the_spread_level(
                 assert row.reason.contribution == 0.0, row.reason
                 if row.evidence.ranked:
                     assert sent.startswith("no one habit explains it: your passes here are level "
-                                           "(middle half spans 0."), sent
+                                           "with each other (middle half spans 0."), sent
                     assert ", under 0.07 s)" in sent, sent
     assert seen_level >= 3, seen_level
     print(f"ok level step: no consistency reason where CORNERS calls it level ({seen_level} level rows)")
@@ -3156,6 +3156,28 @@ def test_a_steadily_slow_corner_stays_ranked_and_names_no_spread():
         sigmas_by_cid={1: 0.60, 2: 0.60, 3: 0.03}, **lev).rows]
     assert kinds == [K.REASON_APEX, K.REASON_LEVEL, K.REASON_LEVEL], kinds
     print("ok steady loss: +0.30 s on every lap stays ranked #1, reason level, not consistency")
+
+
+def test_a_level_width_just_under_the_step_never_prints_as_the_step():
+    """Re-review of #587 (P3): a middle half of 0.066 s rounds to "0.07 s" at two decimals, and the
+    sentence read "middle half spans 0.07 s, under 0.07 s". The one formatter CORNERS shares prints a
+    third decimal in that band, on both tabs; outside it nothing changes."""
+    from studio import stats as stats_service
+    floor = stats_service.CORNER_MIDDLE_HALF_FLOOR_S
+    assert stats_service.fmt_middle_half(0.066, floor) == "0.066 s"
+    assert stats_service.fmt_middle_half(0.064, floor) == "0.06 s"
+    assert stats_service.fmt_middle_half(0.07, floor) == "0.07 s"
+    assert stats_service.fmt_middle_half(0.0749, floor) == "0.07 s"
+    # Laps keep their floor form below the step ("< 0.07 s"), so never reach the band.
+    assert stats_service.fmt_middle_half(0.066) == "< 0.07 s"
+    # Through the Coaching row: plan a 0.066 s middle half at C1 and read the sentence.
+    corners, best, times, lap_times = _level_fixture([0.30] * 3, [0.066, 0.02, 0.02])
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={c.cid: 0.03 for c in corners})
+    sent = K.reason_sentence(opp.rows[0], reach=False)
+    assert sent == ("no one habit explains it: your passes here are level with each other "
+                    "(middle half spans 0.066 s, under 0.07 s)"), sent
+    print(f"ok P3: {sent!r}")
 
 
 def test_level_rows_count_towards_no_cause_in_the_theme():
