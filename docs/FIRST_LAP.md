@@ -86,7 +86,8 @@ divider between them drags.
 - **The tabbed panel**, five full-height pages on the digits **1–5**:
   - **Laps** — every lap and its sector splits, sortable, session best starred (★). The **Entry**
     column is the corner-entry speed; toggle **View ▸ Units** for mph. A slow lap carries a
-    muted **▼ C5** cue naming the corner that cost it; hover it for where the rest went.
+    muted **▼ C5** cue naming the corner that cost it; hover it for where the rest went. A
+    footer counts the slow laps marked ▼, and **next ›** scrolls to each without selecting it.
   - **Corners** — the same corners, for the *one* lap you have selected: time-in-corner, that
     lap's Δ vs the best lap, apex/entry/exit speeds.
   - **Stats** — session totals, the pace distribution, the g-g friction circle, corner/braking/
@@ -120,7 +121,9 @@ number matters: the ideal is a sum of per-segment minima, so it drops the longer
 
 Scrub the lap and the **GoPro video** follows. **Load a reference recording** (**Coaching ▸ Load
 reference recording…**) to play your lap **next to** the best lap of *another* recording of the
-same track — yours from last month, or a friend's GoPro file.
+same track — yours from last month, or a friend's GoPro file. Picking another lap while
+comparing ends the comparison and says so. **R** sets every clean lap off together on the map;
+**⇧R** follows the pack.
 
 ## 7 · Come back faster
 
@@ -131,8 +134,9 @@ that session's debrief (step 3) says whether your focus corners moved.
 ## 8 · The rest of the window
 
 - **Stats** is a full page — PACE, **MOMENTS** (your best lap, your biggest single-corner loss and
-  your best 5-lap run, each a jump to where it happened), IDEAL LAP, SECTORS, CORNERS, BRAKING,
-  STRAIGHTS, DRIVING, SPEED · G and **DATA TRUST**. The IDEAL LAP's gain column sums to the headline.
+  your best 5-lap run, each a jump to where it happened), IDEAL LAP, SECTORS, CORNERS (◆ marks
+  the corners where your passes vary most and cost most), BRAKING, STRAIGHTS, DRIVING, SPEED · G
+  and **DATA TRUST**. The IDEAL LAP's gain column sums to the headline.
 - **Coaching** has a button that jumps the video to your best lap at each corner. No model, no ML:
   every number is a reduction of a validated channel.
 - A g-meter and the brake / coast / grip channels ride along with the charts.

@@ -19,9 +19,10 @@ the only distribution** — no download, no `.dmg`, no signed build (see [Non-go
 <img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h, pictured at v0.7: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
 
 *Every screenshot here is Pacer on Sandown 3h — three hours at Sandown Park — but the
-debrief, which is the synthetic demo's; all are captured by one command,
-[`studio/dev/media_capture.py`](studio/dev/media_capture.py). The window and map shots are v0.7's,
-before 0.8's wider lap line, violet brake points and chart corner labels. In motion:
+debrief, the Stats moments and the lap-strip card, which are the synthetic demo's; all are
+captured by one command, [`studio/dev/media_capture.py`](studio/dev/media_capture.py). The window
+and map shots are v0.7's, before 0.8's wider lap line, violet brake points and chart corner
+labels. In motion:
 [20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4).*
 
 **Try it** on an Apple Silicon Mac with [pixi](https://pixi.sh) — the demo needs no GoPro:
@@ -86,6 +87,7 @@ official timing measures the noise floor.
   scrub the chart and the footage follows, or play two laps side by side — including the best lap
   of *another* recording of the same track. **Lap race** (R) sets every clean lap off from the
   start line together on the map, each on its own lap clock, in packs the timing cannot split.
+  ⇧R follows the pack.
 
 <img src="docs/media/map.png" width="620" alt="The map panel maximised on Sandown 3h, pictured at v0.7: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven named corner apexes, brake-point markers, the start/finish line, and the map key naming every glyph">
 

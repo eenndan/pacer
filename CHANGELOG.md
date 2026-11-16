@@ -6,6 +6,81 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-11-16
+
+The one-story release: 13 pull requests from #574 to #587, Wave 5 of the campaign to make the app
+cooler and still true: the session report tells the Stats page's story in the app's own colours, a
+consistency mark one unusual lap cannot earn, a slow-lap finder, and a Lap race that can follow.
+
+### Highlights
+
+- **The session report tells the Stats page's story.** File ▸ Export ▸ Session report (HTML) is
+  drawn in the app's dark colours and prints on white; it carries MOMENTS, CORNERS with ◆, the
+  slow-lap notes and the lap strip, in the Stats page's order and words (#581)
+- **A consistency mark one lap cannot earn.** Stats ▸ CORNERS marks with ◆ the corners where your
+  passes vary most and cost most, ranked by middle half × median loss. On the demo C1 and C5 carry
+  it; C6, whose σ is one lap's, no longer does, and its hover says so (#574)
+- **Find the slow laps.** A Laps footer counts them, "1 slow lap marked ▼" on the demo, and
+  "next ›" scrolls to and outlines each without selecting it, so a comparison stays put; ↑/↓
+  takes the outline off (#582, #586)
+- **Follow the race.** In the Lap race, ⇧R (or the card's crosshair) zooms the map onto the pack
+  and moves with it, with a scale bar. Off by default, and remembered once you choose (#576)
+- **Broadcast reads over anything.** The Δ bar's scale, the honesty stamp and the g readout sit on
+  plates, and the minimap's corner labels carry a heavier outline. Classic is unchanged (#585)
+- **One number per corner pass.** Lap 6 at C6 reads +0.82 s in the Laps table, Stats and the
+  report alike (Stats said +0.83 s); CORNERS' Med loss is its printed cells' difference (#586)
+- **Level passes, said plainly.** Coaching no longer names consistency as the reason at a corner
+  whose passes are level with each other within 0.07 s; the ranking and the focus corners are
+  unchanged (#587)
+- **Measured, then refused.** "N of M slow laps at one corner", and splitting a long corner in
+  two, each re-run on the demo by one probe; §29's figures were corrected (#579, #580)
+
+### Added
+
+- A Laps table footer counts the slow laps marked ▼, and "next ›" scrolls to and outlines each in
+  turn without selecting it, so the charts, the video and a comparison stay as they are. (#582)
+- The Lap race can follow the field: the map zooms in on the pack and moves with it, with a scale
+  bar. It is off by default; turn it on from the race card's crosshair button or with ⇧R. (#576)
+
+### Changed
+
+- The HTML session report is drawn in the app's dark colours, and prints on white paper. (#581)
+- The HTML session report now carries MOMENTS, CORNERS with the ◆ mark and middle half, the
+  slow-lap notes and the lap strip, in the Stats page's order and words; every row it printed
+  before is kept. (#581)
+- Stats ▸ CORNERS marks the corners where your passes vary most and cost most. (#574)
+- The CORNERS mark ranks them by middle half × median loss, not σ × loss: one unusual pass no
+  longer earns it. (#574)
+- The CORNERS σ hover names the one pass when a single pass carries most of a corner's σ. (#574)
+- The CORNERS mark is now ◆ instead of ▲, because ▲ means "ahead" in every Δ readout. (#574)
+- No CORNERS mark under 5 counted passes, or on a middle half under 0.07 s, the level step. (#574)
+
+### Fixed
+
+- Coaching no longer names consistency as the reason at a corner whose passes are level within
+  0.07 s, the step Stats ▸ CORNERS uses; the corner keeps its rank and says no one habit
+  explains it. (#587)
+- A corner pass's gap to its typical pass is now the printed pass minus the printed typical: on the
+  demo, lap 6 at C6 reads +0.82 s in the Laps table, Stats and the report (Stats said +0.83 s).
+  (#586)
+- CORNERS Med loss is the printed Median minus the printed Best beside it (the demo's C4 read +0.07
+  beside 3.08 and 3.02; now +0.06), and its sum adds the printed cells. (#586)
+- Moving through the Laps table with ↑/↓ (or picking a lap elsewhere) after "next ›" takes the
+  outline off the slow lap it found, so two rows are never marked at once with motion off. (#586)
+- The report's map no longer shows the "drag to set start/finish" cue, nor a key row for the video
+  position it does not draw; the report still says the timing is provisional. (#586)
+- Broadcast export: the Δ bar's scale, the honesty stamp and the g readout now sit on plates, and
+  the minimap's corner labels carry a heavier outline, so they read over bright sky and grass.
+  (#585)
+- Reopening the export dialog in quick succession ran up to 14 hardware ProRes checks at once; it
+  now runs one, and every dialog and export shares its answer. (#584)
+- A hardware ProRes check that fails once is no longer remembered for the rest of the run (a guard:
+  no such failure was seen in 1,912 checks); each export asks it at most once. (#584)
+- On a busy Mac the debrief's best-lap picture could paint, then jump a few pixels and redraw on a
+  first open; it now waits for the page's last layout pass and draws once. (#578)
+- Picking another lap or mark while comparing ends the comparison and says so, instead of moving
+  only the charts under the two videos; the Laps table now shows the two laps being compared. (#575)
+
 ## [0.11.0] — 2026-11-16
 
 The it-tells-the-story release: 6 pull requests from #566 to #573, Wave 4 of the campaign to make
@@ -2055,7 +2130,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/eenndan/pacer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/eenndan/pacer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/eenndan/pacer/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/eenndan/pacer/compare/v0.8.0...v0.9.0

@@ -301,7 +301,8 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     adjacent laps sit inside the tie threshold for most of the race, so a pack is the laps within
     it of the pack's first lap, and only that lap has a position. On an unconfirmed start line the dots still run, but unranked, with
     no intervals and no gap to the best. On a recording timed on the video clock the threshold
-    widens to 0.15 s. There is no follow-cam and no label on each dot.
+    widens to 0.15 s. There is no label on each dot (and no follow-cam: superseded by the addendum
+    below, #576).
   - **Motion is the Δ roll only** (#557): after a seek within one lap the Δ readout counts to its
     new value, never while playing and never across a lap or baseline change. View ▸ Reduce
     motion turns it off, and until the user chooses, it follows macOS's own Reduce Motion. The
@@ -468,3 +469,98 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - The landing stills: re-shoot `hero.png`, `map.png`, `og.png` and the two Stats crops from
     another recording, or swap the Stats crops for demo captures, and a Broadcast still from real
     footage; the one recording on this machine is not one RUL-9 approved for publishing.
+
+## 13. Recorded at the 0.12.0 release, 2026-11-16
+
+- **v0.12.0 is the one-story release**: 13 pull requests from #574 to #587, Wave 5 of the campaign
+  section 8 records. The CORNERS ◆ mark (#574); a lap pick that ends a comparison (#575); Follow
+  in the Lap race (#576); the debrief's best-lap picture drawn once, and the export tests isolated
+  (#578); two refusals, sections 33 and 34 of
+  [refused-2026-09.md](../studio/docs/refused-2026-09.md) (#579), and section 29's figures
+  corrected (#580); the session report that tells the Stats page's story (#581); the Laps table's
+  slow-lap finder (#582); the export gates' order, tests only (#583); one ProRes probe per process
+  (#584); plates under Broadcast's texts (#585); and the QA fixes before the release: one printed
+  number per corner pass (#586) and Coaching's level step (#587).
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **◆ marks consistency, not ▲** (#574): ▲ means "ahead" in every Δ readout. Up to 3 corners
+    and at most half the field, ranked by middle half × median loss, not σ × loss, so one unusual
+    pass no longer earns it; none under 5 counted passes or with a middle half under 0.07 s, the
+    level step. The σ hover names the one pass when leaving it out drops σ below a fraction of
+    itself. On the demo the first and fifth corners carry ◆; the sixth (σ 0.22 s, middle half
+    0.03 s, its σ carried by Lap 6) is unmarked. This closes section 12's open ▲ question.
+  - **A lap pick ends a comparison** (#575): a pick, a MOMENTS Jump or a Coaching Jump leaves
+    compare first and says so; the Laps table shows the pair.
+  - **Follow is off by default** (#576), the conservative default, not for its cost: section 10's
+    "no follow-cam" is superseded by its 2026-11-16 addendum, which carries the measurement (+3.1 /
+    +5.9 / +7.6 ms of CPU per tick at the median / p95 / p99 over the plain race, offscreen raster
+    only; compositing on screen not measured). View ▸ Follow the race, ⇧R or the race card's
+    crosshair; remembered once chosen. The view fits the middle 80 % of the field plus the
+    selected lap.
+  - **The report** (#581): the app's dark tokens on screen, white on paper; the Stats page's order
+    and words; no Grip column (the app reads grip lap to lap within a corner, not as a report
+    figure); the lap strip embedded as the app's own PNG, so the report stays one self-contained
+    file.
+  - **The finder scrolls, it does not select** (#582): the charts, the video and a comparison
+    stay; the outline clears on a key move or another pick (#586).
+  - **Refused**: section 33, "N of M slow laps lost their time at one corner" (on the demo 1 of 1,
+    p 1.00; a p ≤ 0.05 gate was refused too), and section 34, splitting a long corner window in
+    two (it renumbers every corner, and the demo has no valley to split); section 29's figures
+    were corrected to laps by number (#580).
+  - **The ProRes probe** (#584): one in flight per process, shared by every dialog and export; a
+    miss is never kept; a success, an unlisted encoder, a bent alpha or a timeout is; one export
+    action pins the encoder once, so the estimate and the render agree.
+  - **Broadcast plates** (#585): under the Δ bar's scale, the honesty stamp and the g readout, at
+    alpha 230; the minimap's corner labels outlined heavier; the corner cards left at 3.2:1
+    because they are shared with Classic, whose pixels stay identical.
+  - **The printed-loss convention** (#586): a pass's gap is the printed pass minus the printed
+    typical, and Med loss the printed Median minus the printed Best, so every surface prints one
+    number per pass and the reader can check it. On the demo Lap 6 at the sixth corner reads
+    +0.82 s in the Laps table, Stats and the report (Stats said +0.83 s); the fourth corner's Med
+    loss reads +0.06 (was +0.07) and the CORNERS note "Summed, that is 0.77 s" (was 0.78); 19
+    CORNERS BY LAP hovers move by 0.01 s. The ▼ rule now rounds the median too: 3 of 144,400
+    swept cells are newly marked, none on the demo.
+  - **Coaching's level step** (#587, the conservative subset): Coaching never names consistency as
+    the reason at a corner whose passes are level with each other, a middle half under the 0.07 s
+    step Stats ▸ CORNERS uses; it names another habit that clears its own floor, or says "no one
+    habit explains it: your passes here are level with each other". The ranking, the focus corners
+    and the weighing of reasons are unchanged: the demo's debrief still puts its first, second and
+    seventh corners on the focus list. The synthetic golden baseline was re-cut in a reviewed
+    change of 18 leaves (the reason's kind, its contribution and the theme's cause only), and one
+    published cell of the theme table in `studio/coaching.py` was re-measured (a chapter row's
+    "consistency 74 %" now reads "coasting 26 %"). Not ranking corners that lose under 0.07 s, and
+    picking the reason on the middle half instead of σ, were measured and left for the owner,
+    because both would change which corners the debrief shows.
+- **The media.** `accuracy.png`, `debrief.png`, `lapstrip.png` and `moments.png` were re-captured
+  on the synthetic demo at a clean commit, all four byte-identical to the files already committed:
+  `debrief.png` had been re-captured by #587 (its rows' reasons now say the passes are level), and
+  this release records it at a real commit; `moments.png` shows nothing #586 changed. `hero.png`,
+  `map.png` and `og.png` are waived again as stale, for 0.8.0's reasons; they show neither the
+  slow-lap footer nor Follow. `data-trust.png` and `ideal-lap.png` are renewed: 0.12.0 changed
+  Stats-page modules (the ◆ mark, the printed losses, helpers moved for the report), and among the
+  modules that draw these crops only comments and new stylesheet rules for the Laps footer; a demo
+  render of both shots from v0.11.0's `studio/` and from 0.12.0 is byte-identical. The export
+  stills `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed with a new reason: 0.12.0
+  did change export code (#584, #585), but neither change reaches a Classic export: a
+  painter-level render of 192 Classic configurations on the demo, 3,072 frames overlay-only and
+  composited, from v0.11.0's `studio/` and from 0.12.0 is byte-identical.
+- **What could not run for it.** As at 0.11.0, one recording the real-footage checks take is on
+  this machine; the rest report Skipped by name because their recordings are not here. The
+  published real-footage Coaching tables (`test_the_coaching_tables_match_the_footage`) cannot be
+  re-verified offline. Follow's cost was measured offscreen only. The manual half of the golden
+  gate did not run; the core is unchanged, and the synthetic golden gate passed on its reviewed
+  re-cut.
+- **Open for the owner.**
+  - Should Coaching rank a corner whose time lost is under 0.07 s at all? On the demo only the
+    first corner would remain, and 5 of 9 synthetic sessions would lose their debrief landing.
+  - Should Coaching weigh the consistency reason on the middle half instead of σ?
+  - The apex and braking reasons have no noise floor.
+  - The habit planted in the demo is ranked only on the demo's own seed.
+  - The Classic lap strip colours a Δ inside 0.07 s as lost; under provisional timing the overlay
+    still shows "★ BEST" and the Δ while the Laps table withholds both.
+  - Should Broadcast be the default Style, and should the Extras open ticked in Classic?
+  - The ◆ glyph, and Follow's default (off).
+  - The landing stills: re-shoot them from another recording, and a Broadcast still; the one
+    recording on this machine is not one RUL-9 approved for publishing.
+  - The keys 1-5 right after a load, on a real display.
+  - Pull request #582's commit list still shows a comment, since removed, that cited a real
+    session; main never carried it.
