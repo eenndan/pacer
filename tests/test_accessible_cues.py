@@ -249,7 +249,8 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
     not a column on screen.
 
     Measured on D24: tinted and plain cells were identical in size, weight, family, alignment and
-    format, and carried the same tooltip. The ranking is σ × median-loss — erratic AND slow — so on
+    format, and carried the same tooltip. The ranking (σ × median-loss then, middle half × median-loss
+    since cool/erratic-robust) is erratic AND slow — so on
     screen a tinted +0.09 sat directly under a plain +0.11, and a plain +0.10 beat the tinted +0.09.
     A reader saw a column that appeared to be ordered by its own numbers and was not, with no way
     to find out. Contrast was never the problem; meaning was.
@@ -269,10 +270,11 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
     from studio.stats_corners import WORST_LOSS_MARK, WORST_TINT_N
     from studio.stats_panel import StatsView
 
-    def corner(cid, loss, sigma):
+    def corner(cid, loss, half):
         return CornerReport(cid=cid, direction=1, n=6, best_s=9.0, median_s=9.0 + loss,
-                            sigma_s=sigma, median_loss_s=loss, apex_best_kmh=60.0,
-                            apex_median_kmh=58.0, grip_median=0.8, score=sigma * loss)
+                            sigma_s=half, median_loss_s=loss, apex_best_kmh=60.0,
+                            apex_median_kmh=58.0, grip_median=0.8, score=half * loss,
+                            middle_half_s=half)
 
     # C11 (+0.09, erratic) outranks C10 (+0.11, steady): the D24 contradiction, reproduced.
     report = [corner(1, 0.05, 0.05), corner(6, 0.12, 0.20), corner(7, 0.10, 0.05),
@@ -303,16 +305,20 @@ def test_stats_worst_loss_cells_carry_a_mark_and_the_score_that_chose_them():
     # ...and the number that caused it is ON the cell it caused, not only in the table's tooltip.
     tip = by_cid[11].toolTip()
     assert "0.20" in tip and "0.09" in tip and "0.018" in tip, tip
-    assert "σ × median loss" in tip, tip
+    assert "middle half (the σ cell's hover) × median loss" in tip, tip
     assert "entry +0.03" in tip and "exit +0.02" in tip, "the phase triple must survive"
     assert by_cid[10].toolTip() == "", "an unmarked cell must not claim a score"
     # ...AND IT IS NOT THE DISTRUST GLYPH. This assertion used to pin the two marks EQUAL, on the
     # grounds that reusing ⚠ meant "no new codepoint arrives" — a font argument standing in for a
     # meaning argument. ⚠ says "this number may not be sound" (a GPS-dropout lap, a caveated trust
     # term); these three cells say the opposite, that here is the most time available. The app's
-    # loudest advertised gains were wearing its distrust mark. ▲ is upside, and it is in the SAME
-    # measured ledger, so the font argument survives the fix intact.
-    assert WORST_LOSS_MARK.strip() == "▲", WORST_LOSS_MARK
+    # loudest advertised gains were wearing its distrust mark. ▲ replaced it, but ▲ is the Δ
+    # readouts' "ahead", and a red ▲ over the grid's red ▼ "behind" read as the opposite of what it
+    # says. ◆ means nothing else in the app's text, and it is in the SAME measured ledger, so the
+    # font argument survives the fix intact.
+    assert WORST_LOSS_MARK.strip() == "◆", WORST_LOSS_MARK
+    assert WORST_LOSS_MARK.strip() not in (theme.DELTA_AHEAD_ARROW, theme.DELTA_BEHIND_ARROW), (
+        "the priority mark must not be a Δ direction arrow: ▲/▼ mean ahead/behind everywhere")
     assert WORST_LOSS_MARK.strip() != DROPOUT_MARK, (
         "the priority mark and the distrust mark must not be the same glyph — that conflation is "
         "the defect this line exists to prevent coming back")
