@@ -1,6 +1,6 @@
 """CORNERS, a Stats-page section: corner by corner over the clean laps — session-best / median / σ
-time, the median loss against each corner's own Best (the three erratic-and-slow corners marked),
-apex speeds and grip — with the phase-share tile over it (where the corner loss goes: entry · apex
+time, the median loss against each corner's own Best (up to three marked: where the passes vary
+most and cost most), apex speeds and grip — with the phase-share tile over it (where the corner loss goes: entry · apex
 · exit) and the reconciliation line under it that ties this table's loss to the Coaching tab's and
 to the ideal lap's. A row click rings the corner on the map; a right-click on a Best cell opens the
 provenance inspector. A section of `stats_panel.StatsView`: build, refresh and copy here; the page
@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QAbstractItemView, QMenu
 
 from . import provenance, provenance_panel, theme, units
 from . import stats as stats_service
-from ._signal import fmt_signed, plural
+from ._signal import fmt_signed, lap_label, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the CORNERS note
 # quotes the Coaching tab's ranking and totals exactly (`stats_straights` does the same for its
@@ -45,22 +45,24 @@ _CORNER_BEST_COL = 1
 # column alone (stats_common.ReportTable.fit): 581 px now, whole at 1440x831 and at 1280x800.
 CORNER_COLUMNS = ["Corner", "Best", "Median", "σ (s)", "Med loss", "Apex best", "Apex med",
                   theme.estimated_label("Grip")]
-WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss cell marked
+WORST_TINT_N = 3          # at most the top-N scoring corners get the loss cell marked
 # ...and MARKED, not merely tinted. The cue used to be hue and nothing else — tinted and plain
 # cells were identical in size, weight, family, alignment and format, and carried the same tooltip
-# — while the ranking is by σ × median-loss, a PRODUCT that is not a column on screen. So the
+# — while the ranking is by a PRODUCT (σ × median-loss then, middle half × median-loss now) that
+# is not a column on screen. So the
 # column read as if it were ordered by its own numbers and was not: on D24 a tinted +0.09 (C11) sat
 # directly under a plain +0.11 (C10), and a plain +0.10 (C7) beat the tinted +0.09. A reader with
 # no colour, or with the colour and no explanation, was given a contradiction either way.
 #
-# THE MARK IS ▲, NOT ⚠, AND THAT IS THE WHOLE POINT. ⚠ is the app's DISTRUST glyph: the lap grid
-# hangs it on a GPS-dropout lap, the DATA TRUST card on a caveated term, and both mean "this
-# number may not be sound". These three cells mean the opposite — they are the corners with the
-# most time available, the three the driver should practise FIRST. Marking the app's best news
-# with its "don't trust this" glyph told a reader the loudest advertised gains were the flagged
-# ones. ▲ is upside, points at the number, and costs nothing to adopt: the reason the old mark
-# reused ⚠ was font coverage ("no new codepoint arrives"), and ▲ is in the same measured ledger
-# (tests/test_glyph_vocabulary.py's _IN_THE_FACE, asserted against the SHIPPED face).
+# THE MARK IS ◆: NOT ⚠, AND NOT ▲. ⚠ is the app's DISTRUST glyph: the lap grid hangs it on a
+# GPS-dropout lap, the DATA TRUST card on a caveated term, and both mean "this number may not be
+# sound". These three cells mean the opposite — they are the corners with the most time available,
+# the three the driver should practise FIRST. The mark became ▲ for that reason, but ▲ is the Δ
+# readouts' "ahead" (theme.DELTA_AHEAD_ARROW), and a red ▲ on this page sat over the CORNERS BY
+# LAP grid's red ▼ "behind", so it read as the opposite of what it says. ◆ carries no Δ meaning
+# anywhere in the app's text (the compare chart's slot-3 diamond is a plotted point shape, not a
+# character) and is in the same measured ledger (tests/test_glyph_vocabulary.py's _IN_THE_FACE,
+# asserted against the SHIPPED face).
 #
 # It is a PREFIX, deliberately: this column is
 # fixed-decimal and right-aligned, so right alignment IS decimal alignment (a property measured and
@@ -69,7 +71,7 @@ WORST_TINT_N = 3          # the top-N inconsistency-score corners get the loss c
 # theme.icon() pixmap because Inter draws it (tests/test_glyph_vocabulary.py measures exactly that)
 # and because a cell's icon slot paints at the cell's LEFT edge, a whole column away from the
 # right-aligned number it would be marking.
-WORST_LOSS_MARK = "▲ "
+WORST_LOSS_MARK = "◆ "
 CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median / σ "
                    "time-in-corner, the median loss VS THE BEST ANYONE DID IN THAT CORNER "
                    "(this column's own Best cell — not your best lap's corner, which is what the "
@@ -85,10 +87,15 @@ CORNERS_TOOLTIP = ("Corner-by-corner over the clean laps: session-best / median 
                    "second out, so it is left out (hover Best or Median for how many laps count), "
                    "and a corner no lap matched shows dashes rather than a guess. "
                    + provenance.CORNER_MATCH_DRIFT + " "
-                   f"The worst 3 loss cells are marked {WORST_LOSS_MARK.strip()} and "
-                   "tinted — ranked by σ × median-loss (erratic AND slow), which is why the marked "
-                   "cells are not simply this column's three largest numbers; hover one for its "
-                   "own score. It is a consistency ranking, not the Coaching tab's list of what "
+                   f"Up to 3 loss cells are marked {WORST_LOSS_MARK.strip()} and tinted: the "
+                   "corners where your passes vary most and cost most, ranked by the middle half "
+                   "(the σ cell's hover) × median loss, which is why the marked cells are not "
+                   "simply this column's three largest numbers; hover one for its own score. The "
+                   "middle half is used rather than σ so that one unusual pass cannot earn the "
+                   f"mark. A corner with fewer than {stats_service.MIN_MIDDLE_HALF_N} counted "
+                   "passes is never marked, and a corner whose middle half is under "
+                   f"{stats_service.MARK_MIN_MIDDLE_HALF_S:.2f} s, the level step, is never "
+                   "marked. It is a consistency ranking, not the Coaching tab's list of what "
                    "to work on (time lost against your best lap), so the two need not agree. "
                    "Click a row to ring the corner's apex on the map; click a column header to "
                    "sort.")
@@ -124,6 +131,19 @@ def _corner_middle_half_tip(report) -> str:
     return (f"The central 50 % of C{report.cid}'s "
             f"{plural(report.n, 'counted pass', 'counted passes')} span {shown}. "
             "σ counts every one of them.")
+
+
+def _corner_one_pass_tip(report) -> str:
+    """The σ cell's second hover line: "" unless ONE pass carries most of σ
+    (`CornerReport.one_pass_sigma`), which is why such a corner is not marked on σ's word. The
+    pass stays in every number on the row; only the sentence's σ leaves it out."""
+    if not getattr(report, "one_pass_sigma", False):
+        return ""
+    lap = getattr(report, "worst_pass_lap", None)
+    name = "" if lap is None else f"L{lap_label(lap)}: "
+    return (f"One pass carries most of this σ ({name}"
+            f"{fmt_signed(report.worst_pass_vs_median_s, unit='s')} against the median); "
+            f"without it σ would be {report.sigma_without_worst_s:.2f} s.")
 
 
 class CornersSection:
@@ -266,6 +286,11 @@ class CornersSection:
                 coach += (f"; {len(unranked)} more {'is' if len(unranked) == 1 else 'are'} "
                           f"listed there but not ranked ({shown_sum(unranked)})")
             parts.append(coach + ".")
+        # A short session where NO corner has the passes a middle half needs: say why there is no
+        # mark at all, rather than leave a reader to infer that every corner is steady.
+        if all(getattr(r, "middle_half_s", None) is None for r in report):
+            parts.append(f"No {WORST_LOSS_MARK.strip()} under "
+                         f"{stats_service.MIN_MIDDLE_HALF_N} counted passes per corner.")
         gap = self._ideal_gap(session)
         if gap is not None:
             parts.append(f"Your ideal lap is {gap:.2f} s under your best.")
@@ -307,12 +332,11 @@ class CornersSection:
         # carries the name every grip surface shares (see CORNER_COLUMNS).
         self.heading.setText(f"CORNERS · speeds in {u_label} · grip %")
         self.note.setText(self._note_text(session, report))
-        # The worst corners by σ × median-loss get their loss cell MARKED and tinted in the
-        # "behind" hue — erratic AND slow, a consistency ranking and not Coaching's. Capped at
-        # WORST_TINT_N and at half the field: a tint that covers every row highlights nothing.
-        k = min(WORST_TINT_N, max(1, len(report) // 2))
-        ranked = sorted(report, key=lambda r: -r.score)[:k]
-        worst = {r.cid: r for r in ranked if r.score > 0}
+        # The corners where the passes vary most and cost most — middle half × median-loss
+        # (`CornerReport.score`; why not σ: stats.ONE_PASS_SIGMA_FRACTION's block) — get their
+        # loss cell MARKED and tinted in the "behind" hue: a consistency ranking, not Coaching's.
+        # The rule (the cap, half the field, the level-step floor) is stats.marked_corners.
+        worst = {r.cid: r for r in stats_service.marked_corners(report, WORST_TINT_N)}
         behind = QColor(theme.behind_colour())
         mono = theme.mono_font(theme.TABLE)
 
@@ -342,7 +366,9 @@ class CornersSection:
             t.setItem(r, 1, best)
             t.setItem(r, 2, median)
             sig = cell(cr.sigma_s, "{:.2f}")
-            sig_tip = _corner_middle_half_tip(cr)
+            # The middle-half line, then (its own line) the one-pass sentence when σ is one pass's.
+            sig_tip = "\n".join(x for x in (_corner_middle_half_tip(cr),
+                                             _corner_one_pass_tip(cr)) if x)
             if sig_tip:
                 sig.setToolTip(sig_tip)
             t.setItem(r, 3, sig)
@@ -359,11 +385,13 @@ class CornersSection:
                 loss.setText(WORST_LOSS_MARK + loss.text())
                 # ONE marked corner is what a layout of three corners or fewer gets (`k` above),
                 # and it is not "one of the 1" (K2).
-                which = (f"One of the {len(worst)} most erratic-and-slow corners"
-                         if len(worst) > 1 else "The most erratic-and-slow corner")
+                which = (f"One of the {len(worst)} corners where your passes vary most and "
+                         "cost most" if len(worst) > 1
+                         else "The corner where your passes vary most and cost most")
                 tips.append(
-                    f"{which} — ranked by "
-                    f"σ × median loss = {wr.sigma_s:.2f} × {wr.median_loss_s:.2f} = "
+                    f"{which} — ranked by the middle half (the σ cell's hover) × median loss = "
+                    f"{wr.middle_half_s:.2f} × "
+                    f"{wr.median_loss_s:.2f} = "
                     f"{wr.score:.3f} s², not by this column alone, and not the Coaching tab's "
                     "ranking (time lost against your best lap).")
             tri = phase_rows.get(cr.cid)

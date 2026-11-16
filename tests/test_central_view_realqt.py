@@ -1897,7 +1897,7 @@ def test_a_coaching_jump_lights_the_chart_label_too():
     view, s = _shown_view_on_the_laps_tab()
     try:
         win = SimpleNamespace(session=s, view=view, _jumping=False,
-                              _reveal_jump_corner=lambda _cid: None)
+                              _reveal_jump_corner=lambda _cid, **_kw: None)
         StudioWindow._jump_to_opportunity(win, 2, 0.0)
         _APP.processEvents()
         assert view.map._corner_markers.highlighted == "C2"

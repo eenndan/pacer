@@ -1110,6 +1110,258 @@ def test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum():
     print("test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum OK")
 
 
+# --------------------------------------------------------------- one story: a pick during compare
+# A lap pick while two laps were compared moved the CHARTS alone: the panes and the seam went on
+# reading "lap 13 vs lap 12" above charts of lap 6. The rule: a pick LEAVES compare first (as a Lap
+# race does), the pair's own laps are not a pick. `assert_one_story` is the invariant every step
+# below is held to, on the real window over the shipped demo.
+def assert_one_story(win):
+    """Panes, seam, charts and map name ONE lap set. In compare: both pickers and the seam name the
+    pinned pair, the charts and the Laps table show exactly it, the map's lap is pane A's, the ghost
+    is up and the button is checked. Out of it: no pickers, no seam, no ghost, and the charts draw
+    the Laps table's selection. (Where the map is out of compare is the playhead's business.)"""
+    from studio._signal import lap_label
+    v = win.view
+    v.tick()
+    pa, pb = v.video.compare_pickers()
+    charts = sorted(v.plots.selected_lap_ids())
+    lap = v.map._current_lap
+    if v.compare.active:
+        a, b = v.compare.lap_a, v.compare.lap_b
+        assert v.video.compare_btn.isChecked(), "comparing behind an unchecked button"
+        assert pa is not None and pb is not None, "comparing with no pane pickers"
+        assert pa.currentText().startswith(f"lap {lap_label(a)} "), (pa.currentText(), a)
+        assert pb.currentText().startswith(f"lap {lap_label(b)} "), (pb.currentText(), b)
+        assert v.video.seam.isVisible()
+        assert v.video.seam.caption.text() == f"lap {lap_label(a)} vs lap {lap_label(b)}", \
+            v.video.seam.caption.text()
+        assert charts == sorted([a, b]), f"two stories: panes {a} vs {b}, charts {charts}"
+        assert sorted(v.table.selected_lap_ids()) == sorted([a, b]), \
+            f"the Laps table shows {v.table.selected_lap_ids()}, the panes {a} vs {b}"
+        assert lap == a, f"the map is on lap {lap}, pane A on {a}"
+        assert v.map._ghost is not None, "no ghost for pane B"
+    else:
+        assert not v.video.compare_btn.isChecked(), "out of compare behind a checked button"
+        assert pa is None and pb is None and not v.video.seam.isVisible(), "panes left behind"
+        assert v.map._ghost is None, "the ghost outlived compare"
+        assert charts == sorted(v.table.selected_lap_ids()), (charts, v.table.selected_lap_ids())
+
+
+def test_a_lap_pick_during_compare_leaves_it_and_the_window_tells_one_story():
+    """Every pick path, table-driven: after it the window tells one story, compare is OFF, the
+    status bar says so once, and the video went where a pick outside compare sends it (the lap
+    start, or for a Jump the corner entry). The pair's own laps are no pick. A Lap race still ends
+    compare; the button, C and the R key all work after a pick ended it. Then 200 seeded random
+    picks, mark seeks, toggles, pane repoints and races, `assert_one_story` after every one. The
+    Laps table shows the compared pair, and mark seeks follow the same rule."""
+    import random
+
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtTest import QTest
+    from test_race_controller import _settle as _wait
+    from test_race_controller import _window
+
+    from studio.central_view import compare_ended_notice
+    with _window() as (win, _path, _open):
+        v, s, bar = win.view, win.session, win.statusBar()
+        valid = s.valid_lap_ids()
+        cids = list(v.corner_table._cids)
+        nudge = theme.LAP_SEEK_NUDGE_S
+        seeks = []
+        pane = v.video.pane
+        real_seek = pane.seek
+
+        def seek(t):        # the inert player emits no position: land the seek as a real one would
+            seeks.append(t)
+            real_seek(t)
+            v._on_position(t)
+        pane.seek = seek
+
+        def row(lap):
+            return v.table.table.model().index(v.table._row_for_lap(lap), 0)
+
+        def click(lap):     # a plain click: the row becomes the whole selection, even if it was in it
+            v.table.table.selectionModel().setCurrentIndex(
+                row(lap), QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+
+        def cmd_click(lap):
+            v.table.table.selectionModel().select(
+                row(lap), QItemSelectionModel.Toggle | QItemSelectionModel.Rows)
+
+        def enter():
+            if v.compare.active:
+                v.video.compare_btn.click()
+            v.table.select([valid[0]])
+            v._on_laps_selected([valid[0]], seek=True)   # pane A opens on lap 1, pane B on best
+            v.tick()                        # the seek lands before compare reads the playhead
+            v.video.compare_btn.click()
+            _wait(0.05)
+            bar.clearMessage()
+            seeks.clear()
+            assert v.compare.active
+            assert_one_story(win)
+            return v.compare.lap_a, v.compare.lap_b
+
+        a, b = enter()
+        assert (a, b) == (valid[0], s.best_lap_id()), (a, b)   # every enter() opens on this pair
+        pick = next(i for i in valid[5:] if i not in (a, b))
+        best, cid = s.best_lap_id(), cids[2]
+        start = s.lap_window(pick)[0] + nudge
+        entry = s.corners.corner_entry_media_time(pick, cid)
+        best_entry = s.corners.corner_entry_media_time(best, cid)
+        coach = f"compare ended; jumped to C{cid} — Corners is showing lap {best + 1}, this "
+        cases = [  # name, gesture, laps shown after, seek target, status
+            ("table click", lambda: click(pick), [pick], start, compare_ended_notice([pick])),
+            # The table shows the pair, so a ⌘-click adds to what is visible: pair + pick.
+            ("cmd-click", lambda: cmd_click(pick), [a, b, pick],
+             s.lap_window(min(a, b, pick))[0] + nudge, compare_ended_notice([a, b, pick])),
+            ("MOMENTS Jump", lambda: v.stats_view.moment_jump.emit(pick, cid), [pick], entry,
+             compare_ended_notice([pick])),
+            ("Coaching Jump", lambda: v.opportunities.jump_requested.emit(cid, 0.0), [best],
+             best_entry, coach),
+            ("cue click", lambda: (click(pick), v.table.slow_corner_clicked.emit(cid)), [pick],
+             start, compare_ended_notice([pick])),
+        ]
+        for name, gesture, shown, target, status in cases:
+            enter()
+            gesture()
+            _wait(0.05)
+            assert not v.compare.active, f"{name}: still comparing after the pick"
+            assert_one_story(win)
+            assert sorted(v.plots.selected_lap_ids()) == sorted(shown), name
+            assert v.map._current_lap == min(shown), (name, v.map._current_lap, shown)
+            assert seeks and abs(seeks[-1] - target) < 1e-9, (name, seeks, target)
+            msg = bar.currentMessage()
+            assert msg == status or (name == "Coaching Jump" and msg.startswith(status)), \
+                (name, msg)
+        # The arrow key: the next row down, as a click on it would be.
+        a, b = enter()
+        down = v.table._lap_id(v.table.table.currentIndex().row() + 1)
+        v.table.table.setFocus()
+        QTest.keyClick(v.table.table, Qt.Key_Down)
+        _wait(0.05)
+        assert not v.compare.active and v.plots.selected_lap_ids() == [down]
+        assert bar.currentMessage() == compare_ended_notice([down]), bar.currentMessage()
+        assert_one_story(win)
+        # The pair's own laps are no pick: nothing moves, nothing is said, nothing seeks.
+        a, b = enter()
+        v.table.select([a])
+        v.table.table.selectionModel().select(
+            row(b), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        _wait(0.05)
+        assert v.compare.active and (v.compare.lap_a, v.compare.lap_b) == (a, b)
+        assert v.plots.selected_lap_ids() == [a, b] and not seeks and bar.currentMessage() == ""
+        assert_one_story(win)
+        # The table shows the pair, and follows a pane repoint: a click on one pair row is a pick of
+        # that one lap. Entered from lap 6 (6 vs best), pane A repointed to lap 3 → table 3 + best.
+        v.video.compare_btn.click()
+        click(valid[5])
+        _wait(0.05)
+        v.video.compare_btn.click()
+        _wait(0.05)
+        assert (v.compare.lap_a, v.compare.lap_b) == (valid[5], best), (v.compare.lap_a, best)
+        assert sorted(v.table.selected_lap_ids()) == sorted([valid[5], best])
+        v.video.paneRepointRequested.emit(0, valid[2])
+        assert sorted(v.table.selected_lap_ids()) == sorted([valid[2], best])
+        assert_one_story(win)
+        bar.clearMessage()
+        seeks.clear()
+        click(valid[2])
+        _wait(0.05)
+        assert not v.compare.active and v.plots.selected_lap_ids() == [valid[2]]
+        assert bar.currentMessage() == compare_ended_notice([valid[2]]), bar.currentMessage()
+        assert seeks[-1] == s.lap_window(valid[2])[0] + nudge
+        assert_one_story(win)
+        # Turning compare off by its button leaves the charts on the pair the table showed.
+        a, b = enter()
+        v.video.compare_btn.click()
+        assert sorted(v.plots.selected_lap_ids()) == sorted([a, b])
+        assert_one_story(win)
+        # Marks (a Marks row, the , / . keys): a mark in pane A's lap is pane A's own seek and
+        # compare stays; anywhere else (pane B's lap included) it is a pick of the mark's lap.
+        from studio import marks as marks_model
+
+        def mark_in(lap, frac=0.5):
+            w = s.lap_window(lap)
+            return dict(id=f"m{lap}", t=w[0] + frac * (w[1] - w[0]), type=marks_model.TYPE_NOTE,
+                        placed=True, note="here")
+        a, b = enter()
+        other = next(i for i in valid if i not in (a, b) and i > a)
+        win._marks = [mark_in(other)]
+        win._jump_to_mark(+1)               # . (and , : the same _jump_to_mark)
+        _wait(0.05)
+        assert not v.compare.active and v.plots.selected_lap_ids() == [other]
+        assert seeks[-1] == win._marks[0]["t"] and v.map._current_lap == other
+        assert bar.currentMessage().startswith("compare ended; "), bar.currentMessage()
+        assert_one_story(win)
+        a, b = enter()
+        win._marks = [mark_in(a, 0.8)]
+        win._jump_to_mark(+1)               # .
+        _wait(0.05)
+        assert v.compare.active and (v.compare.lap_a, v.compare.lap_b) == (a, b)
+        assert seeks[-1] == win._marks[0]["t"]
+        assert_one_story(win)
+        win._marks = [mark_in(b)]
+        win._on_mark_activated(f"m{b}")     # a Marks row in pane B's lap
+        _wait(0.05)
+        assert not v.compare.active and v.plots.selected_lap_ids() == [b]
+        assert bar.currentMessage() == compare_ended_notice([b]), bar.currentMessage()
+        assert seeks[-1] == win._marks[0]["t"] and v.map._current_lap == b
+        assert_one_story(win)
+        # After a pick ended it: the button is live and unchecked, C re-enters, R races.
+        click(pick)
+        _wait(0.05)
+        assert v.video.compare_btn.isEnabled() and not v.video.compare_btn.isChecked()
+        win.toggle_compare()
+        assert v.compare.active
+        click(valid[1])
+        _wait(0.05)
+        win.activateWindow()
+        v.video.setFocus()      # an item view with focus takes letter keys for its own search
+        _wait(0.05)
+        QTest.keyClick(win, Qt.Key_R)
+        _wait(0.05)
+        assert v.is_racing(), ("R did not race after a pick ended compare", bar.currentMessage())
+        v.end_lap_race()
+        # A Lap race still ends compare, as before.
+        enter()
+        assert v.start_lap_race() and not v.compare.active
+        v.end_lap_race()
+        assert_one_story(win)
+        # 200 seeded steps of everything above, mixed with toggles, pane repoints and races.
+        rng = random.Random(570)
+
+        def repoint():      # a pane picker: it never offers the lap the other pane holds
+            if v.compare.active:
+                side = rng.randrange(2)
+                other = v.compare.lap_b if side == 0 else v.compare.lap_a
+                v.video.paneRepointRequested.emit(side, rng.choice(
+                    [i for i in valid if i != other]))
+        def mark_row():
+            m = mark_in(rng.choice(valid), rng.random())
+            win._marks = [m]
+            win._on_mark_activated(m["id"])
+        steps = [
+            mark_row,
+            lambda: click(rng.choice(valid)),
+            lambda: cmd_click(rng.choice(valid)),
+            lambda: v.stats_view.moment_jump.emit(rng.choice(valid), rng.choice(cids + [None])),
+            lambda: v.opportunities.jump_requested.emit(rng.choice(cids), 0.0),
+            lambda: v.table.slow_corner_clicked.emit(rng.choice(cids)),
+            lambda: v.video.compare_btn.click(),
+            repoint,
+            lambda: (v.compare.active and v.table.select([v.compare.lap_a, v.compare.lap_b]),
+                     v.table._on_selection()),
+            lambda: (v.start_lap_race(), v.end_lap_race()),
+        ]
+        for _ in range(200):
+            rng.choice(steps)()
+            _APP.processEvents()
+            assert_one_story(win)
+    print("ok compare: every lap pick leaves it and says so; the pair is no pick; one story "
+          "over 200 seeded steps")
+
+
 # --------------------------------------------------------------- Issue 1+3 real media (footage)
 def test_real_media_pane_b_is_reference_at_lap_start():
     """REAL widgets on REAL media (the whole point — the fakes hid this): build a StudioWindow on
@@ -1226,6 +1478,7 @@ def _run_all():
     test_ia_06_compare_button_carries_a_visible_label()
     test_u9_04_f_key_reaches_the_video_focus_gesture()
     test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum()
+    test_a_lap_pick_during_compare_leaves_it_and_the_window_tells_one_story()
     print("ALL VIDEO-VIEW COMPARE TESTS PASSED")
 
 
