@@ -41,6 +41,13 @@ exceptions table (another environment, or a `COST` so a slow suite starts first)
 footage or soak registration. The per-test notes that file carried until 2026-09-24 are history,
 kept verbatim in [registration-notes.md](registration-notes.md).
 
+**Two runs on one machine share no files.** Every process jails its app support
+([test_app_support_jail.py](test_app_support_jail.py)) and no test writes a fixed name under the
+shared `$TMPDIR` ([test_temp_isolation.py](test_temp_isolation.py), no carve-outs since
+2026-11-16), so a `pixi run test*` beside another agent's is not a collision. They still share the
+CPU and the VideoToolbox sessions: a check failing near its timeout or on a hardware encode under
+that load is re-run alone before it is believed.
+
 - **C++ Catch2 (5):** `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`,
   `test_gps_source`.
 - **Python studio (the rest):** pure-Python and registered with CTest — offscreen Qt where they
