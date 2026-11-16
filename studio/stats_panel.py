@@ -2832,9 +2832,13 @@ class StatsView(QWidget):
                         # measured against the typical lap through this sector, the ★ against the
                         # quickest. Two marks reading off two baselines and saying so beats one
                         # baseline that answers only half the question (see MATRIX_SCALE_MIN_S).
+                        # Each gap is the printed cell minus the printed anchor beside it.
+                        typ = stats_service.pass_vs_typical_s(val, med)
+                        to_best = stats_service.printed_gap_s(val, col_best)
                         item.setToolTip(
-                            f"{fmt_signed(val - med, d)} s against your typical S{c + 1} "
-                            f"({med:.{d}f} s); {fmt_signed(gap, d)} s against the sector best "
+                            f"{stats_service.fmt_pass_vs_typical(typ)} against your typical "
+                            f"S{c + 1} ({med:.{d}f} s); "
+                            f"{stats_service.fmt_pass_vs_typical(to_best)} against the sector best "
                             f"({col_best:.{d}f} s, lap {matrix.best_lap[c] + 1}).")
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 item.setFont(mono)

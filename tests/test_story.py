@@ -422,7 +422,7 @@ def test_demo_partition_sums_to_the_lap_time_and_the_grid_reads_its_corner_piece
 
 
 DEMO_NOTE = ("Lap 6 · 5.50 s over your typical lap · C5 +2.84 s of it, over your typical pass (▼); "
-             "also C6 ▼ +0.83 s")
+             "also C6 ▼ +0.82 s")
 DEMO_MOMENTS = (
     "Best lap: Lap 13 · 0:44.950",
     "Biggest single-corner loss: Lap 6 · C5 +2.84 s over your typical pass (▼)",
@@ -443,31 +443,129 @@ def test_demo_story():
     print("test_demo_story OK")
 
 
+def _printed_minus_printed(a: float, b: float) -> float:
+    """What a reader computes from the two figures a surface prints beside the gap."""
+    return round(round(a, 2) - round(b, 2), 2)
+
+
 def test_one_pass_at_one_corner_prints_one_number_everywhere():
-    """QA w5: lap 6 at C6 on the demo is 3.6540 − 2.8289 = 0.8251 s over the corner's typical pass.
-    The slow-lap note (Laps ▼ tooltip, report SLOW LAPS) rounded the PASS before subtracting and
-    printed "+0.82 s"; the σ hover and the report's CORNERS note subtracted first and printed
-    "+0.83 s". One function takes the difference (`stats.pass_vs_typical_s`) and one formatter
-    prints it, so every surface naming that pass says the same number."""
-    # The arithmetic, on a planted pass where the two orders disagree.
-    assert stats.pass_vs_typical_s(3.654, 2.8289) == 0.83
-    assert round(round(3.654, 2) - 2.8289, 2) == 0.82      # the old order, for the record
-    assert stats.fmt_pass_vs_typical(stats.pass_vs_typical_s(3.654, 2.8289)) == "+0.83 s"
+    """QA w5: lap 6 at C6 on the demo is 3.6540 against a typical 2.8289. The slow-lap note (Laps ▼
+    tooltip, report SLOW LAPS) printed "+0.82 s" and the σ hover and the report's CORNERS note
+    "+0.83 s". Every surface now prints the PRINTED pass minus the PRINTED typical
+    (`stats.pass_vs_typical_s`), the number a reader checks against "[▼ 3.65] … your typical C6
+    (2.83 s)" on the same line: +0.82 s, everywhere."""
+    # The arithmetic, on the demo's own pass: both other orders, for the record.
+    assert stats.pass_vs_typical_s(3.654, 2.8289) == 0.82
+    assert round(3.654 - 2.8289, 2) == 0.83                 # subtract-then-round (#586 v1)
+    assert stats.fmt_pass_vs_typical(stats.pass_vs_typical_s(3.654, 2.8289)) == "+0.82 s"
     assert stats.pass_vs_typical_s(None, 2.8) is None and stats.pass_vs_typical_s(3.0, None) is None
-    # The demo, on the real accessors: the note's C6 and the σ hover's L6 are one number.
+    # The demo, on the real accessors: the note, the σ sentence, the grid's gap — one number, and
+    # it is the printed pass minus the printed median.
     s = _demo()
     (note,) = s.slow_lap_notes()
-    (c6,) = [c for c in note.corners + note.also if c.cid == 6]
-    printed = stats.fmt_pass_vs_typical(c6.loss_s)
-    (row,) = [r for r in s.corner_report() if r.cid == 6]
-    sigma_note = stats.corner_one_pass_note(row)
-    assert f"L6: {printed} against the median" in sigma_note, (printed, sigma_note)
-    assert f"C6 ▼ {printed}" in note.text, (printed, note.text)
-    # ...and the CORNERS BY LAP cell's hover takes the same function over the same cell.
     mx = s.corner_matrix()
-    r, c = mx.lap_ids.index(5), mx.cids.index(6)
-    assert stats.pass_vs_typical_s(mx.cells[r][c], mx.medians[c]) == c6.loss_s == 0.83
+    r = mx.lap_ids.index(note.lap_id)
+    for cl in note.corners + note.also:
+        c = mx.cids.index(cl.cid)
+        want = _printed_minus_printed(mx.cells[r][c], mx.medians[c])
+        assert cl.loss_s == want, (cl, want)
+        assert f"C{cl.cid} {stats.fmt_pass_vs_typical(want)}" in note.text.replace("▼ ", ""), \
+            (want, note.text)
+        assert stats.pass_vs_typical_s(mx.cells[r][c], mx.medians[c]) == want
+    (c6,) = [c for c in note.corners + note.also if c.cid == 6]
+    assert c6.loss_s == 0.82 and "C6 ▼ +0.82 s" in note.text, note.text
+    for row in s.corner_report():
+        sentence = stats.corner_one_pass_note(row)
+        if not sentence:
+            continue
+        cell = mx.cells[mx.lap_ids.index(row.worst_pass_lap)][mx.cids.index(row.cid)]
+        assert row.median_s == mx.medians[mx.cids.index(row.cid)]
+        want = _printed_minus_printed(cell, row.median_s)
+        lap = f"L{row.worst_pass_lap + 1}: "
+        assert f"{lap}{stats.fmt_pass_vs_typical(want)} against the median" in sentence, \
+            (row.cid, want, sentence)
+    (row6,) = [x for x in s.corner_report() if x.cid == 6]
+    assert "L6: +0.82 s against the median" in stats.corner_one_pass_note(row6)
+    m = s.session_moments()
+    assert m.biggest_loss.cid == 5 and m.biggest_loss.value == _printed_minus_printed(
+        mx.cells[r][mx.cids.index(5)], mx.medians[mx.cids.index(5)])
+    # CORNERS Med loss: the printed Median minus the printed Best beside it (C4: 3.08 − 3.02), and
+    # the note's sum is the sum of those cells.
+    rows = s.corner_report()
+    for x in rows:
+        assert stats.printed_med_loss(x) == _printed_minus_printed(x.median_s, x.best_s), x.cid
+    (c4,) = [x for x in rows if x.cid == 4]
+    assert stats.printed_med_loss(c4) == 0.06, stats.printed_med_loss(c4)
+    total = sum(stats.printed_med_loss(x) for x in rows)
+    assert f"Summed, that is {total:.2f} s." in stats.corner_count_note(rows)[0]
     print("test_one_pass_at_one_corner_prints_one_number_everywhere OK")
+
+
+def test_a_marked_pass_never_prints_below_its_own_step():
+    """The ▼, the heat shade, the note and the σ sentence take ONE gap. With the median unrounded
+    in the ▼ rule, a median sitting on a half-hundredth could mark a cell whose printed gap reads a
+    hundredth under the printed step, or (here) refuse one whose printed gap reaches it: 4.1354
+    prints 4.14, a median of 3.8449999999999998 (the double the sweep produced, just under 3.845)
+    prints 3.84, the step 0.30 — the printed gap is +0.30, a ▼, where the old rule's 4.14 − 3.845
+    came to 0.29499… and refused it. One of the 3 sweep cells (of 144,400) whose ▼ moved."""
+    val, med, step = 4.1354, 3.8449999999999998, 0.30
+    assert f"{val:.2f}" == "4.14" and f"{med:.2f}" == "3.84"
+    assert stats.pass_vs_typical_s(val, med) == 0.30 == _printed_minus_printed(val, med)
+    assert round(round(val, 2) - med, 2) == 0.29             # the old ▼ rule's gap
+    mx = stats.CornerMatrix(lap_ids=[0], cids=[1], cells=[[val]], resolved=[[True]],
+                            medians=[med], scales=[step], n_resolved=[9])
+    assert mx.is_behind(0, 0) and mx.heat(0, 0) == 2, (mx.is_behind(0, 0), mx.heat(0, 0))
+    # The σ sentence prints the same gap from the pass's own time and the row's median.
+    from types import SimpleNamespace
+    row = SimpleNamespace(one_pass_sigma=True, worst_pass_lap=0, median_s=med,
+                          worst_pass_vs_median_s=val - med, sigma_without_worst_s=0.05)
+    assert "L1: +0.30 s against the median" in stats.corner_one_pass_note(row), \
+        stats.corner_one_pass_note(row)
+    print("test_a_marked_pass_never_prints_below_its_own_step OK")
+
+
+def test_on_hundredth_edges_every_printed_loss_is_its_printed_pass_minus_its_printed_typical():
+    """A seeded sweep of sessions whose every corner time sits on (or a hair off) a half-hundredth,
+    where any two rounding orders disagree most (the review's 4,000-session generator, 400 here; the
+    full run: 9,096 printed losses, 0 off, 0 below their step). For every note: each printed
+    corner loss IS the printed pass minus the printed typical, never under its own printed ▼ step;
+    "one"/"two" never name more than the printed excess; and every cell's ▼ is its deepest shade."""
+    import random
+    rnd = random.Random(1)
+
+    def edge(x):
+        return round(x * 100) / 100 + 0.005 + rnd.choice((-1, 1)) * rnd.choice((1e-9, 1e-6, 4e-4, 0.0))
+    checked = 0
+    for _ in range(400):
+        n_laps, n_c = 8, rnd.randint(3, 6)
+        base = [rnd.uniform(2.0, 4.0) for _ in range(n_c)]
+        cells = [[edge(b + rnd.gauss(0, 0.05)) for b in base] for _ in range(n_laps)]
+        slow = rnd.randrange(n_laps)
+        for c in rnd.sample(range(n_c), rnd.randint(1, n_c)):
+            cells[slow][c] = edge(cells[slow][c] + rnd.uniform(0.05, 1.5))
+        mx = stats.corner_matrix(list(range(n_laps)), list(range(1, n_c + 1)), cells,
+                                 [[True] * n_c for _ in range(n_laps)])
+        times = {lap: 45.0 + rnd.gauss(0, 0.15) for lap in range(n_laps)}
+        times[slow] = 45.0 + sum(cells[slow]) - sum(base) + rnd.uniform(0.6, 3.0)
+        for note in story.slow_lap_notes(times, mx, best_lap=None):
+            r = mx.lap_ids.index(note.lap_id)
+            for cl in note.corners + note.also:
+                c = mx.cids.index(cl.cid)
+                want = _printed_minus_printed(mx.cells[r][c], mx.medians[c])
+                assert cl.loss_s == want, (cl, want, note.text)
+                assert want >= round(mx.scales[c], 2), (cl, mx.scales[c], note.text)
+                checked += 1
+            named = [cl.loss_s for cl in note.corners]
+            if note.category == "one":
+                assert named[0] <= note.excess_s, note.text
+            if note.category == "two":
+                assert named[0] + named[1] <= note.excess_s, note.text
+        for r in range(n_laps):
+            for c in range(n_c):
+                assert mx.is_behind(r, c) == (mx.heat(r, c) == 2), (r, c)
+    assert checked > 800, checked
+    print(f"test_on_hundredth_edges_every_printed_loss_is_its_printed_pass_minus_its_printed_typical "
+          f"OK ({checked} printed losses)")
 
 
 def test_demo_dropout_and_excluded_laps_get_no_note():

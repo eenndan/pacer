@@ -32,7 +32,7 @@ CATEGORIES (only a corner BEYOND ITS ▼ STEP may be named — `CornerMatrix.is_
   * `two`      — the two worst ▼ corners together do;
   * `partial`  — a ▼ corner exists, but under that share: every ▼ corner is named, the rest "spread";
   * `spread`   — no corner beyond its ▼ step.
-No ▼ corner is dropped: beside the culprit(s), the others are `also` ("; also C6 ▼ +0.83 s", at most
+No ▼ corner is dropped: beside the culprit(s), the others are `also` ("; also C6 ▼ +0.82 s", at most
 ALSO_NAMED of them, then "+N more").
 STRAIGHTS ARE NEVER NAMED. A straight has no ▼ step today (the grid has corner columns only), so
 there is no honest noise gate to say "the time went on the straight after C4" — such a lap reads
