@@ -488,6 +488,27 @@ def corner_mark_rule(*, hover: bool = True) -> str:
         "to work on (time lost against your best lap), so the two need not agree.")
 
 
+def pass_vs_typical_s(val: float | None, typical: float | None) -> float | None:
+    """ONE PASS against its corner's typical pass (the median of the counted passes), in seconds,
+    signed (+ = slower), rounded to `MATRIX_DECIMALS`; None when either side is missing.
+
+    DIFFERENCE FIRST, THEN ROUND, and the only place that takes this difference for a surface to
+    print. The slow-lap note used to round the pass to two decimals BEFORE subtracting the median,
+    while the σ hover, the grid cell's hover and the report's CORNERS note subtracted first: on the
+    demo, lap 6 at C6 (3.6540 − 2.8289 = 0.8251 s) read "+0.82 s" in the Laps ▼ tooltip and the
+    report's SLOW LAPS, and "+0.83 s" on Stats and in the report's CORNERS, on one page. The ▼
+    DECISION is not this (`_behind_at_print`, one rule with the split grid); this is the number."""
+    if val is None or typical is None:
+        return None
+    return round(float(val) - float(typical), MATRIX_DECIMALS)
+
+
+def fmt_pass_vs_typical(gap: float) -> str:
+    """`pass_vs_typical_s`'s printed form, "+0.83 s" — the one formatter every surface that prints
+    a pass's time against its corner's typical pass goes through."""
+    return fmt_signed(gap, MATRIX_DECIMALS, unit="s")
+
+
 def corner_one_pass_note(report) -> str:
     """"" unless ONE pass carries most of a corner's σ (`CornerReport.one_pass_sigma`), which is
     why such a corner is not marked on σ's word; else the sentence naming that pass. The pass
@@ -497,7 +518,7 @@ def corner_one_pass_note(report) -> str:
     lap = getattr(report, "worst_pass_lap", None)
     name = "" if lap is None else f"L{lap_label(lap)}: "
     return (f"One pass carries most of this σ ({name}"
-            f"{fmt_signed(report.worst_pass_vs_median_s, unit='s')} against the median); "
+            f"{fmt_pass_vs_typical(report.worst_pass_vs_median_s)} against the median); "
             f"without it σ would be {report.sigma_without_worst_s:.2f} s.")
 
 

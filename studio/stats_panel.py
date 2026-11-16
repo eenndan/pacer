@@ -2928,8 +2928,11 @@ class StatsView(QWidget):
                             item.setForeground(text_ink)
                         if matrix.is_behind(r, c):
                             item.setText(theme.DELTA_BEHIND_ARROW + " " + item.text())
+                        # The slow-lap notes and the σ hover print this same pass the same way.
+                        gap = stats_service.pass_vs_typical_s(val, med)
                         item.setToolTip(
-                            f"{fmt_signed(val - med, d)} s against your typical C{cid} ({med:.{d}f} s, the "
+                            f"{stats_service.fmt_pass_vs_typical(gap)} against your typical "
+                            f"C{cid} ({med:.{d}f} s, the "
                             f"median of the {matrix.n_resolved[c]} laps matched on track through "
                             "it)." + heat_clause(level, matrix.scales[c]))
                 t.setItem(r, c + lead, item)

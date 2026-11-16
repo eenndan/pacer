@@ -422,7 +422,7 @@ def test_demo_partition_sums_to_the_lap_time_and_the_grid_reads_its_corner_piece
 
 
 DEMO_NOTE = ("Lap 6 · 5.50 s over your typical lap · C5 +2.84 s of it, over your typical pass (▼); "
-             "also C6 ▼ +0.82 s")
+             "also C6 ▼ +0.83 s")
 DEMO_MOMENTS = (
     "Best lap: Lap 13 · 0:44.950",
     "Biggest single-corner loss: Lap 6 · C5 +2.84 s over your typical pass (▼)",
@@ -441,6 +441,33 @@ def test_demo_story():
     assert got == DEMO_MOMENTS, got
     assert m.best_lap.tie == () and m.best_window.lap_ids == (8, 9, 10, 11, 12), m
     print("test_demo_story OK")
+
+
+def test_one_pass_at_one_corner_prints_one_number_everywhere():
+    """QA w5: lap 6 at C6 on the demo is 3.6540 − 2.8289 = 0.8251 s over the corner's typical pass.
+    The slow-lap note (Laps ▼ tooltip, report SLOW LAPS) rounded the PASS before subtracting and
+    printed "+0.82 s"; the σ hover and the report's CORNERS note subtracted first and printed
+    "+0.83 s". One function takes the difference (`stats.pass_vs_typical_s`) and one formatter
+    prints it, so every surface naming that pass says the same number."""
+    # The arithmetic, on a planted pass where the two orders disagree.
+    assert stats.pass_vs_typical_s(3.654, 2.8289) == 0.83
+    assert round(round(3.654, 2) - 2.8289, 2) == 0.82      # the old order, for the record
+    assert stats.fmt_pass_vs_typical(stats.pass_vs_typical_s(3.654, 2.8289)) == "+0.83 s"
+    assert stats.pass_vs_typical_s(None, 2.8) is None and stats.pass_vs_typical_s(3.0, None) is None
+    # The demo, on the real accessors: the note's C6 and the σ hover's L6 are one number.
+    s = _demo()
+    (note,) = s.slow_lap_notes()
+    (c6,) = [c for c in note.corners + note.also if c.cid == 6]
+    printed = stats.fmt_pass_vs_typical(c6.loss_s)
+    (row,) = [r for r in s.corner_report() if r.cid == 6]
+    sigma_note = stats.corner_one_pass_note(row)
+    assert f"L6: {printed} against the median" in sigma_note, (printed, sigma_note)
+    assert f"C6 ▼ {printed}" in note.text, (printed, note.text)
+    # ...and the CORNERS BY LAP cell's hover takes the same function over the same cell.
+    mx = s.corner_matrix()
+    r, c = mx.lap_ids.index(5), mx.cids.index(6)
+    assert stats.pass_vs_typical_s(mx.cells[r][c], mx.medians[c]) == c6.loss_s == 0.83
+    print("test_one_pass_at_one_corner_prints_one_number_everywhere OK")
 
 
 def test_demo_dropout_and_excluded_laps_get_no_note():
