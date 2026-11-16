@@ -55,6 +55,34 @@ from .workers import VideoExportWorker
 _log = logging.getLogger(__name__)
 
 
+def report_tokens() -> dict[str, str]:
+    """The app's colours the HTML report is drawn in (`export_data.REPORT_TOKENS`), read off
+    theme — the one source; the Qt-free writer cannot import it. The semantic two follow the
+    active palette, as every best-lap and behind cue in the app does."""
+    return {"canvas": theme.C.canvas, "surface": theme.C.surface, "border": theme.C.border,
+            "text": theme.C.text, "text_dim": theme.C.text_dim, "accent": theme.C.accent,
+            "ahead": theme.best_lap_colour(), "behind": theme.behind_colour()}
+
+
+def report_lapstrip_png(session, unit) -> bytes | None:
+    """The lap-strip card (`share_lapstrip`) as PNG bytes for the report, or None where File ▸
+    Export ▸ "Lap-strip card…" is greyed: the lap card's gate (provisional timing) or under two
+    clean laps. The same data, render and palette as the card itself.
+
+    One picture of the report, not the report: a strip that cannot be built is logged and left
+    out (None), so it can never cost the user the whole document."""
+    from . import share_lapstrip  # local, like gate_lapstrip's: the strip's Qt render
+    try:
+        data = share_lapstrip.lapstrip_data(session, unit=unit)
+        if not data.offered:
+            return None
+        image = share_lapstrip.render_lapstrip(data, palette=theme.active_palette())
+        return share_lapstrip.lapstrip_to_png(image)
+    except Exception:  # noqa: BLE001 — see the docstring: the strip is optional, the page is not
+        _log.exception("lap strip for the report could not be built; the report goes without it")
+        return None
+
+
 class ExportChoice(NamedTuple):
     """What the overlay-video options picker returns (None on cancel): the overlay `config`, the
     `lead` seconds of run-up/run-off to add at each end of a lap, and the `scope` — which laps
@@ -239,10 +267,13 @@ class ExportController:
         # in the display unit, so its lap table must too — a km/h table under an mph chart put two
         # different numbers for the same lap on one page. (The CSVs stay canonical SI: they are
         # machine-readable files, and export_data's writers pass no unit.)
+        # The lap strip is the strip card's own render, under its own gate (report_lapstrip_png).
         if self._run_export(lambda: export_data.write_report_html(
                 path, self.win.session,
                 source_label=self.win._loaded_label() or "session",
-                images=images, unit=self.win._speed_unit), path):
+                images=images, unit=self.win._speed_unit,
+                lapstrip=report_lapstrip_png(self.win.session, self.win._speed_unit),
+                tokens=report_tokens()), path):
             self.win.statusBar().showMessage(f"exported {os.path.basename(path)}", self._status_ms)
     def copy_stats_summary(self):
         """File ▸ Export ▸ "Copy stats summary" (N13): the session's statistics as plain text on

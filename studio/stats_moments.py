@@ -15,19 +15,13 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 from . import story, theme
 from ._signal import lap_label
 from .lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip
-from .library import PB_PRECISION_S
 from .stats_common import section_heading
 from .theme import C
 from .widgets import WrapLabel, icon_button
 
 # Two sentences: what a moment is with its tie rule, and how the 5-lap run differs from the PACE
-# row's race pace a few lines up (a median of five against a mean of three: on the shipped demo the
-# run reads 0:45.182 under the tile's 0:45.246, which without this would read as a contradiction).
-MOMENTS_TOOLTIP = (
-    "Three measurements from this session's clean laps, each with a Jump to where it happened; "
-    f"figures within {PB_PRECISION_S:.2f} s of each other, the timing precision (wider on an "
-    "estimated clock), are named as level rather than ranked. The 5-lap run is the best median of "
-    "5 consecutive clean laps, not the PACE row's race pace, which is the best mean of 3.")
+# row's race pace a few lines up. The exported report prints the same rule (`story.MOMENTS_NOTE`).
+MOMENTS_TOOLTIP = story.MOMENTS_TOOLTIP
 
 # The pairs that must not part across a wrap, each joined by a no-break space. Looked at, not
 # guessed: the quadrant wrapped "(within 0.07 / s)" and "pass / (▼)", the 340 px page "C5 / +2.84 s",
@@ -111,14 +105,9 @@ class MomentsSection:
     def refresh(self, session) -> None:
         read = getattr(session, "session_moments", None)
         sm = read() if read is not None else None
-        moments = [m for m in ((sm.best_lap, sm.biggest_loss, sm.best_window) if sm else ())
-                   if m is not None]
-        # A lone UNTIED best lap is the PACE row's best tile word for word ("Best lap: Lap 3 ·
-        # 0:45.280" under "best 0:45.280"): on a session with no corner grid and no 5-lap run that
-        # was the whole section, 116 px for nothing (QA W4). A tied best names laps the tile does
-        # not, so it stays.
-        if len(moments) == 1 and moments[0].kind == story.BEST_LAP and not moments[0].tie:
-            moments = []
+        # A lone UNTIED best lap only repeats the PACE row's best tile: no section
+        # (`story.shown_moments`, the rule the exported report reads too).
+        moments = story.shown_moments(sm)
         self.heading.setVisible(bool(moments))
         self.body.setVisible(bool(moments))
         for i, row in enumerate(self.rows):
