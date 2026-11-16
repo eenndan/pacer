@@ -13,14 +13,11 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView, QMenu
 
-from . import provenance, provenance_panel, theme, units
+# `coaching` for the Coaching tab's OWN row filter, shortlist and sum (not re-implemented), so the
+# CORNERS note quotes that tab's ranking and totals exactly (`stats_straights` does the same) — L5-02.
+from . import coaching, provenance, provenance_panel, theme, units
 from . import stats as stats_service
 from ._signal import fmt_signed, plural
-
-# The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the CORNERS note
-# quotes the Coaching tab's ranking and totals exactly (`stats_straights` does the same for its
-# note) — L5-02.
-from .coaching_panel import PANEL_TOP_N, _ranked_shown, _shown_rows
 from .lap_table import NUM_ROLE, _NumItem, set_corner_direction
 from .stats_common import ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
 from .widgets import DASH, Tile, WrapLabel
@@ -221,9 +218,9 @@ class CornersSection:
         # The Coaching tab's own totals are over its RANKED rows (the corners that survived its
         # per-corner evidence gate), so this reconciliation quotes the same set — a "totals X s"
         # here that included abstained corners would not reconcile with the page it names.
-        rows = _ranked_shown(opp) if getattr(opp, "enough", False) else []
+        rows = coaching.ranked_shown(opp) if getattr(opp, "enough", False) else []
         if rows:
-            top = rows[:PANEL_TOP_N]
+            top = coaching.shortlist(opp)
             # Since #339 Coaching counts a cell only where the lap AND the best lap matched that
             # corner on track — the rule this table counts by — so when this table left some out,
             # the sentence says Coaching did too: a reader who has just been told cells were left
@@ -238,11 +235,11 @@ class CornersSection:
             # values the Coaching rows print, the rule its own headline sums by (B12), and the
             # not-ranked rows are counted rather than silently left out of "the SAME corners".
             same = ", leaving out the same interpolated times" if left_out else ""
-            more = rows[PANEL_TOP_N:]
-            unranked = [r for r in _shown_rows(opp) if not any(r is x for x in rows)]
+            more = rows[len(top):]
+            unranked = [r for r in coaching.shown_rows(opp) if not any(r is x for x in rows)]
 
             def shown_sum(rs) -> str:
-                return f"{sum(round(r.time_lost, 2) for r in rs):.2f} s"
+                return f"{coaching.shown_total(rs):.2f} s"
 
             coach = (f"The Coaching tab measures the SAME corners against your best lap{same}: "
                      f"its headline totals {shown_sum(top)} over {plural(len(top), 'corner')}")
