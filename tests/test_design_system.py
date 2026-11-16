@@ -354,7 +354,7 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
     exempted BY NAME below rather than fixed in a PR whose pixel proof does not cover them.
 
     All five left are the same shape and the shape is argued in the `_CALLS` preamble above: a
-    DIALOG'S MEASURE (400 / 560 / 380 / 460 px) and a button's 88 px floor are extents, and
+    DIALOG'S MEASURE (400 / 640 / 380 / 460 px) and a button's 88 px floor are extents, and
     the SPACE scale has nothing to say about them. They are listed here because the check cannot
     tell an extent from a gap, not because anyone thinks they are wrong.
 
@@ -373,7 +373,7 @@ def test_no_studio_module_hand_picks_a_layout_dimension():
         # The Jump button's floor, moved with the button when the modal became the Coaching page
         # (R11) — which also retired that modal's 720 px dialog measure from this list.
         ("coaching_panel.py", "OpportunitiesPanel._go_button"),  # 88 px button floor
-        ("help_dialog.py", "ShortcutsDialog.__init__"),        # 560 px reading measure
+        ("help_dialog.py", "ShortcutsDialog.__init__"),        # 640 px reading measure
         ("help_dialog.py", "AboutDialog.__init__"),            # 380 px card measure
         ("help_dialog.py", "PrivacyDialog.__init__"),          # 460 px reading measure
     }

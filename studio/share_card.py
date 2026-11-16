@@ -167,6 +167,26 @@ def opp_loss(opp: TopOpp) -> str:
     return f"{hi} s each" if lo == hi else f"{hi} to {lo} s"
 
 
+def opp_baseline() -> str:
+    """What the opportunity's figure is measured against, printed over it:
+    "typical pass vs your best lap's".
+
+    K2 (cool/card-and-keys): on the demo the card read "+0.32 s vs your ideal lap" and, lower down,
+    "BIGGEST OPPORTUNITY C1 +0.36 s" — a part bigger than its whole, because the two gaps have
+    different baselines and only one said so. The ideal gap is the best lap minus the stitch of the
+    driver's best corners and straights; the opportunity is Coaching's `time_lost`, the median over
+    the clean laps of (that lap's pass − the best lap's pass), which IS the typical pass minus the
+    best lap's pass. "median vs your best lap" (the first wording) read as the median LAP against
+    the best lap, 0.68 s on the demo, not 0.36 s; a corner's median pass is what the app calls its
+    `stats.TYPICAL_PASS` (the slow-lap notes, MOMENTS), and the baseline is
+    `coaching.LOSS_BASELINE`, the words the Coaching headline prints the same number with. A tie's
+    span is the same statistic per corner, so the singular reads right over several corners too."""
+    # Imported here, not at the top: the module's import line is being edited by another change.
+    from .stats import TYPICAL_PASS
+
+    return f"{TYPICAL_PASS} {coaching.LOSS_BASELINE}'s"
+
+
 @dataclass(frozen=True)
 class CardData:
     """Everything the shareable card renders — pure display values off Session accessors.
@@ -353,6 +373,7 @@ _REASON_PX_STEPS = (30, 27, 24)
 # it draws whole at 46. A pathological "C99 · C99 · C99 · 99 more" (576 px) takes the second step.
 _OPP_PX_STEPS = (46, 40, 34)
 _OPP_GAP = 24     # the least clear space between the corner line and the loss figure
+_OPP_BASE_PX_STEPS = (24, 22, 20)  # the figure's baseline on the heading row (`opp_baseline`)
 # A tie's corner row names at most this many corners and counts the rest: "C1 · C4 · C7 · 2 more".
 # The CARD's cap, not the page's. The Coaching page's "Start with" names every tied corner
 # (`coaching.corner_names`), but this row is fixed-width. Measured beside the widest span, a
@@ -520,8 +541,16 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     opp_top = map_top + map_h + 56
     if data.top_opp is not None:
         opp = data.top_opp
-        _draw_text(p, pad, opp_top, opp_heading(opp), _font(28, theme.W_SEMIBOLD),
-                   theme.C.text_muted)
+        heading_font = _font(28, theme.W_SEMIBOLD)
+        _draw_text(p, pad, opp_top, opp_heading(opp), heading_font, theme.C.text_muted)
+        # The figure's baseline, right-aligned on the heading row so it sits over the figure it
+        # qualifies (`opp_baseline`, K2). It takes what the heading leaves: the tie heading, the
+        # widest, leaves 374 px for the line's 342 px at 24 px (measured, Inter), so the fit's later
+        # steps are a guard.
+        p.setFont(heading_font)
+        base_avail = right - pad - p.fontMetrics().horizontalAdvance(opp_heading(opp)) - _OPP_GAP
+        base, base_font = _fit_line(p, opp_baseline(), base_avail, _OPP_BASE_PX_STEPS)
+        _draw_text(p, 0, opp_top, base, base_font, theme.C.text_muted, align_right_at=right)
         loss, loss_font = opp_loss(opp), _font(46, theme.W_SEMIBOLD)
         p.setFont(loss_font)
         loss_w = p.fontMetrics().horizontalAdvance(loss)

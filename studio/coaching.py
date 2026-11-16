@@ -539,6 +539,13 @@ def brake_direction_line(d: BrakeDirection | None) -> str | None:
     return f"Braking {d.verdict} went with quicker passes here ({d.n_laps} laps)"
 
 
+# What every `Opportunity.time_lost` is measured against, in the words the Coaching headline prints
+# it with ("0.36 s in your worst corner vs your best lap"). ONE definition because the share card
+# prints the same loss next to its "+0.32 s vs your ideal lap": two gaps with two baselines, and a
+# loss with no baseline beside one with a baseline read as a part bigger than its whole.
+LOSS_BASELINE = "vs your best lap"
+
+
 @dataclass(frozen=True)
 class Opportunity:
     """One corner's coaching row: how much time is realistically available and why."""
@@ -1899,7 +1906,7 @@ def headline(opps: Opportunities) -> str:
         total = shown_total(rows)
         gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
                  else f"{total:.2f} s across your top {len(rows)} corners")
-        gains += " vs your best lap"
+        gains += f" {LOSS_BASELINE}"
     return f"{SCOPE_PREFIX} · {gains} ({clean_laps_phrase(opps.n_laps)})"
 
 

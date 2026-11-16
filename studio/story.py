@@ -90,7 +90,13 @@ import numpy as np
 from ._signal import fmt_time, lap_label, plural
 from .lap_race import ESTIMATED_CLOCK_TIE_S
 from .library import PB_PRECISION_S, within_timing_precision
-from .stats import MATRIX_DECIMALS, CornerMatrix, fmt_pass_vs_typical, pass_vs_typical_s
+from .stats import (
+    MATRIX_DECIMALS,
+    TYPICAL_PASS,
+    CornerMatrix,
+    fmt_pass_vs_typical,
+    pass_vs_typical_s,
+)
 
 #: A lap is slow above its median clean lap by more than the larger of the clean laps' middle
 #: half (their IQR, the Stats page's "middle half · span") and this (s). A default picked on few
@@ -262,9 +268,9 @@ def _body(category: str, named: tuple[CornerLoss, ...], also: tuple[CornerLoss, 
         return (f"{_marked(named[0])}, more than the whole lap: time was gained back elsewhere"
                 f"{_also(also)}")
     if category == ONE:
-        return f"{_pass(named[0])} of it, over your typical pass ({BEHIND_MARK}){_also(also)}"
+        return f"{_pass(named[0])} of it, over your {TYPICAL_PASS} ({BEHIND_MARK}){_also(also)}"
     if category == TWO:
-        return (f"{_pass(named[0])} and {_pass(named[1])} of it, over your typical passes "
+        return (f"{_pass(named[0])} and {_pass(named[1])} of it, over your {TYPICAL_PASS}es "
                 f"({BEHIND_MARK}){_also(also)}")
     if category == PARTIAL:
         return f"{', '.join(_marked(c) for c in named)}; the rest is spread across the lap"
@@ -520,7 +526,7 @@ def moment_row(m: Moment) -> MomentRow:
         return MomentRow(_ROW_LABEL[BEST_LAP], value, jump, None)
     if m.kind == BIGGEST_LOSS:
         value = (f"{_laps_text(m.lap_ids)} · C{m.cid} {fmt_pass_vs_typical(m.value)} over your "
-                 f"typical pass ({BEHIND_MARK})" + "".join(
+                 f"{TYPICAL_PASS} ({BEHIND_MARK})" + "".join(
                      f" · ≈ Lap {lap_label(t.lap_ids[0])} C{t.cid} {fmt_pass_vs_typical(t.value)}"
                      for t in m.tie))
         return MomentRow(_ROW_LABEL[BIGGEST_LOSS], value, jump, m.cid)
