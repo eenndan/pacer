@@ -133,12 +133,13 @@ def _assert_the_planted_call(s, ranked, shortlist):
         f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
     assert top.time_lost >= 0.30, f"C{top.cid} is worth only {top.time_lost:.3f} s"
     assert top.evidence.reach_laps >= 3 and top.evidence.reach == "repeat", top.evidence
-    assert len(ranked) > 1 and top.time_lost >= 5 * ranked[1].time_lost, (
-        f"C{top.cid} {top.time_lost:.3f} s is not 5x the next row: "
-        f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
+    # Since cool/coaching-level-step the planted corner is the ONLY ranked row: the others the v2
+    # demo ranked (C2, C7, C4, 0.03-0.04 s) had only a spread under the 0.07 s level step, and are
+    # listed as level.
+    assert [r.cid for r in ranked] == [habit.cid], [(r.cid, round(r.time_lost, 3)) for r in ranked]
     # The debrief pre-promotes its shortlist onto the focus list; README's and FIRST_LAP's alt text
-    # for docs/media/debrief.png says "the three corners Pacer put on the focus list".
-    assert shortlist[:1] == [habit.cid] and len(shortlist) == 3, shortlist
+    # for docs/media/debrief.png says "the one corner Pacer put on the focus list".
+    assert shortlist == [habit.cid], shortlist
     times = sorted(s.lap_time(i) for i in s.valid_lap_ids())
     # The compare's default pair is the best lap and the next-fastest: both CLEAN laps here, so the
     # compare reads a real gap, but not the habit's — it is not at C1.
