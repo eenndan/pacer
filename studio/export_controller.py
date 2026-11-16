@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME, export_compare, export_data, export_video, prefs, theme
 from ._signal import fmt_hms, lap_label, plural
-from .overlay import broadcast, corner_cards, ghost
+from .overlay import LAYOUT_PREFIX, broadcast, corner_cards, ghost
 from .session import fmt_time
 from .workers import VideoExportWorker
 
@@ -304,6 +304,14 @@ class ExportController:
                     "camera, or be damaged — try a lap further from the end of it.")
         if "cancelled" in low or "canceled" in low:
             return "The export stopped before it finished."
+        # A style's layout with no place for what it must show in this frame size: the overlay's
+        # own sentence ("overlay layout: the honesty stamp does not fit a 250×444 frame"), never
+        # "the encoder stopped" — the encoder never started.
+        at = (message or "").find(LAYOUT_PREFIX)
+        if at >= 0:
+            said = message[at:].split(" (", 1)[0].strip()
+            return (f"{said[0].upper()}{said[1:]}. Nothing was written. Choose a larger "
+                    "Resolution, another Shape, or the Classic style, and export again.")
         return ("The encoder stopped partway through. The details below are what it reported — "
                 "Help ▸ Report a problem… if it keeps happening.")
     def _run_export(self, write, path: str) -> bool:
@@ -476,6 +484,14 @@ class ExportController:
         ("Classic", broadcast.STYLE_CLASSIC),
         ("Broadcast — timing tower, Δ bar, big speed", broadcast.STYLE_BROADCAST),
     ]
+    # The dialog's description line, which names the plates the chosen style burns.
+    _EXPORT_STYLE_DESC = {
+        broadcast.STYLE_CLASSIC: "Burns the overlays into your footage: g-meter, Δ / speed, map "
+                                 "inset and the lap strip.",
+        broadcast.STYLE_BROADCAST: "Burns the overlays into your footage: a timing tower, a Δ bar, "
+                                   "a big speed, the g-meter and a bigger minimap that names its "
+                                   "corners.",
+    }
     # Each remembered row's DEFAULT, by its pref key: what a first launch opens on, and what "Use
     # defaults" puts back — one table, so the two can never disagree about what the defaults are.
     # (Contents' default is its first row, which it opens on every time.)
@@ -868,8 +884,7 @@ class ExportController:
         so the consequences of a choice are visible before it is confirmed rather than after."""
         dlg, col = self._export_dialog("Export overlay video")
 
-        desc = QLabel("Burns the overlays into your footage: g-meter, Δ / speed, map inset and the "
-                      "lap strip.")
+        desc = QLabel(self._EXPORT_STYLE_DESC[broadcast.STYLE_CLASSIC])   # follows the Style
         desc.setWordWrap(True)
         desc.setProperty("role", "Note")
         col.addWidget(desc)
@@ -929,14 +944,19 @@ class ExportController:
             return self._EXPORT_STYLE_OPTIONS[style_combo.currentIndex()][1]
         shown = [_style()]
 
+        # `ticks` is the truth for each style; the boxes SHOW it, unticked while one cannot apply
+        # here (a bright tick on a disabled box read as "on"), and `_update_hint` re-shows it with
+        # the box's signals blocked, so only the user's own clicks write a tick.
         def _show_style_ticks(_index=None):
-            ticks[shown[0]] = [ghost_box.isChecked(), cards_box.isChecked()]
             shown[0] = _style()
-            ghost_box.setChecked(ticks[shown[0]][0])
-            cards_box.setChecked(ticks[shown[0]][1])
+
+        def _ticked(i, on):
+            ticks[shown[0]][i] = on
         ghost_box.setChecked(ticks[shown[0]][0])
         cards_box.setChecked(ticks[shown[0]][1])
         style_combo.currentIndexChanged.connect(_show_style_ticks)
+        ghost_box.toggled.connect(lambda on: _ticked(0, on))
+        cards_box.toggled.connect(lambda on: _ticked(1, on))
         # One Extras row, the opt-in elements side by side.
         extras = QWidget(dlg)
         extras_row = QHBoxLayout(extras)
@@ -953,13 +973,19 @@ class ExportController:
         # Contents no longer comes back, so Source is the heavy row left: when the dialog opens on
         # it, one line names it, and "Use defaults" puts EVERY row back. It writes nothing: prefs
         # are saved on Export, as ever.
+        # A remembered non-default Style is named too: it changes the whole look of the file.
+        recalled = []
         if res_combo.currentIndex() == self._EXPORT_RES_SOURCE:
+            recalled.append(f"resolution: {res_combo.currentText()}")
+        if style_combo.currentIndex() != self._EXPORT_DEFAULT_INDEX[self._PREF_EXPORT_STYLE]:
+            recalled.append(f"style: {style_combo.currentText().split(' — ')[0]}")
+        if recalled:
             recall = QWidget(dlg)
             recall_row = QHBoxLayout(recall)
             recall_row.setContentsMargins(0, 0, 0, 0)
             recall_row.setSpacing(theme.SPACE_M)
-            recall_text = QLabel("Opened on your last export's resolution: "
-                                 f"{res_combo.currentText()}.", recall)
+            recall_text = QLabel(f"Opened on your last export's {' and '.join(recalled)}.",
+                                 recall)
             recall_text.setWordWrap(True)
             recall_text.setProperty("role", "Note")
             recall_row.addWidget(recall_text, 1)
@@ -972,8 +998,8 @@ class ExportController:
                 for key, box in rows.items():
                     box.setCurrentIndex(self._EXPORT_DEFAULT_INDEX[key])
                 content_combo.setCurrentIndex(0)
-                ghost_box.setChecked(False)
-                cards_box.setChecked(False)
+                ticks[_style()] = [False, False]
+                _update_hint()
                 recall.hide()
             use_defaults.clicked.connect(_use_defaults)
 
@@ -1028,6 +1054,13 @@ class ExportController:
             ghost_box.setToolTip(self._GHOST_TIP if no_ghost is None else f"Off here: {no_ghost}")
             no_cards = self._cards_reason(scope, lap)
             cards_box.setEnabled(no_cards is None)
+            want_ghost, want_cards = ticks[_style()]
+            for box, on in ((ghost_box, want_ghost and no_ghost is None),
+                            (cards_box, want_cards and no_cards is None)):
+                box.blockSignals(True)
+                box.setChecked(on)
+                box.blockSignals(False)
+            desc.setText(self._EXPORT_STYLE_DESC[_style()])
             provisional = not bool(getattr(getattr(self.win, "session", None),
                                            "timing_verified", True))
             cards_box.setToolTip(
@@ -1036,15 +1069,15 @@ class ExportController:
 
             clip, files, what = self._scope_plan(scope, lap, lead)
             lines = [f"Renders {what}."]
-            if no_ghost is not None and ghost_box.isChecked():
+            if no_ghost is not None and want_ghost:
                 lines.append(f"No ghost in this export: {no_ghost}")
-            elif scope == export_video.SCOPE_ALL_LAPS and ghost_box.isChecked():
+            elif scope == export_video.SCOPE_ALL_LAPS and want_ghost:
                 missing = self._ghostless_files(lap)
                 if missing:
                     lines.append(missing)
-            if no_cards is not None and cards_box.isChecked():
+            if no_cards is not None and want_cards:
                 lines.append(f"No corner cards in this export: {no_cards}")
-            elif scope == export_video.SCOPE_ALL_LAPS and cards_box.isChecked():
+            elif scope == export_video.SCOPE_ALL_LAPS and want_cards:
                 missing = self._ghostless_files(lap, corner_cards.unavailable_reason,
                                                 "corner cards")
                 if missing:
@@ -1121,9 +1154,9 @@ class ExportController:
         }
         self._remember_export_prefs(indices)   # survives this window, and the relaunch
         try:
-            for (key, _default), box in zip(self._PREF_EXPORT_STYLE_EXTRAS[_style()],
-                                            (ghost_box, cards_box), strict=True):
-                prefs.set(key, box.isChecked())
+            for (key, _default), on in zip(self._PREF_EXPORT_STYLE_EXTRAS[_style()],
+                                           ticks[_style()], strict=True):
+                prefs.set(key, on)
         except OSError as exc:
             _log.warning("export extras not remembered (%r)", exc)
         scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
@@ -1556,6 +1589,7 @@ class ExportController:
         total_files = len(specs)
         done_paths: list[str] = []
         done_syncs: list = []      # each finished file's `SourceSync` (None for a composite)
+        done_notes: list = []      # what an asked-for extra that sat out said (RenderResult.notes)
         state = {"index": 0, "worker": None, "cancelled": False}
 
         def _title(i: int) -> str:
@@ -1639,12 +1673,16 @@ class ExportController:
                 if ok:
                     done_paths.append(spec.out_path)
                     done_syncs.append(getattr(getattr(worker, "result", None), "sync", None))
+                    for note in getattr(getattr(worker, "result", None), "notes", ()) or ():
+                        if note not in done_notes:
+                            done_notes.append(note)
                     if i + 1 < total_files and not state["cancelled"]:
                         _start(i + 1)     # next file, same dialog
                         return
                     dlg.hide()
                     _cleanup_all()
-                    self._video_export_finished(done_paths, specs[0], lap, done_syncs)
+                    self._video_export_finished(done_paths, specs[0], lap, done_syncs,
+                                                notes=done_notes)
                     return
                 dlg.hide()
                 _cleanup_all()
@@ -1710,7 +1748,7 @@ class ExportController:
         if box.clickedButton() is reveal_btn:
             self.win._reveal_in_finder(folder)
     def _video_export_finished(self, out_paths, spec=None, lap: int | None = None,
-                               syncs=None) -> None:
+                               syncs=None, notes=()) -> None:
         """The one thing a finished export owes the user: a plain sentence saying it finished, and
         the file it made.
 
@@ -1769,6 +1807,10 @@ class ExportController:
                     "looks black in QuickTime; an editor lays it over the footage")
             body += (f"\n\nA transparent overlay track {seen}. For a video to watch or share, "
                      f"export again with “{self._EXPORT_CONTENT_OPTIONS[0][0]}”.")
+        # An extra that was ticked but sat this export out says so (corner cards on a frame too
+        # small for them): a tick that silently did nothing would read as a defect.
+        if notes:
+            body += "\n\n" + " ".join(notes)
         # The body carries the product name: macOS drops the window title (see _EXPORT_FAIL_TITLE).
         box = QMessageBox(QMessageBox.Information, f"{APP_NAME} — export finished", body,
                           parent=self.win)

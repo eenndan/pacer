@@ -41,15 +41,25 @@ THE LOOK is the app's own "other lap" language (map_view's compare ghost): the c
 HOLLOW ring on a dark plate, where the kart is a filled hot-coral dot — so it never reads as you,
 or as the amber tail, or the white line, in either palette (the palette moves only the Δ hues).
 Painted on `LAYER_MAP`, under the kart dot and its tail.
+
+BESIDE THE KART IT IS A RING ROUND THE DOT. On a lap close to the best the ghost sits within a dot
+radius of the kart for most of the lap, and under the dot it vanished exactly when the race was
+close (QA, #556). So when its centre is within the dot's outer radius plus a margin (`_NEAR_R`) it
+is drawn OVER the dot instead, as a bigger hollow ring (`_NEAR_RING_R`: the dot's radius plus a
+stroke) still centred on the best lap's place, clipped out of the dot's own disc — it never covers
+the driver; where it crosses the dot it passes behind it. Clear of the dot it keeps the plate look
+above, under the dot, unchanged. Same position, same truth: only the drawing changes.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter, QPen
+import math
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QPainter, QPainterPath, QPen
 
 from studio import lap_race, theme
 from studio.export_palette import EXPORT
-from studio.overlay import LAYER_MAP, ElementContext
+from studio.overlay import DOT_R, LAYER_MAP, ElementContext
 
 # The app's compare-ghost cyan (map_view.GHOST_COLOR is this entry): "the other lap".
 GHOST_COLOR = theme.CHART_SERIES[1]
@@ -59,6 +69,11 @@ _RING_R = 5.6
 _RING_W = 2.4
 _PLATE_ALPHA = 200
 _HALO_W = 4.4
+# Beside the kart (centre within the dot's outer radius plus a margin), the ring round the dot:
+# its radius clears the dot by one stroke, its halo is a thin dark line rather than a plate.
+_NEAR_R = DOT_R + 1.2
+_NEAR_RING_R = DOT_R + _RING_W + 0.6
+_NEAR_HALO_W = 1.6
 
 
 def _lap_name(lap_id: int) -> str:
@@ -140,11 +155,37 @@ class GhostElement:
         return lap_race.race_state(self._tracks, float(vals.tt) - self._clock_start)
 
     def paint(self, p: QPainter, vals) -> None:
+        """Without a dot to read (a caller outside the minimap): the plate look."""
+        self.paint_map(p, vals, None, False)
+
+    def near(self, c: QPointF, dot: QPointF | None) -> bool:
+        """True when the ring's centre `c` is beside the kart `dot`: drawn round it, over it."""
+        return dot is not None and math.hypot(c.x() - dot.x(), c.y() - dot.y()) < _NEAR_R * self._k
+
+    def paint_map(self, p: QPainter, vals, dot: QPointF | None, over: bool) -> None:
         st = self.state(vals)
         if st is None:
             return
         c = self._point(float(st.x[self._row]), float(st.y[self._row]))
+        near = self.near(c, dot)
+        if near != over:
+            return
         k = self._k
+        if near:
+            # Clipped out of the dot's disc: the ring passes behind the driver, never over it.
+            clip = QPainterPath()
+            big = (_NEAR_RING_R + _RING_W + 2.0) * k
+            clip.addRect(QRectF(c.x() - big, c.y() - big, 2 * big, 2 * big))
+            hole = QPainterPath()
+            hole.addEllipse(dot, DOT_R * k, DOT_R * k)
+            p.setClipPath(clip.subtracted(hole))
+            r = _NEAR_RING_R * k
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(theme.qcolor(EXPORT.halo, 220), (_RING_W + 2 * _NEAR_HALO_W) * k))
+            p.drawEllipse(c, r, r)
+            p.setPen(QPen(theme.qcolor(GHOST_COLOR, 255), _RING_W * k))
+            p.drawEllipse(c, r, r)
+            return
         r = _RING_R * k
         p.setPen(QPen(theme.qcolor(EXPORT.halo, 220), _HALO_W * k))
         p.setBrush(theme.qcolor(EXPORT.halo, _PLATE_ALPHA))

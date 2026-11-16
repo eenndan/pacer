@@ -2009,6 +2009,9 @@ it covers 21.8 % of its area with the map inset; anywhere else it is one more ro
 
 **What moves because of this refusal: nothing in the app.** The clip keeps the Δ on the strip.
 
+Shipped beside this refusal (#565): Broadcast's Δ bar, one horizontal fill for the current Δ
+against the lap's own scale; it is not a trace and scrolls nothing.
+
 **What would be new evidence:** a band whose corner rises clear its own stroke on most corners of
 the demo, with a 9:16 place that covers no other element; and a `budget` run on a quiet machine
 whose 5 % share of a 4K export holds the band's added paint.
@@ -2087,6 +2090,9 @@ varies most from lap to lap. It is the order statistic of §2, cell by cell.
 
 **What moves because of this refusal: nothing in the app.** The card keeps one opportunity, ranked
 by the Coaching page's gate.
+
+Shipped beside this refusal (#558): corner cards on the exported clip, one corner at a time, the
+Corners table's own cell, "≈ best" inside 0.07 s; the share card still carries no corner cells.
 
 **What would be new evidence:** a per-corner gap that clears its corner's own noise on more corners
 than the card's one opportunity, and whose largest cell agrees with that opportunity on the demo.
