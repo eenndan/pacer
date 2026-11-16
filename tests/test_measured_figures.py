@@ -233,8 +233,8 @@ def test_the_evidence_prose_is_its_table_s_arithmetic():
         assert int(laps) == themes[rec].laps and max(r.laps for r in by_rec[rec]) <= int(laps), (
             rec, laps, themes[rec], by_rec[rec])
     assert (m.group(1), m.group(5)) == pair, (m.group(1, 5), pair)
-    # The display resolution the header names is the panel's own constant: a row the panel drops is
-    # not a row of this table.
+    # The display resolution the header names is the constant the Coaching rows are filtered by
+    # (`coaching.shown_rows`): a row the page drops is not a row of this table.
     floor = _constant(_COACHING, "DISPLAY_MIN_LOST_S")
     assert all(r.lost >= floor for r in rows), [r for r in rows if r.lost < floor]
 

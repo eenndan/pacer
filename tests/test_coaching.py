@@ -3276,7 +3276,20 @@ def test_page_text_is_what_the_coaching_page_prints_on_the_demo():
         assert len(shown) >= len(page.shortlist), shown
         assert shown == [(r.corner, r.lost, r.done_it, r.reason)
                          for r in page.rows[:len(shown)]], (shown, page.rows)
-    print(f"ok page_text: {page.headline!r}; {len(page.rows)} rows equal the page's cells")
+    # THE SHORTLIST IS THE RANKED ROWS, NOT THE FIRST ROWS. The synthetic GoPro seed 7 ranks two
+    # corners and abstains on the next shown ones, so a shortlist cut as `rows[:3]` would sum an
+    # abstained corner into the headline.
+    s7 = _level_sessions()["seed 7, 12 laps"]
+    o7 = s7.coaching_opportunities()
+    p7 = K.page_text(o7, s7.coaching_brake_direction())
+    assert [r.cid for r in p7.shortlist] == [5, 6], p7.shortlist
+    assert all(r.ranked for r in p7.shortlist), p7.shortlist
+    assert len(p7.rows) >= 3 and not p7.rows[2].ranked, p7.rows   # rows[:3] would differ
+    assert [r.cid for r in p7.shortlist] != [r.cid for r in p7.rows[:3]]
+    assert OpportunitiesPanel(s7).shortlist_cids() == [5, 6]
+    assert p7.headline.startswith("Whole session · ") and "top 2 corners" in p7.headline, p7.headline
+    print(f"ok page_text: {page.headline!r}; {len(page.rows)} rows equal the page's cells; "
+          f"seed 7 shortlist C5, C6 over {len(p7.rows)} shown rows")
 
 
 if __name__ == "__main__":
