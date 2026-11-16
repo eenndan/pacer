@@ -14,6 +14,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView, QMenu
 
 from . import provenance, provenance_panel, theme, units
+from . import stats as stats_service
 from ._signal import fmt_signed, plural
 
 # The Coaching panel's OWN row filter and top-N, imported (not re-implemented) so the CORNERS note
@@ -109,6 +110,20 @@ def _corner_count_tip(report) -> str:
     return (f"Over the {n} of {of} clean laps matched on track at C{report.cid}'s entry and exit. "
             f"On the other {of - n} the corner was interpolated between its neighbours, which can "
             f"put its time tenths of a second out, so {them} left out of this whole row.")
+
+
+def _corner_middle_half_tip(report) -> str:
+    """The σ cell's hover: the corner's middle half beside its σ, or "" below
+    stats.MIN_MIDDLE_HALF_N counted passes (the same None the tile's line is absent on). A second
+    description of the spread, not a ranking: nothing on this table sorts or marks by it. No
+    timing-precision claim: matched corner cells are timed far finer than the lap figure."""
+    shown = stats_service.fmt_middle_half(getattr(report, "middle_half_s", None),
+                                          stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
+    if shown is None:
+        return ""
+    return (f"the central 50 % of C{report.cid}'s "
+            f"{plural(report.n, 'counted pass', 'counted passes')} fall within {shown}. "
+            "σ counts every one of them.")
 
 
 class CornersSection:
@@ -326,7 +341,11 @@ class CornersSection:
                 median.setToolTip(count_tip)
             t.setItem(r, 1, best)
             t.setItem(r, 2, median)
-            t.setItem(r, 3, cell(cr.sigma_s, "{:.2f}"))
+            sig = cell(cr.sigma_s, "{:.2f}")
+            sig_tip = _corner_middle_half_tip(cr)
+            if sig_tip:
+                sig.setToolTip(sig_tip)
+            t.setItem(r, 3, sig)
             loss = cell(cr.median_loss_s, "+{:.2f}")
             # The tooltip is built in the SAME branch as the cue, so the reason can never be
             # missing from a cell that carries the mark. Two independent lines when both apply:

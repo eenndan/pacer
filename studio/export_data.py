@@ -467,6 +467,10 @@ class SummarySection:
     note: str = field(default="")
 
 
+#: The PACE row beside "σ lap" that carries the σ tile's second reading.
+MIDDLE_HALF_ROW = "middle half · width"
+
+
 def _sec(v, fmt: str = "{:.2f} s") -> str:
     """A float value as a display string, or "" when the accessor said None. The one place this
     module turns "no signal" into "no value" — never into a zero."""
@@ -657,6 +661,11 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
                 ("trend" if verdict is None else f"trend · {verdict}",
                  stats_service.fmt_trend(trend) or ""),
             ]
+            # The σ tile's caption line, in the page's own words — and, like that line, absent
+            # below the five-lap floor rather than a bare dash.
+            width = stats_service.fmt_middle_half(pace.middle_half)
+            if width is not None:
+                pace_rows.insert(4, (MIDDLE_HALF_ROW, width))
         # `best rolling` sits AFTER the pace rows and OUTSIDE the branch above, where the page puts
         # it: a start-anywhere loop off `Session` is not a pace statistic and survives a session
         # that has no distribution at all.
