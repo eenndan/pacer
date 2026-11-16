@@ -832,6 +832,13 @@ th, td { border-bottom: 1px solid var(--border); padding: 4px 10px; text-align: 
          font-variant-numeric: tabular-nums; }
 th { color: var(--text-dim); font-weight: 600; }
 tr.best td { color: var(--ahead); font-weight: 600; }
+/* The laps table is the page's widest: human headers that wrap only BETWEEN words (a corner's
+   unit under its "C1", the group heading centred over its pair), and cells a notch tighter. */
+table.laps { font-size: 0.85em; }
+table.laps th, table.laps td { padding: 3px 4px; }
+table.laps th { vertical-align: bottom; word-break: normal; overflow-wrap: normal;
+                hyphens: manual; }
+table.laps th.grp { text-align: center; }
 table.meta th, table.meta td, table.kv th, table.moments th, table.moments td { text-align: left; }
 td.mark { color: var(--behind); font-weight: 600; }
 p.note { margin: 6px 0 0; max-width: 46em; color: var(--text-dim); font-size: 0.9em; }
@@ -850,11 +857,12 @@ img { max-width: 100%; height: auto; border: 1px solid var(--border); border-rad
                           background: var(--surface); }
   h2 { break-after: avoid; }
   tr, li, p.note, img, table.kv, table.meta, table.moments { break-inside: avoid; }
-  /* The laps table carries 5 + 2 per corner + split + 2 disclosure columns: small type, tight
-     cells and breakable headers fit it to the paper's width rather than cut it at C3. */
+  /* The laps table carries 5 + 2 per corner + split + 2 disclosure columns: small type and tight
+     cells fit it to the paper's width rather than cut it at C3. The headers wrap between words
+     only (the screen rule); breaking anywhere cut "C1_apex_kmh" mid-word when they were CSV
+     names. */
   table.laps { width: 100%; font-size: 6.5pt; }
   table.laps th, table.laps td { padding: 1px 2px; }
-  table.laps th { word-break: break-all; }
   /* The lap strip is a dark card on white paper: a hairline says it is one. */
   img.card { border: 1px solid var(--text); border-radius: 0; }
 }
@@ -1010,11 +1018,81 @@ def _lapstrip_section(lapstrip: bytes | None) -> list[str]:
     return _section("LAP STRIP", [_img("Lap strip", lapstrip, LAPSTRIP_LAYOUT_PX, "card")])
 
 
+# The report's Laps table speaks the app's words, not laps.csv's: "Lap", "Time (s)", "Dist (m)",
+# "Entry (km/h)" are the Laps tab's own headers (with the unit the page's cells are in), and a
+# corner's pair sits under ONE "C1" over "time (s)" / "apex (km/h)". The machine names stay the
+# CSV's (`laps_table`), and every one of them maps to exactly one column here (`report_laps_header`).
+REPORT_QUALITY_HEAD = "Quality"
+REPORT_INTERPOLATED_HEAD = "Interpolated"   # the app's word for a corner edge not matched on track
+# INTERPOLATED_NOTE in the page's column words (the CSV trailer keeps its own, ASCII, verbatim).
+REPORT_INTERPOLATED_NOTE = (
+    INTERPOLATED_NOTE
+    .replace(f"{INTERPOLATED_COLUMN} lists", f"{REPORT_INTERPOLATED_HEAD} lists", 1)
+    .replace("*_time_s and *_apex_* cells", "time and apex cells", 1))
+
+
+def report_laps_header(headers) -> list[tuple[str | None, str]]:
+    """`(group, label)` for each of `laps_table`'s machine headers, in order: group None is a
+    column of its own, a group ("C1", "Splits (s)") spans its run of columns over their labels.
+    The speed unit is read off the header's own suffix, so it is the cells' unit by construction.
+    An unknown header keeps its machine name rather than lose its column."""
+    out: list[tuple[str | None, str]] = []
+    for h in headers:
+        stem, _, last = h.rpartition("_")
+        if h == "lap":
+            out.append((None, "Lap"))
+        elif h == "time_s":
+            out.append((None, "Time (s)"))
+        elif h == DIST_COLUMN:
+            out.append((None, "Dist (m)"))
+        elif stem == "entry" and last in units.UNITS:
+            out.append((None, f"Entry ({units.speed_label(last)})"))
+        elif h == "flag":
+            out.append((None, "GPS"))
+        elif h == "quality":
+            out.append((None, REPORT_QUALITY_HEAD))
+        elif h == INTERPOLATED_COLUMN:
+            out.append((None, REPORT_INTERPOLATED_HEAD))
+        elif last == "s" and stem[:1] == "S" and stem[1:].isdigit():
+            out.append(("Splits (s)", stem))
+        elif h.endswith("_time_s"):
+            out.append((h.removesuffix("_time_s"), "time (s)"))
+        elif "_apex_" in h and last in units.UNITS:
+            out.append((h.split("_apex_", 1)[0], f"apex ({units.speed_label(last)})"))
+        else:
+            out.append((None, h))
+    return out
+
+
+def _laps_head(headers) -> str:
+    """The table's header rows: one when nothing is grouped, else a group row over a label row,
+    the ungrouped columns spanning both."""
+    esc = html.escape
+    cols = report_laps_header(headers)
+    if all(g is None for g, _ in cols):
+        return "<tr>" + "".join(f"<th>{esc(label)}</th>" for _g, label in cols) + "</tr>"
+    top, sub, k = [], [], 0
+    while k < len(cols):
+        group, label = cols[k]
+        if group is None:
+            top.append(f'<th rowspan="2">{esc(label)}</th>')
+            k += 1
+            continue
+        run = k
+        while run < len(cols) and cols[run][0] == group:
+            sub.append(f"<th>{esc(cols[run][1])}</th>")
+            run += 1
+        top.append(f'<th colspan="{run - k}" class="grp">{esc(group)}</th>')
+        k = run
+    return f"<tr>{''.join(top)}</tr><tr>{''.join(sub)}</tr>"
+
+
 def _laps_section(session, headers, rows, cue_lap) -> list[str]:
-    """The Laps table (`laps_table`, the CSV's rows) and the notes that decode it."""
+    """The Laps table (`laps_table`, the CSV's rows, under `report_laps_header`'s words) and the
+    notes that decode it."""
     esc = html.escape
     out = ['<section class="wide">', f"<h2>Laps ({len(rows)})</h2>",
-           '<table class="laps"><tr>' + "".join(f"<th>{esc(h)}</th>" for h in headers) + "</tr>"]
+           '<table class="laps">' + _laps_head(headers)]
     for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
         cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
@@ -1027,14 +1105,14 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
     # session (see `quality_key`), so a spotless recording's report gains nothing to read past.
     key = quality_key(headers, rows)
     if key:
-        out.append('<p class="note">Quality markers in the <code>quality</code> column '
+        out.append(f'<p class="note">Quality markers in the {REPORT_QUALITY_HEAD} column '
                    "(UK Government Analysis Function symbols): "
                    + "; ".join(f"<b>{esc(code)}</b> {esc(meaning)}" for code, meaning in key)
                    + ".</p>")
     # …and the same for the C5 disclosure column, for the same reason and on the same terms: a
     # reader of the page has no other way to know that a corner cell beside it is a guess.
     if any_interpolated(headers, rows):
-        out.append(_note(INTERPOLATED_NOTE))
+        out.append(_note(REPORT_INTERPOLATED_NOTE))
     broke = data_quality.break_in_series(session)
     if broke:  # WHICH break — the [b] code alone says only that there is one
         out.append(_note(f"Break in series: {broke}."))
@@ -1042,7 +1120,8 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
 
 
 def write_report_html(path: str, session, source_label: str = "",
-                      images: Sequence[tuple[str, bytes] | tuple[str, bytes, int | None]] = (),
+                      images: Sequence[tuple[str, bytes] | tuple[str, bytes, int | None]
+                                       | tuple[str, bytes, int | None, str | None]] = (),
                       unit: str | None = None, *, lapstrip: bytes | None = None,
                       tokens: Mapping[str, str] | None = None) -> None:
     """One SELF-CONTAINED page telling the session the way the app does, in the app's order:
@@ -1123,7 +1202,9 @@ def write_report_html(path: str, session, source_label: str = "",
         *_lapstrip_section(lapstrip),
         *_laps_section(session, headers, rows, cue_lap),
     ]
-    for item in images:
-        out += _section(item[0], [_img(item[0], item[1], item[2] if len(item) > 2 else None)])
+    for item in images:  # (title, png[, width[, caption: what the figure draws]])
+        caption = [_note(item[3])] if len(item) > 3 and item[3] else []
+        out += _section(item[0], [_img(item[0], item[1], item[2] if len(item) > 2 else None),
+                                  *caption])
     out.append("</main></body></html>")
     _atomic_write(path, lambda f: f.write("\n".join(out)))

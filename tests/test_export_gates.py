@@ -103,7 +103,7 @@ from studio import (  # noqa: E402
     export_data,
     export_video,
 )
-from studio._signal import fmt_hms  # noqa: E402
+from studio._signal import fmt_hms, fmt_time  # noqa: E402
 from studio.app import APP_NAME, StudioWindow  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: E402
@@ -1007,14 +1007,203 @@ def test_the_report_export_states_a_layout_width_for_every_figure():
             export_data.write_report_html = orig_report
             QFileDialog.getSaveFileName = orig_dialog
     images = seen["images"]
-    assert [t for t, *_ in images] == ["Track map", "Speed · Δ to best"], images
-    for (title, png, width), widget in zip(images, (map_w, plots_w), strict=True):
+    # A bare panel is grabbed as is (no session to draw a pinned chart from), under a title that
+    # names no baseline it cannot know; the real chart's title is the next test's.
+    assert [t for t, *_ in images] == ["Track map", "Speed · Δ"], images
+    for (title, png, width, *_caption), widget in zip(images, (map_w, plots_w), strict=True):
         assert png[:8] == b"\x89PNG\r\n\x1a\n", title
         natural = QImage.fromData(png, "PNG").width()
         assert width == round(natural / win.devicePixelRatioF()) == widget.width(), \
             (title, width, natural, widget.width())
     win.hide()
     print("test_the_report_export_states_a_layout_width_for_every_figure OK")
+
+
+# ============================================================ discovery 3, K3 — the report's chart
+def _demo_window():
+    """The REAL window on the shipped demo recording (verified timing on its built-in circuit),
+    loaded and settled: it lands on the first-open debrief, as a first open does."""
+    from studio.dev import make_demo
+    folder = tempfile.TemporaryDirectory(prefix="pacer-test-report-chart-")
+    path = os.path.join(folder.name, "GX010777.MP4")
+    make_demo.make(path, render=False)
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    win.show()
+    done = []
+    win.loadFinished.connect(lambda: done.append(True))
+    win._open_recordings([path])
+    deadline = time.time() + 120
+    while not done and time.time() < deadline:
+        _APP.processEvents()
+        time.sleep(0.01)
+    assert done, "the demo did not load"
+    _pump(0.4)          # past the view's first show and its deferred restores
+    return folder, win
+
+
+def _pump(seconds: float) -> None:
+    end = time.time() + seconds
+    while time.time() < end:
+        _APP.processEvents()
+        time.sleep(0.01)
+
+
+def _report_chart(win):
+    """Export the report and return (title, png, width, caption) of its chart, plus the widget
+    the PNG was grabbed from and what was VISIBLE on that widget at the instant of the grab."""
+    from studio import plots_view
+    seen, grabbed = {}, []
+    real_grab = ExportController.grab_png
+
+    def spy(widget):
+        if isinstance(widget, plots_view.PlotsView):
+            grabbed.append({
+                "widget": widget,
+                "labels": [lb.text() for lb in widget.findChildren(QLabel)
+                           if lb.isVisibleTo(widget) and lb.text()],
+                "lines": [ln.isVisible() for ln in (widget.cur_speed, widget.cur_delta,
+                                                    widget.cur_speed_datum, widget.cur_delta_datum,
+                                                    widget.hover_dot)],
+                "size": (widget.width(), widget.height())})
+        return real_grab(widget)
+
+    orig_report, orig_dialog = export_data.write_report_html, QFileDialog.getSaveFileName
+    with tempfile.TemporaryDirectory() as td:
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(td, "r.html"), ""))
+        export_data.write_report_html = lambda *a, **k: seen.update(k)
+        ExportController.grab_png = staticmethod(spy)
+        try:
+            win.exports.export_report()
+        finally:
+            export_data.write_report_html = orig_report
+            QFileDialog.getSaveFileName = orig_dialog
+            ExportController.grab_png = staticmethod(real_grab)
+    (chart,) = [im for im in seen["images"] if im[0].startswith("Speed")]
+    assert len(grabbed) <= 1, f"{len(grabbed)} chart grabs for one report"
+    # (title, png, width, caption); a figure handed over with no caption reads None.
+    return (*chart, None)[:4], (grabbed[0] if grabbed else {})
+
+
+def _live_chart_state(win):
+    """Everything about the LIVE chart a report export could disturb, pixels included."""
+    from studio import theme
+    pv = win.view.plots
+
+    def ranges(plot):
+        return [[round(float(v), 9) for v in r] for r in plot.getViewBox().viewRange()]
+
+    image = pv.grab().toImage()
+    buf = QBuffer()
+    buf.open(QIODevice.WriteOnly)
+    image.save(buf, "PNG")
+    return {
+        "laps": pv.selected_lap_ids(), "datum": pv._datum_x, "baseline": pv._delta_baseline_kind,
+        "ranges": (ranges(pv.p_speed), ranges(pv.p_delta)),
+        "readout": (pv.window_label.text(), pv.datum_label.text(), pv._readout.isHidden()),
+        "cursors": [(ln.isVisible(), round(float(ln.value()), 9))
+                    for ln in (pv.cur_speed, pv.cur_delta, pv.cur_speed_datum, pv.cur_delta_datum)],
+        "legend": [label.text for _s, label in pv._speed_legend.items],
+        "items": (len(pv.p_speed.items), len(pv.p_delta.items)),
+        "ideal": pv.ideal_btn.isChecked(), "unit": pv._speed_unit, "pen": theme.pen_scale(),
+        "comparing": win.view._comparing(), "racing": win.view.is_racing(),
+        "pixels": bytes(buf.data()),
+    }
+
+
+def test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state():
+    """Discovery 3, K3. The report's speed/Δ figure was `grab()` of the live charts panel, so the
+    document carried the app: the readout strip's "D: datum cursor · N: next Δ loss" and live
+    statistic, the playhead, a datum cursor, and whatever laps a comparison or a race had up — the
+    same session exported twice gave two figures — under a title, "Speed · Δ to best", that a
+    fresh open's chart (the best lap against the IDEAL) contradicts. Exported straight after
+    opening, with the debrief holding the charts panel at 0 px, it embedded an EMPTY image.
+
+    Now the figure is a throwaway chart pinned to the one the app opens on: one PNG for the
+    session whatever the window is doing, a title and caption read off what it drew, no readout,
+    no cursor, and the live chart untouched — selection, datum, zoom, compare, race, pixels. On
+    main: an empty PNG at the debrief (0 px panel), the hint label visible in the grabbed widget,
+    and a different PNG per state."""
+    from PySide6.QtCore import QEvent
+
+    from studio import app as app_mod
+    from studio import plots_view, theme
+    folder, win = _demo_window()
+    try:
+        session, view = win.session, win.view
+        best = session.best_lap_id()
+        best_label = f"lap {best + 1} {fmt_time(session.lap_time(best))} · best"
+
+        # 1. A fresh open: the debrief is up and the live charts panel has no width at all.
+        assert view.plots.width() == 0, "the premise: the debrief collapses the charts panel"
+        before = _live_chart_state(win)
+        (title, png, width, caption), seen = _report_chart(win)
+        assert _live_chart_state(win) == before, "the export changed the live chart"
+        image = QImage.fromData(png, "PNG")
+        assert not image.isNull() and image.width() > 0, "the report embedded an empty chart"
+        assert seen["widget"] is not view.plots, "the report grabbed the live chart"
+        assert seen["size"] == app_mod.REPORT_CHART_SIZE, seen["size"]
+        assert width == app_mod.REPORT_CHART_SIZE[0], width
+        # No app chrome on the grabbed widget: no readout label (the key hint, the live
+        # statistic, the datum line) and no scrub cursor, datum or hover dot.
+        assert not seen["labels"], f"text on the report's chart: {seen['labels']}"
+        assert plots_view.READOUT_HINT not in " ".join(seen["labels"])
+        assert not any(seen["lines"]), seen["lines"]
+        # ...and the pixels are the copy's whole fixed size: no strip under the chart.
+        assert (image.width(), image.height()) == tuple(
+            round(v * win.devicePixelRatioF()) for v in app_mod.REPORT_CHART_SIZE)
+        # The subject, in the chart's own words: the best lap, Δ to the ideal lap.
+        assert title == "Speed · Δ to ideal", title
+        assert caption.startswith(f"Speed of {best_label}. Lower chart: "), caption
+        assert "SYNTHETIC ideal lap" in caption, caption
+
+        # 2. The grid, comparing two laps, a datum dropped, the chart zoomed: the same figure.
+        view.tab_bar.setCurrentIndex(0)
+        if view._maximized_panel is not None:
+            view._toggle_panel_maximized(view._maximized_panel)
+        _pump(0.3)
+        view.compare.enter()
+        _pump(0.3)
+        assert view._comparing() and len(view.plots.selected_lap_ids()) == 2
+        pv = view.plots
+        a = pv.selected_lap_ids()[0]
+        t0, t1 = session.lap_window(a)
+        pv.set_playhead_time(t0 + 0.3 * (t1 - t0))
+        pv.toggle_datum()
+        pv.set_playhead_time(t0 + 0.6 * (t1 - t0))
+        pv.p_speed.setXRange(150.0, 450.0, padding=0)
+        _pump(0.2)
+        # The state the old grab took a picture of: a datum, its readout up, a zoom.
+        assert pv._datum_x is not None and pv.window_label.isVisible(), pv._datum_x
+        before = _live_chart_state(win)
+        chart, seen = _report_chart(win)
+        assert _live_chart_state(win) == before, "the export changed the comparing chart"
+        assert chart == (title, png, width, caption), "the figure followed the live comparison"
+        assert not seen["labels"] and not any(seen["lines"]), seen
+
+        # 3. A lap race: the same figure, and the race still running.
+        view.compare.exit()
+        _pump(0.2)
+        assert view.start_lap_race(), "the demo must be raceable"
+        _pump(0.2)
+        before = _live_chart_state(win)
+        chart, _seen = _report_chart(win)
+        assert _live_chart_state(win) == before, "the export changed the racing chart"
+        assert view.is_racing()
+        assert chart == (title, png, width, caption), "the figure followed the race"
+        view.end_lap_race()
+
+        # 4. The throwaway is gone, and the theme's pen scale is the live chart's again.
+        _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        alive = [w for w in _APP.topLevelWidgets()
+                 if isinstance(w, plots_view.PlotsView) and w.isVisible()]
+        assert not alive, alive
+        assert theme.pen_scale() == before["pen"]
+    finally:
+        win.close()
+        folder.cleanup()
+    print("test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state OK")
+
 
 
 # ============================================================ L12-07 — put a number on it
@@ -2467,6 +2656,7 @@ def _run_all():
     test_the_report_map_grab_survives_a_map_without_the_contract()
     test_the_report_figure_width_divides_out_the_screens_pixel_ratio()
     test_the_report_export_states_a_layout_width_for_every_figure()
+    test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state()
     test_the_options_hint_quantifies_the_size_and_the_work()
     test_the_hint_refreshes_on_the_quality_combo_too()
     test_the_hint_never_promises_a_run_up_the_footage_cannot_give()

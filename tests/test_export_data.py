@@ -17,6 +17,7 @@ Run:  python tests/test_export_data.py
 import base64
 import csv
 import datetime
+import html
 import os
 import sys
 import tempfile
@@ -347,7 +348,8 @@ def test_the_csv_discloses_an_interpolated_corner_cell_and_keeps_every_row():
                   if r and r[0] == f"{export_data.SUMMARY_MARKER}: {export_data.INTERPOLATED_COLUMN}"]
         assert len(legend) == 1 and legend[0][3] == export_data.INTERPOLATED_NOTE, legend
         assert len(legend[0]) == 4, "the trailer stopped being rectangular"
-        assert export_data.INTERPOLATED_COLUMN in page and "interpolated between" in page
+        assert export_data.REPORT_INTERPOLATED_HEAD in page and "interpolated between" in page
+        assert html.escape(export_data.REPORT_INTERPOLATED_NOTE) in page
         assert "<td>C1 C2</td>" in page, "the report's table lost the disclosure cell"
     finally:
         s.corners.lap_corner_resolved = real
@@ -564,9 +566,10 @@ def test_report_html_wellformed_with_images():
     # group (N13) between the two, and "the second <table>" would silently start asserting the
     # SESSION group's row count the next time a group is added.
     laps_tables = [t for t in root.findall(".//table")
-                   if [th.text for th in t.findall("tr/th")][:1] == ["lap"]]
+                   if [th.text for th in t.findall("tr/th")][:1] == ["Lap"]]
     assert len(laps_tables) == 1, [t.get("class") for t in root.findall(".//table")]
-    assert len(laps_tables[0].findall("tr")) == len(s.valid_lap_ids()) + 1
+    assert len([tr for tr in laps_tables[0].findall("tr") if tr.find("td") is not None]) == \
+        len(s.valid_lap_ids())
     # Both images embedded as base64 data URIs that decode back to real PNG bytes.
     imgs = root.findall(".//img")
     assert len(imgs) == 2
@@ -647,8 +650,10 @@ def test_report_table_follows_the_display_unit(): # noqa: E301
             with open(path, encoding="utf-8") as f:
                 pages[unit] = f.read()
             ET.fromstring(pages[unit])  # still well-formed
-    assert "entry_kmh" in pages[None] and "entry_mph" not in pages[None]
-    assert "entry_mph" in pages["mph"] and "_kmh" not in pages["mph"]
+    # (in the page's own words — "Entry (km/h)", "apex (km/h)" — see report_laps_header)
+    assert "Entry (km/h)" in pages[None] and "Entry (mph)" not in pages[None]
+    assert "Entry (mph)" in pages["mph"] and "apex (mph)" in pages["mph"]
+    assert "Entry (km/h)" not in pages["mph"] and "apex (km/h)" not in pages["mph"]
     print("ok L12-01: the report table follows the display unit, the SI default is unchanged")
 
 
@@ -946,7 +951,7 @@ def test_the_page_keeps_what_the_slow_laps_and_corners_sections_must_say():
     assert "Lap 15 · a < b & c" in body and "a &lt; b &amp; c" in text
     assert "DROPOUT LAP NOTE" not in body, "a ⚠ dropout lap was given a note"
     page = " ".join(stats_service.corner_count_note(left, page=False))
-    assert page in body and "corners_interpolated column" in page
+    assert page in body and f"{export_data.REPORT_INTERPOLATED_HEAD} column" in page
     assert "shown muted lap by lap" not in body
     one_pass = [(r.cid, stats_service.corner_one_pass_note(r)) for r in report
                 if stats_service.corner_one_pass_note(r)]
@@ -974,10 +979,66 @@ def test_print_puts_every_laps_column_on_paper():
     text = _report_text(s, lapstrip=PNG_1PX)
     root = ET.fromstring(text)
     laps = [t for t in root.iter("table") if t.get("class") == "laps"]
-    assert len(laps) == 1 and [th.text for th in laps[0].findall("tr/th")][-2:] == [
-        "quality", export_data.INTERPOLATED_COLUMN]
+    # Every column on paper, under its page header: the two disclosures last, as in laps.csv.
+    headers, _rows = export_data.laps_table(s)
+    named = [th.text for th in laps[0].findall("tr/th")]
+    assert len(laps) == 1 and named[:1] == ["Lap"] and [
+        label for _g, label in export_data.report_laps_header(headers)][-2:] == [
+        export_data.REPORT_QUALITY_HEAD, export_data.REPORT_INTERPOLATED_HEAD]
+    assert export_data.REPORT_INTERPOLATED_HEAD in named and "break-all" not in paper
     assert [i.get("class") for i in root.iter("img")] == ["card"]
     print("ok report-story: print shows every laps column; the strip is a bordered card")
+
+
+def test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column():
+    """Discovery 3, K4: the report's Laps table printed laps.csv's machine names — `time_s`,
+    `dist_m`, `entry_kmh`, `C1_time_s`, `C1_apex_kmh`, `quality`, `corners_interpolated` — so it
+    scrolled sideways on screen (1981 px of table in a 978 px card on the demo) and its headers
+    broke mid-word on A4 (`break-all`). It now reads like the Laps tab ("Lap", "Time (s)", "Dist
+    (m)", "Entry (km/h)") with each corner's pair under ONE "C1" over "time (s)" / "apex (km/h)",
+    in the page's speed unit; every column is still there, and laps.csv keeps its names."""
+    s = make_session()
+    for unit, label in ((None, "km/h"), ("mph", "mph")):
+        headers, rows = export_data.laps_table(s, unit)
+        cols = export_data.report_laps_header(headers)
+        assert len(cols) == len(headers), (headers, cols)       # one page column per CSV column
+        assert not [lb for _g, lb in cols if "_" in lb], cols    # no machine name left
+        by = dict(zip(headers, cols, strict=True))
+        assert by["lap"] == (None, "Lap") and by["time_s"] == (None, "Time (s)")
+        assert by[export_data.DIST_COLUMN] == (None, "Dist (m)")
+        sfx = "kmh" if unit is None else "mph"
+        assert by[f"entry_{sfx}"] == (None, f"Entry ({label})")
+        assert by["C1_time_s"] == ("C1", "time (s)")
+        assert by[f"C1_apex_{sfx}"] == ("C1", f"apex ({label})")
+        assert by["S1_s"] == ("Splits (s)", "S1")
+        assert by["quality"] == (None, export_data.REPORT_QUALITY_HEAD)
+        assert by[export_data.INTERPOLATED_COLUMN] == (None, export_data.REPORT_INTERPOLATED_HEAD)
+        # The page: two header rows whose spans cover every column exactly once.
+        root = ET.fromstring(_report_text(s, unit=unit))
+        (table,) = [t for t in root.iter("table") if t.get("class") == "laps"]
+        top, sub = table.findall("tr")[:2]
+        spans = sum(int(th.get("colspan", 1)) for th in top.findall("th"))
+        assert spans == len(headers), (spans, len(headers))
+        assert [th.text for th in top.findall("th") if th.get("rowspan") == "2"] == \
+            [lb for g, lb in cols if g is None], "a column of its own changed place or went missing"
+        assert [th.text for th in sub.findall("th")] == [lb for g, lb in cols if g is not None]
+        assert [th.text for th in top.findall("th") if th.get("colspan")] == \
+            list(dict.fromkeys(g for g, _lb in cols if g is not None))
+        assert all(len(tr.findall("td")) == len(headers) for tr in table.findall("tr")[2:])
+        page = "".join(ET.tostring(table, encoding="unicode"))
+        assert "time_s" not in page and "_kmh" not in page and "_mph" not in page, page[:200]
+    # An unknown column keeps its machine name rather than lose its place.
+    assert export_data.report_laps_header(["lap", "new_thing"])[1] == (None, "new_thing")
+    # laps.csv is untouched: its header row is still laps_table's machine names.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "laps.csv")
+        export_data.write_laps_csv(path, s)
+        with open(path, encoding="utf-8") as f:
+            first = f.readline().strip()
+    assert first == ",".join(export_data.laps_table(s)[0]) and "C1_apex_kmh" in first, first
+    # On paper the headers wrap between words only.
+    assert "break-all" not in export_data._REPORT_CSS
+    print("ok K4: the report's laps table has the app's headers, every column, the CSV its names")
 
 
 if __name__ == "__main__":
@@ -1004,4 +1065,5 @@ if __name__ == "__main__":
     test_a_degraded_recording_stamps_the_slow_lap_notes_like_the_laps_table()
     test_the_page_keeps_what_the_slow_laps_and_corners_sections_must_say()
     test_print_puts_every_laps_column_on_paper()
+    test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column()
     print("test_export_data: OK")

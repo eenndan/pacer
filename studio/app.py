@@ -116,6 +116,11 @@ LOAD_PLACEHOLDER_MS = 400
 _ABSENT = object()
 
 
+# The report chart's layout size (logical px): fixed, so the figure is the session's and not the
+# window's — the live grab was as wide as the charts panel happened to be (_grab_report_chart).
+REPORT_CHART_SIZE = (960, 480)
+
+
 def _report_key_drops(key) -> set[str]:
     """The map key's rows a REPORT grab leaves out: each describes something that grab does not
     draw. "start" names a drag gesture over handles `grab_clean` hides; "marker" is the video
@@ -3897,6 +3902,84 @@ class StudioWindow(QMainWindow):
                     key._relayout()
                     map_view._reposition_key()
 
+
+    def _grab_report_chart(self) -> tuple[bytes, str, str | None]:
+        """The HTML REPORT's speed/Δ chart as (png, title, caption), drawn on a THROWAWAY chart
+        rather than grabbed off the live one.
+
+        The live grab put the app into the document (discovery 3, K3): the readout strip's "D:
+        datum cursor · N: next Δ loss" and live statistic, the playhead and any datum cursor, and
+        whatever laps the table, a comparison or a race happened to have up at export time — the
+        same session gave a different figure every time. Its title said "Δ to best" over a chart
+        that, at a fresh open, draws Δ to IDEAL. And at a fresh open the debrief keeps the charts
+        panel collapsed to 0 px, so the report embedded an empty image.
+
+        So the subject is PINNED: the chart the app opens on — the best lap alone, which the chart
+        draws against the synthetic ideal lap (`PlotsView._delta_series`). Where that would be a
+        flat zero line (no stitched ideal: too few laps, one lap quickest everywhere, no corners)
+        it is the app's launch pick instead, the two fastest laps against the best
+        (`CentralView._select_default`). The axis is distance, the app's default; the unit is the
+        reader's, like every other figure in the report. Title and caption are read off the copy
+        AFTER it drew, so they name exactly its laps and baseline, in the chart's own words.
+        Brake glyphs, coast bands, corner labels and sector lines are pushed as CentralView pushes
+        them. Nothing touches the live chart, so there is nothing to restore.
+
+        Falls back to the plain grab for a bare widget (tests) with no session to draw."""
+        from . import plots_view as pv
+
+        live = getattr(getattr(self, "view", None), "plots", None)
+        if not isinstance(live, pv.PlotsView):
+            return self.exports.grab_png(live), "Speed · Δ", None
+        session, mode = self.session, "distance"
+        # A PlotsView points theme's GLOBAL pen scale at its own screen's ratio when built; the
+        # copy's screen need not be the window's, so the live chart's scale is put back after.
+        pen_scale = theme.pen_scale()
+        chart = pv.PlotsView(session)
+        try:
+            chart.setAttribute(Qt.WA_DontShowOnScreen, True)
+            chart.set_document_still()
+            chart.set_speed_unit(self._speed_unit)
+            chart.resize(*REPORT_CHART_SIZE)
+            best = session.best_lap_id()
+            chart.set_laps([best] if best is not None else [])
+            if chart.delta_baseline_kind() == pv.DELTA_BASELINE_BEST:
+                fastest = [r["idx"] for r in sorted(session.lap_rows(), key=lambda r: r["time"])]
+                if len(fastest) >= 2:
+                    chart.set_laps(fastest[:2])
+            ids = chart.selected_lap_ids()
+            chart.set_sector_lines(session.sector_plot_positions(mode))
+            chart.set_corner_labels(session.corner_plot_positions(mode))
+            colour = self.view._driving_lap_colour
+            chart.set_brake_markers([(session.driving.lap_brake_plot_positions(lid, mode),
+                                      colour(lid, k), lid) for k, lid in enumerate(ids)])
+            chart.set_coasting_spans(
+                [(session.driving.lap_coasting_plot_spans(ids[0], mode), colour(ids[0], 0))]
+                if ids else [])
+            # Shown off-screen so it lays out at its size, then settled by hand — POSTED events
+            # only (the layout requests), never an event loop: no timer, input or playback tick of
+            # the live window runs inside an export. What the copy would otherwise wait for is run
+            # directly: the axis gutters, re-measured on the laid-out scene (the first budget is
+            # taken before there is one and reserves 48 px under the x-axis title — measured — which
+            # the live chart's later resizes correct and a one-shot copy never gets), and the
+            # legend's placement, which the live chart runs on a zero-delay timer. Three passes
+            # reach the fixed point (on the demo: byte-identical to letting the event loop settle
+            # it, and to eight passes; one pass is not).
+            chart.show()
+            for _ in range(3):
+                QApplication.sendPostedEvents()
+                chart._budget_axis_gutters()
+                chart._place_speed_legend()
+            title = f"Speed · {pv.DELTA_SHORT_LABELS[chart.delta_baseline_kind()]}"
+            caption = chart.document_caption()
+            if not session.timing_verified:
+                # The chart names its baseline lap "best" on provisional timing too (it does on
+                # screen); the page that withholds that lap's attribution says why, under it.
+                caption = f"{caption} {data_quality.STAMP_PROVISIONAL}."
+            return self.exports.grab_png(chart), title, caption
+        finally:
+            chart.close()
+            chart.deleteLater()
+            theme.set_pen_scale(pen_scale)
 
     @staticmethod
     def _save_card_png(image, path: str) -> None:

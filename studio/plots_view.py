@@ -918,6 +918,29 @@ class PlotsView(QWidget):
         """Copy of the lap ids overlaid on the charts."""
         return list(self._lap_ids)
 
+    # ----------------------------------------------------------- the report's still
+    def set_document_still(self):
+        """Make THIS instance a still for a document — the HTML report's chart: no readout strip.
+        The strip is the app talking to the person at the keyboard (the "D: datum cursor · N: next
+        Δ loss" hint, the live window statistic, the datum interval), and a page has no keyboard
+        and no playhead; the report embedded all of it (discovery 3, K3). Called on a throwaway
+        copy built for the grab, never on the live chart, so there is nothing to undo."""
+        self._readout.setVisible(False)
+
+    def delta_baseline_kind(self) -> str:
+        """The baseline the lower chart drew at the last refresh: a DELTA_BASELINE_* kind."""
+        return self._delta_baseline_kind
+
+    def document_caption(self) -> str:
+        """What this chart draws, in its own words, for the line under a still of it: the speed
+        legend's entries (the laps, their times, which is the baseline) and the Δ axis's hover
+        (the baseline spelled out). Read from what refresh() drew, so it cannot name a lap or a
+        baseline the picture does not show."""
+        leg = self._speed_legend
+        names = [label.text for _sample, label in (leg.items if leg is not None else [])]
+        drawn = "; ".join(names) if names else "no lap"
+        return f"Speed of {drawn}. Lower chart: {self._delta_axis_tip()}"
+
     # ----------------------------------------------------------- sector lines (F2)
     def set_sector_lines(self, positions):
         """Set sector guide lines on both charts. positions = [(label, plot-x)] in the current
