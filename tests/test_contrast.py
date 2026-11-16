@@ -816,6 +816,8 @@ HOSTS = {
     # The excluded-lap strip sits under the lap grid, on the panel surface.
     "QLabel#LapExcludedBody": (C.surface,),
     'QLabel#LapExcludedHeader[tone="warn"]': (C.surface,),
+    # ...and so does the slow-lap finder footer just above it, its flat "next ›" button included.
+    "QPushButton#LapSlowFinderNext": (C.surface,),
     # The PB toast is a card with its own C.surface_active fill; everything inside it is on that.
     "QLabel#PBToastTitle": (C.surface_active,),
     "QLabel#PBToastBody": (C.surface_active,),
