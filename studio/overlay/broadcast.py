@@ -27,13 +27,19 @@ WHAT EACH PART SHOWS, AND WHERE THE NUMBER COMES FROM:
   * the LAST LINE (a whole-recording export only): the running clock cannot show a lap's final
     time there — the crossing falls between two frames, so the lap's last frame is up to a frame
     short and the next is already the next lap (QA, #565). For `LAST_HOLD_S` after each crossing
-    a separate sub-plate under the tower reads "LAST  0:46.207  +0.215": the finished lap's Time
-    and Δbest cells as the Laps table prints them (`fmt_time`, `lap_table.delta_best_gaps`,
-    `fmt_signed(·, 3)`), neutral inside the printed 0.07 s, `★` on the best lap, no Δ under
-    provisional timing (the column's dashes). Only for a lap the table has a row for (not an
-    excluded or too-brief piece, so never the out-lap's "previous lap"), and never on a single-lap
-    export, where nothing follows. The running clock above it never stops: a frozen clock would
-    be a false readout;
+    a separate sub-plate under the tower reads "LAST  0:46.207  Δbest +0.215": the finished
+    lap's Time and Δbest cells as the Laps table prints them (`fmt_time`,
+    `lap_table.delta_best_gaps`, `fmt_signed(·, 3)`), neutral inside the printed 0.07 s, `★` on
+    the best lap, no Δ under provisional timing (the column's dashes). Its Δ is ALWAYS to the best
+    lap, so it always says "Δbest" — under a tower reading "Δref" an unnamed gap would read as one
+    to the reference; where the label does not fit the plate (the tower's own width) the line is
+    the time alone. Below the corner labels' 11 px floor (`_LABEL_MIN_PX`) there is no LAST line
+    at all. Only for a lap the table has a row for (not an excluded or too-brief piece, so never
+    the out-lap's "previous lap"), and never on a single-lap export, where nothing follows. It is
+    drawn with or without the tower: after the recording's last lap, or a lap followed by an
+    excluded crossing, the tower goes and the LAST line stands alone under the lap's header strip
+    ("LAP 14"), so it never reads as debris. The running clock above it never stops: a frozen
+    clock would be a false readout;
   * the HONESTY STAMP is the Classic one — the same lines from `data_quality.burned_timing_stamp`,
     painted by the same `_paint_stamp` at the same size — moved to hang under the tower instead of
     under the strip (the seam's `occupies`); it is never dropped and never shrunk.
@@ -59,7 +65,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QFontMetricsF, QImage, QPainter, QPainterPath, QPen
 
 from studio import library, theme, units
-from studio._signal import fmt_signed, fmt_time
+from studio._signal import fmt_signed, fmt_time, lap_label
 from studio.export_palette import EXPORT
 from studio.overlay import LAYER_MAP, LAYER_TOP, STAMP, ElementContext, layout
 from studio.overlay.corner_cards import baseline_word
@@ -73,6 +79,8 @@ _PENDING_DELTA = ""
 _CACHE_MAX = 192        # cached text images: a lap's speeds and Δ strings, recent first
 _LABEL_MIN_PX = 11.0   # the C-labels' legibility floor: below it a label is noise
 LAST_HOLD_S = 2.0      # how long the LAST line stays after a crossing
+_LAST_DIGITS = 0.56    # the LAST line's faces, against its plate's height
+_LAST_TAG = 0.44       # "LAST" and "Δbest": the tower's muted label, smaller
 
 
 def styled(config, style: str):
@@ -218,13 +226,35 @@ class BroadcastElement:
         self._f_time = ev._font(self._time_h * 0.80, bold=True)
         self._f_delta = ev._font(self._delta_h * 0.64, bold=True)
         self._last_h, self._last_gap = L.TOWER_LAST * u, L.TOWER_LAST_GAP * u
-        self._f_last = ev._font(self._last_h * 0.56, bold=True)
-        self._f_last_tag = ev._font(self._last_h * 0.40, bold=True)
+        # The line's smallest face is its tag; below the labels' floor the line is noise: none.
+        self.last_px = self._last_h * _LAST_TAG
+        if self.last_px < _LABEL_MIN_PX:
+            self._holds, self._last_rows = [], {}
+        self._f_last = ev._font(self._last_h * _LAST_DIGITS, bold=True)
+        self._f_last_tag = ev._font(self.last_px, bold=True)
         self._last_sp = 0.012 * u
-        last_w = [self._last_width(r) for r in self._last_rows.values()]
         tower_w = 2 * self._pad + max(
             [_adv(self._f_head, t) for t in heads] + [_adv(self._f_time, t) for t in clocks]
-            + [_adv(self._f_delta, t) for t in deltas] + last_w + [0.18 * u])
+            + [_adv(self._f_delta, t) for t in deltas] + [0.18 * u])
+        # The LAST plate is the tower's width, which may grow for it only as far as the tower's
+        # neighbours leave room (the g-meter; in landscape the top-centre Δ bar): a row whose
+        # "Δbest +0.215" does not fit is the time alone (an unnamed Δ would read as the tower's
+        # baseline); one whose time alone does not fit is dropped.
+        m, gap = L.MARGIN * u, L.GAP * u
+        room = ctx.plates["gmeter"].x() - gap - m
+        if ctx.out_w >= ctx.out_h:
+            room = min(room, (ctx.out_w - L.DBAR_W * u) / 2.0 - gap - m)
+        room = max(room, tower_w)
+        fitted_rows = {}
+        for lap, row in self._last_rows.items():
+            for cand in (row, (row[0], "", EXPORT.text)):
+                if 2 * self._pad + self._last_width(cand) <= room:
+                    fitted_rows[lap] = cand
+                    break
+        self._holds = [h for h in self._holds if h[1] in fitted_rows]
+        self._last_rows = fitted_rows
+        tower_w = max([tower_w] + [2 * self._pad + self._last_width(r)
+                                   for r in fitted_rows.values()])
         self._main_h = L.BROADCAST["tower"].h * u
         tower_h = self._main_h + ((self._last_gap + self._last_h) if self._holds else 0.0)
         sp_h = L.SPEED_H * u
@@ -283,6 +313,14 @@ class BroadcastElement:
         p.end()
         self._tower_img = img
         self._heads: dict[str, QImage] = {}
+        # The header strip alone (a LAST line without its tower): the amber band, rounded.
+        img, p = _image(r.width(), self._head_h)
+        band = QRectF(1, 1, r.width(), self._head_h)
+        p.setPen(Qt.NoPen)
+        p.setBrush(theme.qcolor(EXPORT.accent, 240))
+        p.drawRoundedRect(band, 7 * k, 7 * k)
+        p.end()
+        self._header_img = img
         # The Δ bar: one image per lap scale in use (`_bar_image`).
         r = self.dbar
         lab_h = r.height() * 0.42
@@ -342,6 +380,8 @@ class BroadcastElement:
         """The LAST line's runs: (text, font, colour)."""
         time_text, delta, colour = row
         runs = [("LAST", self._f_last_tag, EXPORT.text_dim), (time_text, self._f_last, EXPORT.text)]
+        if delta and delta != "★":
+            runs.append(("Δbest", self._f_last_tag, EXPORT.text_dim))
         if delta:
             runs.append((delta, self._f_last, colour))
         return runs
@@ -456,10 +496,17 @@ class BroadcastElement:
         head, clock, delta, colour, frac, bar, speed = self.state(vals)
         if head is not None:
             self._paint_tower(p, head, clock, delta, colour, frac)
-            last = self.last_lap(vals)
-            if last is not None:
-                p.drawImage(QPointF(self.tower.x() - 1, self.tower.y() + self._main_h
-                                    + self._last_gap - 1), self._last_imgs[last[0]])
+        last = self.last_lap(vals)
+        if last is not None:
+            y = self.tower.y() + self._main_h + self._last_gap
+            if head is None:
+                # No tower (the recording's last lap, or an excluded crossing, follows): the
+                # finished lap's header strip over the line, so it is not a stray plate.
+                p.drawImage(QPointF(self.tower.x() - 1, y - self._head_h - self._last_gap - 1),
+                            self._header_img)
+                p.drawImage(QPointF(self.tower.x() - 1, y - self._head_h - self._last_gap - 1),
+                            self._head(f"LAP {lap_label(last[0])}"))
+            p.drawImage(QPointF(self.tower.x() - 1, y - 1), self._last_imgs[last[0]])
         # --- the Δ bar (not on the best lap: the tower's ★ BEST says why), on this lap's scale
         if bar is not None:
             scale = self.scale_of(vals.lap_id)

@@ -235,12 +235,27 @@ def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
         p = ev.OverlayPainter(s, spec, 1920, 1080, 30.0)
         off = ev.OverlayPainter(s, off_spec, 1920, 1080, 30.0)
         el = p.elements[0]
-        near = far = 0
-        for t in _times(spec, 40):
+        near = far = fitted = 0
+        for t in _times(spec, 40 if lap != close else 80):
             vals, a = _painted(p, s, spec, t)
             kart = p._map.marker_and_tail(vals.tt)[0]
             want = _ghost_px(p, el, vals)
             d = float(np.hypot(want[0] - kart.x(), want[1] - kart.y()))
+            if 1.5 < d < near_r * el._k:
+                # The ring is round the BEST LAP'S place, not round the dot: a circle fitted to
+                # its cyan pixels (a fit, not a centroid — the arc behind the dot is cut away)
+                # is centred on the ghost within half a pixel, and not on the dot.
+                m = _cyan(a[..., :3], a[..., 3]) & (np.hypot(xx + 0.5 - want[0],
+                                                            yy + 0.5 - want[1]) < 20)
+                py, px = np.nonzero(m)
+                px, py = px + 0.5, py + 0.5
+                sol = np.linalg.lstsq(np.c_[2 * px, 2 * py, np.ones(len(px))],
+                                      px ** 2 + py ** 2, rcond=None)[0]
+                miss = float(np.hypot(sol[0] - want[0], sol[1] - want[1]))
+                assert miss < 0.5 and np.hypot(sol[0] - kart.x(), sol[1] - kart.y()) > 1.0, (
+                    f"t={t:.3f}: the ring is centred {miss:.2f} px from the ghost, gap {d:.2f} px "
+                    f"(ring at {sol[0]:.1f},{sol[1]:.1f}; dot {kart.x():.1f},{kart.y():.1f})")
+                fitted += 1
             if d < 3.0:
                 r = np.hypot(xx + 0.5 - kart.x(), yy + 0.5 - kart.y())
                 ink = int((_cyan(a[..., :3], a[..., 3]) & (r < 20)).sum())
@@ -264,9 +279,11 @@ def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
                     f"t={t:.3f}: the ring clear of the dot changed"
                 far += 1
         count[lap] = (near, far)
+        if lap == close:
+            assert fitted >= 10, f"only {fitted} frames to fit the ring's centre on"
         spec.source.cleanup()
         off_spec.source.cleanup()
-    assert count[close][0] >= 20, f"only {count[close]} frames beside the kart on lap {close + 1}"
+    assert count[close][0] >= 40, f"only {count[close]} frames beside the kart on lap {close + 1}"
     assert count[f["lap"]][1] >= 12, f"only {count[f['lap']]} clear frames on lap {f['lap'] + 1}"
     print(f"ok beside the kart the ghost is a ring round the dot: (beside, clear) frames of 40 "
           f"{ {k + 1: v for k, v in count.items()} }, the clear ones unchanged")

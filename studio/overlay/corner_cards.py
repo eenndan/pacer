@@ -42,9 +42,10 @@ the widest.
 
 PLACEMENT: left-aligned with the speed readout and just above it, then moved up past any Classic
 plate it would touch (the minimap is wide in 9:16); it must land inside the safe area clear of
-every plate. Where it cannot (a frame ≲ 300 px wide, QA #565/#558) the cards SIT THE EXPORT OUT
-rather than fail it or burn a card over another plate: an extra is never worth the whole file, and
-the finished box says so (`skipped`, collected by `overlay.build`).
+every plate. Where it cannot, the cards SIT THE EXPORT OUT rather than fail it or burn a card
+over another plate: an extra is never worth the whole file, and the finished box says so
+(`skipped`, collected by `overlay.build`). A fallback: no frame size the dialog offers reaches it
+today (tests/test_export_broadcast.py walks them); QA #565/#558 once failed an export here.
 """
 from __future__ import annotations
 
