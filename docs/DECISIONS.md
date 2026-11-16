@@ -401,3 +401,62 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     withholds both.
   - A Broadcast still from real footage, and re-shot landing stills: the one recording on this
     machine is not one RUL-9 approved for publishing.
+
+## 12. Recorded at the 0.11.0 release, 2026-11-16
+
+- **v0.11.0 is the it-tells-the-story release**: 6 pull requests from #566 to #573, Wave 4 of the
+  campaign section 8 records. The story core, slow-lap notes and three session moments in a
+  Qt-free module (#567); the middle half of your laps beside σ, a Corners σ hover and a row in the
+  exported report (#568); the Laps table's ▼ cue naming the corner, and its tooltip, on a slow
+  lap, whose click rings the corner on the map (#569); Stats ▸ MOMENTS, each moment a Jump (#570); four refusals, sections
+  29 to 32 of [refused-2026-09.md](../studio/docs/refused-2026-09.md), with an addendum to §28
+  (#566); and the QA fixes before the release (#573).
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **A slow-lap note has one baseline, your typical lap**, the median clean lap (#567). A lap is
+    slow when it is more than the larger of the clean laps' middle half and 0.50 s over it: a
+    default chosen on few sessions, and every tooltip states the rule and says so. Each corner's
+    share is its time over its own typical pass, and only a corner beyond the CORNERS BY LAP ▼ step
+    is named. The ▼ cue in the row appears only when one or two corners hold the loss (#569).
+    Straights are never named: the grid has no noise gate for them yet.
+  - **A lap after a left-out lap is labelled** "(after Lap N, left out)", or "(after a too-brief
+    crossing)"; its numbers are the same with or without the label (#573).
+  - **Three moments kept**: the best lap, the biggest single-corner loss and the best 5-lap run
+    (#567, #570). A best 3-lap-run moment was not built: the PACE tile carries that figure, and 5
+    of the demo's 12 runs sit within 0.07 s of the best. The best pass per corner and the longest
+    run with no ▼ were refused (§32): the first is a tie of 6 to 11 passes at six of the demo's
+    seven corners, and the second counts the grid's outlier cells, not its calm: 16 % of
+    pure-noise grids run at least as long as the demo's 8 laps.
+  - **The middle half is a width** (#568): "middle half spans 0.59 s", the upper quartile minus
+    the lower over the clean laps, never a ± about the median, and shown only from 5 laps, below
+    which one slow lap reaches a quartile. A lap width under 0.07 s prints "< 0.07 s"; a corner's, under 0.01 s, "< 0.01 s".
+  - **An estimated clock widens a moment's ties to 0.15 s**, the Lap race's own bound, and says so
+    (#567).
+  - **MOMENTS sits under PACE**, above IDEAL LAP, and is absent when it would only repeat the best
+    lap the PACE tile already prints (#570, #573).
+  - **The PACE tile reads "race pace · best 3-lap mean"**, in the exported report too, so it is
+    not read as the 5-lap run's median below it (#570).
+- **The media.** `accuracy.png` and `lapstrip.png` were re-captured, byte-identical to 0.10.0's.
+  `debrief.png` was re-captured on the synthetic demo and changed in two rows: the Coaching
+  reason now reads "middle half of laps spans" where it read "within" (#573). `moments.png` is
+  new: the demo's Stats page from PACE to the foot of MOMENTS; three captures were byte-identical.
+  `hero.png`, `map.png` and `og.png` are waived again as stale, for 0.8.0's reasons.
+  `data-trust.png` and `ideal-lap.png` are renewed with a new reason: 0.11.0 did change Stats-page
+  modules (the σ caption, the race-pace caption, MOMENTS, the Corners σ hover), but none inside
+  these crops; the modules that draw them are unchanged since v0.10.0, and a demo render of both
+  shots from v0.10.0's `studio/` and from 0.11.0 is byte-identical. The export stills
+  `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed: 0.11.0 changed no export-video
+  code.
+- **What could not run for it.** As at 0.10.0, one recording the real-footage checks take is on
+  this machine; the rest report Skipped because their recordings are not here. The manual half of
+  the golden gate did not run; the core is unchanged, and the synthetic golden gate passed.
+- **Open for the owner.**
+  - The CORNERS ▲ "erratic" mark against the middle half: on the demo the sixth corner carries ▲ with the
+    smallest middle half, 0.03 s, its σ coming from one lap. A fix is in review for the next
+    release (#574).
+  - The Classic lap strip colours a Δ of +0.06 s as lost, inside the 0.07 s precision.
+  - Under provisional timing the overlay still shows "★ BEST" and the Δ, while the Laps table
+    withholds both.
+  - Should Broadcast be the default Style?
+  - The landing stills: re-shoot `hero.png`, `map.png`, `og.png` and the two Stats crops from
+    another recording, or swap the Stats crops for demo captures, and a Broadcast still from real
+    footage; the one recording on this machine is not one RUL-9 approved for publishing.

@@ -121,8 +121,8 @@ def _corner_middle_half_tip(report) -> str:
                                           stats_service.CORNER_MIDDLE_HALF_FLOOR_S)
     if shown is None:
         return ""
-    return (f"the central 50 % of C{report.cid}'s "
-            f"{plural(report.n, 'counted pass', 'counted passes')} fall within {shown}. "
+    return (f"The central 50 % of C{report.cid}'s "
+            f"{plural(report.n, 'counted pass', 'counted passes')} span {shown}. "
             "σ counts every one of them.")
 
 

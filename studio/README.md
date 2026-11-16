@@ -140,7 +140,7 @@ caches + delegates.
 | [stats.py](stats.py) | Stats-page reducers + `SessionStats`: totals, per-lap stats, bands, stints, split/corner grids | — | `test_stats` |
 | [bests.py](bests.py) | Service: best lap, best splits, the ideal lap (`theoretical_best`), best rolling lap | — | `test_session_pure` |
 | [timeline.py](timeline.py) | Cursor/plot/video conversions: plot-x ↔ media time, lap at time, nearest point; the map dot's interpolated position (`trace_point_at`) | — | `test_timeline` |
-| [story.py](story.py) | The session's story: where a slow lap's time went (▼ corners or spread), four session moments with their ties | — | `test_story` |
+| [story.py](story.py) | The session's story: where a slow lap's time went (▼ corners or spread), three session moments with their ties | — | `test_story` |
 | [lap_race.py](lap_race.py) | Lap Race core: every clean lap on its own clock from the start line; ladder, interval on the Δ frame, ties | — | `test_lap_race` |
 | [render_cache.py](render_cache.py) | Per-lap map-draw cache: gap-aware trace segments, the reference-centerline donor | — | `test_reference` |
 | [gapfill.py](gapfill.py) | Map-only GPS-gap fill: cross-lap borrow, reference centerline or spline, tagged inferred | — | `test_gapfill` |
