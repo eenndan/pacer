@@ -34,7 +34,7 @@ import numpy as np
 from . import corners as corners_mod
 from . import driving, units
 from . import stats as stats_service
-from ._signal import plural
+from ._signal import DASH, plural
 from .corners import project_boundaries
 
 # Min clean laps before coaching; the per-corner loss is a MEDIAN, ill-defined/unstable below 3.
@@ -1793,3 +1793,198 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
             out.append(f"Start with C{lead.cid}: +{lead.time_lost:.2f} s"
                        + (f", and {had}." if had else "."))
     return out[:2]
+
+
+# ------------------------------------------------------- the shortlist, and the words a page prints
+#
+# ONE DEFINITION OF "THE SHORTLIST". Which rows a coaching surface shows, which of them carry a
+# claim, and which few the headline sums used to live in the Qt module `coaching_panel`, so every
+# other surface (the Stats page's reconciliation note, its STRAIGHTS start-here, the share card's
+# opportunity) imported a view to learn it — and a Qt-free one (the exported HTML report) could not
+# learn it at all. The rule is here now, beside the model it reads, and every surface asks it.
+
+# L2: the time-lost cells render at 2 dp ("+{t:.2f} s"), so any loss under half a centisecond rounds
+# to "+0.00 s" — an informationless "opportunity" with a live Jump button. summarize() keeps the raw
+# 1e-9 ranking (used by the golden fingerprint), but the DISPLAYED opportunity lists drop rows below
+# the shown resolution so no "+0.00 s" row ever appears.
+DISPLAY_MIN_LOST_S = 0.005  # < this rounds to +0.00 s at 2 dp — not a shown opportunity
+
+# The actionable SHORTLIST: the rows the Coaching page's headline sums (and the debrief's table, its
+# pre-promoted focus corners and the Stats page's reconciliation quote), and the FLOOR on how many
+# rows the page shows. L5-08: it is not a ceiling — the page renders as much of the ranking as its
+# viewport can hold (see coaching_panel.OpportunitiesPanel._tune_rows).
+PANEL_TOP_N = 3
+
+# IA-01: the ONE scope word the coaching headline leads with. Every opportunity is a median over the
+# session's clean laps — the page does not, and cannot, re-scope to the lap you have selected, so it
+# says so where the number is read.
+SCOPE_PREFIX = "Whole session"
+
+# The one-word answer behind the "Done it?" cell, per REACH_* id — the glance cue that separates
+# "repeat what you already did" from "find something new". A row whose reach has no word here
+# (REACH_UNKNOWN: built without per-lap times) prints the em-dash instead of a count.
+REACH_WORD = {
+    REACH_REPEAT: "Yes",
+    REACH_RARE: "Rarely",
+    REACH_NEVER: "Never",
+}
+
+
+def shown_rows(opps: Opportunities) -> list[Opportunity]:
+    """The opportunity rows worth SHOWING: those whose time_lost does not round to +0.00 s at the
+    2-dp display resolution (L2, `DISPLAY_MIN_LOST_S`). Ranking/order is preserved (summarize
+    already sinks the abstained rows below the ranked ones); only sub-resolution rows are dropped.
+    An abstained row IS shown — with the sentence saying which evidence test it failed."""
+    return [r for r in opps.rows if r.time_lost >= DISPLAY_MIN_LOST_S]
+
+
+def ranked_shown(opps: Opportunities) -> list[Opportunity]:
+    """The shown rows that carry a CLAIM, biggest loss first. An abstained row is displayed (with
+    its reason) but must never be summed into a "time available" figure: that is the number the
+    evidence gate exists to keep honest.
+
+    Reads the row's evidence through getattr because the Stats page hands this duck-typed rows from
+    a session stub; a row with no evidence at all is UNMEASURED, not gated out, so it counts (the
+    same rule `_NO_EVIDENCE` encodes)."""
+    return [r for r in shown_rows(opps)
+            if getattr(getattr(r, "evidence", None), "ranked", True)]
+
+
+def shortlist(opps: Opportunities) -> list[Opportunity]:
+    """THE shortlist: the top `PANEL_TOP_N` ranked, shown rows, in rank order — what the Coaching
+    headline sums, what the debrief's table shows and pre-promotes onto the focus list, and whose
+    first row is the share card's "biggest opportunity". [] when nothing shown is ranked.
+
+    The top RANKED rows, not the top rows: an abstained corner is displayed but its number is not a
+    claim, so summing it into "time available" would put back exactly the noise the evidence gate
+    took out. (summarize orders ranked-first, so this is normally the first `PANEL_TOP_N` rows — the
+    filter matters when fewer than that are ranked.)"""
+    return ranked_shown(opps)[:PANEL_TOP_N]
+
+
+def shown_total(rows: Iterable[Opportunity]) -> float:
+    """The sum of `rows`' losses AS PRINTED, each rounded to the cells' 2 dp first (B12): a headline
+    ("0.56 s") and the rows under it (+0.26 +0.20 +0.11 = 0.57) must never disagree by a rounding
+    penny — a total is an aggregate of what the reader can check by eye."""
+    return sum(round(r.time_lost, 2) for r in rows)
+
+
+def clean_laps_phrase(n: int) -> str:
+    """"median of N clean laps" — the sample the opportunities are a median OVER, so the headline
+    carries its own denominator (singular for the degenerate one-lap case)."""
+    return f"median of {n} clean lap{'' if n == 1 else 's'}"
+
+
+def headline(opps: Opportunities) -> str:
+    """The Coaching page's one-line framing, "Whole session · 0.60 s across your top 3 corners vs
+    your best lap (median of 14 clean laps)" — or "" when the page shows no rows (too few clean laps,
+    or nothing above the display resolution: the empty state speaks instead).
+
+    Phrased by COUNT (P1: "in your worst corner" for one, never "across the top 1"), with the
+    BASELINE named on the face — one tab away the Stats CORNERS table prints a "Med loss" for the
+    same corners against the best ANYONE did in each, a different question with a much bigger
+    answer — and LED by the scope (IA-01), because the sibling Corners tab renames itself for the
+    selected lap and this number does not move with it. The zero case is real: every shown corner
+    can fail the evidence gate, and the honest headline then says so rather than totalling 0.00 s."""
+    if not opps.enough or not shown_rows(opps):
+        return ""
+    rows = shortlist(opps)
+    # The baseline, measured: on the D24 0060 pair the two "loss" columns sum to 1.02 s here and
+    # 3.93 s on the Stats CORNERS table, and corner by corner run 1.3x to 2450x apart — not a
+    # rounding question the reader can resolve by looking harder. The scope, measured: on D24 lap 6
+    # a headline that named neither understated the lap's own +2.08 s as "0.21 s".
+    if not rows:
+        gains = "no corner clears its own lap-to-lap spread"
+    else:
+        total = shown_total(rows)
+        gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
+                 else f"{total:.2f} s across your top {len(rows)} corners")
+        gains += " vs your best lap"
+    return f"{SCOPE_PREFIX} · {gains} ({clean_laps_phrase(opps.n_laps)})"
+
+
+def theme_lines(opps: Opportunities) -> tuple[str, list[str]]:
+    """(the theme sentence, its at most two actions) — "" and [] when nothing is ranked. The second
+    action is the "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps" line. The rows
+    ride along so a side one corner on the reach line decides is not stated as a side
+    (COACHING-4, `theme_tipping_row`)."""
+    theme_obj = getattr(opps, "theme", None) or _NO_THEME
+    rows = list(opps.rows)
+    return theme_sentence(theme_obj, rows), theme_actions(theme_obj, rows)
+
+
+def lost_text(opp: Opportunity) -> str:
+    """The "Time lost" cell: "+0.36 s" (2 dp — the resolution `DISPLAY_MIN_LOST_S` is set by)."""
+    return f"+{opp.time_lost:.2f} s"
+
+
+def done_it_text(opp: Opportunity) -> str:
+    """The "Done it?" cell: "6 of 14 laps" — how many of the laps counted at this corner already
+    matched or beat the best lap's time through it, as a COUNT over its denominator (LOOK-9: the
+    word it replaced flipped at one lap). The em-dash for an unmeasured row."""
+    ev = opp.evidence
+    return f"{ev.reach_laps} of {plural(ev.n_laps, 'lap')}" if ev.reach in REACH_WORD else DASH
+
+
+def reason_text(opp: Opportunity, directions: dict | None = None, unit: str | None = None,
+                reach: bool = True) -> str:
+    """The "How to find it" cell: the row's `reason_sentence` (apex deficit in `unit`) and, under a
+    RANKED row whose laps separate one, the measured braking-direction line from `directions`
+    (cid -> BrakeDirection; {} or None leaves it off, as the debrief does). An abstained row is its
+    abstain sentence alone: a row that has just declined a claim does not grow a lever under it.
+    `reach` False leaves off the "N of M laps" clause, for a surface printing `done_it_text` beside
+    it (QA JOURNEY-8)."""
+    sentence = reason_sentence(opp, unit, reach=reach)
+    if not opp.evidence.ranked:
+        return sentence
+    line = brake_direction_line((directions or {}).get(opp.cid))
+    return f"{sentence}\n{line}" if line else sentence
+
+
+@dataclass(frozen=True)
+class RowText:
+    """One Coaching row as a page prints it — every string, no widget."""
+
+    cid: int
+    corner: str      # "C1"
+    lost: str        # "+0.36 s"
+    done_it: str     # "6 of 14 laps", or "—" for an unmeasured row
+    reason: str      # the "How to find it" text (`reason_text`), possibly two lines
+    ranked: bool     # False: an abstained row — shown muted, its number is not a claim
+
+
+@dataclass(frozen=True)
+class PageText:
+    """Everything a surface needs to print the Coaching page's answer, in the page's own words:
+    the headline, the theme and its actions ("Start with …"), the shortlist the headline sums, and
+    every shown row. `headline` "" (and both row tuples empty) when the page shows its empty state."""
+
+    headline: str
+    theme: str
+    actions: tuple[str, ...]
+    shortlist: tuple[RowText, ...]
+    rows: tuple[RowText, ...]
+
+
+def row_text(opp: Opportunity, directions: dict | None = None, unit: str | None = None,
+             reach: bool = False) -> RowText:
+    """`opp` as the Coaching table prints it (see `RowText`); `reach` as in `reason_text`."""
+    return RowText(cid=int(opp.cid), corner=f"C{opp.cid}", lost=lost_text(opp),
+                   done_it=done_it_text(opp),
+                   reason=reason_text(opp, directions, unit, reach=reach),
+                   ranked=bool(opp.evidence.ranked))
+
+
+def page_text(opps: Opportunities, directions: dict | None = None, unit: str | None = None,
+              *, reach: bool = False) -> PageText:
+    """The Coaching page's text in one call — for a surface with no widget (the exported report).
+    `directions` is `Session.coaching_brake_direction()` (None leaves the braking lines off, as the
+    debrief does), `unit` the speed unit; `reach` True puts the "N of M laps" clause back into each
+    reason, for a surface that does not print `done_it` beside it. The strings are the ones the
+    page's own widgets are filled from, so the two cannot drift."""
+    theme, actions = theme_lines(opps)
+    shown = shown_rows(opps) if opps.enough else []
+    return PageText(headline=headline(opps), theme=theme, actions=tuple(actions),
+                    shortlist=tuple(row_text(r, directions, unit, reach)
+                                    for r in (shortlist(opps) if shown else [])),
+                    rows=tuple(row_text(r, directions, unit, reach) for r in shown))

@@ -82,14 +82,14 @@ def test_a_v1_list_keeps_its_meaning():
 def test_the_baseline_is_the_corners_table_row():
     """On a real (synthetic) session: each promoted corner's baseline IS its CORNERS row — median
     and lap count — and a v1 (fraction) item of the same window is re-measured by its own method."""
-    from studio import chapters
+    from studio import chapters, coaching
     from studio.session import Session
     with tempfile.TemporaryDirectory(prefix="focusrow_") as folder, _fresh_app_support():
         a, _b = _two_recordings(folder)
         s = Session.load(chapters.discover_siblings(a))
         entry = s.library_entry([a])
         rows = {r.cid: r for r in s.corner_report()}
-        cids = [r.cid for r in s.coaching_opportunities().ranked_rows()[:3]] or sorted(rows)[:3]
+        cids = [r.cid for r in coaching.shortlist(s.coaching_opportunities())] or sorted(rows)[:3]
         items = s.focus_items(cids, entry)
         assert [i.cid for i in items] == cids, (items, cids)
         for it in items:
