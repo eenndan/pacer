@@ -98,6 +98,7 @@ RACE_VEIL_ALPHA = 195
 # easing time constants in RACE seconds (so 2× eases as far per metre as 1×) and the step of the
 # race clock that counts as a jump (a scrub, a restart): recentre at once.
 FOLLOW_WIDTHS_M = (30.0, 45.0, 60.0, 90.0, 120.0, 150.0)
+FOLLOW_FIELD_Q = 0.8
 FOLLOW_FILL = 0.6
 FOLLOW_SHRINK = 0.8
 FOLLOW_BOX = 0.15
@@ -1569,30 +1570,50 @@ class _FollowCam:
 
     THE REFERENCE is the median dot, x and y apart: the bulk of the field, which one straggler or
     one lap pulling away does not drag (the selected lap is the ring, wherever it is). THE WIDTH is
-    the narrowest of FOLLOW_WIDTHS_M that keeps every dot within FOLLOW_FILL of the free area from
-    the median, so the leader and the last lap stay in view up to the widest step. It is a ladder,
-    not a continuous fit, and shrinks only once the field fits well inside the next step down
-    (FOLLOW_SHRINK): a scale change re-lays the corner labels, and a view that zoomed every tick
-    would swim. THE MOTION eases in race time (FOLLOW_TAU_S, FOLLOW_ZOOM_TAU_S), and the median is
-    never let outside a dead-zone box of FOLLOW_BOX round the free centre; with motion off the
-    view holds still until the median leaves that box, then recentres in one step. A step of the
-    race clock backwards or past FOLLOW_JUMP_S (a scrub, a restart) recentres at once."""
+    the narrowest of FOLLOW_WIDTHS_M that keeps the MIDDLE FOLLOW_FIELD_Q of the dots (the nearest
+    80 % to the median) and the selected lap's dot within FOLLOW_FILL of the free area from their
+    median. Fitting every dot held the demo's view at the widest step 52 % of the race for two or
+    three stragglers, at 14.8 px per 0.1 s of gap; this fit gives 22.2 px and keeps the selected
+    lap in view 99.2 % of the race (97.6 % fitting every dot; review of #576). It is a ladder, not a continuous fit, and shrinks only
+    once the field fits well inside the next step down (FOLLOW_SHRINK): a scale change re-lays the
+    corner labels, and a view that zoomed every tick would swim. THE MOTION eases in race time
+    (FOLLOW_TAU_S, FOLLOW_ZOOM_TAU_S), and the median is never let outside a dead-zone box of
+    FOLLOW_BOX round the free centre; with motion off the view holds still until the median leaves
+    that box, then recentres in one step. A step of the race clock backwards or past FOLLOW_JUMP_S
+    (a scrub, a restart) recentres at once. WHEN RACE TIME IS HELD (a pause, the finish) an
+    unfinished zoom completes at once: easing runs in race time, so a held clock would leave the
+    view half-zoomed and the corner labels laid for another scale for as long as it is held."""
 
     def __init__(self):
         self.cx = self.cy = self.w = self.goal = self.t = None
+        self.ref: tuple[float, float] | None = None     # the point the dead zone holds (tests)
 
     @staticmethod
     def reference(xs, ys) -> tuple[float, float]:
         return float(np.median(xs)), float(np.median(ys))
 
+    @staticmethod
+    def middle(xs, ys, px: float, py: float):
+        """The FOLLOW_FIELD_Q of the dots nearest the median (all of them below five dots)."""
+        if len(xs) < 5:
+            return xs, ys
+        d = np.hypot(xs - px, ys - py)
+        keep = d <= np.quantile(d, FOLLOW_FIELD_Q)
+        return xs[keep], ys[keep]
+
     def step(self, t: float, xs, ys, free_w: float, free_h: float, view_w: float,
-             motion_on: bool) -> None:
+             motion_on: bool, held: bool = False, keep=None) -> None:
+        """`keep`: the selected lap's dot (x, y), fitted with the middle of the field wherever it
+        is — on the demo that holds it in view 99.2 % of the race instead of 96.3 %, for 0.2 px
+        per 0.1 s of gap."""
         xs, ys = np.asarray(xs, float), np.asarray(ys, float)
         fin = np.isfinite(xs) & np.isfinite(ys)
         if not fin.any():
             return
-        xs, ys = xs[fin], ys[fin]
-        px, py = self.reference(xs, ys)
+        xs, ys = self.middle(xs[fin], ys[fin], *self.reference(xs[fin], ys[fin]))
+        if keep is not None and np.isfinite(keep[0]) and np.isfinite(keep[1]):
+            xs, ys = np.append(xs, keep[0]), np.append(ys, keep[1])
+        px, py = self.ref = self.reference(xs, ys)  # the centre of the middle of the field
         mpp = max(2 * float(np.max(np.abs(xs - px))) / (FOLLOW_FILL * free_w),
                   2 * float(np.max(np.abs(ys - py))) / (FOLLOW_FILL * free_h))
         need = mpp * view_w
@@ -1606,11 +1627,11 @@ class _FollowCam:
         # Only as the race runs: a resize or a repaint while paused keeps the ground width.
         if dt > 0 and (goal > self.goal or (goal < self.goal and need < FOLLOW_SHRINK * goal)):
             self.goal = goal
-        if motion_on and dt > 0:
+        if motion_on and dt > 0 and not held:
             self.w += (self.goal - self.w) * (1.0 - np.exp(-dt / FOLLOW_ZOOM_TAU_S))
             if abs(self.w - self.goal) < 0.005 * self.goal:
                 self.w = self.goal
-        elif not motion_on:
+        else:                   # motion off, or race time held: the zoom completes now
             self.w = self.goal
         mpp = self.w / view_w
         bx, by = FOLLOW_BOX * free_w * mpp, FOLLOW_BOX * free_h * mpp
@@ -2178,13 +2199,13 @@ class MapView(QWidget):
             self._circuit_memo = (key, box)
         return self._circuit_memo[1]
 
-    def _fit_view(self):
+    def _fit_view(self, force: bool = False):
         """Frame the map on its content and freeze it there (autorange off, so the video marker
         moving never drags the view around). The one place a range is set — called at build, from
         the Fit button / canvas double-click, and after a redraw or resize that left our own fit
         standing. Under Follow it does nothing: Follow owns the view, and puts back the fit (or the
         user's own view) when it ends."""
-        if getattr(self, "_follow", None) is not None:
+        if getattr(self, "_follow", None) is not None and not force:
             return
         box = self._content_bbox()
         if box is None:
@@ -2355,8 +2376,11 @@ class MapView(QWidget):
             if race is not None:
                 race.set_visible(False)
             if follow:
-                (xr, yr), _fitted, _mouse = self._follow_restore
-                vb.setRange(xRange=xr, yRange=yr, padding=0)
+                (xr, yr), fitted, _mouse = self._follow_restore
+                if fitted:              # our fit, at the map's size NOW (it may have been resized)
+                    self._fit_view(force=True)
+                else:
+                    vb.setRange(xRange=xr, yRange=yr, padding=0)
             # The marker is hidden for the grab, so drop any marker-dodge nudge the labels are
             # holding (see _CornerMarkers.avoid_point): on a card with no marker, a nudged label
             # just looks mis-placed. Restored below from the marker's live position.
@@ -2799,9 +2823,7 @@ class MapView(QWidget):
             self._follow = _FollowCam()
             vb.setMouseEnabled(False, False)
             self.fit_btn.setVisible(False)
-            self._scale_bar.show()
-            self._scale_bar.raise_()
-            self._follow_apply()
+            self._follow_apply()        # shows the scale bar once it has a scale to show
             return
         self._follow = None
         (xr, yr), fitted, mouse = self._follow_restore
@@ -2836,7 +2858,14 @@ class MapView(QWidget):
         if w < 8 or h < 8:
             return
         x0 = self._free_x0(w)
-        cam.step(float(state.t), state.x, state.y, w - x0, h, w, motion.enabled())
+        # At the finish race time stops: `held` completes any zoom (a pause does it through dt = 0).
+        sel = self._race.selected if self._race is not None else None
+        keep = None
+        if sel is not None and sel in state.ids:
+            k = state.ids.index(sel)
+            keep = (float(state.x[k]), float(state.y[k]))
+        cam.step(float(state.t), state.x, state.y, w - x0, h, w, motion.enabled(),
+                 held=bool(getattr(state, "over", False)), keep=keep)
         if cam.w is None:
             return
         mpp = cam.w / w
@@ -2845,6 +2874,9 @@ class MapView(QWidget):
         vb.setRange(xRange=(xl, xl + w * mpp), yRange=(yl, yl + h * mpp), padding=0)
         self._scale_bar.set_scale(mpp)
         self._scale_bar.reposition()
+        if self._scale_bar.isHidden():
+            self._scale_bar.show()
+            self._scale_bar.raise_()
 
     def end_race(self):
         """Remove every race item and put the marker, the key and the view back as they were."""

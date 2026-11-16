@@ -787,13 +787,15 @@ def _follow_geometry(mp):
 
 
 def _ref_offset_px(mp):
-    """The median dot's offset (px) from the free area's centre, and the dead-zone box (px)."""
+    """The camera's reference point's offset (px) from the free area's centre, and the dead-zone
+    box (px). The reference is the median of what the width is fitted to (the middle 80 % of the
+    dots and the selected lap); `cam.ref` is that point as the camera computed it this tick."""
     from studio import map_view as mv
-    x, y = mp._race.positions()
+    rx, ry = mp._follow.ref
     (xl, xh), (yl, yh) = mp.plot.getViewBox().viewRange()
     w, h, x0, fw = _follow_geometry(mp)
-    px = (float(np.median(x)) - xl) / (xh - xl) * w
-    py = (yh - float(np.median(y))) / (yh - yl) * h
+    px = (rx - xl) / (xh - xl) * w
+    py = (yh - ry) / (yh - yl) * h
     return (abs(px - (x0 + fw / 2)), abs(py - h / 2)), (mv.FOLLOW_BOX * fw, mv.FOLLOW_BOX * h)
 
 
@@ -984,6 +986,118 @@ def test_follow_on_the_real_window():
     print("ok follow: off = view untouched and frames identical; on = median in the box (1×/2×, "
           "scrubs, motion on/off), ladder width ±1 px at 3 sizes, honest scale bar, no rebuild; "
           "every exit restores the view exactly; gated with its reason; remembered")
+
+
+def test_follow_completes_its_zoom_when_race_time_holds():
+    """Review of #576. The zoom eases in RACE time, so when race time stopped — the finish, a pause
+    — an unfinished zoom froze half-way (the demo at 1×, motion on: target 30 m, the view held at
+    58.5 m for the whole final classification) and the corner labels stayed laid for the old scale.
+    Also the two mutants the first tests let live (pan/zoom left on under Follow; a report grab that
+    kept Follow's zoom), a grab after a resize under Follow (it must frame the map at its size now),
+    and the scale bar never showing before it has a scale."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from studio import motion
+    with _window() as (win, _path, _open):
+        v, mp = win.view, win.view.map
+        vb = mp.plot.getViewBox()
+        cm = mp._corner_markers
+        assert cm._texts, "no corner labels: the label-scale checks would test nothing"
+
+        def labels_match_view():
+            (sx, sy), (lx, ly) = cm._px_per_data(), cm.layout_scale
+            return abs(sx - lx) <= 1e-6 * lx and abs(sy - ly) <= 1e-6 * ly
+
+        real_enabled = motion.enabled
+        motion.enabled = lambda: True
+        try:
+            assert v.start_lap_race(1.0, (0.25, 0.5, 1.0, 2.0))
+            race = v.race
+            clock = {"now": 0.0}
+            race._clock = lambda: clock["now"]
+            race._last = 0.0
+            # The scale bar shows only once it has a scale (Follow switched on before any state).
+            mp._race_state = None
+            mp.set_race_follow(True)
+            assert mp._scale_bar.isHidden(), "the scale bar showed before its first scale"
+            mp.update_race(race.state())
+            assert not mp._scale_bar.isHidden() and mp._scale_bar.metres > 0
+            mp.set_race_follow(False)
+            race.set_follow(True)
+            assert vb.state["mouseEnabled"] == [False, False], "pan/zoom left on under Follow"
+            # A pause in the middle of a zoom completes it, and the labels follow the scale.
+            race.scrub(0.0)
+            race.tick()
+            paused = None
+            while race.playing:
+                clock["now"] += 1 / 30
+                race.tick()
+                cam = mp._follow
+                if cam.w != cam.goal and race.t > 1.0:
+                    race.toggle_play()
+                    paused = race.t
+                    for _ in range(5):
+                        clock["now"] += 1 / 30
+                        race.tick()
+                    break
+            assert paused is not None, "no zoom in the demo race: the pause check tests nothing"
+            assert mp._follow.w == mp._follow.goal, (paused, mp._follow.w, mp._follow.goal)
+            assert labels_match_view(), (paused, cm.layout_scale, cm._px_per_data())
+            # The finish: the last zoom completes and the labels follow it. On the way the selected
+            # lap's dot stays in view: the width fits it with the middle 80 % of the field.
+            race.toggle_play()
+            seen_sel = []
+            while race.playing:
+                clock["now"] += 1 / 30
+                race.tick()
+                st = race.state()
+                if race.selected in st.ids:
+                    k = st.ids.index(race.selected)
+                    (xl, xh), (yl, yh) = vb.viewRange()
+                    seen_sel.append(xl <= st.x[k] <= xh and yl <= st.y[k] <= yh)
+            assert len(seen_sel) > 100 and np.mean(seen_sel) >= 0.98, np.mean(seen_sel)
+            for _ in range(30):
+                clock["now"] += 1 / 30
+                race.tick()
+            cam = mp._follow
+            assert cam.w == cam.goal, ("the finish froze a zoom", cam.w, cam.goal)
+            (xl, xh), _ = vb.viewRange()
+            assert abs((xh - xl) - cam.goal) <= cam.goal / vb.rect().width()
+            assert labels_match_view(), ("labels laid for another scale at the finish",
+                                         cm.layout_scale, cm._px_per_data())
+        finally:
+            motion.enabled = real_enabled
+        # A report grab under Follow, after a resize: the map framed at its size now, not Follow's
+        # zoom and not the framing from before the resize.
+        win.resize(1728, 1117)
+        _settle(0.2)
+        seen = {}
+        with mp.grab_clean():
+            seen["range"] = vb.viewRange()
+        assert vb.viewRange() != seen["range"], "Follow's view did not come back after the grab"
+        race.set_follow(False)
+        assert seen["range"] == vb.viewRange(), ("the grab did not frame the resized map",
+                                                 seen["range"], vb.viewRange())
+        QTest.keyClick(win, Qt.Key_Escape)
+        win.resize(1440, 900)
+        _settle(0.1)
+        # A race started from compare (#575 reworked compare's exits): compare ends, the
+        # remembered Follow is on, and leaving puts the plain map's view back.
+        race.set_follow(True)
+        assert not v.is_racing()
+        before = vb.viewRange()
+        v.video.compare_btn.click()
+        _settle(0.1)
+        if v.compare.active:
+            assert v.start_lap_race(1.0, (0.25, 0.5, 1.0, 2.0))
+            assert not v.compare.active and mp.race_following(), "a race from compare lost Follow"
+            v.end_lap_race()
+            assert not mp.race_following() and mp._scale_bar.isHidden()
+        else:
+            assert vb.viewRange() == before
+    print("ok follow: a pause or the finish completes the zoom and re-lays the labels; pan/zoom "
+          "off under Follow; a grab frames the resized map; no scale bar before its scale")
 
 
 if __name__ == "__main__":
