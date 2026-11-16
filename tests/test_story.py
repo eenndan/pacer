@@ -136,6 +136,57 @@ def test_the_first_lap_is_tagged():
     print("test_the_first_lap_is_tagged OK")
 
 
+def test_a_slow_lap_after_a_left_out_lap_is_tagged():
+    """QA W4 (#567): the lap after a pit stop read "spread", true and useless. A slow lap whose
+    previous crossing is no lap of the Laps table (a ⊘ lap, or a crossing too brief to be one) is
+    tagged with it, in that table's words; a slow lap after a clean lap is not; the first lap keeps
+    its own tag. A LABEL only: the category, excess and corners are the untagged note's."""
+    planted = {0: ([0.0, 1.5, 0.0, 0.0], 2.0), 7: ([0.0, 1.5, 0.0, 0.0], 2.0),
+               11: ([0.0, 0.0, 0.0, 0.0], 2.0), 15: ([0.0, 0.0, 0.0, 0.0], 2.0)}
+    times, mx = _grid(planted)
+    # Lap 6 (Lap 7 on screen) was left out, lap 10 was a sliver; lap 14 is a clean lap of the grid.
+    left_out = {6: story.AFTER_LEFT_OUT, 10: story.AFTER_TOO_BRIEF}
+    untagged = _by_lap(story.slow_lap_notes(times, mx, best_lap=1, first_lap_id=0))
+    notes = _by_lap(story.slow_lap_notes(times, mx, best_lap=1, first_lap_id=0, left_out=left_out))
+    assert sorted(notes) == [0, 7, 11, 15], sorted(notes)
+    n7, n11, n15 = notes[7], notes[11], notes[15]
+    assert (n7.after_gap, n7.after_reason) == (6, "left out"), n7
+    assert n7.text.startswith("Lap 8 (after Lap 7, left out) · "), n7.text
+    assert story.row_text(n7).startswith("After a left-out lap · "), story.row_text(n7)
+    assert (n11.after_gap, n11.after_reason) == (10, "too brief"), n11
+    assert n11.text.startswith("Lap 12 (after a too-brief crossing) · "), n11.text
+    assert story.row_text(n11).startswith("After a too-brief crossing · "), story.row_text(n11)
+    assert n11.category == "spread"
+    assert (n15.after_gap, n15.after_reason) == (None, None) and "after" not in n15.text.lower()
+    assert not story.row_text(n15).startswith("After"), story.row_text(n15)
+    # The first lap keeps its own tag even with a left-out crossing planted before it.
+    first = _by_lap(story.slow_lap_notes(times, mx, best_lap=1, first_lap_id=0,
+                                         left_out={-1: story.AFTER_LEFT_OUT}))[0]
+    assert first.first_lap and first.after_gap is None, first
+    assert first.text.startswith("Lap 1 (first lap) · "), first.text
+    assert story.row_text(first).startswith("First lap · "), story.row_text(first)
+    # It excuses nothing and removes nothing: every number is the untagged note's.
+    for lap, n in notes.items():
+        u = untagged[lap]
+        assert (n.excess_s, n.category, n.corners, n.also, n.gap_to_best_s, n.rule) == \
+            (u.excess_s, u.category, u.corners, u.also, u.gap_to_best_s, u.rule), (n, u)
+        assert n.text.split(" · ", 1)[1] == u.text.split(" · ", 1)[1], (n.text, u.text)
+    print("test_a_slow_lap_after_a_left_out_lap_is_tagged OK")
+
+
+def test_the_rule_names_the_middle_half_as_the_stats_page_does():
+    """One name for one number: the margin is "the clean laps' middle half", the σ tile's own word
+    (QA W4 EVAL #567); "IQR" is named nowhere in a note."""
+    times, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0)})
+    (note,) = story.slow_lap_notes(times, mx, best_lap=0)
+    assert "the larger of the clean laps' middle half (0." in note.rule, note.rule
+    assert "IQR" not in note.rule and "IQR" not in note.text, note.rule
+    half = {i: 45.0 + (2.0 if i % 2 else 0.0) for i in range(N_LAPS)}
+    wide = story.slow_rule_text(*story.slow_threshold(half))
+    assert "not typical" in wide and "IQR" not in wide, wide
+    print("test_the_rule_names_the_middle_half_as_the_stats_page_does OK")
+
+
 def test_a_half_slow_session_says_its_median_is_not_a_racing_lap():
     """Half the laps 2 s slower (a neutralised session): IQR 2 s, over twice the 0.5 s floor."""
     planted = {i: ([0.0] * 4, 2.0) for i in range(10, 19)} | {19: ([0.0] * 4, 6.0)}
@@ -202,9 +253,17 @@ def test_five_lap_windows_tie_span_and_break():
                       "every 5-lap median in Laps 11–15"), m.text
     many = _five(0, 45.0) | _five(10, 45.01) | _five(20, 45.02) | _five(30, 45.03)
     m = story.session_moments(many, None, best_lap=0).best_window
-    assert m.lap_ids == () and len(m.tie) == 4, m
+    # QA W4 (#570): the "no single best" row names its stretches (up to three, then "+N more") and
+    # keeps the best window's laps for its Jump — it used to name none, with lap_ids ().
+    assert m.lap_ids == (0, 1, 2, 3, 4) and len(m.tie) == 4 and story.no_single_best(m), m
     assert m.text == ("No single best 5-lap run: 4 stretches of level 5-lap medians "
-                      "(within 0.07 s)"), m.text
+                      "(within 0.07 s): Laps 1–5, 11–15, 21–25, +1 more"), m.text
+    three = _five(0, 45.02) | _five(10, 45.0) | _five(20, 45.01)
+    m = story.session_moments(three, None, best_lap=10).best_window
+    assert story.no_single_best(m) and m.lap_ids == (10, 11, 12, 13, 14), m
+    assert m.text == ("No single best 5-lap run: 3 stretches of level 5-lap medians "
+                      "(within 0.07 s): Laps 1–5, 11–15, 21–25"), m.text
+    assert story.moment_row(m).lap_id == 10, story.moment_row(m)
     flat = {i: 45.0 + 0.001 * i for i in range(10)}
     m = story.session_moments(flat, None, best_lap=0).best_window
     assert [t.lap_ids for t in m.tie] == [tuple(range(10))], m.tie
@@ -243,7 +302,8 @@ def test_a_moment_row_joins_back_into_the_moments_text():
                 continue
             row = story.moment_row(moment)
             assert f"{row.label}: {row.value}" == moment.text, (row, moment.text)
-            assert row.lap_id == (moment.lap_ids[0] if moment.lap_ids else None), row
+            if not story.no_single_best(moment):
+                assert row.lap_id == moment.lap_ids[0], row
             assert row.cid == moment.cid, row
             rows += 1
     w = story.session_moments(shared, None, 4).best_window
@@ -253,7 +313,13 @@ def test_a_moment_row_joins_back_into_the_moments_text():
     loss = story.session_moments(*fields[-1][:2], 0).biggest_loss
     assert loss is not None and loss.tie and story.moment_row(loss).cid == loss.cid, loss
     none = story.moment_row(story.session_moments(many, None, 0).best_window)
-    assert (none.label, none.lap_id) == ("No single best 5-lap run", None), none
+    assert (none.label, none.lap_id) == ("No single best 5-lap run", 0), none
+    # The Jump lands on the first lap of the SPAN holding the best window, not the window's own.
+    wide = _five(0, 45.03) | {i: 45.0 + 0.001 * (16 - i) for i in range(10, 17)} | \
+        _five(20, 45.02) | _five(30, 45.01)
+    w = story.session_moments(wide, None, 0).best_window
+    assert story.no_single_best(w) and w.lap_ids[0] > 10, w
+    assert story.moment_row(w).lap_id == 10, (story.moment_row(w), w.lap_ids)
     print(f"test_a_moment_row_joins_back_into_the_moments_text OK ({rows} rows)")
 
 
@@ -375,6 +441,9 @@ def test_demo_dropout_and_excluded_laps_get_no_note():
     orig_drop, orig_valid = s.lap_has_dropout, s.valid_lap_ids
     try:
         s.lap_has_dropout = lambda i: i == 5 or orig_drop(i)
+        # A patched accessor is no re-segmentation, so the memo (keyed on the corner model's
+        # generation and the valid list's identity) cannot see it: drop it, as a re-segment would.
+        s._story_memo = None
         # Lap 5 gone moves the median: lap 0 (the first lap) now reads slow, and that is right.
         assert 5 not in [n.lap_id for n in s.slow_lap_notes()], s.slow_lap_notes()
         # Lap 5 held the demo's only ▼ cells: without it there is no loss to name at all.
@@ -385,6 +454,7 @@ def test_demo_dropout_and_excluded_laps_get_no_note():
     finally:
         for name in ("lap_has_dropout", "valid_lap_ids"):
             s.__dict__.pop(name, None)
+        s._story_memo = None
     assert [n.lap_id for n in s.slow_lap_notes()] == [5]
     print("test_demo_dropout_and_excluded_laps_get_no_note OK")
 
@@ -398,6 +468,87 @@ def test_demo_memo_is_invalidated_by_a_timing_edit():
     assert again is not first, "a timing edit re-segmented the session and the story memo hit"
     assert [n.text for n in again] == [n.text for n in first]
     print("test_demo_memo_is_invalidated_by_a_timing_edit OK")
+
+
+def test_demo_a_slow_lap_after_an_excluded_lap_says_so():
+    """On the real accessors: the lap before the demo's slow lap made a ⊘ excluded lap — gone
+    from `valid_lap_ids`, in `excluded_lap_ids` — and the slow lap's note says so, in the Laps
+    table's words, its numbers unchanged. Back to clean, the tag goes."""
+    s = _demo()
+    (plain,) = s.slow_lap_notes()
+    assert plain.after_gap is None and plain.text == DEMO_NOTE, plain.text
+    orig_valid, orig_excl = s.valid_lap_ids, s.excluded_lap_ids
+    try:
+        s.valid_lap_ids = lambda: [i for i in orig_valid() if i != 4]
+        s.excluded_lap_ids = lambda: sorted({*orig_excl(), 4})
+        s._story_memo = None
+        note = {n.lap_id: n for n in s.slow_lap_notes()}[5]
+        assert (note.after_gap, note.after_reason) == (4, "left out"), note
+        assert note.category == "one" and note.corners[0].cid == 5, note
+        assert note.text.startswith("Lap 6 (after Lap 5, left out) · "), note.text
+    finally:
+        for name in ("valid_lap_ids", "excluded_lap_ids"):
+            s.__dict__.pop(name, None)
+        s._story_memo = None
+    assert [n.text for n in s.slow_lap_notes()] == [DEMO_NOTE]
+    print("test_demo_a_slow_lap_after_an_excluded_lap_says_so OK")
+
+
+def test_demo_memo_hit_is_constant_time_and_misses_on_every_input_change():
+    """QA W4 (#568): a memo HIT cost 1.2-2.2 ms because its key rebuilt every clean lap's corner
+    list. A hit now reads no lap at all (pinned by counting `lap_corner_stats` calls, so it cannot
+    pass on a fast machine alone) and takes under 0.1 ms; and the memo still misses on a sector
+    edit, its undo, a timing-trust flip and a reference change's stats invalidation."""
+    import time
+
+    from studio.session import Seg
+    s = _demo()
+    first = s.session_moments()
+    assert s.session_moments() is first
+    calls = [0]
+    orig = s.corners.lap_corner_stats
+
+    def counting(i):
+        calls[0] += 1
+        return orig(i)
+    s.corners.lap_corner_stats = counting
+    ts = []
+    try:
+        for _ in range(200):
+            a = time.perf_counter()
+            got = s.session_moments()
+            ts.append(time.perf_counter() - a)
+            assert got is first
+    finally:
+        del s.corners.lap_corner_stats
+    hit_ms = float(np.median(ts)) * 1000
+    assert calls[0] == 0, f"a memo hit read {calls[0]} laps' corner stats"
+    assert hit_ms < 0.1, f"memo hit {hit_ms:.3f} ms"
+    start, sectors = s.start_line, list(s.sector_lines)
+    texts = [n.text for n in s.slow_lap_notes()]
+    st = start
+    extra = Seg(st.x1 + 40.0, st.y1 + 40.0, st.x2 + 40.0, st.y2 + 40.0)
+    s.set_timing_lines(start, sectors + [extra], user_confirm=False)     # a sector edit
+    edited = s.session_moments()
+    assert edited is not first, "a sector edit and the story memo hit"
+    s.set_timing_lines(start, sectors, user_confirm=False)               # its undo
+    undone = s.session_moments()
+    assert undone is not edited and [n.text for n in s.slow_lap_notes()] == texts
+    saved = (s.track_name, s._timing_user_confirmed)
+    assert s.timing_verified and undone.best_lap is not None
+    try:
+        s.track_name, s._timing_user_confirmed = None, False             # a trust flip
+        assert not s.timing_verified
+        flipped = s.session_moments()
+        assert flipped is not undone and flipped.best_lap is None, flipped
+    finally:
+        s.track_name, s._timing_user_confirmed = saved
+    again = s.session_moments()
+    assert again is not undone and again.best_lap is not None
+    s.corners.invalidate_stats()                                         # a reference change
+    assert s.session_moments() is not again
+    print(f"test_demo_memo_hit_is_constant_time_and_misses_on_every_input_change OK "
+          f"(hit {hit_ms * 1000:.1f} µs)")
 
 
 def test_demo_moments_are_stable_under_timing_jitter():

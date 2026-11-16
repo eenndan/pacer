@@ -217,12 +217,12 @@ def test_stats_summary_values_equal_the_session_accessors():
     # cool/middle-half: the σ tile's second reading travels with it, in the page's own words.
     # Absent below the five-lap floor, as the tile's line is (never a bare dash row): this session
     # has 3 clean laps. With a width, the row sits right under σ in the page's own words.
-    assert pace.middle_half is None and "middle half · width" not in p, p
+    assert pace.middle_half is None and "middle half · span" not in p, p
     st.pace = lambda: dataclasses.replace(pace, middle_half=0.594)
     rows = next(sec.rows for sec in export_data.stats_summary(s) if sec.title == "PACE")
     labels = [k for k, _v in rows]
-    assert labels[labels.index("σ lap") + 1] == "middle half · width", labels
-    assert dict(rows)["middle half · width"] == "0.59 s"
+    assert labels[labels.index("σ lap") + 1] == "middle half · span", labels
+    assert dict(rows)["middle half · span"] == "0.59 s"
     del st.pace
     pace = st.pace()
     assert p["consistency · σ/median"] == f"{st.pace_cov():.1f} %"

@@ -468,7 +468,7 @@ class SummarySection:
 
 
 #: The PACE row beside "σ lap" that carries the σ tile's second reading.
-MIDDLE_HALF_ROW = "middle half · width"
+MIDDLE_HALF_ROW = "middle half · span"
 
 
 def _sec(v, fmt: str = "{:.2f} s") -> str:

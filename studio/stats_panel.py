@@ -844,22 +844,25 @@ def peak_brake_tooltip_gps(why: str) -> str:
 
 SIGMA_CAPTION = "σ lap"
 # THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
-# tile taller than its row-mates, and a grid row is as tall as its tallest tile. Measured: the
-# caption runs 161 px ("within 0.59 s") to 171 px ("within < 0.07 s"; a width of ten-odd seconds, 166), past
-# the 146 px of "race pace · best 3-lap mean", so the PACE row now fits a pane from 340 px rather
-# than 310; the row stays 37 px tall at every width from 300 to 1440 px.
+# tile taller than its row-mates, and a grid row is as tall as its tallest tile. It reads "middle
+# half SPANS 0.59 s", never "within": "within 0.59 s" invited a ± reading, a band twice as wide
+# (QA W4). Measured: the caption runs MEASURED_PX, past the 146 px of "race pace · best 3-lap
+# mean", so the PACE row needs a pane of about 340 px — and it never gets less than 486: the
+# window's minimum width is 1059 px, which leaves the Stats pane at least that. The row stays
+# 37 px tall at every width from 300 to 1440 px.
 SIGMA_TOOLTIP = (
-    "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half is "
-    "the width of the band the central 50 % of your clean laps fall in. Neither removes a lap. "
+    "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half "
+    "spans the central 50 % of your clean laps, slowest of them minus fastest (their "
+    "interquartile range). Neither removes a lap. "
     f"The middle half is shown from {stats_service.MIN_MIDDLE_HALF_N} clean laps; under "
     f"{stats_service.MIDDLE_HALF_FLOOR_S:.2f} s it is inside the timing precision of a gap "
     f"between two laps and reads < {stats_service.MIDDLE_HALF_FLOOR_S:.2f} s.")
 
 
 def sigma_caption(middle_half: float | None) -> str:
-    """The σ tile's caption: "σ lap", plus the middle half's width when there are laps enough."""
+    """The σ tile's caption: "σ lap", plus the middle half's span when there are laps enough."""
     shown = stats_service.fmt_middle_half(middle_half)
-    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half within {shown}"
+    return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half spans {shown}"
 
 
 PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "

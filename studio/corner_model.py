@@ -679,6 +679,11 @@ class CornerModel:
         self._shift_cache: dict[int, np.ndarray] = {}  # lap id -> its fitted rigid shift
         # (the ReferenceLap it was built for, its warp) — see reference_alignment
         self._ref_align_cache: tuple | None = None
+        # A fresh token per invalidation (`invalidate` and `invalidate_stats` replace it): a memo
+        # DOWNSTREAM of these caches (`Session._story`) keys on it by identity instead of walking
+        # every lap's cached stats. An object, not a counter, so a new CornerModel can never
+        # reproduce an old one's value.
+        self.generation = object()
 
     def invalidate(self) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
@@ -692,6 +697,7 @@ class CornerModel:
         self._geometry_cache = _UNSET
         self._shift_cache.clear()
         self._ref_align_cache = None
+        self.generation = object()
 
     def invalidate_stats(self) -> None:
         """Drop ONLY the per-lap stats (not the corner detection) — called from
@@ -715,6 +721,7 @@ class CornerModel:
         self._geometry_cache = _UNSET
         self._shift_cache.clear()
         self._ref_align_cache = None
+        self.generation = object()
 
     # -------------------------------------------------------- spatial traces for the per-lap warp
     def _best_trace(self) -> tuple | None:
