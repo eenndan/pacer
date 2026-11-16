@@ -26,13 +26,14 @@ See the "spread, reach and the evidence gate" block below for the measured numbe
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sized
 from dataclasses import dataclass, field, replace
+from typing import cast
 
 import numpy as np
 
 from . import corners as corners_mod
-from . import driving, units
+from . import data_quality, driving, units
 from . import stats as stats_service
 from ._signal import DASH, plural
 from .corners import project_boundaries
@@ -1995,3 +1996,202 @@ def page_text(opps: Opportunities, directions: dict | None = None, unit: str | N
                     shortlist=tuple(row_text(r, directions, unit, reach)
                                     for r in (shortlist(opps) if shown else [])),
                     rows=tuple(row_text(r, directions, unit, reach) for r in shown))
+
+
+# ---- the page's own words that `page_text` does not carry: its empty state, what its columns
+# mean, its scope, and the braking line's caveat. They lived in `coaching_panel` as tooltips and
+# empty-state copy; a surface with no hover (the exported report) prints them as notes, so they
+# live here, beside the rows they explain, and the panel reads them from here (byte for byte).
+
+def _lap_account(session) -> tuple[int | None, int]:
+    """(valid laps, how many of them had a GPS dropout) off `session` — the two counts the lap
+    table itself shows — or (None, 0) for a caller with no session / a double with no lap account,
+    which keeps the count-only copy."""
+    valid = getattr(session, "valid_lap_ids", None)
+    if not callable(valid):
+        return None, 0
+    dropout = getattr(session, "dropout_lap_ids", None)
+    return (len(cast("Sized", valid())),
+            (len(cast("Sized", dropout())) if callable(dropout) else 0))
+
+
+def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
+    """(title, body) for the two no-table cases — too few clean laps, or nothing losing time.
+
+    U2 — THE REASON IS WHAT REMOVED THE LAPS, NOT ALWAYS THE DRIVER. `opps.n_laps` alone cannot
+    tell three different sessions apart, and the copy used to tell all three to "drive a few more
+    laps". Measured in the real window on hero6.mp4 and hero8.mp4: zero valid laps, and every other
+    panel on the frame said data_quality's "No complete laps in this recording." with its GPS-lock /
+    drag-the-line body while this page alone blamed the driving. So `session`'s lap account picks:
+      * no valid lap at all — data_quality's one no-laps state, word for word;
+      * enough valid laps but GPS dropouts took them under the minimum — the GPS, named with the
+        lap table's own total (constructed only: no D24 recording has a dropout lap);
+      * too few valid laps — the count is the reason, so "drive more" stays, and any dropout among
+        them is named so this page's count reconciles with the rows the lap table lists.
+
+    ONE AUTHOR FOR EVERY SURFACE, and this function is what makes that true rather than intended.
+    The panel and the retired modal once said the same fact in two sentences, and only the modal's
+    carried the NEXT ACTION (QA D2-08); the exported report's COACHING section prints this too.
+
+    The split is the app's empty-state copy contract: title = WHAT HAPPENED, body = WHY then WHAT
+    NEXT (see widgets.EmptyState)."""
+    if not opps.enough:
+        valid, dropouts = _lap_account(session)
+        if valid == 0:
+            return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body()
+        needs = (f"Coaching needs {MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
+                 f"session has {opps.n_laps}")
+        # (dropouts > 0 only with a lap account: `valid` is then a count.)
+        lost = (f"{dropouts} of its {plural(valid, 'lap')} had a GPS dropout"
+                if dropouts and valid is not None
+                else "")
+        if lost and valid is not None and valid >= MIN_LAPS:
+            return ("Not enough clean laps.",
+                    f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
+                    "corner by corner. You drove the laps — the GPS lost its fix during them.")
+        return ("Not enough clean laps yet.",
+                f"{needs}{f' ({lost})' if lost else ''}. Drive a few more laps and reload.")
+    return ("No corner is losing time.",
+            "Your typical lap matches your best lap all the way round — your best-lap pace is "
+            "consistent. Nice driving.")
+
+
+# VIEW-9 (QA 2026-09-25): on MK_18_09 C5 read +0.13 s lost beside "net −0.01 s" and C8 +0.06
+# beside +0.19, so the header says whose number it is. Since COACHING-2 the bars are medians over
+# the laps, not the typical lap's clock, and there is no net: a sum of three medians is no lap's.
+PHASE_HEADER = "Median Δt"
+# What each column header means — the panel's header hovers, the report's column notes. Keyed by the
+# header TEXT so every table that prints a column shares its one definition.
+COLUMN_TIPS = {
+    "Corner": "The corner's number in track order, with an arrow for its direction — "
+              "anticlockwise is a left-hander, clockwise a right.",
+    "Time lost": "Median time lost through this corner versus your own best lap's same corner, "
+                 "over your clean laps (seconds). A lap counts at a corner only where it was "
+                 "matched to your best lap's line on track at the corner's entry and exit.",
+    "Done it?": "How many of your clean laps already matched or beat your best lap's time "
+                "through this corner, out of the laps matched on track there. Many of them — "
+                "repeat what you have already driven. Few — this is pace you have not "
+                "established yet, and it needs something new.",
+    PHASE_HEADER: "Where in the corner your laps are faster/slower than your best lap: per third, "
+                  "the MEDIAN Δt over your clean laps matched on track there (seconds). Each third "
+                  "is its own median, so the three need not add up to the row's Time lost, and "
+                  "can differ from it in sign.",
+    "How to find it": "The dominant MEASURED reason this corner is losing time, with its numbers — "
+                      "plus the ESTIMATED brake-point line when one is available for the corner.",
+}
+
+
+def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:
+    """What the rows are a statistic OVER and what the headline total counts (IA-01): the page's
+    words (`page`, the headline strip's hover, which also says the rows do not follow the selected
+    lap), or the report's, which has no lap to select and prints the rows above this note.
+
+    `n` is the shortlist the headline sums (`len(shortlist(opps))`), counted in the headline's own
+    words: "your top 3 corners", "your worst corner", and with none ranked the headline's "no corner
+    clears its own lap-to-lap spread" — this sentence said "your top 3" over a headline reading
+    "top 2", and described a total on a page that printed none. At n = PANEL_TOP_N it is the
+    sentence the panel always printed, byte for byte."""
+    selection = (" — these rows do NOT follow the lap you select; the Corners tab is the per-lap "
+                 "view." if page else ".")
+    where = "below" if page else "above"
+    if n <= 0:
+        total = (f"No corner clears its own lap-to-lap spread, so there is no total; every "
+                 f"corner is listed {where} with the reason it did not clear the evidence gate.")
+    else:
+        what = "your worst corner that" if n == 1 else f"your top {n} corners that"
+        total = (f"The total is {what} cleared the evidence gate; corners that did not are "
+                 f"listed {where} with the reason.")
+    return ("The biggest realistic time gains vs your own best lap, across the WHOLE session "
+            f"(the median over your clean, GPS-dropout-free laps){selection} {total}")
+
+
+def totals_pointer(top_total: float, n: int, ideal_gap: str, *, corners_note: bool) -> str:
+    """The report's last COACHING note: why its headline total and IDEAL LAP's gap, both "vs your
+    best", are not one quantity (review of #592). The headline's `top_total` over its `n` corners is
+    how far the typical pass sits from the best lap's — time ABOVE the best lap — while the ideal
+    lap's gap (`ideal_gap`, the figure IDEAL LAP prints, e.g. "0.32 s") is time UNDER it. Built from
+    the two printed figures only; `corners_note` adds the pointer to the CORNERS reconciliation,
+    when the page prints it. Report only: the app shows the two on different tabs."""
+    through = "this corner" if n == 1 else f"these {plural(n, 'corner')}"
+    tail = ("; the note under CORNERS ties the two together." if corners_note else ".")
+    return (f"{top_total:.2f} s is how far your {stats_service.TYPICAL_PASS} through "
+            + through + " sits from your "
+            f"best lap's — it is not time under your best lap. Time under your best lap is the "
+            f"ideal lap's {ideal_gap} (IDEAL LAP below){tail}")
+
+
+def medians_note(*, bars: bool = True) -> str:
+    """The sentence that names the reasons' statistic: medians over the clean laps (COACHING-2: no
+    single lap is named any more). `bars` False for a surface without the Entry·Apex·Exit bars."""
+    if bars:
+        return "The reasons and the Entry·Apex·Exit bars are medians over your clean laps."
+    return "The reasons are medians over your clean laps."
+
+
+# What a braking-direction line (`brake_direction_line`) does NOT say, after its subject: the
+# panel's hover prints "It " + this, the report "The braking line under C1 " + this (L7).
+BRAKE_DIRECTION_CAVEAT = ("says which way, not how far: no braking distance measured here holds "
+                          "up, so none is given.")
+
+# The Stats CORNERS reconciliation's last two sentences: the ideal lap's gap, then the rule that
+# ties three per-corner answers together (CORNERS' Med loss, Coaching's Time lost, the ideal).
+BASELINES_SENTENCE = "Different baselines, different questions — not three estimates of one."
+
+
+def ideal_gap_s(session) -> float | None:
+    """best lap − ideal total, or None when either half is missing (the honesty rule: no number
+    rather than a 0.00 that reads as a measurement)."""
+    ideal_fn = getattr(session, "ideal_total", None)
+    best_fn = getattr(session, "best_lap_id", None)
+    time_fn = getattr(session, "lap_time", None)
+    if ideal_fn is None or best_fn is None or time_fn is None:
+        return None
+    ideal = ideal_fn()
+    best_id = best_fn()
+    if ideal is None or best_id is None:
+        return None
+    best = time_fn(best_id)
+    return None if best is None else float(best) - float(ideal)
+
+
+def ideal_gap_sentence(gap: float) -> str:
+    """"Your ideal lap is 0.32 s under your best." — the reconciliation's ideal clause."""
+    return f"Your ideal lap is {gap:.2f} s under your best."
+
+
+def corners_reconciliation(opps: Opportunities | None, left_out: int, *, page: bool = True) -> str:
+    """The Stats CORNERS note's Coaching sentence — what the Coaching answer totals over the SAME
+    corners against your best lap, every row accounted for — or "" when nothing is ranked.
+    `left_out` is how many lap × corner times the CORNERS table left out (interpolated). `page`
+    False names the exported report's COACHING section instead of the tab.
+
+    ONE WAY OF SUMMING, AND EVERY ROW ACCOUNTED FOR (LOOK-3, QA 2026-09-26). This read "totals
+    0.29 s, 0.28 s of it in its top 3" on MK_18_09: 0.29 was the raw 0.286 and 0.28 the rounded
+    rows, the same three corners — while the Coaching tab measured 1.07 s across all 11 it lists,
+    8 of them not ranked. Every figure is a sum of the 2-dp values the Coaching rows print, the rule
+    its own headline sums by (B12), and the not-ranked rows are counted rather than silently left
+    out of "the SAME corners". Since #339 Coaching counts a cell only where the lap AND the best lap
+    matched that corner on track — the rule CORNERS counts by — so when that table left some out,
+    the sentence says Coaching did too."""
+    rows = ranked_shown(opps) if opps is not None and getattr(opps, "enough", False) else []
+    if not rows or opps is None:
+        return ""
+    top = shortlist(opps)
+    same = ", leaving out the same interpolated times" if left_out else ""
+    more = rows[len(top):]
+    unranked = [r for r in shown_rows(opps) if not any(r is x for x in rows)]
+
+    def shown_sum(rs) -> str:
+        return f"{shown_total(rs):.2f} s"
+
+    coach = ("The Coaching tab" if page else "The COACHING section above") + (
+        f" measures the SAME corners against your best lap{same}: "
+        f"its headline totals {shown_sum(top)} over {plural(len(top), 'corner')}")
+    if more:
+        coach += (f", {len(more)} more ranked "
+                  f"{'corner adds' if len(more) == 1 else 'corners add'} "
+                  f"{shown_sum(more)}")
+    if unranked:
+        coach += (f"; {len(unranked)} more {'is' if len(unranked) == 1 else 'are'} "
+                  f"listed there but not ranked ({shown_sum(unranked)})")
+    return coach + "."

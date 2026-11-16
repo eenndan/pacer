@@ -1380,7 +1380,38 @@ def _report_page(win):
             export_data.write_report_html = real_write
         with open(path, encoding="utf-8") as f:
             page = f.read()
+    _LAST_REPORT_KW.clear()
+    _LAST_REPORT_KW.update(seen)
     return page, seen["images"], legends
+
+
+# Every keyword the last _report_page export handed the writer (the lap card's bytes among them).
+_LAST_REPORT_KW: dict = {}
+
+
+def test_the_report_opens_on_the_apps_own_lap_card_and_none_when_provisional():
+    """cool/report-front: the page's opening picture is the lap card File ▸ Export saves — the
+    SAME build (`_build_share_card`), so the same gate: on verified timing the writer gets that
+    card's PNG and the page opens on it beside COACHING; on PROVISIONAL timing the card is not
+    made, the writer gets None and the page has no picture (and still opens on COACHING)."""
+    from studio import share_card
+    with _demo() as win:
+        page, _images, _legends = _report_page(win)
+        card = _LAST_REPORT_KW.get("card")
+        want = share_card.card_to_png(win._build_share_card())
+    assert card is not None and card == want, "the report's card is not the app's lap card"
+    image = QImage.fromData(card)
+    assert (image.width(), image.height()) == (share_card.CARD_W, share_card.CARD_H)
+    assert '<figure class="hero"><img alt="Lap card"' in page
+    assert page.index('<figure class="hero">') < page.index("<h2>COACHING</h2>")
+    with _demo(provisional=True) as win:
+        assert win._build_share_card() is None
+        page, _images, _legends = _report_page(win)
+        card = _LAST_REPORT_KW.get("card", "missing")
+    assert card is None, "a provisional session handed the report a lap card"
+    assert "<figure" not in page and "<h2>COACHING</h2>" in page
+    assert page.index("</header>") < page.index("<h2>COACHING</h2>") < page.index("<h2>SESSION</h2>")
+    print("test_the_report_opens_on_the_apps_own_lap_card_and_none_when_provisional OK")
 
 
 def test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions():
@@ -2971,6 +3002,7 @@ def _run_all():
     test_the_report_chart_is_the_apps_opening_chart_with_no_chrome_and_no_live_state()
     test_the_report_map_is_the_apps_opening_map_whatever_the_window_is_doing()
     test_a_provisional_report_never_names_the_best_lap_in_its_pictures_or_their_captions()
+    test_the_report_opens_on_the_apps_own_lap_card_and_none_when_provisional()
     test_the_report_chart_without_an_ideal_lap_is_the_two_fastest_and_says_so()
     test_a_one_lap_report_chart_has_no_delta_chart_and_says_why()
     test_the_report_figures_state_their_own_width_whatever_the_windows_pixel_ratio()

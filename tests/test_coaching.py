@@ -3292,6 +3292,41 @@ def test_page_text_is_what_the_coaching_page_prints_on_the_demo():
           f"seed 7 shortlist C5, C6 over {len(p7.rows)} shown rows")
 
 
+def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
+    """Review of #592 (P3): the headline strip's hover said "The total is your top 3 corners" over a
+    headline summing two (seed 7), and described a total where none is ranked. It counts the
+    shortlist now; with three ranked (the demo) it is the sentence it always was, byte for byte."""
+    _qapp()
+    import dataclasses
+
+    from studio import coaching_panel as cp
+    main_scope = (
+        "The biggest realistic time gains vs your own best lap, across the WHOLE session "
+        "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
+        "lap you select; the Corners tab is the per-lap view. The total is your top 3 corners "
+        "that cleared the evidence gate; corners that did not are listed below with the reason. "
+        "Coaching ▸ Opportunities (or the panel's maximize button) shows this page full-window, "
+        "where each row also carries where in the corner the time goes and a Jump to it.")
+    assert cp._SCOPE_TOOLTIP == cp.scope_tooltip(3) == main_scope
+    demo = _level_sessions()["demo"]
+    assert cp.OpportunitiesPanel(demo).summary_label.toolTip().endswith(
+        main_scope + " " + K.medians_note())
+    tip7 = cp.OpportunitiesPanel(_level_sessions()["seed 7, 12 laps"]).summary_label.toolTip()
+    assert "The total is your top 2 corners that cleared" in tip7 and "top 3" not in tip7, tip7
+    opp = _populated_opps()
+    one = dataclasses.replace(opp, rows=[opp.rows[0]] + [dataclasses.replace(
+        r, evidence=dataclasses.replace(r.evidence, abstain=K.ABSTAIN_SPREAD))
+        for r in opp.rows[1:]])
+    tip1 = _full_window_page(one).summary_label.toolTip()
+    assert "The total is your worst corner that cleared" in tip1, tip1
+    none = dataclasses.replace(opp, rows=[dataclasses.replace(
+        r, evidence=dataclasses.replace(r.evidence, abstain=K.ABSTAIN_SPREAD)) for r in opp.rows])
+    tip0 = _full_window_page(none).summary_label.toolTip()
+    assert "No corner clears its own lap-to-lap spread, so there is no total" in tip0, tip0
+    assert "The total is" not in tip0, tip0
+    print("ok scope hover: top 3 unchanged, top 2 / worst corner / no total where true")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

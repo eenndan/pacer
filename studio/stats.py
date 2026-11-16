@@ -474,12 +474,15 @@ CORNER_MARK_N = 3
 
 def corner_mark_rule(*, hover: bool = True) -> str:
     """What the mark means and how it is ranked: the CORNERS tooltip's sentence (`hover`), or the
-    report's, where the middle half is a column of its own and nothing can be hovered."""
+    report's, where the middle half is a column of its own, nothing can be hovered, and Coaching's
+    list is the report's own COACHING section."""
     where = "(the σ cell's hover)" if hover else "(the Middle half column)"
     score = "; hover one for its own score" if hover else ""
     # The page's "this column" is the loss column the tooltip hangs on; under a table it names it.
     largest = ("this column's three largest numbers" if hover
                else "the Med loss column's three largest numbers")
+    # The report prints Coaching's list itself, as its COACHING section (the page version, #581).
+    coaching_list = "the Coaching tab's list" if hover else "the COACHING section's list"
     return (
         f"Up to {CORNER_MARK_N} loss cells are marked {CORNER_MARK} and tinted: the "
         "corners where your passes vary most and cost most, ranked by the middle half "
@@ -489,7 +492,7 @@ def corner_mark_rule(*, hover: bool = True) -> str:
         f"mark. A corner with fewer than {MIN_MIDDLE_HALF_N} counted "
         "passes is never marked, and a corner whose middle half is under "
         f"{MARK_MIN_MIDDLE_HALF_S:.2f} s, the level step, is never "
-        "marked. It is a consistency ranking, not the Coaching tab's list of what "
+        f"marked. It is a consistency ranking, not {coaching_list} of what "
         "to work on (time lost against your best lap), so the two need not agree on the "
         "order. They agree on the level step: Coaching never gives a corner under it a "
         "consistency reason.")

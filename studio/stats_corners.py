@@ -217,40 +217,13 @@ class CornersSection:
         opp = opp_fn() if opp_fn is not None else None
         # The Coaching tab's own totals are over its RANKED rows (the corners that survived its
         # per-corner evidence gate), so this reconciliation quotes the same set — a "totals X s"
-        # here that included abstained corners would not reconcile with the page it names.
-        rows = coaching.ranked_shown(opp) if getattr(opp, "enough", False) else []
-        if rows:
-            top = coaching.shortlist(opp)
-            # Since #339 Coaching counts a cell only where the lap AND the best lap matched that
-            # corner on track — the rule this table counts by — so when this table left some out,
-            # the sentence says Coaching did too: a reader who has just been told cells were left
-            # out here would otherwise have to guess whether the total beside it counts them.
-            # (It said the OPPOSITE until W1. COASTING still counts every cell, deliberately —
-            # see CornerModel.lap_corner_resolved — and is not named here.)
-            #
-            # ONE WAY OF SUMMING, AND EVERY ROW ACCOUNTED FOR (LOOK-3, QA 2026-09-26). This read
-            # "totals 0.29 s, 0.28 s of it in its top 3" on MK_18_09: 0.29 was the raw 0.286 and
-            # 0.28 the rounded rows, the same three corners — while the Coaching tab measured 1.07 s
-            # across all 11 it lists, 8 of them not ranked. Every figure is now a sum of the 2-dp
-            # values the Coaching rows print, the rule its own headline sums by (B12), and the
-            # not-ranked rows are counted rather than silently left out of "the SAME corners".
-            same = ", leaving out the same interpolated times" if left_out else ""
-            more = rows[len(top):]
-            unranked = [r for r in coaching.shown_rows(opp) if not any(r is x for x in rows)]
-
-            def shown_sum(rs) -> str:
-                return f"{coaching.shown_total(rs):.2f} s"
-
-            coach = (f"The Coaching tab measures the SAME corners against your best lap{same}: "
-                     f"its headline totals {shown_sum(top)} over {plural(len(top), 'corner')}")
-            if more:
-                coach += (f", {len(more)} more ranked "
-                          f"{'corner adds' if len(more) == 1 else 'corners add'} "
-                          f"{shown_sum(more)}")
-            if unranked:
-                coach += (f"; {len(unranked)} more {'is' if len(unranked) == 1 else 'are'} "
-                          f"listed there but not ranked ({shown_sum(unranked)})")
-            parts.append(coach + ".")
+        # here that included abstained corners would not reconcile with the page it names. The
+        # sentence is `coaching.corners_reconciliation`'s, the exported report's CORNERS note's
+        # too. (COASTING still counts every cell, deliberately — see
+        # CornerModel.lap_corner_resolved — and is not named here.)
+        coach = coaching.corners_reconciliation(opp, left_out)
+        if coach:
+            parts.append(coach)
         # A short session where NO corner has the passes a middle half needs says why there is no
         # mark at all (stats.corner_no_mark_note).
         no_mark = stats_service.corner_no_mark_note(report)
@@ -258,25 +231,14 @@ class CornersSection:
             parts.append(no_mark)
         gap = self._ideal_gap(session)
         if gap is not None:
-            parts.append(f"Your ideal lap is {gap:.2f} s under your best.")
-        parts.append("Different baselines, different questions — not three estimates of one.")
+            parts.append(coaching.ideal_gap_sentence(gap))
+        parts.append(coaching.BASELINES_SENTENCE)
         return " ".join(parts)
 
     @staticmethod
     def _ideal_gap(session) -> float | None:
-        """best lap − ideal total, or None when either half is missing (the honesty rule: no
-        number rather than a 0.00 that reads as a measurement)."""
-        ideal_fn = getattr(session, "ideal_total", None)
-        best_fn = getattr(session, "best_lap_id", None)
-        time_fn = getattr(session, "lap_time", None)
-        if ideal_fn is None or best_fn is None or time_fn is None:
-            return None
-        ideal = ideal_fn()
-        best_id = best_fn()
-        if ideal is None or best_id is None:
-            return None
-        best = time_fn(best_id)
-        return None if best is None else float(best) - float(ideal)
+        """best lap − ideal total, or None (`coaching.ideal_gap_s`, the report's too)."""
+        return coaching.ideal_gap_s(session)
 
     def refresh(self, session, unit, u_label):
         self._session = session

@@ -41,7 +41,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import NamedTuple, TextIO, cast
 
-from . import APP_NAME, data_quality, story, units
+from . import APP_NAME, coaching, data_quality, story, units
 from . import stats as stats_service
 from ._signal import DASH, exclusion_summary, fmt_hms, fmt_time, lap_label
 
@@ -469,6 +469,8 @@ class SummarySection:
 
 #: The PACE row beside "σ lap" that carries the σ tile's second reading.
 MIDDLE_HALF_ROW = "middle half · span"
+#: IDEAL LAP's gap row: the figure the report's COACHING pointer quotes (`coaching.totals_pointer`).
+IDEAL_GAP_ROW = "on the table · vs your best"
 
 
 def _sec(v, fmt: str = "{:.2f} s") -> str:
@@ -686,7 +688,7 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         out.append(SummarySection("IDEAL LAP", [
             (smp.caption(), fmt_time(sb.total)),
             # UNSIGNED, as the tile prints it: time you can find is a magnitude (LOOK-7).
-            ("on the table · vs your best", f"{gap:.2f} s"),
+            (IDEAL_GAP_ROW, f"{gap:.2f} s"),
         ], note=smp.sentence()))
 
     # --- SPEED · G: session peaks over the per-lap stats, the page's own reductions.
@@ -847,6 +849,30 @@ ul.notes li { margin: 4px 0; }
    write_report_html) shrinks a figure below its natural pixel size. */
 img { max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 4px;
       margin: 4px 0; }
+/* The opening: the lap card beside COACHING, so the answer is on the first screen; one column on
+   a narrow one, the card at most its layout width there. */
+.front { display: grid; gap: 16px; align-items: start; margin: 0 0 16px; }
+.front > section { margin: 0; }
+.front.with-card { grid-template-columns: minmax(200px, 30%) minmax(0, 1fr); }
+figure.hero { margin: 0; }
+figure.hero img.card { display: block; width: 100%; margin: 0; }
+@media (max-width: 640px) {
+  .front.with-card { grid-template-columns: minmax(0, 1fr); }
+  figure.hero { max-width: 360px; }
+}
+p.lead { font-size: 1.15em; font-weight: 600; margin: 0 0 6px; }
+p.body { margin: 0 0 6px; max-width: 46em; }
+ul.actions { margin: 4px 0 8px; padding-left: 1.2em; }
+ul.actions li { margin: 2px 0; }
+/* The page's columns: numbers right, the corner and its reason left; a muted row is not ranked. */
+table.coaching { width: 100%; }
+table.coaching th:first-child, table.coaching td:first-child, table.coaching td.why,
+table.coaching th:last-child { text-align: left; }
+table.coaching th, table.coaching td { white-space: nowrap; vertical-align: top; }
+table.coaching td.why { width: 100%; white-space: normal; }
+td.lost { color: var(--behind); }
+tr.muted td, td.dim { color: var(--text-dim); }
+tbody.more tr:first-child td { border-top: 2px solid var(--border); }
 @media print {
   body { font-size: 10pt; }
   main { max-width: none; padding: 0; }
@@ -862,8 +888,11 @@ img { max-width: 100%; height: auto; border: 1px solid var(--border); border-rad
      names. */
   table.laps { width: 100%; font-size: 6.5pt; }
   table.laps th, table.laps td { padding: 1px 2px; }
-  /* The lap strip is a dark card on white paper: a hairline says it is one. */
+  /* The lap strip and the lap card are dark cards on white paper: a hairline says each is one. */
   img.card { border: 1px solid var(--text); border-radius: 0; }
+  /* The opening stays side by side on paper, the card a third of the width, kept whole. */
+  .front.with-card { grid-template-columns: 58mm minmax(0, 1fr); }
+  figure.hero { max-width: none; break-inside: avoid; }
 }
 """
 
@@ -913,12 +942,12 @@ def _timing_caveat(session, caveat) -> list[str]:
     return [_note(f"Timing: {_timing_meta(session, where='on this page')}")] if caveat else []
 
 
-def _summary_sections(session, unit) -> list[list[str]]:
+def _summary_sections(session, unit, groups=None) -> list[list[str]]:
     """The Stats page's groups (`stats_summary`), one section each, in its order. PACE also
     prints the σ tile's hover (`stats.SIGMA_TOOLTIP`: what σ counts, what the middle half spans)
     when σ holds a number — a page has no hover. Not in the clipboard text: its "< 0.07 s"."""
     out = []
-    for sec in stats_summary(session, unit):
+    for sec in stats_summary(session, unit) if groups is None else groups:
         notes = [sec.note] if sec.note else []
         if sec.title == "PACE" and dict(sec.rows).get(stats_service.SIGMA_CAPTION):
             notes.append(stats_service.SIGMA_TOOLTIP)
@@ -971,10 +1000,21 @@ def _corners_section(session, unit) -> list[str]:
     head = "".join(f"<th>{html.escape(h)}</th>" for h in REPORT_CORNER_COLUMNS)
     body = ["<table>", f"<tr>{head}</tr>",
             *(_corner_cells(r, r.cid in marked, unit_id) for r in report), "</table>"]
+    # The Stats CORNERS note's reconciliation, in the report's words (K6): what the COACHING
+    # section totals over the same corners against your best lap, the ideal lap's gap, and why
+    # three per-corner answers differ — said here, below both of the other two answers.
     notes = stats_service.corner_count_note(report, page=False)
-    notes.append(stats_service.corner_no_mark_note(report)
-                 or stats_service.corner_mark_rule(hover=False))
+    counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
+    read = getattr(session, "coaching_opportunities", None)
+    opps = cast("coaching.Opportunities | None", read() if callable(read) else None)
+    coach = coaching.corners_reconciliation(opps, sum(of - n for n, of in counted), page=False)
+    no_mark = stats_service.corner_no_mark_note(report)
+    gap = coaching.ideal_gap_s(session)
+    notes += [x for x in (coach, no_mark, None if gap is None else coaching.ideal_gap_sentence(gap),
+                          coaching.BASELINES_SENTENCE) if x]
     body.append(_note(" ".join(notes)))
+    if not no_mark:
+        body.append(_note(stats_service.corner_mark_rule(hover=False)))
     body += [_note(f"C{r.cid}: {stats_service.corner_one_pass_note(r)}")
              for r in report if stats_service.corner_one_pass_note(r)]
     return _section(f"CORNERS · speeds in {units.speed_label(unit_id)}", body)
@@ -1015,6 +1055,107 @@ def _lapstrip_section(lapstrip: bytes | None) -> list[str]:
     if not lapstrip:
         return []
     return _section("LAP STRIP", [_img("Lap strip", lapstrip, LAPSTRIP_LAYOUT_PX, "card")])
+
+
+#: The Coaching page's four always-shown columns (coaching_panel.OpportunitiesPanel._COLUMNS): the
+#: report prints its rows under the same words. Their meanings are `coaching.COLUMN_TIPS`.
+REPORT_COACHING_COLUMNS = ("Corner", "Time lost", "Done it?", "How to find it")
+#: The columns whose meaning a reader needs and the table cannot carry (the other two say it).
+_COACHING_COLUMN_NOTES = ("Time lost", "Done it?")
+
+
+def _timing_clean(session) -> bool:
+    """Verified start line and no degraded clock: the one state the report stamps nothing for."""
+    return (bool(getattr(session, "timing_verified", True))
+            and not bool(getattr(getattr(session, "timing_quality", None), "degraded", False)))
+
+
+def _coaching_row(r: coaching.RowText) -> str:
+    """One Coaching row in the page's cells; a reason's braking line on a line of its own, and an
+    abstained row muted (its number is shown, not claimed: the panel's dim tone)."""
+    esc = html.escape
+    reason = "<br/>".join(esc(line) for line in r.reason.split("\n"))
+    cls = "" if r.ranked else ' class="muted"'
+    lost = "lost" if r.ranked else "lost dim"
+    return (f"<tr{cls}><td>{esc(r.corner)}</td><td class=\"{lost}\">{esc(r.lost)}</td>"
+            f"<td>{esc(r.done_it)}</td><td class=\"why\">{reason}</td></tr>")
+
+
+def _coaching_section(session, unit, ideal_gap: str | None = None,
+                      corners_note: bool = False) -> list[str]:
+    """The Coaching page's answer — `coaching.page_text`, never re-derived: the headline, the theme
+    and its "Start with …" action, then every shown row in the page's order (the shortlist the
+    headline sums first, then the rest, ranked and not ranked) under the page's column words. The
+    notes under it are the page's hovers a document has no hover for (`coaching.scope_note`,
+    `medians_note`, `COLUMN_TIPS`, `BRAKE_DIRECTION_CAVEAT`), and the report's Timing stamp when the
+    timing is not clean — the rows are measured against a best lap that timing qualifies.
+
+    The page's own empty state (`coaching.empty_state_copy`) when it shows no rows, never a blank
+    section; nothing for a session double with no Coaching model."""
+    read = getattr(session, "coaching_opportunities", None)
+    if not callable(read):
+        return []
+    opps = cast("coaching.Opportunities", read())
+    dirs = getattr(session, "coaching_brake_direction", None)
+    # The ordinary page's rows (not the debrief's): they carry the braking-direction line.
+    directions = cast(dict, (dirs() if callable(dirs) else None) or {})
+    text = coaching.page_text(opps, directions, units.normalize_unit(unit))
+    esc = html.escape
+    if not text.headline:
+        title, body = coaching.empty_state_copy(opps, session)
+        return _section("COACHING", [f'<p class="lead">{esc(title)}</p>',
+                                     f'<p class="body">{esc(body)}</p>'])
+    out = [f'<p class="lead">{esc(text.headline)}</p>']
+    if text.theme:
+        out.append(f'<p class="body">{esc(text.theme)}</p>')
+    if text.actions:
+        out += ['<ul class="actions">', *(f"<li>{esc(a)}</li>" for a in text.actions), "</ul>"]
+    if text.rows:
+        head = "".join(f"<th>{esc(h)}</th>" for h in REPORT_COACHING_COLUMNS)
+        # The shortlist the headline sums leads the order (ranked rows first); the rows after it
+        # sit in their own body, under a rule, so "your top 3" is visibly those three.
+        k = len(text.shortlist)
+        lead = k if [r.cid for r in text.rows[:k]] == [r.cid for r in text.shortlist] else 0
+        out += ['<table class="coaching">', f"<thead><tr>{head}</tr></thead>",
+                "<tbody>", *map(_coaching_row, text.rows[:lead]), "</tbody>"]
+        if text.rows[lead:]:
+            out += ['<tbody class="more">', *map(_coaching_row, text.rows[lead:]), "</tbody>"]
+        out.append("</table>")
+    n = len(text.shortlist)
+    notes = [f"{coaching.scope_note(page=False, n=n)} {coaching.medians_note(bars=False)}",
+             *(f"{h} — {coaching.COLUMN_TIPS[h]}" for h in _COACHING_COLUMN_NOTES)]
+    braked = [r.corner for r in text.rows if r.ranked
+              and coaching.brake_direction_line(directions.get(r.cid))]
+    if braked:
+        notes.append(f"The braking line under {' and '.join(braked)} "
+                     f"{coaching.BRAKE_DIRECTION_CAVEAT}")
+    out += [_note(n) for n in notes]
+    out += _timing_caveat(session, not _timing_clean(session))
+    # LAST: the headline's total and IDEAL LAP's gap both read "vs your best" one screen apart and
+    # are not one quantity. Only when both are printed: a ranked shortlist and an IDEAL LAP section.
+    if n and ideal_gap:
+        total = coaching.shown_total(r for r in coaching.shortlist(opps))
+        out.append(_note(coaching.totals_pointer(total, n, ideal_gap, corners_note=corners_note)))
+    return _section("COACHING", out)
+
+
+#: The lap card's width in the report's opening: its 1080 px canvas at a third, beside COACHING.
+CARD_LAYOUT_PX = 360
+
+
+def _front(session, unit, card: bytes | None, ideal_gap: str | None = None,
+           corners_note: bool = False) -> list[str]:
+    """The report's opening, the app's debrief in a page: the lap card the app exports (`card`,
+    rendered by the caller under the card's own gate — None on provisional timing, and then there
+    is no picture here, not a stand-in) beside the COACHING section, which is what a reader opens
+    a session report to find: what to work on. Laid side by side so both are on the first screen;
+    one column on a narrow one."""
+    sec = _coaching_section(session, unit, ideal_gap, corners_note)
+    if not card:
+        return sec
+    return ['<div class="front with-card">',
+            f'<figure class="hero">{_img("Lap card", card, CARD_LAYOUT_PX, "card")}</figure>',
+            *sec, "</div>"]
 
 
 # The report's Laps table speaks the app's words, not laps.csv's: "Lap", "Time (s)", "Dist (m)",
@@ -1132,16 +1273,21 @@ def write_report_html(path: str, session, source_label: str = "",
                       images: Sequence[tuple[str, bytes] | tuple[str, bytes, int | None]
                                        | tuple[str, bytes, int | None, str | None]] = (),
                       unit: str | None = None, *, lapstrip: bytes | None = None,
+                      card: bytes | None = None,
                       tokens: Mapping[str, str] | None = None) -> None:
     """One SELF-CONTAINED page telling the session the way the app does, in the app's order:
-    the header (recording, track, date, lap count, best lap, and the `Timing` stamp), the Stats
+    the header (recording, track, date, lap count, best lap, and the `Timing` stamp), then the
+    debrief's answer — the lap card beside the COACHING section (`_front`) — then the Stats
     page's groups (SESSION, PACE, MOMENTS, IDEAL LAP, SPEED · G, DRIVING, then CORNERS), the
     slow-lap notes, the lap strip, the laps table (same rows/columns as `write_laps_csv`, via
     `laps_table`) and the passed snapshots. `images` is an iterable of `(title, png_bytes)` or
     `(title, png_bytes, layout_width_px)` — app.py grabs the map/plots widgets (QWidget.grab →
     QImage → PNG bytes), so this module stays Qt-free; `lapstrip` is the `share_lapstrip` card's
     PNG bytes for the same reason (None: no strip, which is what its gate says on a provisional
-    session). `tokens` maps REPORT_TOKENS to the app's colours; without them the page is paper.
+    session). `card` is the lap card's PNG bytes (`share_card`, the image File ▸ Export ▸ "Lap
+    card" saves), the page's opening picture, under the same rule: None on provisional timing, and
+    the page then opens on COACHING with no picture. `tokens` maps REPORT_TOKENS to the app's
+    colours; without them the page is paper.
 
     `layout_width_px` is the width the DOCUMENT lays that image out at, in CSS pixels, and it is
     what makes the page reproducible: a HiDPI grab arrives at 2x the pixels, and with no width
@@ -1189,7 +1335,16 @@ def write_report_html(path: str, session, source_label: str = "",
         ("Best lap", best_txt),
         ("Timing", _timing_meta(session)),
     ]
-    summary = _summary_sections(session, unit)
+    groups = stats_summary(session, unit)
+    summary = _summary_sections(session, unit, groups)
+    # What the COACHING pointer quotes: IDEAL LAP's printed gap, when that section is printed, and
+    # whether CORNERS prints the reconciliation it points to.
+    ideal_gap = next((dict(g.rows).get(IDEAL_GAP_ROW) for g in groups if g.title == "IDEAL LAP"),
+                     None)
+    corners = _corners_section(session, unit)
+    read = getattr(session, "coaching_opportunities", None)
+    opps = cast("coaching.Opportunities | None", read() if callable(read) else None)
+    corners_note = bool(corners) and bool(coaching.corners_reconciliation(opps, 0, page=False))
     # The Stats page's order: MOMENTS sits under PACE (CORNERS follows every group, below).
     after_pace = next((k + 1 for k, sec in enumerate(summary) if sec[1] == "<h2>PACE</h2>"),
                       len(summary))
@@ -1204,8 +1359,9 @@ def write_report_html(path: str, session, source_label: str = "",
         f"<h1>{APP_NAME} — session report</h1>",
         *_kv_table(meta, "meta"),
         "</header>",
+        *_front(session, unit, card, ideal_gap, corners_note),
         *(line for sec in summary for line in sec),
-        *_corners_section(session, unit),
+        *corners,
         *_slow_laps_section(session),
         *_lapstrip_section(lapstrip),
         *_laps_section(session, headers, rows, cue_lap),

@@ -109,7 +109,8 @@ official timing measures the noise floor.
 <img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of the 69 laps found used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag and 26.2 ppm of clock drift, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check that agrees, the g-meter's cornering force matching the GPS path's within 9 %, and a gyroscope rotation cross-check that agrees within 2.7 % over 62 closed laps — above the friction circle, with a 1.50 g grip envelope">
 
 - **Exports.** Lap times and per-lap channels as CSV, a session report as one self-contained HTML
-  page (the Stats page's story: pace, moments, corners, slow laps, the lap strip), a shareable lap
+  page (it opens on the lap card and the Coaching page's answer, then the Stats page's story: pace,
+  moments, corners, slow laps, the lap strip), a shareable lap
   card as an image, and the telemetry burned onto the footage (via ffmpeg). A lap-strip card puts
   every lap of the session on one image, and the overlay comes in two styles, Classic or
   Broadcast, with a ghost of your best lap and corner cards as extras you tick.
