@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirty-two features were built far enough to **measure**, and the measurement said not to ship
+Thirty-four features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2414,6 +2414,131 @@ only on the run with no ▼, the one moment that is a count of the grid's marks.
 **What would be new evidence:** a corner's best pass that changes in fewer than one draw in ten at
 the measured σ, on more than one recording; and, for the run with no ▼, a rule for a calm stretch
 that pure noise at the session's own lap count and spread does not satisfy at that rate.
+
+---
+
+## 33. "N of M slow laps lost their time at one corner" — refused (W5 discovery)
+
+**The idea.** The Laps table cues each slow lap with its culprit corner ("▼ C5"). Add the cues up
+and say where they gather: one sentence, "N of M slow laps lost their time at" the corner most cues
+name.
+
+**How it was measured.** `studio/dev/probes/corner_refusals.py` on the synthetic demo. The slow
+laps and their culprits are the app's own (`Session.slow_lap_notes`, `story.culprit_cue`): a lap
+names one culprit when one ▼ corner holds more than half of its excess, and two when two ▼ corners
+together do. The count is the most cues that name one corner. A lap whose cue names two corners
+counts at both; a slow lap with no culprit counts in M and at no corner.
+- **The null.** Every slow lap with a culprit draws it independently, each of the grid's corners
+  equally likely (a two-corner lap draws two different corners). p is the chance that some corner
+  gathers at least the observed count, computed exactly, not drawn.
+- **Why that null.** Equal odds is the null most generous to the sentence: weighting the corners
+  unequally makes a shared corner likelier by chance. The last row of the second table shows it,
+  with each corner weighted by its own lap-to-lap σ on the demo (0.029–0.203 s, over the 13 clean
+  laps that are not slow).
+
+| synthetic demo | |
+|---|---|
+| clean laps / corners | 14 / 7 |
+| slow laps / with a culprit | 1 / 1, Lap 6 at C5 |
+| the sentence | "1 of 1 slow laps lost their time at C5" |
+| p under the null | 1.00 |
+
+| 7 corners, M slow laps with one culprit each | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|
+| fewest at one corner that beats chance, p ≤ 0.05 | 3 | 4 | 4 | 4 | 5 | 5 |
+| p of half of them or more at one corner | 0.39 | 0.65 | 0.16 | 0.29 | 0.07 | 0.13 |
+| the same, each corner weighted by its σ | 0.59 | 0.83 | 0.47 | 0.66 | 0.43 | 0.58 |
+
+**On the demo the sentence reads "1 of 1", at p 1.00: a single slow lap gathers at its own corner
+whatever that corner is.** Two things are wrong with it beyond that.
+- **A session has too few slow laps for the count to mean anything.** The demo has 1 slow lap of
+  14. Over 7 corners the count beats chance only when it is nearly unanimous, 4 of 6 or 5 of 8,
+  and "half of them at one corner" never does at any M in the table. The sentence would print a
+  coincidence in the same words as a pattern.
+- **It cannot see the demo's planted habit.** The habit (`make_demo.DEMO_HABIT`, §29) costs 8 of
+  the 14 laps about 0.4 s each at C1, and C1 carries no ▼ on any lap. The habit laps ARE the
+  typical pass there: the 6 habit-free laps sit 0.36–0.38 s under it, and a ▼ marks only a loss
+  over the typical pass beyond its step (0.30 s). The one slow lap is a habit lap, and its cue
+  names C5. Counting cues counts what went wrong once; the habit is the Coaching page's C1 row.
+
+The discovery round measured the count on one real recording, and it did not beat chance there
+either.
+
+**What moves because of this refusal: nothing in the app.** Each slow lap keeps its own cue and
+note; a finder that steps through the slow laps names no corner they share.
+
+**Re-run it** (the demo is generated into one `mkdtemp` and removed; its last line is the JSON):
+
+```bash
+pixi run python -m studio.dev.probes.corner_refusals
+```
+
+**What would be new evidence:** a session whose cues gather at one corner at p ≤ 0.05 under this
+null, and a second session where they gather at the same corner.
+
+---
+
+## 34. Splitting a long corner window into two corners — refused (W5 discovery)
+
+**The idea.** A long corner window can hold two slow points. Split it into two corners, so a loss
+is placed in its own half of the bend.
+
+**How it was measured.** `studio/dev/probes/corner_refusals.py` on the synthetic demo.
+- **The windows.** Each corner's window on the reference lap, and its ringed apex (`Corner.apex`,
+  where the map draws the apex dot and the ring), in metres into the window.
+- **The bend.** In C1, the habit's corner, the pooled curvature the corner detector reads
+  (`corners.pooled_curvature`): its local maxima, and the lowest |κ| between them.
+- **Where a pass loses its time.** Along each lap's own projected window, the time since entry
+  against a typical pass. Its slope is smoothed over 3 m, about two GPS fixes, and the peak loss is
+  where that slope is highest. Every ▼ pass is measured against its corner's median pass, and each
+  habit lap at C1 against the median of the 6 habit-free laps.
+
+| synthetic demo, m | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+|---|---|---|---|---|---|---|---|
+| window length | 51.8 | 54.1 | 48.8 | 56.3 | 55.6 | 58.6 | 70.6 |
+| ringed apex, into the window | 27.0 | 27.5 | 25.3 | 29.7 | 28.4 | 29.3 | 35.7 |
+
+| every ▼ pass on the demo, m into the window | peak loss | ringed apex | peak − apex |
+|---|---|---|---|
+| Lap 6 at C5 | 26.1 | 28.4 | −2.3 |
+| Lap 6 at C6 | 6.7 | 29.3 | −22.6 |
+
+| C1, the 8 habit laps against the 6 habit-free laps | |
+|---|---|
+| loss over the window | 0.357–0.428 s |
+| peak loss | 22.0–32.4 m into the window |
+| farthest peak from the ringed apex | 5.4 m |
+| share of the loss lost before the apex | 50–57 % |
+
+**Refused for the renumbering first.** A split adds a corner, so every corner after it takes the
+next id, on every recording. On the demo C2–C7 would become C3–C8, and every corner id published
+for it would move: the Coaching ranking §30 quotes, the corner columns of §29–§32, the slow-lap
+note "C5 +2.84 s" that `tests/test_story.py` pins, and every test pin, card and figure that names
+a corner.
+
+**And the demo gives no window to split.**
+- **C1 is not long.** It is the sixth longest of seven windows. A length rule that reached it would
+  split every window but C3.
+- **C1 is one bend.** The pooled |κ| has two local maxima 3.0 m apart (24.8 and 27.8 m), and
+  between them it never falls below 98.9 % of its peak. There is no valley for a split to sit in.
+- **The demo has no ▼ pass at C1** (§33), so it cannot show where a ▼ pass loses its time there.
+  Its two ▼ passes are elsewhere, both on Lap 6: at C5 the peak loss sits 2.3 m before the ringed
+  apex, at C6 22.6 m before it, on the entry.
+- **The loss C1 does carry straddles its apex.** Every habit lap's peak loss is within 5.4 m of the
+  ringed apex, and half of its loss (50–57 %) comes before it. A split near the apex would cut the
+  one habit the demo plants into two corners, each holding about half of it.
+
+The discovery round reported the same placement on one real recording: the peak loss near the
+ringed apex on most of a long window's ▼ passes.
+
+**What moves because of this refusal: nothing in the app.** A long window stays one corner. Where
+in it the time went stays the Coaching row's Entry·Apex·Exit thirds (`Session.phase_report`).
+
+**Re-run it:** `pixi run python -m studio.dev.probes.corner_refusals`, as §33.
+
+**What would be new evidence:** a window whose pooled curvature has a real valley, two bends the
+detector merged, and whose ▼ passes lose their time on one side of it, on more than one recording.
+That would have to be worth renumbering every corner after it.
 
 ---
 
