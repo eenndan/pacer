@@ -834,8 +834,8 @@ def test_the_cue_and_a_moment_jump_share_one_owned_ring():
 
 
 # ===================================================== cool/slow-lap-finder: find the cue rows
-# The table opens centred on the best lap; on a 36-lap session that left 0 of its 6 cue rows in
-# view. The footer counts the rows wearing a cue and "next ›" scrolls to each, wrapping, and
+# The table opens centred on the best lap, so on a long session the cue rows can all sit out of
+# view (planted below: four cue rows, a short grid on its last lap, 0 of 4 in view). The footer counts the rows wearing a cue and "next ›" scrolls to each, wrapping, and
 # selects nothing (a Laps pick moves the charts and the video, and leaves a comparison, #575).
 def _planted(s, cued=(0, 1, 2, 5), uncued=()):
     """The demo's one note copied onto `cued` lap ids (a culprit, so a ▼ cue) and onto `uncued`

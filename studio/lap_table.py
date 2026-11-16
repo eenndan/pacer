@@ -208,9 +208,10 @@ def slow_note_tip(note) -> str:
 
 
 # THE SLOW-LAP FINDER (cool/slow-lap-finder): a one-line footer under the grid, "2 slow laps marked
-# ▼ · next ›", shown only while some row wears a culprit cue. The table opens centred on the best
-# lap, and on a 36-lap session that put every cue row out of view (0 of 6 visible at open), so the
-# cue was there and nothing said so.
+# ▼" on the left and "next ›" on the right, shown only while some row wears a culprit cue. The
+# table opens centred on the best lap, so on a long session the cue rows can all sit out of view:
+# tests/test_lap_table_affordances.py plants four cue rows on the demo session, scrolls a short
+# grid to its last lap, and finds 0 of 4 in view — the cue was there and nothing said so.
 #
 # IT COUNTS THE ROWS THAT WEAR THE CUE, not every slow lap. "next ›" lands on a row, and only a cue
 # row shows on its face why it was landed on; a slow lap with no single culprit (`partial`,
