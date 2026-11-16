@@ -521,7 +521,8 @@ def test_the_fixed_copy_reads_right_at_one():
     from studio.stats_panel import StatsView
     c1 = CornerReport(cid=1, direction=1, n=37, best_s=2.48, median_s=2.69, sigma_s=0.4,
                       median_loss_s=0.21, apex_best_kmh=73.4, apex_median_kmh=67.4,
-                      grip_median=0.72, score=0.08, n_laps=38)
+                      grip_median=0.72, score=0.08, n_laps=38,
+                      middle_half_s=0.38)
     sess = _fake_view_session()
     sess.corner_report = lambda: [c1]
     sess.phase_report = lambda: None

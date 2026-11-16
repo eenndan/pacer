@@ -120,6 +120,24 @@ MIDDLE_HALF_FLOOR_S = PB_PRECISION_S
 # A CORNER width carries no precision claim (matched corner cells are timed far finer than a lap):
 # it only stops printing "0.00 s" for a width the 2-dp print cannot show.
 CORNER_MIDDLE_HALF_FLOOR_S = 0.01
+# THE CORNERS RANKING ("erratic AND slow") is middle half × median loss, not σ × median loss:
+# σ is carried by single passes. On the shipped demo one lap (L6, the 51 s lap) holds 91 % of C6's
+# variance and 92 % of C5's (σ 0.221 → 0.029 s and 0.757 → 0.060 s without it), and σ × loss
+# marked C6 though its middle half, 0.034 s, is the narrowest of all seven corners; the middle half
+# marks C1, C5, C7. The middle half (IQR; /1.349 makes it a σ for normal passes, a constant that
+# cannot change a ranking, so the score is the width the σ hover prints) was chosen over MAD×1.4826
+# on synthetic corners (4000 draws, steady N(0, 0.03 s), erratic N(0, 0.20 s), +1.0 s outliers):
+#     one outlier       both robust from n = 5: P(erratic outranks it) 0.98 / 0.97, score 1.4× steady
+#     two outliers      MAD holds (0.91 at n = 5); the middle half only from n = 9 (0.43 at n = 5,
+#                       0.95 at n = 8): Q3 reaches the second-slowest pass below that
+#     40 % of passes +0.4 s (two lines, a genuinely erratic corner, the demo's C1 shape)
+#                       middle half 0.99-1.00 at n = 6-14; MAD 0.72 at n = 6, 0.91 at n = 10, as
+#                       its median sits inside the larger mode and calls the corner steady
+# Below MIN_MIDDLE_HALF_N passes there is no middle half, so the corner scores 0.0 and is never
+# marked: falling back to σ there would bring the one-pass mark back where one pass weighs most.
+# σ stays on screen as the measurement it is; when it falls by more than this fraction with its
+# single worst pass left out of the ESTIMATE, the σ hover names that pass (CornerReport).
+ONE_PASS_SIGMA_FRACTION = 0.5
 # Pace-trend gate: below this many clean laps a fitted slope is noise dressed as insight,
 # so the trend statistic reports None and the tile shows a dash.
 TREND_MIN_LAPS = 6
@@ -399,12 +417,26 @@ class CornerReport:
     apex_best_kmh: float | None     # the fastest apex speed carried through
     apex_median_kmh: float | None
     grip_median: float | None       # median per-lap grip utilization (0..~1.1); None w/o g
-    score: float                    # σ × median_loss — the inconsistency weight (0.0 when
-    #                                 either input is missing), same product as consistency.py
+    score: float                    # middle_half × median_loss — the erratic-and-slow weight
+    #                                 (0.0 when either is missing; see corner_report). NOT
+    #                                 consistency.py's σ × median_loss, which coaching reads
     n_laps: int | None = None       # laps with a corner row at all (the denominator of `n`);
     #                                 None only from a caller that never counted them
     middle_half_s: float | None = None  # `middle_half` (width Q3 − Q1) of the counted times; None
     #                                     below MIN_MIDDLE_HALF_N
+    # The ONE PASS farthest from the mean — the pass whose omission lowers σ the most — and σ
+    # with it left out of the ESTIMATE (never out of the data: every other column counts it).
+    # None below three counted passes; the lap is None from a caller that gave no lap ids.
+    worst_pass_lap: int | None = None          # 0-based lap id (display through lap_label)
+    worst_pass_vs_median_s: float | None = None  # its time − this row's median (signed)
+    sigma_without_worst_s: float | None = None
+
+    @property
+    def one_pass_sigma(self) -> bool:
+        """True when ONE pass carries most of σ: σ falls by more than ONE_PASS_SIGMA_FRACTION
+        with that pass left out of the estimate."""
+        return (self.sigma_s is not None and self.sigma_without_worst_s is not None
+                and self.sigma_without_worst_s < ONE_PASS_SIGMA_FRACTION * self.sigma_s)
 
 
 @dataclass(frozen=True)
@@ -1027,14 +1059,15 @@ def sector_medians(splits_by_lap: list[list[float]]) -> list[float | None]:
 
 
 def corner_report(cids, directions, times_by_lap, apex_by_lap,
-                  grip_by_lap, resolved_by_lap=None) -> list[CornerReport]:
+                  grip_by_lap, resolved_by_lap=None, lap_ids=None) -> list[CornerReport]:
     """The corner-by-corner session report: one CornerReport per corner (track order).
 
     Each *_by_lap input is one row per included lap, aligned to `cids` (ragged rows are
     tolerated — column k reads only rows long enough). σ via consistency.sigma (ddof=1);
-    score = σ × median_loss, the same both-erratic-AND-slow product the consistency
-    ranking uses (rationale in studio/consistency.py) — 0.0 when either input is missing
-    so an under-sampled corner never outranks a measured one.
+    score = middle_half × median_loss, the both-erratic-AND-slow product (why the product:
+    studio/consistency.py; why the middle half and not σ: ONE_PASS_SIGMA_FRACTION's block) —
+    0.0 when either input is missing, so a corner under MIN_MIDDLE_HALF_N passes is never
+    ranked. `lap_ids`, one per row, names the worst pass (None → the lap is not named).
 
     WHICH CELLS COUNT. `resolved_by_lap` is `CornerModel.lap_corner_resolved` for each row (the
     rows of all four inputs are then the same laps, in the same order): a lap's corner whose
@@ -1075,9 +1108,13 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
     times_by_lap, apex_by_lap = counted(times_by_lap), counted(apex_by_lap)
     grip_by_lap = counted(grip_by_lap)
     n_laps = len(times_by_lap)
+    ids = list(lap_ids) if lap_ids is not None else [None] * n_laps
     out: list[CornerReport] = []
     for k, (cid, direction) in enumerate(zip(cids, directions, strict=True)):
         times = column(times_by_lap, k)
+        # the lap id of each counted time, in the same order (`column` keeps row order)
+        owners = [i for r, i in zip(times_by_lap, ids, strict=True)
+                  if k < len(r) and np.isfinite(r[k])]
         apex = column(apex_by_lap, k)
         grip = column(grip_by_lap, k)
         n = len(times)
@@ -1085,14 +1122,22 @@ def corner_report(cids, directions, times_by_lap, apex_by_lap,
         med = float(np.median(times)) if n else None
         sig = sigma(times)
         loss = med - best if med is not None and best is not None else None  # both iff n
+        half = middle_half(times)
+        worst = int(np.argmax(np.abs(times - times.mean()))) if n >= 3 else None
         out.append(CornerReport(
             cid=int(cid), direction=int(direction), n=n, n_laps=n_laps,
             best_s=best, median_s=med, sigma_s=sig, median_loss_s=loss,
             apex_best_kmh=float(np.max(apex)) if len(apex) else None,
             apex_median_kmh=float(np.median(apex)) if len(apex) else None,
             grip_median=float(np.median(grip)) if len(grip) else None,
-            score=(sig * loss) if sig is not None and loss is not None else 0.0,
-            middle_half_s=middle_half(times),
+            score=(half * loss) if half is not None and loss is not None else 0.0,
+            middle_half_s=half,
+            worst_pass_lap=(None if worst is None or owners[worst] is None
+                            else int(owners[worst])),
+            worst_pass_vs_median_s=(None if worst is None or med is None
+                                    else float(times[worst]) - med),
+            sigma_without_worst_s=(None if worst is None
+                                   else sigma(np.delete(times, worst))),
         ))
     return out
 
