@@ -846,10 +846,11 @@ SIGMA_CAPTION = "σ lap"
 # THE MIDDLE HALF rides on σ's caption line, not a line of its own: a third line would make this
 # tile taller than its row-mates, and a grid row is as tall as its tallest tile. It reads "middle
 # half SPANS 0.59 s", never "within": "within 0.59 s" invited a ± reading, a band twice as wide
-# (QA W4). Measured: the caption runs MEASURED_PX, past the 146 px of "race pace · best 3-lap
-# mean", so the PACE row needs a pane of about 340 px — and it never gets less than 486: the
-# window's minimum width is 1059 px, which leaves the Stats pane at least that. The row stays
-# 37 px tall at every width from 300 to 1440 px.
+# (QA W4). Measured: the caption runs 161 px ("spans 0.59 s") to 171 px ("spans < 0.07 s"; ten-odd
+# seconds, 166), past the 146 px of "race pace · best 3-lap mean", so the PACE row needs a pane of
+# about 340 px. It never gets less than 486: the window's minimum width is 1059 px, and at that
+# width (as at 1280 x 800) the Stats viewport is 486 px, the row ending at 420. The row stays 37 px
+# tall at every width from 300 to 1440 px.
 SIGMA_TOOLTIP = (
     "σ counts every clean lap, a spin included, so one bad lap can carry it; the middle half "
     "spans the central 50 % of your clean laps, slowest of them minus fastest (their "

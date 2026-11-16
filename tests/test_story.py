@@ -281,7 +281,7 @@ def test_a_moment_row_joins_back_into_the_moments_text():
     label and value join with ": " into `text` exactly, across every wording the builders have —
     a lone best and a tied one, a corner loss with ≈ ties, a run with its own span, an "also level"
     span that SHARES laps with the best window (Laps 1–6 holds laps 5 and 6 of Laps 5–9, so only
-    holding the whole window marks the own span), and no single best, which has no Jump."""
+    holding the whole window marks the own span), and no single best, whose Jump is its span's."""
     many = _five(0, 45.0) | _five(10, 45.01) | _five(20, 45.02) | _five(30, 45.03)
     shared = {0: 45.06, 1: 45.06, 2: 45.3, 3: 45.6, 4: 45.0, 5: 45.0, 6: 45.6, 7: 45.6, 8: 45.03}
     _, mx = _grid({4: ([0.0, 1.5, 0.0, 0.0], 2.0), 7: ([0.0, 1.48, 0.0, 0.0], 2.0)})
