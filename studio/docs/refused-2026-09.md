@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Twenty-eight features were built far enough to **measure**, and the measurement said not to ship
+Thirty-two features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2192,6 +2192,228 @@ pixi run python -m studio.dev.probes.motion_refusals
   cost is measured on the demo under #557's ~2 ms budget for a transition frame;
 - for the slide: a card whose rows can swap order without first merging during playback, on a
   session where the probe counts more than a handful of such swaps at the tick.
+
+**Addendum, 2026-11-15 (W4 design pass): a variant of the fade's reopen condition was tried, and
+the fade stays refused.** The design pass built the cheapest fade that needs no second pool of
+colour buckets, though it is not built on the map's own pool either: at the lap change it grabs the
+map once and lays that snapshot over the new line at falling opacity. On the demo, in the real
+window offscreen at 1728×1117 (not this section's pinned 480 × 480 harness), the grab took 7.3 ms
+and every frame of
+the fade cost +10.0 ms over a plain map repaint (7.2 → 17.2 ms, medians of 100 frames), five times
+#557's ~2 ms budget for a transition frame. These are the design pass's figures, measured once on a
+loaded Mac, and not re-measured here: like #557's, they need the fade itself, which is not in the
+tree. The addendum restates the reopen condition rather than closing it: a fade on the map's own
+bucket pool is still unmeasured.
+
+---
+
+## 29. Brake-onset spread bands on the map — refused (W4 design pass)
+
+**The idea.** On the map's line, at each braking zone, a band over the middle half of the clean
+laps' brake-onset positions with a tick at the median: where you brake, and how much it wanders.
+
+**How it was measured.** `studio/dev/probes/story_refusals.py` on the synthetic demo. For each
+braking zone it takes the clean laps' brake onsets from `Session._brake_rows_by_lap`, the one list
+every braking surface reads, and sets their middle-half spread (the interquartile range) against
+the distance the kart covers in one GPS fix there: the best lap's speed at the median onset times
+the recording's fix interval, 0.1 s. An onset lands on a fix, so a band narrower than one fix would
+draw the receiver's sampling, not the driver: the design drew a band only where it clears one fix.
+The map is the real window's, pinned at 480 × 480 as in §28, where a metre is 1.25 px.
+
+| synthetic demo, clean laps, m | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+|---|---|---|---|---|---|---|---|
+| middle-half spread of the onset | 5.4 | 1.4 | 1.3 | 1.4 | 2.0 | 1.3 | 0.7 |
+| one GPS fix at that speed | 2.7 | 2.2 | 2.7 | 2.3 | 2.5 | 2.3 | 2.5 |
+
+| C1, the planted habit's corner, split by the generator's truth | laps | median onset | middle-half spread |
+|---|---|---|---|
+| laps with the habit | 8 | 89.8 m | 3.8 m |
+| laps without it | 6 | 94.0 m | 3.3 m |
+
+**Six bands would not be drawn, and the seventh mixes two groups.** At six of the seven zones the
+spread is inside one fix. The one that clears it is C1, the corner of the demo's planted habit
+(`make_demo.DEMO_HABIT`): its band would be 6.7 px long, and it mixes two groups that each wander
+more than one fix. Split by the truth, the habit laps brake about 4 m before the clean ones. The
+finding itself is already on C1's Coaching row as a measured "brake later" (ρ −0.81, Holm p 0.003),
+and BRAKING gives its σ 3.9 m and span 13.3 m; BRAKING already reads a σ at or under one fix's
+quantisation (`driving.ONSET_QUANT_M`, 1.5 m) as the receiver's, not the driver's. The design pass
+reported the same shape on the one real recording it measured: the bands that clear
+one fix there are a few pixels long at the map's scale, and the one band long enough to read was
+§20's merged brake event, the kink and the hairpin fused into one onset.
+
+**What moves because of this refusal: nothing in the app.** The map keeps the lap's own brake
+glyphs; the spread stays a column of BRAKING.
+
+**Re-run it** (the demo is generated into one `mkdtemp` and removed; its last line is the JSON):
+
+```bash
+pixi run python -m studio.dev.probes.story_refusals
+```
+
+**What would be new evidence:** a receiver with a higher fix rate, or a band whose length is
+readable at the map's scale and says something BRAKING's σ column and the brake-direction line do
+not.
+
+---
+
+## 30. "What you nailed" — refused (W4 design pass)
+
+**The idea.** The debrief says where you lost time. Say also where you did not: a positive line,
+"C4: nailed it", for the corners you drove as well as your best every time.
+
+**How it was measured.** `studio/dev/probes/story_refusals.py` on the synthetic demo. The line is
+the mirror of an opportunity. An opportunity is the time the typical pass gives away against the
+best one, so praise is a corner whose typical pass (`Session.corner_report`'s median) is within
+0.07 s of its best pass, the step under which the app calls two times level
+(`library.PB_PRECISION_S`).
+
+| synthetic demo, clean laps, s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+|---|---|---|---|---|---|---|---|
+| typical pass − best pass | 0.381 | 0.050 | 0.083 | 0.066 | 0.088 | 0.028 | 0.081 |
+| fires under ±0.035 s of cell jitter, share of draws | 0.00 | 0.77 | 0.35 | 0.56 | 0.10 | 0.95 | 0.36 |
+
+The second row is the same rule after 1,000 seeded draws that move every corner cell by a uniform
+amount within ±0.035 s, half the level step, as §32's jitter does.
+
+**On the demo it fires at 3 of 7 corners: C2, C4 and C6, and C4 by 0.004 s. Three things are
+wrong with it.**
+- **It is unstable.** Under the jitter the same number of corners fires in only 39 % of the draws,
+  and only C6 fires in more than four draws in five. A line that would praise C4 or C3 depending on
+  a few hundredths of noise is praising the noise.
+- **It contradicts the Coaching page.** It would praise C2 and C4, which the Coaching page ranks as
+  opportunities on the demo (`Session.coaching_opportunities`, ranked C1, C2, C7, C4).
+- **It measures the quickest pass, not repeatability.** Typical − best is a gap to a minimum, the
+  order statistic of §2. More laps bring a lower best pass while the median holds, so the line
+  fires less the longer you drive.
+
+The design pass reported it fired at no corner of the one real recording it measured.
+
+**What moves because of this refusal: nothing in the app.** The debrief names opportunities only.
+
+**What would be new evidence:** a rule for praise that holds under this jitter on the demo, does
+not praise a corner the Coaching page ranks, and fires on a real session replicated on a second.
+
+---
+
+## 31. An ideal-lap film — refused (W4 design pass)
+
+**The idea.** The ideal lap is stitched from each segment's best pass. Stitch the video the same
+way: one clip that plays each corner and straight from the lap that drove it quickest.
+
+**How it was measured.** `studio/dev/probes/story_refusals.py` on the synthetic demo. It reads the
+ideal's own partition (`Session.ideal_segment_bests`): its donors, and each cut where one donor
+hands over to the next. At every cut it measures the jump in speed and in position between the
+outgoing donor's last point and the incoming donor's first, each on its own lap. For scale, it
+measures the same two jumps at 200 seeded random cuts between two clean laps at one partition edge.
+
+| synthetic demo | |
+|---|---|
+| segments of the partition | 15 |
+| donor laps / cuts between them | 9 / 12 |
+| ideal / best lap | 44.63 / 44.95 s |
+| a cut every | 3.4 s |
+| speed jump at a cut, median / largest | 0.6 / 2.9 km/h |
+| position jump at a cut, median / largest | 0.5 / 0.7 m |
+| a random cut between two clean laps, 90th percentile | 5.7 km/h, 1.0 m |
+
+**The seams are not the problem.** The cuts jump less than random cuts at the same edges between
+two clean laps: the largest speed jump is under the random cuts' 90th percentile, and the position
+jump is under a metre.
+
+**Three other things are.**
+- **It cuts every 3.4 s.** 12 cuts in 44.6 s, between 9 laps, is a montage, not a lap.
+- **It shows an order statistic as a lap that was driven.** The ideal is the sum of each segment's
+  minimum (§2). No lap was driven at it: on the demo it is 0.32 s under the best lap, and §2
+  measured no recombination of the laps at or left of the best lap, 0 of 20 on both recordings. It
+  falls as the session grows: 0.72 / 0.60 / 0.36 s for a doubling of the laps on §5's three
+  fixtures. A film would give that number a picture, which is the overclaim the ideal-lap
+  disclosure exists to prevent.
+- **The exporter renders one continuous window.** `export_video.resolve_video_source` resolves one
+  global window [t0, t1) to its chapters. A film of 13 shots needs a new export that renders many
+  windows and joins them, for this one feature.
+
+**What moves because of this refusal: nothing in the app.** The ideal stays a number with its
+sample beside it, and a lap's export stays one window.
+
+**What would be new evidence:** a multi-window export that exists for another reason, and a
+presentation that reads as a montage of best passes, not as a lap.
+
+---
+
+## 32. Two session moments that do not survive the app's level step — refused (W4 design pass)
+
+**The idea.** A short list of the session's moments, each a jump to the lap it names: the best
+lap, the biggest single-corner loss, the longest run with no ▼, the best 5-lap run, the best 3-lap
+run, and the best pass through each corner.
+
+**How it was measured.** `studio/dev/probes/story_refusals.py` on the synthetic demo, three ways.
+- **Under the app's level step:** 1,000 seeded draws. In every draw each lap time moves by a
+  uniform amount within ±0.07 s (`library.PB_PRECISION_S`, the step the app treats as level), and
+  each corner cell, the CORNERS BY LAP grid's time through one corner, by a uniform amount within
+  ±0.035 s, every one independent of the others. The grid's ▼ marks are recomputed from the moved
+  cells. For each moment it counts the share of draws in which the lap it names changes.
+- **At the measured timing noise:** the step is wider than the measured timing noise (σ 0.0247 s,
+  `docs/ACCURACY.md` row C). At that σ, Gaussian per lap and σ/√2 per corner cell, the probe
+  re-measures every row with another 1,000 seeded draws: the second column.
+- **Pure noise:** a moment can be stable and still be what noise alone would produce. A ▼ marks a
+  cell above its corner's 90th-percentile deviation from the median, floored at 0.30 s
+  (`stats._typical_and_scale`). The probe draws 1,000 seeded grids of pure Gaussian noise at the
+  demo's 14 laps and 7 corners, each corner its demo median plus noise of that corner's own sample
+  σ (0.031–0.757 s), and again at its robust σ, 1.4826 × the median absolute deviation (0.022–0.080
+  s). It marks them through the real constructor (`stats.corner_matrix`) and reads each grid's ▼
+  and its longest run with no ▼.
+
+| synthetic demo, 14 clean laps, 1,000 draws | under the level step | at the measured σ | |
+|---|---|---|---|
+| best pass per corner, at six of seven corners | 0.13–0.69 | 0.07–0.69 | a tie of 6–11 passes within 0.07 s |
+| best pass per corner, at C5 | 0.00 | 0.00 | alone |
+| longest run with no ▼ | 0.00 | 0.00 | 8 laps |
+| best 3-lap run | 0.16 | 0.04 | 5 of 12 runs within 0.07 s of the best |
+| best lap | 0.00 | 0.00 | 0.215 s clear of the next |
+| biggest single-corner loss | 0.00 | 0.00 | |
+| best 5-lap run | 0.00 | 0.00 | 3 of 10 runs within 0.07 s of the best |
+
+| longest run with no ▼, 14 laps × 7 corners | ▼ per grid | median | 90th percentile | grids at least as long as the demo's |
+|---|---|---|---|---|
+| pure noise at each corner's sample σ, 1,000 grids | 4.1 | 5 laps | 8 laps | 0.16 |
+| pure noise at each corner's robust σ, 1,000 grids | 0.0 | 14 laps | 14 laps | 1.00 |
+| the demo | 2 | 8 laps | | |
+
+**Two moments name a lap the noise could have picked.**
+- **The best pass through a corner** is a tie at six corners of seven, 6 to 11 passes within
+  0.07 s of the quickest. Which one is named changes in up to 69 % of the draws under the level
+  step, and in 7 % to 69 % at the measured σ. Only C5's stands alone, the corner whose grip the
+  generator varies most (§27). Naming one pass of eleven as "the" best pass is a coin toss
+  presented as a moment.
+- **The longest run with no ▼** never changes under either jitter, and that was the wrong test. The
+  demo's grid carries 2 ▼ in all, at C5 and C6; at every other corner the 0.30 s floor wins. Noise
+  at each corner's sample σ, which those same outlier cells inflate, carries 4.1 ▼ a grid, and the
+  demo's run of 8 laps is the 90th percentile of what it produces on the same grid, and 16 % of the
+  noise grids run at least as long. At each corner's robust σ the floor wins everywhere, the noise
+  grids carry no ▼, and the run is the whole session every time. The run's length counts the
+  session's outlier cells, not its calm. The review of the story-core PR that raised this measured
+  the same shape on its own noise grids, with 7 corners (median / 90th percentile of the longest
+  run): 7 / 12 at 14 laps and σ 0.15 s, 12 / 18 at 36 laps and σ 0.15 s, 4 / 5 at 40 laps and σ
+  0.30 s. Those are the review's figures, not re-measured here.
+
+**The best 3-lap run is not built as a second moment.** That is a design choice, not a noise
+refusal: at the measured σ it changes in only 4 % of the draws (16 % under the level step). The
+figure already exists, as the Stats page's "race pace · best 3-lap run" tile
+(`stats_panel.py`, from `stats.best_consecutive_mean`: the best mean of `stats.RACE_PACE_N`
+consecutive clean laps). A moment naming its laps would name a tie group: 5 of the 12 runs sit
+within 0.07 s of the best. The best 5-lap run moment already carries the idea, named with its ties.
+
+**The moments the design pass kept survive the jitter.** The best lap, worded as a tie where
+another lap is within 0.07 s of it; the biggest single-corner loss; and the best 5-lap run, named
+with its ties. On the demo none of them changes at either noise level. The pure-noise test was run
+only on the run with no ▼, the one moment that is a count of the grid's marks.
+
+**What moves because of this refusal: nothing in the app.** No session-moments list exists yet;
+these two will not be in it.
+
+**What would be new evidence:** a corner's best pass that changes in fewer than one draw in ten at
+the measured σ, on more than one recording; and, for the run with no ▼, a rule for a calm stretch
+that pure noise at the session's own lap count and spread does not satisfy at that rate.
 
 ---
 
