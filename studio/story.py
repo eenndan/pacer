@@ -274,7 +274,7 @@ def slow_lap_notes(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
         unmeasured = tuple(matrix.cids[c] for c in cols if not matrix.resolved[row][c])
         first = lap == first_lap_id
         head = (f"Lap {lap_label(lap)}{' (first lap)' if first else ''} · "
-                f"{excess:.2f} s over your typical lap")
+                f"{_excess_text(excess)}")
         out.append(SlowLapNote(
             lap_id=lap, first_lap=first,
             gap_to_best_s=(printed_ms(t) - best_ms) / 1000 if best_ms is not None else None,
@@ -282,6 +282,28 @@ def slow_lap_notes(lap_times: Mapping[int, float], matrix: CornerMatrix | None,
             unmeasured=unmeasured, caveat=caveat, rule=rule,
             text=f"{head} · {_body(category, corners, also, unmeasured)}"))
     return out
+
+
+def _excess_text(excess: float) -> str:
+    return f"{excess:.2f} s over your typical lap"
+
+
+def row_text(note: SlowLapNote) -> str:
+    """The note for a surface whose row already names the lap (the Laps table): `text` without
+    its "Lap N · " head, built from the same pieces, so the two can never say different things."""
+    head = f"First lap · {_excess_text(note.excess_s)}" if note.first_lap else \
+        _excess_text(note.excess_s)
+    return f"{head} · {_body(note.category, note.corners, note.also, note.unmeasured)}"
+
+
+def culprit_cue(note: SlowLapNote) -> str:
+    """The in-row cue: the culprit corner(s) behind the grid's mark ("▼ C5", "▼ C5 C6"), or ""
+    when no corner holds the culprit share of the excess (`partial` names its ▼ corners, `spread`
+    has none): with nothing that is THE reason, a short cue would overstate one corner of several,
+    and the note on hover says the rest."""
+    if note.category not in (OVER_LAP, ONE, TWO):
+        return ""
+    return f"{BEHIND_MARK} {' '.join(f'C{c.cid}' for c in note.corners)}"
 
 
 # ------------------------------------------------------------------------------------- moments
