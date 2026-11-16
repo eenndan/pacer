@@ -26,8 +26,9 @@ See the "spread, reach and the evidence gate" block below for the measured numbe
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sized
 from dataclasses import dataclass, field, replace
+from typing import cast
 
 import numpy as np
 
@@ -2010,7 +2011,8 @@ def _lap_account(session) -> tuple[int | None, int]:
     if not callable(valid):
         return None, 0
     dropout = getattr(session, "dropout_lap_ids", None)
-    return len(valid()), (len(dropout()) if callable(dropout) else 0)
+    return (len(cast("Sized", valid())),
+            (len(cast("Sized", dropout())) if callable(dropout) else 0))
 
 
 def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
@@ -2039,9 +2041,11 @@ def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
             return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body()
         needs = (f"Coaching needs {MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
                  f"session has {opps.n_laps}")
-        lost = (f"{dropouts} of its {plural(valid, 'lap')} had a GPS dropout" if dropouts
+        # (dropouts > 0 only with a lap account: `valid` is then a count.)
+        lost = (f"{dropouts} of its {plural(valid, 'lap')} had a GPS dropout"
+                if dropouts and valid is not None
                 else "")
-        if lost and valid >= MIN_LAPS:
+        if lost and valid is not None and valid >= MIN_LAPS:
             return ("Not enough clean laps.",
                     f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
                     "corner by corner. You drove the laps — the GPS lost its fix during them.")

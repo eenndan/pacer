@@ -1004,8 +1004,8 @@ def _corners_section(session, unit) -> list[str]:
     notes = stats_service.corner_count_note(report, page=False)
     counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]
     read = getattr(session, "coaching_opportunities", None)
-    coach = coaching.corners_reconciliation(read() if callable(read) else None,
-                                            sum(of - n for n, of in counted), page=False)
+    opps = cast("coaching.Opportunities | None", read() if callable(read) else None)
+    coach = coaching.corners_reconciliation(opps, sum(of - n for n, of in counted), page=False)
     no_mark = stats_service.corner_no_mark_note(report)
     gap = coaching.ideal_gap_s(session)
     notes += [x for x in (coach, no_mark, None if gap is None else coaching.ideal_gap_sentence(gap),
@@ -1092,10 +1092,10 @@ def _coaching_section(session, unit) -> list[str]:
     read = getattr(session, "coaching_opportunities", None)
     if not callable(read):
         return []
-    opps = read()
+    opps = cast("coaching.Opportunities", read())
     dirs = getattr(session, "coaching_brake_direction", None)
     # The ordinary page's rows (not the debrief's): they carry the braking-direction line.
-    directions = (dirs() if callable(dirs) else None) or {}
+    directions = cast(dict, (dirs() if callable(dirs) else None) or {})
     text = coaching.page_text(opps, directions, units.normalize_unit(unit))
     esc = html.escape
     if not text.headline:
