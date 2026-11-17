@@ -1486,12 +1486,16 @@ _OPTIONAL_COLS = (_PANEL_COL_CMP, _PANEL_COL_PHASES, _PANEL_COL_GO, _PANEL_COL_R
 JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's button padding
 
 
-# Each of the two stacked buttons' floor: a TABLE line and its padding. Stacked, they need a cell
-# 2 x 22 + the 2 px gap tall, and a cell is its row less the 4 px inset above and below and the 1 px
-# grid line (measured: a 48 px row holds a 39 px cell) — a row of 55 px, which a reason wrapped to
-# three lines has and a one-line full-window row (48 px) has not (`_stack_fits`).
-STACKED_BUTTON_MIN_PX = 22
-STACKED_ROW_PX = 2 * STACKED_BUTTON_MIN_PX + theme.SPACE_XXS + 2 * theme.SPACE_XS + 1
+# Each of the two stacked buttons' floor is the app's pointer-target floor (`theme.HIT_MIN`:
+# nothing clickable smaller), and they touch — their own borders part them. Stacked, they need a
+# cell 2 x HIT_MIN tall, and a cell is its row less the SPACE_XS inset above and below and the 1 px
+# grid line (measured: a 48 px row holds a 39 px cell) — a row of 57 px, which the demo's docked
+# rows (58 px and up, three wrapped lines) have and a one-line full-window row (48 px) has not.
+STACKED_BUTTON_MIN_PX = theme.HIT_MIN
+STACKED_ROW_PX = 2 * STACKED_BUTTON_MIN_PX + 2 * theme.SPACE_XS + 1
+# What a text-driven row adds over its wrapped reason and the delegate's padding: Qt's own
+# sizeHintForRow is that sum plus 2 (measured on every row of the layout fixture, 2-4 lines).
+ROW_TEXT_CHROME_PX = 2
 
 
 class ActionCell(QWidget):
@@ -1507,7 +1511,7 @@ class ActionCell(QWidget):
         self.jump, self.compare = jump, compare
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(theme.SPACE_XXS)
+        lay.setSpacing(0)
         for btn in (jump, compare):
             btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
             lay.addWidget(btn)
@@ -1542,7 +1546,7 @@ class ActionCell(QWidget):
         buttons' full 31 px hints, so stacking does not by itself make a row taller."""
         hint = self.jump.sizeHint()
         if self.is_stacked():
-            hint.setHeight(2 * STACKED_BUTTON_MIN_PX + theme.SPACE_XXS)
+            hint.setHeight(2 * STACKED_BUTTON_MIN_PX)
         return hint
 
 
@@ -2101,7 +2105,8 @@ class OpportunitiesPanel(QWidget):
             # debrief (compare_requested). Stacked, a docked page keeps main's row heights exactly;
             # the column there took the demo's rows from 58 to 89 px at a 676 px page.
             # Where neither fits (rows too short to stack, no room for the column) the row keeps
-            # its Jump alone, as on main: buttons squeezed under 22 px clip their descenders.
+            # its Jump alone, as on main: buttons under the hit floor (18 px measured) clip their
+            # descenders, and the design system allows nothing clickable under it.
             self._stack_ok = (_PANEL_COL_GO in shown and not self._debrief
                               and self._stack_fits(room))
             if (_PANEL_COL_GO in shown and not self._debrief and not self._stack_ok
@@ -2170,7 +2175,7 @@ class OpportunitiesPanel(QWidget):
             item = t.item(r, _PANEL_COL_REASON)
             text = item.text() if item is not None else ""
             wrapped = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, text).height()
-            if wrapped + pad_v < STACKED_ROW_PX:
+            if wrapped + pad_v + ROW_TEXT_CHROME_PX < STACKED_ROW_PX:
                 return False
         return True
 
@@ -2202,9 +2207,10 @@ class OpportunitiesPanel(QWidget):
 
         `compact` is the one stacked under Jump (`ActionCell`): no glyph, because "Compare" with its
         glyph is 108 px and the Jump column 88 px inside its inset; without it, 83 px."""
+        # No width floor of its own: with its glyph it is wider than Jump's (108 px vs 88), and
+        # stacked it takes the Jump column's width from the cell (Preferred, in a VBox).
         btn = (QPushButton("Compare") if compact
                else QPushButton(theme.icon("ph.columns", color=C.text), "Compare"))
-        btn.setMinimumWidth(JUMP_MIN_PX)
         btn.setAutoDefault(False)
         btn.setDefault(False)
         if opp is not None:
