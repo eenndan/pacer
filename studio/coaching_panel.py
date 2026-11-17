@@ -81,7 +81,13 @@ def _style_headers(table: QTableWidget, headers: list[str]):
         if item is None or not label:
             continue
         item.setTextAlignment(_HEADER_ALIGN.get(label, Qt.AlignLeft) | Qt.AlignVCenter)
-        item.setToolTip(_HEADER_TIPS.get(label, ""))
+        item.setToolTip(_header_tip(table, label))
+
+
+def _header_tip(table: QTableWidget, label: str) -> str:
+    """`label`'s hover on `table`: the debrief's words while the table's "debrief" property is set
+    (`coaching.column_tip`: its reason cells carry no braking-direction line), else COLUMN_TIPS."""
+    return coaching.column_tip(label, debrief=bool(table.property("debrief")))
 
 
 def _header_chrome_px(table: QTableWidget, col: int, label: str) -> int:
@@ -111,8 +117,8 @@ def _elide_header(table: QTableWidget, col: int, label: str, chrome_px: int):
         label, Qt.ElideRight, max(avail, 0))
     if item.text() != text:
         item.setText(text)
-    item.setToolTip(_HEADER_TIPS.get(label, "") if text == label
-                    else f"{label} — {_HEADER_TIPS.get(label, '')}".strip(" —"))
+    tip = _header_tip(table, label)
+    item.setToolTip(tip if text == label else f"{label} — {tip}".strip(" —"))
 
 
 # WHICH ROWS, AND IN WHAT WORDS, IS NOT DECIDED HERE. The shown rows (`coaching.shown_rows`, no
@@ -1788,6 +1794,12 @@ class OpportunitiesPanel(QWidget):
         "Compare with your previous PB" beside the PB line (``compare_pb_requested``); `saved`
         False words the note for a list that is never written (the demo's, ``debrief_note``)."""
         self._debrief = bool(on)
+        # The reason header's hover follows the mode: the debrief's cells carry no braking line.
+        self.table.setProperty("debrief", self._debrief)
+        label = self._COLUMNS[_PANEL_COL_REASON]
+        head = self.table.horizontalHeaderItem(_PANEL_COL_REASON)
+        tip = _header_tip(self.table, label)
+        head.setToolTip(tip if head.text() == label else f"{label} — {tip}")   # as _elide_header
         self._debrief_lead = ((pb_line, list(promoted or []), bool(compare), bool(saved)) if on
                               else (None, [], False, True))
         if on:

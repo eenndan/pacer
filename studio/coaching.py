@@ -2126,10 +2126,24 @@ COLUMN_TIPS = {
                   "can differ from it in sign.",
     # The cell's second line is `brake_direction_line` (the estimated "Brake ~N m later" line it
     # replaced was retired in L7, coaching_panel._reason_cell); this said ESTIMATED until W8.
+    # `reason_text` adds it under a RANKED row only, and the debrief never shows it: see
+    # `column_tip`.
     "How to find it": "The dominant MEASURED reason this corner is losing time, with its numbers — "
-                      "plus the MEASURED braking-direction line where your laps separate one: "
-                      "which way braking went with quicker passes here, over how many laps.",
+                      "plus, under a ranked row whose laps separate one, the MEASURED "
+                      "braking-direction line: which way braking went with quicker passes here, "
+                      "over how many laps.",
 }
+# The debrief's "How to find it": its rows carry the reason alone (no braking-direction line until
+# the debrief ends, coaching_panel.OpportunitiesPanel.set_debrief), so its hover promises none.
+REASON_TIP_DEBRIEF = "The dominant MEASURED reason this corner is losing time, with its numbers."
+
+
+def column_tip(label: str, *, debrief: bool = False) -> str:
+    """The hover of the column headed `label` ("" for none): `COLUMN_TIPS`, except the debrief's
+    "How to find it", whose cells never print the braking-direction line (`REASON_TIP_DEBRIEF`)."""
+    if debrief and label == "How to find it":
+        return REASON_TIP_DEBRIEF
+    return COLUMN_TIPS.get(label, "")
 
 
 def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:

@@ -3372,7 +3372,38 @@ def test_the_how_to_find_it_tip_promises_only_what_the_cell_prints():
     d = K.BrakeDirection(cid=1, n_laps=36, rho=-0.5, p=0.001, family=4, p_holm=0.004)
     assert "went with quicker passes here" in K.brake_direction_line(d) and \
         "went with quicker passes here" in tip, tip
-    print(f"ok tip: {tip!r}")
+    # The line sits under a RANKED row only (`reason_text`), and the hover says so.
+    assert "under a ranked row" in tip, tip
+    # Review of #595: the debrief shows the same header over cells that never carry the line (on
+    # the demo C1 separates "later": the page prints it, the debrief does not), so its hover
+    # promises none — and the ordinary page's comes back when the debrief ends.
+    _qapp()
+    from studio.coaching_panel import _PANEL_COL_REASON, OpportunitiesPanel
+    panel = OpportunitiesPanel(_level_sessions()["demo"])
+    panel.resize(1400, 900)
+    panel.show()
+    for _ in range(6):
+        _APP.processEvents()
+
+    def hover_and_c1():
+        head = panel.table.horizontalHeaderItem(_PANEL_COL_REASON)
+        return head.toolTip(), panel.table.item(0, _PANEL_COL_REASON).text()
+
+    page_tip, page_c1 = hover_and_c1()
+    assert page_tip.endswith(tip) and "Braking later went with quicker passes" in page_c1, \
+        (page_tip, page_c1)
+    panel.set_debrief(True, None, [], False, saved=False)
+    for _ in range(6):
+        _APP.processEvents()
+    deb_tip, deb_c1 = hover_and_c1()
+    assert "Braking" not in deb_c1, deb_c1
+    assert "braking" not in deb_tip.lower(), deb_tip
+    assert deb_tip.endswith(K.REASON_TIP_DEBRIEF), deb_tip
+    panel.set_debrief(False)
+    for _ in range(6):
+        _APP.processEvents()
+    assert hover_and_c1()[0].endswith(tip), hover_and_c1()[0]
+    print(f"ok tip: page {tip!r}; debrief {K.REASON_TIP_DEBRIEF!r}")
 
 
 def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
