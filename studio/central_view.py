@@ -462,6 +462,45 @@ def _busy():
         QGuiApplication.restoreOverrideCursor()
 
 
+class _MapRaceButton(ToggleButton):
+    """The map toolbar's "Lap race" button: View ▸ Lap race's visible twin. It holds no race state
+    of its own — the window binds it to that QAction (`app._RaceButtonBinding`), so its check,
+    enabled state and tooltip are the menu item's.
+
+    IT IS NOT IN THE TOOLBAR'S LAYOUT. PanelToolbar pins every control at its own width, so the
+    bar's honest need IS the map panel's minimum width: 552 px, one pixel under the 553 px the
+    charts panel sets for the column (test_map_key holds that). Any laid-out control — even a 0 px
+    minimum, since the row's spacing still counts — would raise the window's own minimum. So the
+    button sits in the empty left-hand stretch the right-aligned run leaves, placed on every bar
+    resize/relayout, and is the bar's ONE control to step aside when that stretch is too narrow
+    (the panel near its floor, ~650 px): the run is the map's only way to its own controls, while
+    the race keeps R, the View menu and ⌘K. Nothing is ever clipped or pushed."""
+
+    def __init__(self, bar: QWidget):
+        super().__init__("Lap race", glyph="ph.flag", parent=bar)
+        self.setAccessibleName("Lap race")
+        self._bar = bar
+        bar.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self._bar and event.type() in (QEvent.Resize, QEvent.LayoutRequest,
+                                                 QEvent.Show):
+            self.place()
+        return False
+
+    def place(self) -> None:
+        """Left-align it in the bar's stretch at the controls' height, or hide it if it would not
+        fit there with one spacing to spare."""
+        bar, row = self._bar, self._bar.layout()
+        w = self.sizeHint().width()
+        room = bar.width() - row.sizeHint().width()     # the stretch the right-hand run leaves
+        fits = room >= w + row.spacing()
+        if fits:
+            self.setGeometry(row.contentsMargins().left(), (bar.height() - theme.CTRL_H) // 2,
+                             w, theme.CTRL_H)
+        self.setVisible(fits)
+
+
 class CentralView(QWidget):
     """Session-scoped central widget for one loaded recording (see module docstring)."""
 
@@ -994,6 +1033,10 @@ class CentralView(QWidget):
         self._map_header = PanelHeader("MAP", trailing=self._map_max_btn)
         self._map_toolbar = PanelToolbar(self.map.rainbow_combo, self.map.snap_btn,
                                          self.map.add_sector_btn, self.map.reset_sectors_btn)
+        # The Lap race's visible entry (it had none: View ▸ Lap race, R or ⌘K only), on the bar of
+        # the panel it is drawn on. ph.flag: the race card has no glyph of its own for the race,
+        # and the bundled Phosphor 1.3 has no checkered flag.
+        self.race_btn = _MapRaceButton(self._map_toolbar)
         # Trust strip over the map: ONE compact strip, two tiers of concern, so it never eats a
         # third of the ≤320px map (the common first-run case: unknown track + older GoPro would
         # stack two word-wrapped banners). The ACTIONABLE line leads (provisional_banner — "place

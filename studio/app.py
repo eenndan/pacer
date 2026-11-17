@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 import shiboken6
 from PySide6.QtCore import (
     QEvent,
+    QObject,
     Qt,
     QTimer,
     QtMsgType,
@@ -509,6 +510,48 @@ class _ShortcutGate(QShortcut):
         else:
             self._said = gate_refusal(self._action)
             bar.showMessage(self._said, STATUS_MS)
+
+
+class _RaceButtonBinding(QObject):
+    """Makes the map toolbar's "Lap race" button (`CentralView.race_btn`) ONE control with View ▸
+    Lap race: a click triggers the action (so R, the menu, ⌘K and the button run one handler), and
+    the button mirrors the action's check, enabled state and tooltip — the feature tooltip naming
+    R when it can run, the gate's whole reason when it cannot (`_gate_action`). A QPushButton
+    cannot take a QAction (only a QToolButton can, and the toolbar's controls are QPushButtons in
+    the theme's control style), hence this small mirror.
+
+    The action's enabled state is a CACHE of its gate, which reads whether the map is on screen
+    (see `_ShortcutGate`). A button sitting greyed with "The map is not on screen" over a map that
+    is plainly back would be that cache made visible, so the gate is re-read whenever the map's
+    geometry or visibility changes — a maximize, its restore, video focus, the first layout.
+
+    A child of the button: it and its connections go with the view on a reload."""
+
+    def __init__(self, action, button, watch: QWidget, sync: Callable[[], None]):
+        super().__init__(button)
+        self._action, self._button, self._sync = action, button, sync
+        action.changed.connect(self.mirror)
+        button.clicked.connect(self._clicked)
+        watch.installEventFilter(self)
+        self.mirror()
+
+    def _clicked(self) -> None:
+        self._action.trigger()
+        self.mirror()            # a refused start leaves the action unchecked: so is the button
+
+    def mirror(self) -> None:
+        a, b = self._action, self._button
+        b.setEnabled(a.isEnabled())
+        b.setToolTip(a.toolTip())
+        b.setChecked(a.isChecked())
+
+    def eventFilter(self, obj, event):
+        # Resize and Show only: the map coming BACK is what a stale gate gets wrong (its leaving
+        # ends any race, and that syncs). Not Hide, which a view being torn down also sends — a
+        # sync from there reads a half-destroyed view.
+        if event.type() in (QEvent.Resize, QEvent.Show):
+            self._sync()
+        return False
 
 
 def gate_refusal(action) -> str:
@@ -2073,6 +2116,12 @@ class StudioWindow(QMainWindow):
             if race is not None:        # the next race starts in the remembered Follow choice
                 race.follow = self._race_follow
                 race.on_follow = self._on_race_follow
+        # …and its toolbar button on the map is that same command (`_RaceButtonBinding`). Guarded
+        # too: a window built piecemeal in a test has no menus.
+        race_btn = getattr(self.view, "race_btn", None)
+        race_act = getattr(self, "_race_action", None)
+        if race_btn is not None and race_act is not None:
+            _RaceButtonBinding(race_act, race_btn, self.view.map, self._sync_view_menu)
         self.view.timingEdited.connect(self._sync_view_menu)
         self._sync_edit_menu()  # a fresh load has no prior edit -> Undo disabled
         self.setCentralWidget(self.view)
