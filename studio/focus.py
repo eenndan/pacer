@@ -761,8 +761,8 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # …AND IT MUST BEAT THE TIMING (cool/focus-verdict-gates): a difference under
         # `library.PB_PRECISION_S` is level by the app's one rule for two times, whatever the
         # spread. Over the demo against 16 habit-free sessions of its circuit, both orders, 28 of
-        # 343 verdicts said "faster"/"slower" on 0.020-0.048 s because those corners' spreads were
-        # tight, and one pair said "0.05 s slower" one way and "no change" the other. An estimated
+        # 224 verdicts said "faster"/"slower" on 0.020-0.052 s because those corners' spreads were
+        # tight, and four corners read "slower" one way and "no change" the other. An estimated
         # clock never gets here (BLOCK_DEGRADED), so its wider tie (`lap_race.ESTIMATED_CLOCK_TIE_S`)
         # has no case to apply to.
         spread = max(item.iqr_s, now.iqr)

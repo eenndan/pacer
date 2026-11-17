@@ -666,7 +666,7 @@ def test_the_mirrored_circuit_is_another_layout_and_gets_no_verdict():
 def test_same_layout_sessions_are_never_refused_and_claim_only_past_the_step():
     """The demo against habit-free sessions of its own circuit, both orders: the layout test
     refuses none of their corners; no "faster"/"slower" stands on a difference under the timing
-    step (on main, 0.020-0.048 s claims at s4, s6 and s7 among these); A → B "faster" exactly when
+    step (on main, 0.020-0.052 s claims at s4, s6 and s7 among these); A → B "faster" exactly when
     B → A "slower" (on main C5 read "0.05 s slower" demo → s6 and "no change" back); and the
     demo's planted habit still reads as before on s7."""
     from studio import library
