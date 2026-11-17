@@ -2228,7 +2228,8 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
             f"Start with C5, C2 or C8: +0.13 s down to +0.06 s {spread}, so this cannot rank "
             "them."]),
         "SD_19_09_26": (K.THEME_EXECUTION, [
-            "Consistency is the common thread — 78% of that time is in C1, C7, C2, C3.",
+            "Consistency is the common thread — 78% of the time your 5 ranked corners lose is in "
+            "C1, C7, C2, C3.",
             "Start with C1: +0.15 s, and you have matched it on 4 of 36 laps."]),
         "SD_30_08_26": (K.THEME_EXECUTION, [
             "Consistency is the common thread — 100% of that time is in C7, C5, C3.",
@@ -2317,7 +2318,7 @@ def test_the_page_leads_with_the_theme():
     rows = _themed([K.REACH_RARE] * 3 + [K.REACH_REPEAT])
     opp = K.Opportunities(enough=True, n_laps=20, median_lap_id=4, rows=rows,
                           theme=K.session_theme(rows))
-    sentence = K.theme_sentence(opp.theme)
+    sentence = K.theme_sentence(opp.theme, opp.rows)   # the rows, as the page reads it
     assert sentence and "pace, not execution" in sentence
 
     class _S:
@@ -2560,9 +2561,10 @@ def test_the_theme_names_the_one_corner_on_the_reach_line():
     theme = K.session_theme(sd19)
     assert (theme.kind, round(theme.share, 2), theme.lead_cid) == (K.THEME_EXECUTION, 0.78, 1), theme
     said = K.theme_sentence(theme, sd19)
-    assert said == ("No single theme: 78% of the time on offer is in corners you have already "
-                    "driven at this pace, 22% in corners you have rarely reached — C1 sits on the "
-                    "line between the two."), said
+    # Five ranked corners under a headline summing three: the halves name their base (W8).
+    assert said == ("No single theme: of the time your 5 ranked corners lose, 78% is in corners "
+                    "you have already driven at this pace, 22% in corners you have rarely reached "
+                    "— C1 sits on the line between the two."), said
     # Without the rows the sentence is what it always was (every other caller is unchanged).
     assert K.theme_sentence(theme).startswith("Most of the time on offer is execution"), theme
     # C7 tips it too (59.9 % < THEME_SHARE): the LARGEST-loss tipping corner is the one named. C5,
@@ -3120,7 +3122,7 @@ def test_the_level_step_leaves_the_ranking_as_it_was():
                      (4, K.REASON_LEVEL)], kinds
     # The theme is unchanged on the demo: the level rows were never its cause.
     assert K.theme_actions(demo.theme, demo.rows) == [
-        "Apex speed is the common thread — 79% of that time is in C1.",
+        "Apex speed is the common thread — 79% of the time your 4 ranked corners lose is in C1.",
         "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."]
     print(f"ok ranking unchanged: {_MAIN_RANKED}")
 
@@ -3325,6 +3327,135 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     assert "No corner clears its own lap-to-lap spread, so there is no total" in tip0, tip0
     assert "The total is" not in tip0, tip0
     print("ok scope hover: top 3 unchanged, top 2 / worst corner / no total where true")
+
+
+# --------------------------------------------------- W8: coaching says only what the page shows
+def test_a_level_row_takes_no_phase_tail():
+    """A level row's sentence says its passes are level, under the 0.07 s step; on main the demo's C7
+    went on "— most of it on the apex" over thirds of 0.011 / 0.020 / 0.001 s, each under the step
+    the same sentence quotes. Every surface prints this one sentence (`page_text` feeds the report
+    and the debrief, `test_page_text_is_what_the_coaching_page_prints_on_the_demo` pins it to the
+    page's cells). A row with any other reason keeps its tail, here over a third at the step."""
+    demo = _level_sessions()["demo"].coaching_opportunities()
+    c7 = next(r for r in demo.rows if r.cid == 7)
+    assert c7.reason.kind == K.REASON_LEVEL and c7.phases.dominant == K.PHASE_APEX, c7
+    assert max(c7.phases.as_tuple()) < K.LEVEL_STEP_S, c7.phases
+    want = ("no one habit explains it: your passes here are level with each other "
+            "(middle half spans 0.05 s, under 0.07 s)")
+    assert K.reason_sentence(c7, reach=False) == want, K.reason_sentence(c7, reach=False)
+    for directions in (None, _level_sessions()["demo"].coaching_brake_direction()):
+        row = next(r for r in K.page_text(demo, directions).rows if r.cid == 7)
+        assert row.reason == want, row.reason
+    for name, s in _level_sessions().items():
+        for r in s.coaching_opportunities().rows:
+            if r.reason.kind == K.REASON_LEVEL:
+                assert K.dominant_phase_clause(r) == "", (name, r.cid, r.phases)
+    # Whatever the thirds, a level row names none of them.
+    big_apex = K.PhaseLoss(entry=0.01, apex=0.30, exit=0.01)
+    assert K.dominant_phase_clause(_opp_with(K.REASON_LEVEL, big_apex)) == ""
+    # Another reason over a dominant third at the step keeps its tail, as before.
+    at_step = K.PhaseLoss(entry=0.01, apex=K.LEVEL_STEP_S + 0.01, exit=0.01)
+    apex = _opp_with(K.REASON_APEX, at_step, apex_speed_deficit=3.0)
+    assert K.reason_sentence(apex).endswith("km/h) — most of it on the apex"), \
+        K.reason_sentence(apex)
+    spread = _opp_with(K.REASON_CONSISTENCY, at_step, sigma=0.2)
+    assert K.dominant_phase_clause(spread) == " — most of it on the apex"
+    print(f"ok level row: {want!r} with no phase tail; other reasons keep theirs")
+
+
+def test_the_how_to_find_it_tip_promises_only_what_the_cell_prints():
+    """The column hover still promised "the ESTIMATED brake-point line", retired from every row in L7
+    (coaching_panel._reason_cell): the cell's second line is the measured braking direction."""
+    tip = K.COLUMN_TIPS["How to find it"]
+    assert "ESTIMATED" not in tip and "brake-point" not in tip, tip
+    assert "MEASURED braking-direction line" in tip, tip
+    d = K.BrakeDirection(cid=1, n_laps=36, rho=-0.5, p=0.001, family=4, p_holm=0.004)
+    assert "went with quicker passes here" in K.brake_direction_line(d) and \
+        "went with quicker passes here" in tip, tip
+    print(f"ok tip: {tip!r}")
+
+
+def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
+    """The demo's page read "0.43 s across your top 3 corners" over "Apex speed is the common thread —
+    79% of that time is in C1": 79 % is C1's share of the 0.46 s all 4 RANKED corners lose (of the
+    headline's 0.43 s it would be 84 %). The number stays (re-basing is the owner's call, DECISIONS
+    §14); the sentence names its base whenever the ranked count is not the shortlist's length, in
+    every percentage form, and is byte-identical to before when the two are equal."""
+    demo = _level_sessions()["demo"].coaching_opportunities()
+    assert K.headline(demo).startswith("Whole session · 0.43 s across your top 3 corners"), \
+        K.headline(demo)
+    assert (demo.theme.n_ranked, len(K.shortlist(demo))) == (4, 3), demo.theme
+    assert K.theme_lines(demo)[1][0] == (
+        "Apex speed is the common thread — 79% of the time your 4 ranked corners lose is in C1.")
+    import dataclasses
+
+    def rows(reaches, kinds, losses=(0.5, 0.3, 0.2, 0.1)):
+        return [_ranked_row(i + 1, loss, 0.01, reach=reach, kind=kind, n_laps=40,
+                            reach_laps=12 if reach == K.REACH_REPEAT else 2)
+                for i, (reach, kind, loss) in enumerate(zip(reaches, kinds, losses, strict=False))]
+
+    R, P, B, A = K.REACH_REPEAT, K.REACH_RARE, K.REASON_BRAKING, K.REASON_APEX
+    cases = {   # name: (rows of 4 ranked, main's theme sentence, main's cause line)
+        "execution, two cause corners": (
+            rows([R, R, R, P], [A, A, B, B], (0.7, 0.1, 0.1, 0.1)),
+            "Most of the time on offer is execution, not pace — 90% of it is in corners you "
+            "have already driven at this pace.",
+            "Apex speed is the common thread — 80% of that time is in C1, C2."),
+        "pace, several cause corners": (
+            rows([P, P, P, R], [B, B, B, A]),
+            "Most of the time on offer is pace, not execution — 91% of it is in corners you have "
+            "rarely been quick through.",
+            "Braking is the common thread — 91% of that time is in C1, C2, C3."),
+        "split": (
+            rows([R, P, R, P], [B, B, B, B], (0.5, 0.4, 0.1, 0.3)),
+            "No single theme: 46% of the time on offer is in corners you have already driven at "
+            "this pace, 54% in corners you have rarely reached.",
+            "Braking is the common thread — 100% of that time is in C1, C2, C3, C4."),
+        "all of it, one cause corner": (
+            rows([R, R, R, R], [A, B, B, B], (0.8, 0.1, 0.05, 0.05)),
+            "All of the time on offer is in corners you have already driven at this pace: repeat "
+            "it, no new speed needed.",
+            "Apex speed is the common thread — 80% of that time is in C1."),
+    }
+    named = {
+        "execution, two cause corners": (
+            "Most of the time your 4 ranked corners lose is execution, not pace — 90% of it is in "
+            "corners you have already driven at this pace.",
+            "Apex speed is the common thread — 80% of the time your 4 ranked corners lose is in "
+            "C1, C2."),
+        "pace, several cause corners": (
+            "Most of the time your 4 ranked corners lose is pace, not execution — 91% of it is in "
+            "corners you have rarely been quick through.",
+            "Braking is the common thread — 91% of the time your 4 ranked corners lose is in "
+            "C1, C2, C3."),
+        "split": (
+            "No single theme: of the time your 4 ranked corners lose, 46% is in corners you have "
+            "already driven at this pace, 54% in corners you have rarely reached.",
+            "Braking is the common thread — 100% of the time your 4 ranked corners lose is in "
+            "C1, C2, C3, C4."),
+        "all of it, one cause corner": (
+            "All of the time on offer is in corners you have already driven at this pace: repeat "
+            "it, no new speed needed.",
+            "Apex speed is the common thread — 80% of the time your 4 ranked corners lose is in "
+            "C1."),
+    }
+    for name, (four, sentence, cause) in cases.items():
+        th = K.session_theme(four)
+        got = (K.theme_sentence(th, four), K.theme_actions(th, four)[0])
+        assert got == named[name], (name, got)
+        # Without the rows there is no shortlist to compare: main's words.
+        assert K.theme_sentence(th) == sentence, (name, K.theme_sentence(th))
+        # Three ranked: the shortlist IS the base, and every form is main's, byte for byte.
+        three = [r for r in four if r.cid != 4]
+        th3 = dataclasses.replace(th, n_ranked=3)
+        assert (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == (sentence, cause), \
+            name
+    # A ranked corner under the display resolution is in the base but not in the shortlist.
+    tiny = rows([R, R], [B, B], (0.5, 0.004))
+    th = K.session_theme(tiny)
+    assert K.theme_actions(th, tiny)[0] == (
+        "Braking is the common thread — 100% of the time your 2 ranked corners lose is in C1, C2.")
+    print("ok theme base: named when ranked != shortlist, main's words when equal")
 
 
 if __name__ == "__main__":
