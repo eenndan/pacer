@@ -152,7 +152,8 @@ _CSV = _CellFormat(_f3, _f3, _f3, _f3, "")
 #: three decimals (the app's Time column: two laps a thousandth apart must not read level); the
 #: distance is the Laps tab's whole metres; every speed the lap/corner tables' one decimal; a split
 #: or corner time PRINT_DECIMALS, the resolution the app's ★ and ▼ are decided at; a missing number
-#: is the app's dash, never a blank between numbers.
+#: is a dash, as the Stats page's SPLITS and CORNERS BY LAP grids print it (the Laps tab leaves a
+#: missing split's cell blank; a page has no empty-cell styling to tell that blank from a gap).
 _DISPLAY = _CellFormat(
     time=_f3,
     dist=lambda v: f"{float(v):.{DIST_DECIMALS}f}",
