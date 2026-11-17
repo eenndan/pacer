@@ -1410,9 +1410,12 @@ _REASON_PHASES = {
     REASON_COASTING: {PHASE_APEX, PHASE_EXIT},  # coasting → back-to-throttle is apex/exit
     REASON_LINE: {PHASE_APEX, PHASE_EXIT},  # the line trades apex speed for the exit
     REASON_CONSISTENCY: set(PHASES),        # phase-agnostic → any dominant third is fine
-    REASON_LEVEL: set(PHASES),
     REASON_NONE: set(PHASES),
 }
+# REASON_LEVEL takes no clause at all (`dominant_phase_clause`): its sentence says the passes are
+# level, under LEVEL_STEP_S, and a "most of it on the apex" after it located a loss smaller than the
+# step the same sentence had just called level — the demo's C7, thirds 0.011 / 0.020 / 0.001 s
+# under "(… under 0.07 s)".
 
 
 def dominant_phase_clause(opp: Opportunity) -> str:
@@ -1425,7 +1428,11 @@ def dominant_phase_clause(opp: Opportunity) -> str:
     M5: the clause is REASON-AWARE. When the dominant third matches the reason's natural lever phase
     (_REASON_PHASES) it reads as the fix location ("… — most of it on entry"). When it does NOT
     (e.g. a braking/entry fix but the exit third dominates) it reads as a CONSEQUENCE instead
-    ("… and it carries to exit"), so an entry lever is never phrased as an exit fix."""
+    ("… and it carries to exit"), so an entry lever is never phrased as an exit fix.
+
+    "" on a REASON_LEVEL row, whatever its thirds (the note under `_REASON_PHASES`)."""
+    if opp.reason.kind == REASON_LEVEL:
+        return ""
     ph = opp.phases
     total = ph.total
     if total <= 1e-6:
@@ -1576,20 +1583,44 @@ _CAUSE_WORD = {
 }
 
 
+# THE SHARES NAME THEIR BASE. Every percentage the theme prints is a share of ALL the ranked time
+# (`session_theme`), while the headline right above it sums only the shortlist (`shortlist`, at most
+# PANEL_TOP_N rows shown at 2 dp). On the demo the page read "0.43 s across your top 3 corners" over
+# "Apex speed is the common thread — 79% of that time is in C1": 79 % is C1's 0.36 s of the 0.46 s
+# its 4 ranked corners lose; of the headline's 0.43 s it would be 84 %. Which base the theme should
+# use is the owner's call and stays as it was; the words now say which one it is whenever the two
+# counts differ. When they are equal the base IS the shortlist and the sentence is unchanged.
+def _theme_base(theme: Theme, rows: list[Opportunity] | None) -> str:
+    """"the time your 4 ranked corners lose" when the theme's shares are over more (or other)
+    corners than the shortlist the headline sums, else "" (the shortlist is the base, or the rows
+    are not known and there is no headline to disagree with)."""
+    if not rows:
+        return ""
+    n_short = min(PANEL_TOP_N, sum(1 for r in rows
+                                   if r.evidence.ranked and r.time_lost >= DISPLAY_MIN_LOST_S))
+    n = theme.n_ranked
+    if n == n_short:
+        return ""
+    return f"the time your {plural(n, 'ranked corner')} {'loses' if n == 1 else 'lose'}"
+
+
 def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     """The session's ONE line — what the twelve findings add up to. "" when nothing is ranked.
 
-    Percentages are shares of the RANKED time on offer, which is the same total the panel's
-    headline sums, so the two numbers on the page are two readings of one quantity.
+    Percentages are shares of the RANKED time on offer: every ranked corner's, which is the
+    headline's total only when the headline's shortlist holds every ranked corner. When it does not,
+    the percentage forms name their base ("Most of the time your 4 ranked corners lose is …", the
+    block above `_theme_base`); without `rows` there is no shortlist to compare and nothing is named.
 
     With the session's `rows`, a side that one corner on the reach line decides is not stated as a
     side: the SPLIT form prints instead, both halves, and names that corner (`theme_tipping_row`).
     `theme` itself is unchanged — only the words hedge."""
     if theme.kind == THEME_NONE:
         return ""
+    base = _theme_base(theme, rows)
     tipping = theme_tipping_row(theme, rows) if rows else None
     if tipping is not None:
-        return _split_sentence(theme, tipping)
+        return _split_sentence(theme, tipping, base)
     # "the time on offer", not "your time": the shares are over the RANKED rows only, and on a
     # short session most of the measured loss can sit in abstained corners (0064's chapter 3 alone:
     # 0.121 s ranked against 0.444 s abstained). The same words the abstain sentence uses for the
@@ -1597,35 +1628,45 @@ def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     #
     # "ALL", NOT "MOST", AT 100 % (LOOK-9 / copy #2, QA 2026-09-26): "Most of the time on offer is
     # execution, not pace — 100% of it is …" contradicted itself in one sentence on MK_18_09.
+    #
+    # The "All of" forms print no share, and name no base: every ranked corner on one side puts
+    # every shortlisted one there too.
     whole = round(theme.share, 2) >= 1.0
+    most = f"Most of {base or 'the time on offer'}"
     if theme.kind == THEME_EXECUTION:
         if whole:
             return ("All of the time on offer is in corners you have already driven at this "
                     "pace: repeat it, no new speed needed.")
-        return (f"Most of the time on offer is execution, not pace — {theme.share:.0%} of it is "
+        return (f"{most} is execution, not pace — {theme.share:.0%} of it is "
                 "in corners you have already driven at this pace.")
     if theme.kind == THEME_PACE:
         if whole:
             return ("All of the time on offer is in corners you have rarely been quick through: "
                     "it needs new speed, not repetition.")
-        return (f"Most of the time on offer is pace, not execution — {theme.share:.0%} of it is "
+        return (f"{most} is pace, not execution — {theme.share:.0%} of it is "
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
     # when no side clears THEME_SHARE, and it is a real state: D24's 0060 chapter 2 landed here.
     # No lap set of the working set lands there — 0068 comes closest, at 78 % execution
     # (the THEME table above coaching.THEME_SHARE). Its kind stays execution, yet since COACHING-4
     # this is the form its page prints, naming C1, the corner on the reach line that decides it.
-    return _split_sentence(theme)
+    return _split_sentence(theme, None, base)
 
 
-def _split_sentence(theme: Theme, tipping: Opportunity | None = None) -> str:
+def _split_sentence(theme: Theme, tipping: Opportunity | None = None, base: str = "") -> str:
     """The SPLIT form — both halves of the ranked time — plus, when one corner on the reach line
     decides the side, that corner. The halves are the measured ones (`theme`'s own seconds), not the
-    tipped ones: the hedge is about which side, not about the numbers."""
+    tipped ones: the hedge is about which side, not about the numbers. `base` is `_theme_base`'s
+    phrase, leading the halves when it is not the headline's shortlist."""
     total = theme.execution_s + theme.pace_s
     exec_pct = theme.execution_s / total if total > 0 else 0.0
-    out = (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have already "
-           f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached")
+    if base:
+        out = (f"No single theme: of {base}, {exec_pct:.0%} is in corners you have already "
+               f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached")
+    else:
+        out = (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have "
+               f"already driven at this pace, {1 - exec_pct:.0%} in corners you have rarely "
+               "reached")
     if tipping is None:
         return out + "."
     corner_label = f"C{tipping.cid}"
@@ -1780,8 +1821,10 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     if theme.cause != REASON_NONE and theme.cause_cids:
         if not (theme.kind == THEME_PACE and theme.cause == REASON_CONSISTENCY):
             corners_txt = ", ".join(f"C{c}" for c in theme.cause_cids)
+            # The share's base, named when it is not the headline's shortlist (`_theme_base`).
+            of = _theme_base(theme, rows) or "that time"
             out.append(f"{_CAUSE_WORD[theme.cause]} is the common thread — "
-                       f"{theme.cause_share:.0%} of that time is in {corners_txt}.")
+                       f"{theme.cause_share:.0%} of {of} is in {corners_txt}.")
     else:
         out.append("No single cause dominates these corners — work them one at a time.")
     lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
@@ -2081,9 +2124,26 @@ COLUMN_TIPS = {
                   "the MEDIAN Δt over your clean laps matched on track there (seconds). Each third "
                   "is its own median, so the three need not add up to the row's Time lost, and "
                   "can differ from it in sign.",
+    # The cell's second line is `brake_direction_line` (the estimated "Brake ~N m later" line it
+    # replaced was retired in L7, coaching_panel._reason_cell); this said ESTIMATED until W8.
+    # `reason_text` adds it under a RANKED row only, and the debrief never shows it: see
+    # `column_tip`.
     "How to find it": "The dominant MEASURED reason this corner is losing time, with its numbers — "
-                      "plus the ESTIMATED brake-point line when one is available for the corner.",
+                      "plus, under a ranked row whose laps separate one, the MEASURED "
+                      "braking-direction line: which way braking went with quicker passes here, "
+                      "over how many laps.",
 }
+# The debrief's "How to find it": its rows carry the reason alone (no braking-direction line until
+# the debrief ends, coaching_panel.OpportunitiesPanel.set_debrief), so its hover promises none.
+REASON_TIP_DEBRIEF = "The dominant MEASURED reason this corner is losing time, with its numbers."
+
+
+def column_tip(label: str, *, debrief: bool = False) -> str:
+    """The hover of the column headed `label` ("" for none): `COLUMN_TIPS`, except the debrief's
+    "How to find it", whose cells never print the braking-direction line (`REASON_TIP_DEBRIEF`)."""
+    if debrief and label == "How to find it":
+        return REASON_TIP_DEBRIEF
+    return COLUMN_TIPS.get(label, "")
 
 
 def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:
