@@ -633,3 +633,73 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   the "best rolling" note, one lap in two colours, the speed-panel chip, the welcome page, the
   "most of it on the apex" tail, and the fifth corner's label under the Broadcast minimap's kart
   dot.
+
+## 15. Recorded at the 0.13.1 release, 2026-11-17
+
+- **v0.13.1 is a patch release**: 4 pull requests from #594 to #597, Waves 7 and 8 of the campaign
+  section 8 records, run after the owner said to continue past 0.13.0. Discovery round 4's verdict
+  was two truth fixes, then stop. The report's edge states (#594); Coaching says only what the page
+  shows (#595); the report's Laps table at the app's precision (#596); and `fmt_time` carrying the
+  minute (#597). No capability was added and nothing in the live app's look changed except the
+  words of two Coaching lines.
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **When nothing ranks, the lap card repeats Coaching's headline** (#594), word for word, where
+    it asked for "a few more clean laps"; that line is kept for too few clean laps, the one state it
+    is true of. On a synthetic session of 4 laps that lists five corners and ranks none, the card
+    and the report's COACHING section now say the same thing.
+  - **No 0.00 is printed as a measurement** (#594). The ideal-gap sentence ("Your ideal lap is
+    … under your best") is withheld whenever one lap won every segment, the gate the IDEAL LAP
+    group already reads, which a one-lap session always meets; Med loss under two counted passes is
+    a dash, and with every cell a dash the CORNERS note prints no sum.
+  - **The theme's share keeps its number and names its base** (#595): on the demo, "79% of the
+    time your 4 ranked corners lose is in" its first corner, under "0.43 s across your top 3
+    corners", where it read "79% of that time". When the ranked count equals the shortlist the sentence is unchanged. Re-basing the
+    share onto the shortlist (84 % on the demo) stays open.
+  - **A level row takes no phase tail** (#595): "no one habit explains it: your passes here are
+    level with each other (…, under 0.07 s)" no longer ends "— most of it on the apex" (the demo's
+    seventh corner: thirds of 0.011, 0.020 and 0.001 s). The "How to find it" hover names the
+    measured braking-direction line, not the estimated brake-point line retired earlier, and the
+    debrief, whose rows never carry that line, has a hover of its own.
+  - **The report's Laps cells print at the app's precision** (#596): whole metres, speeds to one
+    decimal in the reader's unit, splits and corner times to two, a missing number as a dash. The
+    lap time keeps three decimals, in seconds under the "Time (s)" header, so two laps a thousandth
+    apart never read level. `laps.csv` is byte-identical to 0.13.0's.
+  - **`fmt_time` carries only at the boundary** (#597): a time within half a millisecond under a
+    minute prints "1:00.000", not "0:60.000"; every other printed time is byte-identical.
+- **The media.** `debrief.png` was re-captured on the synthetic demo: its seventh corner's row lost
+  its tail and its theme line names its base, so its bytes changed. `accuracy.png` and
+  `moments.png` were re-captured in the same run and `lapstrip.png` in a run of its own, at a clean
+  commit, all three byte-identical to the files already committed. The waivers granted at 0.13.0
+  hold through 0.13.x (`tests/test_version.py` lapses a waiver at the next minor release), so none
+  was renewed. The export stills' reason stands: 0.13.1 changed one function the overlay's clock
+  calls, `fmt_time`, at the minute boundary only, and a painter-level render on the demo of 24
+  Classic configurations, 384 frames overlay-only and composited, from 0.13.0's `studio/` and from
+  0.13.1 is byte-identical.
+- **What could not run for it.** As at 0.13.0, one recording the real-footage checks take is on
+  this machine; the rest report Skipped by name. The manual half of the golden gate did not run;
+  the core is unchanged.
+- **Resolved from section 14**: the report's Laps table precision; the lap card's line beside
+  COACHING when nothing ranks; the one-lap report's "0.00 s under your best"; the map key's collapse
+  chevron in the report; the theme's base, partly (named, not re-based).
+- **Open for the owner** (new).
+  - The theme's share is computed from unrounded losses: the demo prints 79 %, while its printed
+    cells (0.36 of 0.46 s) give 78 %.
+  - A ranked corner whose loss is under the display floor would still be counted in "your N ranked
+    corners".
+  - A row that is not level can still say "most of it on …" over thirds that are all under 0.07 s.
+  - With sector lines, the report's Laps card scrolls sideways at 1100 px.
+  - `fmt_time` prints −30 s as "-1:30.000" (minus one minute, plus 30 s), a convention nothing
+    exercises: no caller passes a negative.
+  - One lap drawn in two colours in a race over a pick; a note when the best rolling lap is within
+    0.07 s of the best lap; the welcome screen.
+- **Open for the owner** (carried from section 14): a session reload stranding widgets; the
+  landing stills, and whether to add a report screenshot; the capture tool's `lapstrip.png` bytes
+  depending on what else the run captures; ranking corners that lose under 0.07 s at all; weighing
+  consistency on the middle half rather than σ; the apex and braking reasons have no noise floor;
+  the demo habit is ranked only on its own seed; Classic colours a Δ inside 0.07 s; the overlay's
+  ★/Δ under provisional timing; Broadcast as the default Style; Extras on in Classic; the ◆ glyph;
+  Follow's default; re-shooting the landing stills and a Broadcast still; the keys 1-5 right after
+  a load on a real display; pull request #582's commit list comment; the published real-footage
+  Coaching tables cannot be re-verified offline.
+- **The campaign ends with this release.** Discovery round 4 found no unfinished first impression
+  and no performance cliff, and asked for these truth fixes and then a stop.

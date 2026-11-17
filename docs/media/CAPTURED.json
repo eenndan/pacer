@@ -3,12 +3,12 @@
   "files": {
     "accuracy.png": {
       "captured": "2026-11-17",
-      "commit": "a76465b",
+      "commit": "614567a",
       "derived": null,
       "sha256": "5401cd4772397fb2bc6177d66a90729da19e7ce4d66d3d664e6499c2b9b0f1fe",
       "shot": "accuracy",
       "source": "numbers in code",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "waiver": null
     },
     "best-lap.jpg": {
@@ -52,12 +52,12 @@
     },
     "debrief.png": {
       "captured": "2026-11-17",
-      "commit": "a76465b",
+      "commit": "614567a",
       "derived": null,
-      "sha256": "970c350fc2b434841a3cac057c6b5b89765b3993a4c1d802bec280879b3579c1",
+      "sha256": "3950f9a8dadc14ba013b2f13a1321e75150b14254536686096516faa040ae8fb",
       "shot": "debrief",
       "source": "synthetic demo",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "waiver": null
     },
     "hero.png": {
@@ -88,12 +88,12 @@
     },
     "lapstrip.png": {
       "captured": "2026-11-17",
-      "commit": "a76465b",
+      "commit": "614567a",
       "derived": null,
       "sha256": "d77cc79e5f9b8ba64a058df4aea0da838adf4cb8598989fec91fe2a1b97961ca",
       "shot": "lapstrip",
       "source": "synthetic demo",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "waiver": null
     },
     "map.png": {
@@ -111,12 +111,12 @@
     },
     "moments.png": {
       "captured": "2026-11-17",
-      "commit": "a76465b",
+      "commit": "614567a",
       "derived": null,
       "sha256": "7cb8d74933b38e8587d83031eb7d6c70bd52742a62c5e1e55bce3800621030ca",
       "shot": "moments",
       "source": "synthetic demo",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "waiver": null
     },
     "og.png": {

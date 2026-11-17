@@ -6,6 +6,49 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-11-17
+
+A patch release: 4 pull requests from #594 to #597, Waves 7 and 8 of the campaign: every surface
+says only what its page shows, with no 0.00 printed as a measurement, no phase tail on a level
+corner, a share that names its base, and the report's Laps table at the app's precision.
+
+### Highlights
+
+- **The report's edge states say only what is measured.** When no corner ranks, the lap card
+  prints Coaching's headline, not "Drive a few more clean laps"; a one-lap report no longer says its
+  ideal lap is 0.00 s under the best, and its map key loses a caret a picture can't use (#594)
+- **Coaching says only what the page shows.** A corner whose passes are level no longer ends "—
+  most of it on the apex" (the demo's C7), and the "How to find it" hover no longer promises a
+  retired brake-point line; the debrief has its own (#595)
+- **The theme names its base.** Under "0.43 s across your top 3 corners" the demo now reads "79%
+  of the time your 4 ranked corners lose is in C1", not "79% of that time" (#595)
+- **The report's Laps table reads like the app.** Lap 2 on the demo: 960 m, 93.1 km/h, C1 3.41 s
+  at 47.2, as the Laps and Corners tabs print them, in km/h or mph; laps.csv is unchanged (#596)
+- **Lap times carry the minute.** A lap of 59.9996 s prints 1:00.000, not 0:60.000, in the Laps
+  table, the report, the lap card and the exported overlay's clock (#597)
+
+### Fixed
+
+- Times: a time just under a minute boundary carries the minute — 59.9996 s prints 1:00.000, not
+  0:60.000 — in the Laps table, report, share card, exported overlay clock and compare captions.
+  (#597)
+- Session report: the Laps table prints the app's precision — 960 m, 93.1 km/h, C1 3.41 s at 47.2 —
+  not laps.csv's 960.427 / 93.089 / 3.407 / 47.196; a missing number is a dash, as in Stats. (#596)
+- Coaching: a corner whose passes are level no longer ends "— most of it on the apex", a part
+  smaller than the 0.07 s step the same sentence calls level (debrief, page, report, lap card).
+  (#595)
+- Coaching: the "How to find it" hover names the measured braking-direction line under ranked rows,
+  not the retired estimated brake-point line; on the debrief, which has none, it names neither.
+  (#595)
+- Coaching: the theme's percentages name their base when it is not the headline's top corners: "79%
+  of the time your 4 ranked corners lose is in C1" under "0.43 s across your top 3 corners". (#595)
+- Lap card: with corners listed but none ranked it prints the Coaching headline, not "Drive a few
+  more clean laps"; that line is kept for too few clean laps, the one state it is true of. (#594)
+- CORNERS (Stats, report): no "ideal lap is 0.00 s under your best" when one lap won every segment
+  (always so with one lap); Med loss under two passes is a dash, not "+0.00" or a 0.00 s sum. (#594)
+- Report map: the map key keeps its title without the collapse caret, a control a picture can't use;
+  the live map's key is unchanged. (#594)
+
 ## [0.13.0] — 2026-11-17
 
 The report release: 4 pull requests from #589 to #592, Wave 6 of the campaign to make the app
@@ -2184,7 +2227,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/eenndan/pacer/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/eenndan/pacer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/eenndan/pacer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/eenndan/pacer/compare/v0.10.0...v0.11.0
