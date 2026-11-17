@@ -3328,6 +3328,16 @@ class Session:
 
         edges = [(place(f0), place(f1)) for f0, f1 in windows]
         extra = tuple(sorted({d for pair in edges for d in pair if d not in frame}))
+        # A window with ONE edge on a boundary and one off it needs both edges as knots, and
+        # neither warp above has them: `full` lacks the off-grid edge and `extra` the on-grid one,
+        # so on main every lap was skipped and the verdict said "0 clean laps through it today"
+        # (boundaries sit on a 0.75 m grid, so a stored edge lands on one of today's often: 16 of
+        # 112 windows over the demo and 8 synthetic sessions, both orders). Those windows get
+        # their own warp over `extra` plus their on-grid edges; the other two kinds keep theirs,
+        # so their numbers stay bit-identical. A per-boundary match does not depend on the other
+        # knots (`corners._spatial_matches`), so each edge lands where it lands in any warp.
+        mixed = tuple(sorted({*extra, *(d for d0, d1 in edges
+                                        if (d0 in frame) != (d1 in frame) for d in (d0, d1))}))
         times: list[list[float]] = [[] for _ in windows]
         n_of = [0] * len(windows)
         for lid in self.consistency_lap_ids():
@@ -3337,9 +3347,11 @@ class Session:
             total_lap = float(dist[-1])
             full = self.corners.lap_alignment(lid, total_lap)
             own = self.corners.lap_alignment(lid, total_lap, extra) if extra else None
+            one_on = own if mixed == extra else self.corners.lap_alignment(lid, total_lap, mixed)
             for k, (d0, d1) in enumerate(edges):
                 n_of[k] += 1
-                align = full if d0 in frame and d1 in frame else own
+                on_grid = (d0 in frame) + (d1 in frame)
+                align = full if on_grid == 2 else own if on_grid == 0 else one_on
                 if align is None or not bool(np.isin([d0, d1], align[0]).all()):
                     continue        # an edge interpolated, not matched: counted, never timed
                 m0, m1 = np.interp([d0, d1], align[0], align[1])
