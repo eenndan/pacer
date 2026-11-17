@@ -159,6 +159,13 @@ DASH = "—"
 #: this resolution, so the number the reader sees and the number the mark is decided on are one.
 PRINT_DECIMALS = 2
 
+#: The decimals the Laps tab prints a lap's DISTANCE to, in metres. Whole metres: the odometer
+#: reads short of the distance driven (`stats.ODOMETER_NOTE`), so a millimetre is a claim it cannot
+#: back. Named because the exported report's Laps table prints the same cell (export_data).
+DIST_DECIMALS = 0
+#: The decimals the lap and corner tables print a SPEED to (entry, apex, exit), in either unit.
+SPEED_DECIMALS = 1
+
 
 def is_best_at_print(value, best, decimals: int = PRINT_DECIMALS) -> bool:
     """Does `value` read as the session best — at the resolution it is PRINTED to?
