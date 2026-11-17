@@ -632,6 +632,7 @@ def _run_all():
     test_reach_cell_never_states_a_count_without_its_denominator()
     test_the_braking_line_row_holds_it_and_names_the_laps_it_counted()
     test_the_pages_jump_buttons_are_never_clipped()
+    test_compare_sits_under_jump_where_its_column_does_not_fit()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 
 
@@ -660,14 +661,62 @@ def test_the_pages_jump_buttons_are_never_clipped():
         seen += 1
         vp = t.viewport().width()
         for r in range(t.rowCount()):
-            btn = t.cellWidget(r, _PANEL_COL_GO)
+            holder = t.cellWidget(r, _PANEL_COL_GO)   # ActionCell: Jump, and a stacked Compare
             cell = t.visualRect(t.model().index(r, _PANEL_COL_GO))
-            over = (btn.geometry().right() + 1) - (cell.right() + 1)
-            assert over <= 0, f"width {w}: row {r}'s Jump overhangs its cell by {over} px"
-            assert btn.geometry().right() + 1 <= vp, (
-                f"width {w}: row {r}'s Jump runs past the {vp} px viewport into the gutter")
+            buttons = [("Jump", holder.jump)] + (
+                [("Compare", holder.compare)] if holder.is_stacked() else [])
+            for name, btn in buttons:
+                right = holder.geometry().x() + btn.geometry().right() + 1
+                over = right - (cell.right() + 1)
+                assert over <= 0, f"width {w}: row {r}'s {name} overhangs its cell by {over} px"
+                assert right <= vp, (
+                    f"width {w}: row {r}'s {name} runs past the {vp} px viewport into the gutter")
     assert seen, "no width showed the Jump column: this sweep proves nothing"
     print(f"ok jump-clip: no Jump button crosses its cell at {seen} widths from 1432 px down")
+
+
+def test_compare_sits_under_jump_where_its_column_does_not_fit():
+    """cool/compare-at-corner: a row's Compare is wherever its Jump is. Where every row is tall
+    enough (STACKED_ROW_PX: a reason wrapped to three lines) it is stacked under Jump in the Jump
+    cell (ActionCell) — each button at least STACKED_BUTTON_MIN_PX tall, Compare below Jump, Jump
+    first in the tab order, the row no taller than its reason makes it; where a row is shorter
+    (one-line rows, full-window) it has its own column, which leaves the reason REASON_MIN_PX —
+    never both. With no Jump (the default docked page), or rows too short to stack and no room for
+    the column, the row is as before: no Compare. A stand-in session offers no typical pass, so each Compare is
+    disabled and says why."""
+    from studio import coaching_panel as cp
+
+    p = _panel(_rows(9), (1432, 808))
+    t = p.table
+    stacked_seen = column_seen = 0
+    for w in range(1432, 480, -24):
+        p.resize(w, 808)
+        for _ in range(8):
+            _APP.processEvents()
+        go, col = (not t.isColumnHidden(cp._PANEL_COL_GO), not t.isColumnHidden(cp._PANEL_COL_CMP))
+        if col:
+            column_seen += 1
+            assert go and t.columnWidth(cp._PANEL_COL_REASON) >= cp.REASON_MIN_PX - 24, (
+                w, t.columnWidth(cp._PANEL_COL_REASON))
+        for r in range(t.rowCount()):
+            holder = t.cellWidget(r, cp._PANEL_COL_GO)
+            assert not (holder.is_stacked() and (col or not go)), (w, r, go, col)
+            if not holder.is_stacked():
+                continue
+            jump, cmp_ = holder.jump, holder.compare
+            assert cmp_.isVisibleTo(t) and cmp_.text() == "Compare", (w, r)
+            assert min(jump.height(), cmp_.height()) >= cp.STACKED_BUTTON_MIN_PX, (
+                w, r, jump.height(), cmp_.height())
+            assert jump.geometry().bottom() < cmp_.geometry().top(), (w, r)
+            assert holder.height() <= t.rowHeight(r), (w, r, holder.height(), t.rowHeight(r))
+            assert t.rowHeight(r) >= cp.STACKED_ROW_PX, (w, r, t.rowHeight(r))
+            assert jump.nextInFocusChain() is cmp_, (w, r)
+            assert cmp_.accessibleName() == f"Compare at C{r + 1}"
+            assert not cmp_.isEnabled() and "No typical pass to compare" in cmp_.toolTip()
+        stacked_seen += any(t.cellWidget(r, cp._PANEL_COL_GO).is_stacked()
+                            for r in range(t.rowCount()))
+    assert stacked_seen and column_seen, (stacked_seen, column_seen)
+    print(f"ok compare: own column at {column_seen} widths, under Jump at {stacked_seen}")
 
 
 if __name__ == "__main__":

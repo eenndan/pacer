@@ -1325,7 +1325,7 @@ def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
     assert not re.search(r"\blap \d", tip), f"the hover names a lap: {tip}"
     calls = []
     page.jump_requested.connect(lambda c, d: calls.append((c, d)))
-    go = t.cellWidget(0, _PANEL_COL_GO)
+    go = t.cellWidget(0, _PANEL_COL_GO).jump   # the cell is ActionCell: Jump (+ Compare)
     assert not go.autoDefault(), "B10: focused-default styling repainted the arrow amber-on-amber"
     go.click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
@@ -2739,7 +2739,7 @@ def _check_hero_landing(win):
     assert [c for c, _p in hero.target_points()] == cids, hero.target_points()
     # One primary Jump: the top row's.
     t = panel.table
-    variants = [t.cellWidget(r, _PANEL_COL_GO).property("variant") for r in range(t.rowCount())]
+    variants = [t.cellWidget(r, _PANEL_COL_GO).jump.property("variant") for r in range(t.rowCount())]
     assert variants[0] == "primary" and variants.count("primary") == 1, variants
     # Nothing below the fold, nothing shed: every shortlist row whole inside the table's viewport,
     # the hero inside the page, and the lead, the focus list and the theme each whole.
@@ -3534,6 +3534,8 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             # THE DEBRIEF HAS NO COMPARE: a hidden column, not a narrow one (Jump is on screen).
             assert page.is_debrief() and t.rowCount() >= 1
             assert t.isColumnHidden(cp._PANEL_COL_CMP) and not t.isColumnHidden(cp._PANEL_COL_GO)
+            assert not any(t.cellWidget(r, cp._PANEL_COL_GO).is_stacked()
+                           for r in range(t.rowCount())), "the debrief stacked a Compare"
             _open(win, path)
             win._escape_out()
             v, s = win.view, win.session                 # a load builds a new view
@@ -3580,31 +3582,62 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             assert S.fmt_pass_vs_typical(tp.typical_vs_best_s) == K.lost_text(rows[0]) == "+0.36 s"
             assert S.printed_gap_s(tp.pass_s, tp.best_pass_s) == 0.37
 
-            seeks, notices = [], []
-            real_seek = v.video.seek_pane
-            v.video.seek_pane = lambda side, sec: (seeks.append((side, sec)), real_seek(side, sec))
-            v.statusNotice.connect(notices.append)
-            t0 = time.perf_counter()
-            btn.click()
-            took_ms = 1000 * (time.perf_counter() - t0)
+            def activate_and_check(button) -> float:
+                """Click `button`; the compare it lands must be the one the row names."""
+                seeks, notices = [], []
+                real_seek = v.video.seek_pane
+                v.video.seek_pane = lambda side, sec: (seeks.append((side, sec)),
+                                                       real_seek(side, sec))
+                v.statusNotice.connect(notices.append)
+                try:
+                    t0 = time.perf_counter()
+                    button.click()
+                    took = 1000 * (time.perf_counter() - t0)
+                    _settle(0.2)
+                finally:
+                    v.video.seek_pane = real_seek
+                    v.statusNotice.disconnect(notices.append)
+                assert c.active and not c.cross and (c.lap_a, c.lap_b) == (3, best), (
+                    c.lap_a, c.lap_b)
+                assert getattr(v, "_maximized_panel", None) is None, "the grid is back"
+                entry = {side: s.corners.corner_entry_media_time(lap, 1)
+                         for side, lap in ((0, 3), (1, best))}
+                assert {side: sec for side, sec in seeks} == entry, (seeks, entry)
+                x0, x1 = s.corner_plot_window(1, v.plots.axis_mode())
+                lo, hi = v.plots.p_speed.getViewBox().viewRange()[0]
+                pad = x1 - x0
+                assert lo <= x0 and hi >= x1 and lo >= x0 - pad - 1e-6 and hi <= x1 + pad + 1e-6, (
+                    lo, hi, x0, x1)
+                assert v.map.pinned_corner() == "C1"
+                assert notices[-1] == (
+                    "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
+                    "here (median of 14: 3.38 s, +0.36 s on the best lap's)"), notices
+                assert "median lap" not in notices[-1]
+                return took
+
+            took_ms = activate_and_check(btn)
+            win.toggle_compare()
+            assert not c.active
+
+            # DOCKED: the default 1440x900 page (515 px) affords no Jump, so no Compare — as on
+            # main. Widened to a docked width that shows Jump (640 px of the 1440), the C1 row's
+            # Compare sits under its Jump, visible, enabled, after it in the tab order, and lands
+            # the same compare; the rows keep their height.
+            v.select_lap_tab(3)
             _settle(0.2)
-            assert c.active and not c.cross and (c.lap_a, c.lap_b) == (3, best), (c.lap_a, c.lap_b)
-            assert getattr(v, "_maximized_panel", None) is None, "the grid is back for the panes"
-            entry = {side: s.corners.corner_entry_media_time(lap, 1)
-                     for side, lap in ((0, 3), (1, best))}
-            last = {side: sec for side, sec in seeks}
-            assert last == entry, (seeks, entry)
-            x0, x1 = s.corner_plot_window(1, v.plots.axis_mode())
-            lo, hi = v.plots.p_speed.getViewBox().viewRange()[0]
-            pad = x1 - x0
-            assert lo <= x0 and hi >= x1 and lo >= x0 - pad - 1e-6 and hi <= x1 + pad + 1e-6, (
-                lo, hi, x0, x1)
-            assert v.map.pinned_corner() == "C1"
-            assert notices[-1] == (
-                "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
-                "here (median of 14: 3.38 s, +0.36 s on the best lap's)"), notices
-            assert "median lap" not in notices[-1]
-            v.video.seek_pane = real_seek
+            assert t.isColumnHidden(cp._PANEL_COL_GO) and t.isColumnHidden(cp._PANEL_COL_CMP)
+            v._main_splitter.setSizes([640, 800])
+            _settle(0.3)
+            assert not t.isColumnHidden(cp._PANEL_COL_GO) and t.isColumnHidden(cp._PANEL_COL_CMP)
+            cell = t.cellWidget(0, cp._PANEL_COL_GO)
+            under = cell.compare
+            assert cell.is_stacked() and under.isVisible() and under.isEnabled(), cell
+            assert under.accessibleName() == "Compare at C1" and "not your median lap" in (
+                under.toolTip())
+            assert cell.jump.nextInFocusChain() is under
+            assert cell.jump.geometry().bottom() < under.geometry().top()
+            assert min(t.rowHeight(r) for r in range(t.rowCount())) >= cp.STACKED_ROW_PX
+            activate_and_check(under)
 
             # A LAP PICK LEAVES IT, as it leaves any compare; the C key then makes today's pair.
             v.table.select([5])

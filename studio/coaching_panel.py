@@ -1476,13 +1476,62 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
 # could not show one whole row.
 REASON_MIN_PX = 180
 
-# The columns the page gives up as it narrows, first to last. The bars are a detail of the row (the
-# reason sentence already names the dominant phase; Compare SHOWS where in the corner the passes
-# part, so it outranks them), Compare and Jump actions a row click half-does (it rings the corner),
-# "Done it?" a count the sentence also states — see _apply_column_budget. The page's docked width
-# (515 px at the 1440x900 default) affords none of the three; full-window affords them all.
-_OPTIONAL_COLS = (_PANEL_COL_PHASES, _PANEL_COL_CMP, _PANEL_COL_GO, _PANEL_COL_REACH)
+# The columns the page gives up as it narrows, first to last. The Compare column goes first because
+# it never takes the action away: without it each row's Compare sits under its Jump (ActionCell).
+# The bars are a detail of the row (the reason sentence already names the dominant phase), Jump an
+# action a row click half-does (it rings the corner), "Done it?" a count the sentence also states —
+# see _apply_column_budget. The default docked page (515 px at 1440x900, 498 px at 1280x800)
+# affords none of the actions, as before; from ~540 px Jump and the stacked Compare show.
+_OPTIONAL_COLS = (_PANEL_COL_CMP, _PANEL_COL_PHASES, _PANEL_COL_GO, _PANEL_COL_REACH)
 JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's button padding
+
+
+# Each of the two stacked buttons' floor: a TABLE line and its padding. Stacked, they need a cell
+# 2 x 22 + the 2 px gap tall, and a cell is its row less the 4 px inset above and below and the 1 px
+# grid line (measured: a 48 px row holds a 39 px cell) — a row of 55 px, which a reason wrapped to
+# three lines has and a one-line full-window row (48 px) has not (`_stack_fits`).
+STACKED_BUTTON_MIN_PX = 22
+STACKED_ROW_PX = 2 * STACKED_BUTTON_MIN_PX + theme.SPACE_XXS + 2 * theme.SPACE_XS + 1
+
+
+class ActionCell(QWidget):
+    """A row's Jump cell: the Jump, and — while the page has no room for the Compare column — the
+    row's Compare stacked under it (cool/compare-at-corner). The Compare column costs 124 px, and a
+    docked page that affords Jump (104 px) but not both still shows the action in the same cell: a
+    row there wraps its reason to three lines or more, so the cell already has the height for two
+    buttons. Alone, the Jump fills the cell exactly as it did when it was the cell widget itself.
+    Tab order is the layout's: Jump, then Compare."""
+
+    def __init__(self, jump: QPushButton, compare: QPushButton):
+        super().__init__()
+        self.jump, self.compare = jump, compare
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(theme.SPACE_XXS)
+        for btn in (jump, compare):
+            btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+            lay.addWidget(btn)
+        compare.setVisible(False)
+
+    def set_stacked(self, on: bool) -> None:
+        """Show the stacked Compare (or hide it); the two share the cell's height."""
+        for btn in (self.jump, self.compare):
+            btn.setMinimumHeight(STACKED_BUTTON_MIN_PX if on else 0)
+        if self.compare.isHidden() == on:
+            self.compare.setVisible(on)
+        self.updateGeometry()
+
+    def is_stacked(self) -> bool:
+        return not self.compare.isHidden()
+
+    def sizeHint(self):
+        """The height the row must give the cell: Jump's own while alone (the hint the row
+        reserved when Jump was the cell widget), both floors while stacked — never the two
+        buttons' full 31 px hints, so stacking does not by itself make a row taller."""
+        hint = self.jump.sizeHint()
+        if self.is_stacked():
+            hint.setHeight(2 * STACKED_BUTTON_MIN_PX + theme.SPACE_XXS)
+        return hint
 
 
 def compare_status(tp: stats_service.TypicalPass) -> str:
@@ -1655,6 +1704,8 @@ class OpportunitiesPanel(QWidget):
                         _PANEL_COL_CMP: self._cmp_column_px()}
         # cid -> the corner's typical pass beside the best lap's (refresh), for the rows' Compare.
         self._typical: dict = {}
+        self._stacked = False   # each row's Compare sits under its Jump (`_sync_stacked`)
+        self._stack_ok = False  # ...which every shown row is tall enough for (the column budget)
         # The headline (e.g. "0.60 s across your top 3 corners") — the page's one-line framing.
         self._headline = ""
         # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
@@ -1956,7 +2007,7 @@ class OpportunitiesPanel(QWidget):
                 self.table.setItem(r, 3, self._reason_item(opp, directions))
                 self.table.setCellWidget(r, _PANEL_COL_PHASES,  # D2
                                          PhaseBar(opp.phases))
-                self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp, primary=r == 0))
+                self.table.setCellWidget(r, _PANEL_COL_GO, self._action_cell(opp, primary=r == 0))
                 self.table.setCellWidget(r, _PANEL_COL_CMP, self._cmp_button(opp))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
@@ -2024,18 +2075,30 @@ class OpportunitiesPanel(QWidget):
                     - t.columnWidth(_COL_CORNER) - t.columnWidth(_COL_LOST))
             shown = set()
             for col in reversed(_OPTIONAL_COLS):
-                if col == _PANEL_COL_CMP and self._debrief:
-                    continue        # never on the debrief (compare_requested), and costs nothing
+                if col == _PANEL_COL_CMP:
+                    continue        # decided last, below: every other column is decided as before
                 if room - self._col_px[col] < REASON_MIN_PX:
                     break           # strict priority: never a lesser column in a greater one's place
                 shown.add(col)
                 room -= self._col_px[col]
+            # The Compare column only where a row's Compare cannot sit under its Jump (ActionCell):
+            # where some row is too short for two buttons (one-line rows, full-window). Never on the
+            # debrief (compare_requested). Stacked, a docked page keeps main's row heights exactly;
+            # the column there took the demo's rows from 58 to 89 px at a 676 px page.
+            # Where neither fits (rows too short to stack, no room for the column) the row keeps
+            # its Jump alone, as on main: buttons squeezed under 22 px clip their descenders.
+            self._stack_ok = (_PANEL_COL_GO in shown and not self._debrief
+                              and self._stack_fits(room))
+            if (_PANEL_COL_GO in shown and not self._debrief and not self._stack_ok
+                    and room - self._col_px[_PANEL_COL_CMP] >= REASON_MIN_PX):
+                shown.add(_PANEL_COL_CMP)
             for col in _OPTIONAL_COLS:
                 if (col not in shown) != t.isColumnHidden(col):
                     t.setColumnHidden(col, col not in shown)
                     self._restretch.start(0)
                     if col == _PANEL_COL_REACH:     # the count moves into / out of the reason
                         self._refill_reasons()
+            self._sync_stacked()
             _elide_header(t, _PANEL_COL_REASON, self._COLUMNS[_PANEL_COL_REASON],
                           self._reason_chrome)
         finally:
@@ -2072,16 +2135,59 @@ class OpportunitiesPanel(QWidget):
                                 self.jump_requested.emit(c, d))
         return btn
 
+    def _action_cell(self, opp: coaching.Opportunity, primary: bool) -> ActionCell:
+        """One row's Jump cell: the Jump, with the row's Compare stacked under it for a page too
+        narrow for the Compare column (`_sync_stacked`)."""
+        cell = ActionCell(self._go_button(opp, primary=primary), self._cmp_button(opp, compact=True))
+        cell.set_stacked(self._stacked)
+        return cell
+
+    def _stack_fits(self, reason_px: int) -> bool:
+        """Would every shown row hold Jump and Compare stacked, with the reason `reason_px` wide?
+        Read off the reason's own wrapped height (the measure `_shortlist_px` uses), so the answer
+        is decided without the Compare column and cannot flip with it."""
+        t = self.table
+        avail, pad_v = _reason_text_box(t, _PANEL_COL_REASON, reason_px)
+        if avail <= 0:
+            return False
+        fm = t.fontMetrics()
+        for r in range(t.rowCount()):
+            item = t.item(r, _PANEL_COL_REASON)
+            text = item.text() if item is not None else ""
+            wrapped = fm.boundingRect(QRect(0, 0, avail, 0), Qt.TextWordWrap, text).height()
+            if wrapped + pad_v < STACKED_ROW_PX:
+                return False
+        return True
+
+    def _sync_stacked(self) -> None:
+        """Show each row's stacked Compare exactly while the Jump column is on screen, the Compare
+        column is not, and every row is tall enough for both (`_stack_fits`, decided by the column
+        budget) — never on the debrief (RUL-7)."""
+        t = self.table
+        stacked = (self._stack_ok and not self._debrief and not t.isColumnHidden(_PANEL_COL_GO)
+                   and t.isColumnHidden(_PANEL_COL_CMP))
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        for r in range(t.rowCount()):
+            cell = t.cellWidget(r, _PANEL_COL_GO)
+            if isinstance(cell, ActionCell):
+                cell.set_stacked(stacked)
+
     def _cmp_column_px(self) -> int:
         """The Compare column's width, priced as the Jump column's is (`_go_column_px`)."""
         return max(self._cmp_button(None).sizeHint().width(), JUMP_MIN_PX) + 2 * theme.SPACE_S
 
-    def _cmp_button(self, opp: coaching.Opportunity | None) -> QPushButton:
+    def _cmp_button(self, opp: coaching.Opportunity | None, compact: bool = False) -> QPushButton:
         """One row's Compare: emits ``compare_requested(TypicalPass)`` — the corner's typical pass
         against the best lap's, at the corner. Disabled, saying why, where the corner has no typical
         pass (`compare_tooltip`). The app's ordinary button, as every Jump but the first is: one
-        primary per page. With no row it is the template the column budget measures."""
-        btn = QPushButton(theme.icon("ph.columns", color=C.text), "Compare")
+        primary per page. With no row it is the template the column budget measures.
+
+        `compact` is the one stacked under Jump (`ActionCell`): no glyph, because "Compare" with its
+        glyph is 108 px and the Jump column 88 px inside its inset; without it, 83 px."""
+        btn = (QPushButton("Compare") if compact
+               else QPushButton(theme.icon("ph.columns", color=C.text), "Compare"))
         btn.setMinimumWidth(JUMP_MIN_PX)
         btn.setAutoDefault(False)
         btn.setDefault(False)
