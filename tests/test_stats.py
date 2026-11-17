@@ -3127,6 +3127,48 @@ def test_corners_note_names_both_baselines_and_reconciles_them():
     print("ok corners-note: both baselines named, three totals reconciled, hidden when empty")
 
 
+def test_one_lap_corners_prints_no_zero_gap_as_a_measurement():
+    """QA v0.13.0, a one-lap session: Stats ▸ CORNERS and the report's CORNERS note read "Your ideal
+    lap is 0.00 s under your best." and "Summed, that is 0.00 s." over seven "+0.00" Med loss
+    cells. Each is 0 by construction: ONE lap won every segment (`ideal_donor_lap_id`, the gate
+    the IDEAL LAP group and the card already read), and one pass is both a corner's Best and its
+    Median (σ's own two-pass floor). The page and the report now print the dash and leave both
+    sentences out; with more than one donor the ideal gap is still stated (the control)."""
+    _APP  # noqa: B018
+    from studio import coaching, export_data
+    from studio.stats import CornerReport
+    from studio.stats_panel import StatsView
+    from studio.widgets import DASH
+
+    def one_pass(cid):
+        return CornerReport(cid=cid, direction=1, n=1, n_laps=1, best_s=3.0 + cid,
+                            median_s=3.0 + cid, sigma_s=None, median_loss_s=0.0,
+                            apex_best_kmh=60.0, apex_median_kmh=60.0, grip_median=None, score=0.0)
+
+    report = [one_pass(1), one_pass(2), one_pass(3)]
+    sess = _fake_view_session(single_donor=True)
+    sess.corner_report = lambda: report
+    sess.phase_report = lambda: None
+    sess.coaching_opportunities = lambda: coaching.Opportunities(
+        enough=False, n_laps=1, median_lap_id=None, rows=[])
+    assert sess.ideal_donor_lap_id() is not None and coaching.ideal_gap_s(sess) is None
+    view = StatsView(sess)
+    note = view.corners.note.text()
+    t = view.corners.table
+    cells = [t.item(r, 4).text() for r in range(t.rowCount())]
+    assert cells == [DASH] * 3, cells
+    report_html = " ".join(export_data._corners_section(sess, "kmh"))
+    for where, text in (("Stats ▸ CORNERS", note), ("the report's CORNERS", report_html)):
+        assert "Your ideal lap is" not in text, (where, text)
+        assert "Summed, that is" not in text, (where, text)
+        assert "own Best above" in text, (where, "the baseline sentence itself stays")
+    assert "+0.00" not in report_html, report_html
+    # The control: more than one donor, so the ideal is not one lap, and the gap is stated.
+    multi = _fake_view_session()
+    assert multi.ideal_donor_lap_id() is None and coaching.ideal_gap_s(multi) is not None
+    print("ok one-lap corners: no 0.00 ideal gap, no 0.00 sum, Med loss dashed")
+
+
 def test_slowest_corner_is_the_typical_lap_not_one_lap_s_moment():
     """LOOK-12 (QA 2026-09-26). SPEED · G printed the session MINIMUM as "slowest point": 14.5 km/h
     on MK_18_09, lap 18's traffic moment, against a typical 30.1 km/h (the median of the per-lap

@@ -472,6 +472,56 @@ def test_the_report_map_drops_the_drag_instruction_and_the_keys_for_what_it_hide
           f"(live caption {_accent_px(live, box)} px of ink, report 0)")
 
 
+def test_the_report_map_key_keeps_its_title_and_loses_the_collapse_caret():
+    """QA v0.13.0: the report's map key read "⌄ Map key" — a disclosure caret, in a still picture
+    where a click opens nothing (and since #586 the plate is forced open, so it could only say
+    "collapse"). The report's grab paints the title without the caret, on the title's own column;
+    the live plate keeps its caret before and after. Checked on the key's own pixels: the caret
+    cell's text_dim ink, and the title column's. On main the report key carried the caret."""
+    from PySide6.QtCore import QRectF
+
+    from studio import app as app_mod
+    mv = _sized_map(_session())
+    key = mv._map_key
+    assert key._fits and not key.painted_collapsed(), "the plate must be open for this check"
+    row = (_mv._LEGEND_PAD, _mv._LEGEND_PAD + _mv._LEGEND_ROW_H)
+    caret_cell = QRectF(_mv._LEGEND_PAD, row[0], _mv._LEGEND_GLYPH_W, _mv._LEGEND_ROW_H)
+    tx = _mv._LEGEND_PAD + _mv._LEGEND_GLYPH_W + _mv._LEGEND_GAP
+    title_cell = QRectF(tx, row[0], 40, _mv._LEGEND_ROW_H)
+
+    def ink(img, rect):
+        """Pixels in `rect` (logical px) that differ from the plate under them (the cell's corner):
+        the caret's and the title's glyphs, whatever their antialiasing."""
+        dpr = img.devicePixelRatio()
+        x0, y0 = int(rect.x() * dpr), int(rect.y() * dpr)
+        x1, y1 = int(rect.right() * dpr), int(rect.bottom() * dpr)
+        plate = img.pixelColor(x0, y0)
+        n = 0
+        for y in range(y0, min(y1, img.height())):
+            for x in range(x0, min(x1, img.width())):
+                c = img.pixelColor(x, y)
+                n += (abs(c.red() - plate.red()) + abs(c.green() - plate.green())
+                      + abs(c.blue() - plate.blue()) + abs(c.alpha() - plate.alpha())) > 60
+        return n
+
+    live = key.grab().toImage()
+    assert ink(live, caret_cell) > 5, "the live plate's caret is not where the test looks"
+    seen = {}
+
+    def grab_png(widget):
+        img = key.grab().toImage()
+        seen["caret"], seen["title"] = ink(img, caret_cell), ink(img, title_cell)
+        return b"\x89PNG"
+    owner = SimpleNamespace(exports=SimpleNamespace(grab_png=grab_png))
+    app_mod.StudioWindow._grab_report_map_png(owner, mv)
+    assert seen["caret"] == 0, f"{seen['caret']} px of collapse caret in the report's map key"
+    assert seen["title"] > 5, "the report's map key lost its title"
+    assert key._document is False and ink(key.grab().toImage(), caret_cell) > 5, (
+        "the live map key lost its caret after the report grab")
+    print(f"test_the_report_map_key_keeps_its_title_and_loses_the_collapse_caret OK "
+          f"(live caret {ink(live, caret_cell)} px, report 0)")
+
+
 # --------------------------------------------------------------- MAP-11: even sectors
 def test_three_add_sector_clicks_divide_the_lap_evenly():
     """MAP-11. Appending one line at a time can only bisect what is LEFT, so three clicks gave

@@ -549,7 +549,14 @@ def fmt_pass_vs_typical(gap: float) -> str:
 def printed_med_loss(row) -> float | None:
     """A CORNERS row's Med loss as its cell prints it: the printed Median minus the printed Best,
     the two cells beside it (`printed_gap_s`). The demo's C4 printed +0.07 beside 3.08 and 3.02.
-    Only the printed figure: the ◆ ranks on the unrounded `score`, which this does not touch."""
+    Only the printed figure: the ◆ ranks on the unrounded `score`, which this does not touch.
+
+    None (the dash) under two counted passes, σ's own floor (`consistency.sigma`): one pass is both
+    the corner's Best and its Median, so its "+0.00" was a loss of 0 by construction — and a
+    one-lap session summed seven of them into "Summed, that is 0.00 s."."""
+    n = getattr(row, "n", None)
+    if n is not None and n < 2:
+        return None
     return printed_gap_s(getattr(row, "median_s", None), getattr(row, "best_s", None))
 
 
@@ -584,11 +591,12 @@ def corner_count_note(report, *, page: bool = True) -> list[str]:
     in its laps table's Interpolated column instead (export_data.REPORT_INTERPOLATED_HEAD)."""
     shown = ("shown muted lap by lap" if page
              else "named lap by lap in the laps table's Interpolated column")
-    # The sum of the Med loss cells AS PRINTED (`printed_med_loss`), so it adds up on the page.
-    total = sum(g for g in map(printed_med_loss, report) if g is not None)
+    # The sum of the Med loss cells AS PRINTED (`printed_med_loss`), so it adds up on the page —
+    # and no sum at all when every cell is a dash: a total of nothing is not "0.00 s".
+    printed = [g for g in map(printed_med_loss, report) if g is not None]
+    summed = f" Summed, that is {sum(printed):.2f} s." if printed else ""
     parts = [f"Med loss is measured against each corner's own Best above — the quickest "
-             f"anyone went through it, which is usually not your best lap's corner. "
-             f"Summed, that is {total:.2f} s."]
+             f"anyone went through it, which is usually not your best lap's corner.{summed}"]
     # C4: which cells this table counted, when that is not all of them — the one thing that
     # makes its numbers differ from a surface that counts every lap (corner_report).
     counted = [(r.n, r.n_laps) for r in report if getattr(r, "n_laps", None) is not None]

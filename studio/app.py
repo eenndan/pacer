@@ -3890,6 +3890,9 @@ class StudioWindow(QMainWindow):
             # The user's collapse choice, or _ABSENT for a legend that has no such concept (a
             # bare stand-in): restoring it must not INVENT the attribute on the way back.
             collapsed = getattr(key, "_collapsed", _ABSENT)
+            # ...and its still-picture flag, which drops the title's caret: the plate is forced
+            # open above, so the caret could only ever say "click to collapse", in an image.
+            document = getattr(key, "_document", _ABSENT)
             touched = False
             try:
                 if rows is not None:
@@ -3898,6 +3901,8 @@ class StudioWindow(QMainWindow):
                     key._ROWS = tuple(r for r in rows if r[0] not in _report_key_drops(key))
                     if collapsed is not _ABSENT:
                         key._collapsed = False  # the DOCUMENT's key, not the screen's preference
+                    if document is not _ABSENT:
+                        key._document = True
                     touched = True
                     key._relayout()
                     map_view._reposition_key()  # re-derives _fits from the real canvas height
@@ -3911,6 +3916,8 @@ class StudioWindow(QMainWindow):
                     del key._ROWS  # back to the class attribute
                     if collapsed is not _ABSENT:
                         key._collapsed = collapsed
+                    if document is not _ABSENT:
+                        key._document = document
                     key._relayout()
                     map_view._reposition_key()
 

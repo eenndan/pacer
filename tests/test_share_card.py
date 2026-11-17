@@ -205,6 +205,76 @@ def test_no_opportunity_when_every_ranked_loss_rounds_to_zero():
     print("test_no_opportunity_when_every_ranked_loss_rounds_to_zero OK")
 
 
+def _abstained_opps(n_laps=4):
+    """Corners listed, none ranked: every row failed the per-corner spread gate — the state
+    synthetic seed 3 with 4 laps is in (five corners listed, none ranked)."""
+    ev = coaching.Evidence(n_laps=n_laps, reach_laps=1, reach=coaching.REACH_RARE, iqr=0.20,
+                           abstain=coaching.ABSTAIN_SPREAD)
+    rows = [coaching.Opportunity(**{**_apex_opp(cid=c, time_lost=t).__dict__, "evidence": ev})
+            for c, t in ((3, 0.06), (6, 0.04))]
+    return coaching.Opportunities(enough=True, n_laps=n_laps, median_lap_id=2, rows=rows)
+
+
+def test_the_no_opportunity_line_says_what_the_coaching_page_says_for_its_state():
+    """QA v0.13.0: with corners listed and none ranked, the report's COACHING read "no corner
+    clears its own lap-to-lap spread (median of 4 clean laps)" beside a card asking the driver to
+    "Drive a few more clean laps for coaching tips." — true of one state only. The card now prints
+    the Coaching page's words for the state it is in: the headline when corners are listed and none
+    ranks, the page's empty-state title when nothing is losing time or the GPS took the laps, and
+    its own "drive a few more" line only for too few clean laps. Drawn whole, at the card's one
+    size, for the longest line (a three-digit lap count). On main `card_data` printed the one line
+    for every state (it had no `no_opp`)."""
+    import dataclasses
+
+    from PySide6.QtGui import QPainter
+
+    none_ranked = share_card.card_data(FakeSession(opps=_abstained_opps()), unit="kmh")
+    assert none_ranked.top_opp is None
+    assert none_ranked.no_opp == coaching.headline(_abstained_opps()), none_ranked.no_opp
+    assert none_ranked.no_opp == ("Whole session · no corner clears its own lap-to-lap spread "
+                                  "(median of 4 clean laps)"), none_ranked.no_opp
+    few = coaching.Opportunities(enough=False, n_laps=2, median_lap_id=None, rows=[])
+    assert share_card.card_data(FakeSession(opps=few)).no_opp == share_card.NO_OPP_FEW_LAPS
+    losing_none = coaching.Opportunities(enough=True, n_laps=6, median_lap_id=3, rows=[])
+    assert share_card.card_data(FakeSession(opps=losing_none)).no_opp == (
+        coaching.empty_state_copy(losing_none)[0]) == "No corner is losing time."
+
+    class _Dropouts(FakeSession):     # 5 valid laps, 3 of them dropouts: the GPS, not the driver
+        def valid_lap_ids(self):
+            return [1, 2, 3, 4, 5]
+
+        def dropout_lap_ids(self):
+            return {1, 2, 3}
+    gps = share_card.card_data(_Dropouts(opps=few))
+    assert gps.no_opp == "Not enough clean laps." and "drive" not in gps.no_opp.lower(), gps.no_opp
+    # A ranked lead prints its block, not a line; a coaching hiccup leaves the row empty.
+    assert share_card.card_data(FakeSession()).no_opp == ""
+
+    class _Boom(FakeSession):
+        def coaching_opportunities(self):
+            raise RuntimeError("coaching blew up")
+    assert share_card.card_data(_Boom()).no_opp == ""
+
+    # Fit: the longest line this row prints is drawn whole within the content box, never elided.
+    pad, right = 72, share_card.CARD_W - 72
+    longest = coaching.headline(_abstained_opps(n_laps=148))
+    probe = QImage(10, 10, QImage.Format_ARGB32)
+    p = QPainter(probe)
+    try:
+        txt, font = share_card._fit_line(p, longest, right - pad, share_card._NO_OPP_PX_STEPS)
+    finally:
+        p.end()
+    assert txt == longest, f"the headline was elided on the card: {txt!r}"
+    opp_top = 512 + share_card.MAP_PLATE_H_MAX + 56     # no map: the plate is at its max height
+    for data in (none_ranked, dataclasses.replace(none_ranked, no_opp=longest)):
+        img = share_card.render_card(data, None, palette=theme.PALETTE_STANDARD)
+        ink = _row_ink(img, opp_top - 26, opp_top + 8, theme.C.text_muted)
+        assert ink and min(ink) >= pad and max(ink) <= right, (min(ink, default=None),
+                                                               max(ink, default=None))
+    print(f"test_the_no_opportunity_line_says_what_the_coaching_page_says_for_its_state OK "
+          f"(longest line at {font.pixelSize()} px)")
+
+
 # ------------------------------------------ QA W1 REG-1: the card honours the page's tie rule
 # The working set's RANKED rows, biggest loss first — (cid, time lost s, IQR s, counted laps, laps at
 # the target, reach) — as the QA r4 ADVICE lane extracted them through the real (jailed) loader; the
@@ -417,7 +487,7 @@ def test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits():
     widest heading (a tie), in km/h and mph, plain and stamped "estimated timing". The card has ONE
     size (CARD_W × CARD_H, the exporter offers no other), so that size is every size. With no
     ranked corner there is no figure, so there is no baseline either: the row keeps its single
-    "Drive a few more clean laps" line, as before."""
+    "Drive a few more clean laps" line (too few laps; `no_opportunity_line` has the others)."""
     import dataclasses
 
     pad, right = 72, share_card.CARD_W - 72
@@ -453,7 +523,8 @@ def test_the_opportunity_baseline_is_drawn_over_its_figure_and_fits():
             p.end()
         assert txt == share_card.opp_baseline() and font.pixelSize() == 24, (txt, avail)
     # No ranked corner: no figure, no baseline — the one muted line, from `pad`, ends well left.
-    none = share_card.render_card(dataclasses.replace(lead, top_opp=None), None,
+    none = share_card.render_card(dataclasses.replace(lead, top_opp=None,
+                                                      no_opp=share_card.NO_OPP_FEW_LAPS), None,
                                   palette=theme.PALETTE_STANDARD)
     ink = _row_ink(none, *heading_band, theme.C.text_muted)
     assert ink and max(ink) < share_card.CARD_W // 2 + 200, max(ink)
@@ -1451,6 +1522,7 @@ if __name__ == "__main__":
     test_card_data_no_opportunity_when_too_few_laps()
     test_card_data_survives_coaching_error()
     test_no_opportunity_when_every_ranked_loss_rounds_to_zero()
+    test_the_no_opportunity_line_says_what_the_coaching_page_says_for_its_state()
     test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card()
     test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss()
     test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too()

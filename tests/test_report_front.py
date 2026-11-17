@@ -5,7 +5,7 @@ list".
 
 WHAT IS HELD, on real Sessions loaded from synthetic GoPro recordings (the shipped demo, and seed 7
 of the demo circuit: a three-way tie at the top, level rows and two not-ranked rows) plus a two-lap
-session for the empty state:
+session for the empty state and a one-lap one for the gaps that are 0 by construction:
 
   * the order — header, COACHING, then the Stats groups — and the hero card only when one is passed;
   * every Coaching string on the page is `coaching.page_text`'s, row by row, in its order — never a
@@ -42,7 +42,8 @@ _SESSIONS: dict = {}
 
 def _sessions() -> dict:
     """demo (verified, planted C1 habit), seed7 (verified, a tie), seed7prov (the same drive at an
-    unknown origin: PROVISIONAL), twolaps (under coaching.MIN_LAPS: the empty state). Generated once
+    unknown origin: PROVISIONAL), twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
+    3, one lap: the ideal is that lap, every corner one pass). Generated once
     per process; the TemporaryDirectory stays alive with them (sessions read their files lazily)."""
     if not _SESSIONS:
         from studio.dev import make_demo as md
@@ -55,7 +56,8 @@ def _sessions() -> dict:
         _SESSIONS["demo"] = Session.load([demo])
         for name, seed, laps, origin in (("seed7", 7, 12, md.DEMO_ORIGIN),
                                          ("seed7prov", 7, 12, sg.ORIGIN),
-                                         ("twolaps", md.DEMO_SEED, 2, md.DEMO_ORIGIN)):
+                                         ("twolaps", md.DEMO_SEED, 2, md.DEMO_ORIGIN),
+                                         ("onelap", 3, 1, md.DEMO_ORIGIN)):
             rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin)
             _SESSIONS[name] = Session.load(rec.paths)
     return _SESSIONS
@@ -258,6 +260,25 @@ def test_the_corners_note_reconciles_the_answers_in_the_reports_words():
     print("ok K6: CORNERS reconciles COACHING, the ideal and Med loss, in the report's words")
 
 
+def test_a_one_lap_report_states_no_zero_as_a_measurement():
+    """QA v0.13.0 (synthetic seed 3, one lap, through the real loader): the CORNERS note read
+    "Summed, that is 0.00 s. … Your ideal lap is 0.00 s under your best." over seven "+0.00" Med
+    loss cells, while the report's own IDEAL LAP section was hidden — the ideal is the one lap
+    (`ideal_donor_lap_id`), and one pass is a corner's Best and Median at once. Now: dashes, and
+    neither sentence."""
+    s = _sessions()["onelap"]
+    assert len(s.valid_lap_ids()) == 1 and s.ideal_donor_lap_id() is not None
+    text = _report(s)
+    sec = _section(ET.fromstring(text), "CORNERS")
+    body = _text(sec)
+    cells = [_text(tr.findall("td")[5]) for tr in sec.iter("tr") if tr.findall("td")]
+    assert cells and set(cells) == {"—"}, cells
+    for gone in ("Your ideal lap is", "Summed, that is", "+0.00"):
+        assert gone not in body, (gone, body)
+    assert "IDEAL LAP" not in text
+    print(f"ok one lap: {len(cells)} Med loss cells dashed, no 0.00 sum, no 0.00 ideal gap")
+
+
 def test_one_self_contained_page_with_every_string_escaped():
     """No script, no link, no http; every src a data: URI, the card's included. Every string the
     COACHING section interpolates is escaped: planted markup in `page_text` and in the empty state
@@ -403,6 +424,7 @@ if __name__ == "__main__":
     test_provisional_and_degraded_timing_stamp_the_coaching_rows()
     test_no_ranked_table_prints_the_pages_own_empty_state()
     test_the_corners_note_reconciles_the_answers_in_the_reports_words()
+    test_a_one_lap_report_states_no_zero_as_a_measurement()
     test_one_self_contained_page_with_every_string_escaped()
     test_print_draws_the_card_with_a_hairline_beside_coaching()
     test_mph_reaches_the_coaching_reasons()
