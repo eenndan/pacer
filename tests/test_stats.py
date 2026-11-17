@@ -6282,6 +6282,55 @@ def test_a_short_session_says_why_no_corner_is_marked():
     print("test_a_short_session_says_why_no_corner_is_marked OK")
 
 
+def test_the_typical_pass_is_one_laps_pass_nearest_the_median_at_print():
+    """cool/compare-at-corner: a Coaching row's Compare puts the corner's typical pass beside the
+    best lap's. WHICH lap is `stats.typical_pass_lap`: the counted pass nearest the median at print,
+    then raw-nearest, then the lowest lap, never the best lap; the CORNERS BY LAP column's typical,
+    so only its resolved cells and only where it has one (MATRIX_MIN_LAPS)."""
+    from studio import stats as S
+    pick = S.typical_pass_lap
+    # Odd count: the median IS a pass.
+    assert pick([0, 1, 2, 3, 4], [3.0, 3.2, 3.1, 3.5, 3.4], 3.2) == 1
+    # Even count: the median (3.38) is no lap's; the two middle passes (3.37, 3.39) are each one
+    # hundredth off at print, and the tie goes to the lower lap id whichever order they come in.
+    times = {6: 3.37, 3: 3.39, 9: 3.01, 2: 3.42}
+    assert pick(list(times), list(times.values()), 3.38) == 3
+    assert pick(list(times)[::-1], list(times.values())[::-1], 3.38) == 3
+    # Level AT PRINT, then raw: 3.3849 and 3.3751 both print the typical's 3.38, and lap 7 is
+    # raw-nearer to 3.3790, so it wins although lap 5 is the lower lap (PR #601 review, P3).
+    assert pick([7, 5], [3.3751, 3.3849], 3.3790) == 7
+    # ...which is what keeps an odd count on its median pass: lap 0's 3.198 prints the 3.20 of the
+    # median pass (lap 1), and on the old lap-id tie-break the lower lap took its place.
+    assert pick([0, 1, 2, 3, 4], [3.198, 3.2, 3.1, 3.5, 3.4], 3.2) == 1
+    # Nearer at print still beats nearer raw: against a typical of 3.3790 (3.38), lap 2's 3.3849
+    # prints 3.38 (0.00 off) and lap 1's 3.3740 prints 3.37 (0.01 off), though lap 1 is raw-nearer.
+    assert pick([1, 2], [3.3740, 3.3849], 3.3790) == 2
+    # Never the excluded (best) lap, even when it prints the typical itself.
+    assert pick([0, 1, 2], [3.00, 3.10, 3.30], 3.10, exclude=1) == 0
+    # No typical, or nothing left once the best lap is out → None.
+    assert pick([0, 1], [3.0, 3.1], None) is None
+    assert pick([4], [3.0], 3.0, exclude=4) is None
+
+    # Through the grid: only resolved cells count, and the best lap's pass rides along.
+    cm = S.corner_matrix
+    ids = list(range(6))
+    rows = [[3.0], [3.4], [3.2], [3.3], [3.1], [9.9]]
+    m = cm(ids, [1], rows, [[True]] * 5 + [[False]])       # lap 5's 9.9 is unresolved
+    tp = m.typical_pass(1, best_lap=0)
+    assert m.medians[0] == 3.2 and tp is not None
+    assert (tp.lap_id, tp.pass_s, tp.typical_s, tp.n, tp.best_lap_id, tp.best_pass_s) == (
+        2, 3.2, 3.2, 5, 0, 3.0), tp
+    # The best lap printing the typical: the next-nearest pass instead (3.3 and 3.1 tie: lap 3).
+    assert m.typical_pass(1, best_lap=2).lap_id == 3
+    # Too few passes: under MATRIX_MIN_LAPS resolved cells the column has no typical, so no pass.
+    few = cm(ids, [1], rows, [[True]] * (S.MATRIX_MIN_LAPS - 1) + [[False]] * 2)
+    assert few.medians[0] is None and few.typical_pass(1, best_lap=0) is None
+    # A best lap with no resolved cell here, an unknown corner, no best lap → None.
+    assert cm(ids, [1], rows, [[False]] + [[True]] * 5).typical_pass(1, best_lap=0) is None
+    assert m.typical_pass(7, best_lap=0) is None and m.typical_pass(1, best_lap=None) is None
+    print("test_the_typical_pass_is_one_laps_pass_nearest_the_median_at_print OK")
+
+
 def test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap():
     """W9: PACE printed a best rolling lap a few ms under the best lap with no note (the demo:
     0:44.945 beside 0:44.950, 0.006 s apart), as if it were a faster loop. Under the timing step
