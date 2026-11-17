@@ -1057,16 +1057,19 @@ def test_the_focus_prose_is_its_tables_arithmetic():
     then, now = _focus_pair()
     text = _flatten(_read(_FOCUS))
     margin = _constant(_COACHING, "SPREAD_MARGIN")
-    # The bar is the WIDER of the two spreads — read that off the code rather than assume it.
-    assert re.search(r"spread = max\(item\.iqr_s, now\.iqr\)\s+if abs\(delta\) < SPREAD_MARGIN \* spread:",
+    # The bar is the WIDER of the two spreads, and a change under the timing step is no change
+    # either (cool/focus-verdict-gates) — read both off the code rather than assume them.
+    assert re.search(r"spread = max\(item\.iqr_s, now\.iqr\)\s+if abs\(delta\) < SPREAD_MARGIN \* spread "
+                     r"or library\.within_timing_precision\(delta\):",
                      _read(_FOCUS)), "focus.verdict's spread test changed; update this check and the table"
+    step = _constant(_LIBRARY, "PB_PRECISION_S")
     words = {k: _constant(_FOCUS, k) for k in ("OUTCOME_UNCHANGED", "OUTCOME_IMPROVED", "OUTCOME_SLOWER")}
     for r in rows:
         assert abs(r.change - (r.now_med - r.then_med)) <= 0.001 + 1e-9, f"{r!r}: change is not now − then"
         assert abs(r.bar - margin * max(r.then_iqr, r.now_iqr)) <= 0.001 + 1e-9, (
             f"{r!r}: bar is not SPREAD_MARGIN ({margin}) × the wider IQR")
         if abs(abs(r.change) - r.bar) > 0.002:
-            want = (words["OUTCOME_UNCHANGED"] if abs(r.change) < r.bar else
+            want = (words["OUTCOME_UNCHANGED"] if abs(r.change) < max(r.bar, step) else
                     words["OUTCOME_IMPROVED"] if r.change < 0 else words["OUTCOME_SLOWER"])
             assert r.verdict == want, f"{r!r}: verdict.py's rule gives {want}"
     # "Promote <then>'s top three ranked corners": the evidence table's first three ranked rows.
