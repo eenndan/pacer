@@ -20,7 +20,11 @@ What is asserted here, on inputs whose answer is known by construction:
     support. This is PR #258's rule ("silent when either side has no record") said out loud;
   * the SPREAD test: a change smaller than half the wider of the two sessions' interquartile
     spreads is "no change you can act on", using coaching.SPREAD_MARGIN and coaching's own IQR
-    statistic rather than a second notion of significance;
+    statistic rather than a second notion of significance; and so is one under the timing step
+    (library.PB_PRECISION_S), whatever the spread, so a verdict reads the same in both directions;
+  * the LAYOUT: a stored corner whose window today lies on a corner turning the other way (the
+    demo's circuit driven as its mirror image) is not compared, and the headline says the layout
+    looks different; no same-layout session of the demo's circuit is refused that way;
   * the PANEL: the block is dormant until the app hands it a report, it names the corner its Add
     button would promote, the two gestures are signals (the window owns the store), and it yields
     its height to the ranked list exactly as the theme block does;
@@ -156,26 +160,28 @@ def test_records_that_disagree_refuse_the_verdict_and_name_the_difference():
 
 def test_a_change_inside_the_corners_own_spread_is_not_a_change():
     """The same actionability test the coaching gate applies within a session, on the same
-    statistic — a driver cannot aim at 0.06 s inside a band whose middle half is 0.13 s wide."""
+    statistic — a driver cannot aim at 0.09 s inside a band whose middle half is 0.20 s wide.
+    (0.09 s, not the 0.061 s this test used to take: that is under the timing step, which says
+    "no change" whatever the spread — `test_a_difference_under_the_timing_step_is_no_change…`.)"""
     alike = _records(("GX0060", _record()), ("GX0062", _record(air=19.0, track_t=26.0)))
-    inside = F.verdict([_item(median=4.537, iqr=0.129)], _now(),
-                       [_sample(4.598, iqr=0.134)], alike).outcomes[0]
+    inside = F.verdict([_item(median=4.537, iqr=0.19)], _now(),
+                       [_sample(4.627, iqr=0.20)], alike).outcomes[0]
     assert inside.kind == F.OUTCOME_UNCHANGED, inside
-    assert inside.delta is not None and abs(inside.delta - 0.061) < 1e-6
-    assert "no change you can act on" in F.outcome_sentence(inside)
-    # …and the same numbers with a spread half as wide DO clear the bar.
+    assert inside.delta is not None and abs(inside.delta - 0.090) < 1e-6
+    assert "inside the corner's own 0.20 s spread" in F.outcome_sentence(inside)
+    # …and the same numbers with a narrower spread DO clear the bar.
     outside = F.verdict([_item(median=4.537, iqr=0.05)], _now(),
-                        [_sample(4.598, iqr=0.05)], alike).outcomes[0]
+                        [_sample(4.627, iqr=0.05)], alike).outcomes[0]
     assert outside.kind == F.OUTCOME_SLOWER, outside
-    assert abs(outside.delta - 0.061) < 1e-6
+    assert abs(outside.delta - 0.090) < 1e-6
     # WHOSE spread: the WIDER of the two sessions', in either order — a change is only as aimable
     # as the noisier side. Both pairs above have near-equal spreads, so on their own they cannot
     # tell "wider" from "narrower": a verdict built on the tight side passed them unchanged.
     for then_iqr, now_iqr in ((0.05, 0.20), (0.20, 0.05)):
         lopsided = F.verdict([_item(median=4.537, iqr=then_iqr)], _now(),
-                             [_sample(4.598, iqr=now_iqr)], alike).outcomes[0]
+                             [_sample(4.627, iqr=now_iqr)], alike).outcomes[0]
         assert lopsided.kind == F.OUTCOME_UNCHANGED, (
-            f"0.061 s is inside half of the noisier session's 0.20 s spread, but with IQRs "
+            f"0.090 s is inside half of the noisier session's 0.20 s spread, but with IQRs "
             f"then={then_iqr} / now={now_iqr} it was graded {lopsided.kind!r}")
     # the bar itself is coaching's constant, not a second one invented here
     assert F.SPREAD_MARGIN is K.SPREAD_MARGIN
@@ -264,6 +270,118 @@ def test_the_headline_counts_the_refusals_rather_than_hiding_them():
     assert "no verdict yet" in F.report_headline(blocked), F.report_headline(blocked)
     assert F.report_headline(F.Report(track="x")) == ""
     print(f"ok headline: {head!r} / {F.report_headline(blocked)!r}")
+
+
+# ------------------------------------------------- the timing step and the layout (cool/focus-verdict-gates)
+def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
+    """A claim must beat the timing: under `library.PB_PRECISION_S` (0.07 s) two medians are level
+    by the app's one rule for two times, even where the corner's spread is tight enough that the
+    spread test alone would have called it. On main the demo against habit-free sessions of its
+    circuit said "0.05 s slower" at +0.0517 s and "0.02 s faster" at −0.0203 s. At the step and
+    over it the spread test decides, unchanged; on an estimated clock nothing gets that far."""
+    from studio import library
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    step = library.PB_PRECISION_S
+    tight = 0.02                      # a spread whose half (0.01 s) every gap below clears
+    for gap in (0.020, 0.0517, step - 1e-4):
+        for sign in (1, -1):
+            o = F.verdict([_item(median=4.0, iqr=tight)], _now(),
+                          [_sample(4.0 + sign * gap, iqr=tight)], alike).outcomes[0]
+            assert o.kind == F.OUTCOME_UNCHANGED, (gap, sign, o)
+            text = F.outcome_sentence(o)
+            assert text.startswith("C4 — no change you can act on: under 0.07 s apart, within "
+                                   "timing precision ("), text
+            assert "s faster" not in text and "s slower" not in text, text
+    # AT the step is not under it. Around 1.0 s both 1.0 ± 0.07 difference back to ≥ 0.07 in
+    # floating point (around 4.0 s one sign rounds to 0.06999…, which IS under it).
+    for gap in (step, step + 1e-3, 0.30):
+        for sign, kind in ((1, F.OUTCOME_SLOWER), (-1, F.OUTCOME_IMPROVED)):
+            o = F.verdict([_item(median=1.0, iqr=tight)], _now(),
+                          [_sample(1.0 + sign * gap, iqr=tight)], alike).outcomes[0]
+            assert abs(o.delta) >= step and o.kind == kind, (gap, sign, o)
+    # …and the boundary itself, exactly: a delta of PB_PRECISION_S to the last bit is a claim (a
+    # `<=` in the rule would call it level; 1.0 ± 0.07 differences back to 0.07000000000000006).
+    assert library.within_timing_precision(step) is False
+    exact = F.verdict([_item(median=0.0, iqr=tight)], _now(), [_sample(step, iqr=tight)],
+                      alike).outcomes[0]
+    assert exact.delta == step and exact.kind == F.OUTCOME_SLOWER, exact
+    # The step-only line prints its medians to the millisecond: at two decimals 2.8448 → 2.9097 s
+    # (0.0649 s apart) read "2.84 → 2.91 s", a 0.07 s difference beside "under 0.07 s apart".
+    near = F.verdict([_item(median=2.8448, iqr=tight)], _now(), [_sample(2.9097, iqr=tight)],
+                     alike).outcomes[0]
+    assert near.kind == F.OUTCOME_UNCHANGED, near
+    assert F.outcome_sentence(near) == ("C4 — no change you can act on: under 0.07 s apart, within "
+                                        "timing precision (2.845 → 2.910 s, 38 → 65 laps)."), \
+        F.outcome_sentence(near)
+    # Under the step AND inside the spread: the spread sentence, as before (its number is the why).
+    inside = F.verdict([_item(median=4.0, iqr=0.13)], _now(), [_sample(4.05, iqr=0.13)],
+                       alike).outcomes[0]
+    assert "inside the corner's own 0.13 s spread" in F.outcome_sentence(inside)
+    # Over the step but inside the spread: still the spread test's "no change", unchanged.
+    wide = F.verdict([_item(median=4.0, iqr=0.30)], _now(), [_sample(4.10, iqr=0.30)],
+                     alike).outcomes[0]
+    assert wide.kind == F.OUTCOME_UNCHANGED and "0.30 s spread" in F.outcome_sentence(wide)
+    # An estimated clock: refused before any step, under it, at it or over it — no number at all.
+    for gap in (step - 1e-4, step, 0.30):
+        o = F.verdict([_item(median=4.0, iqr=tight)], _now(degraded=True),
+                      [_sample(4.0 + gap, iqr=tight)], alike).outcomes[0]
+        assert o.blocker == F.BLOCK_DEGRADED and o.delta is None, (gap, o)
+    print(f"ok timing step: {text}")
+
+
+def _layout_item(cid, direction, enter, exit_) -> F.FocusItem:
+    return F.FocusItem(**{**vars(_item(cid=cid, enter=enter, exit_=exit_)), "direction": direction})
+
+
+def test_a_corner_that_turns_the_other_way_today_is_not_compared():
+    """Another layout of one circuit has its name and, driven the other way round, its lap length,
+    so neither the track test nor the lap-length allowance refuses it: the demo's list re-measured
+    on its mirrored twin said "C1 — 0.35 s faster" between a right-hander and a left-hander. The
+    stored window is read on today's corners; the one overlapping it most must turn the same way."""
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    # today's corners, as lap fractions: a right-hander at 0.15-0.20 and a left-hander at 0.40-0.46
+    today = [(0.14, 0.205, -1), (0.40, 0.46, 1)]
+    now = {**_now(), "corners": today}
+    same = F.verdict([_layout_item(4, -1, 0.15, 0.20)], now, [_sample(4.2)], alike).outcomes[0]
+    assert same.blocker == F.BLOCK_NONE and same.has_verdict, same
+    other = F.verdict([_layout_item(4, +1, 0.15, 0.20)], now, [_sample(4.2)], alike).outcomes[0]
+    assert other.blocker == F.BLOCK_LAYOUT and other.delta is None, other
+    assert F.outcome_sentence(other) == ("C4 — can't say: the corner there today turns the other "
+                                         "way — a different layout?"), F.outcome_sentence(other)
+    none = F.verdict([_layout_item(5, -1, 0.70, 0.75)], now, [_sample(4.2)], alike).outcomes[0]
+    assert none.blocker == F.BLOCK_LAYOUT and none.delta is None, none
+    assert F.outcome_sentence(none) == ("C5 — can't say: there's no corner there today — a "
+                                        "different layout?"), F.outcome_sentence(none)
+    # The corner overlapping MOST decides: a window straddling both reads the left-hander here.
+    straddle = F.verdict([_layout_item(6, +1, 0.19, 0.45)], now, [_sample(4.2)], alike).outcomes[0]
+    assert straddle.has_verdict, straddle
+    # An item that never stored a hand, or a caller with no corners, compares as it always did.
+    unknown = F.item_from_dict({k: v for k, v in F.item_to_dict(_layout_item(4, 1, 0.15, 0.20))
+                                .items() if k != "direction"})
+    assert unknown.direction == 0
+    assert F.verdict([unknown], now, [_sample(4.2)], alike).outcomes[0].has_verdict
+    assert F.verdict([_layout_item(4, +1, 0.15, 0.20)], _now(), [_sample(4.2)],
+                     alike).outcomes[0].has_verdict
+    # …nor does a session whose best lap has no detected corner at all: an EMPTY list says
+    # nothing about the hand of the corner under the window, so it is not "a different layout".
+    bare = F.verdict([_layout_item(4, +1, 0.15, 0.20)], {**_now(), "corners": []},
+                     [_sample(4.2)], alike)
+    assert bare.outcomes[0].has_verdict, bare.outcomes[0]
+    assert "layout" not in F.report_headline(bare), F.report_headline(bare)
+    # It is a structural test: it fires before the record gate, after the start-line one.
+    assert F.verdict([_layout_item(4, +1, 0.15, 0.20)], now, [_sample(4.2)],
+                     session_record.empty_store()).outcomes[0].blocker == F.BLOCK_LAYOUT
+    assert F.verdict([_layout_item(4, +1, 0.15, 0.20)], {**now, "verified": False},
+                     [_sample(4.2)], alike).outcomes[0].blocker == F.BLOCK_UNVERIFIED
+    # Every corner refused that way: one line, and the headline names the layout.
+    whole = F.verdict([_layout_item(4, +1, 0.15, 0.20), _layout_item(7, -1, 0.41, 0.45)], now,
+                      [_sample(4.2), _sample(3.0)], alike)
+    assert F.report_lines(whole) == ["C4 and C7 — can't say: the corners there today turn the "
+                                     "other way — a different layout of the track?"], \
+        F.report_lines(whole)
+    assert F.report_headline(whole) == ("Focus list · 2 corners · no verdict — the layout looks "
+                                        "different today"), F.report_headline(whole)
+    print(f"ok layout: {F.outcome_sentence(other)} / {F.report_headline(whole)}")
 
 
 # --------------------------------------------------------------------------------- persistence
@@ -380,8 +498,9 @@ _FOCUS_SESSIONS: dict = {}
 
 
 def _focus_session(name: str):
-    """The demo ("demo") or the habit-free demo-circuit recording DEMO_SEED + k ("s<k>"), generated
-    once per process (the TemporaryDirectory is kept alive with them: sessions read lazily)."""
+    """The demo ("demo") or the habit-free demo-circuit recording DEMO_SEED + k ("s<k>"), or that
+    recording driven on the circuit's mirror image, anticlockwise ("m<k>"), generated once per
+    process (the TemporaryDirectory is kept alive with them: sessions read lazily)."""
     if name not in _FOCUS_SESSIONS:
         from studio.dev import make_demo as md
         from studio.dev import synth_gopro as sg
@@ -393,7 +512,8 @@ def _focus_session(name: str):
             paths = [path]
         else:
             paths = sg.generate(os.path.join(tmp.name, name), md.DEMO_SEED + int(name[1:]),
-                                md.DEMO_LAPS, chapters=1, origin=md.DEMO_ORIGIN).paths
+                                md.DEMO_LAPS, chapters=1, origin=md.DEMO_ORIGIN,
+                                mirror=name.startswith("m")).paths
         _FOCUS_SESSIONS[name] = Session.load(paths)
     return _FOCUS_SESSIONS[name]
 
@@ -528,6 +648,69 @@ def test_no_stored_window_is_left_without_laps_where_the_corners_table_has_passe
                     f"{a} → {b}: window {w} timed on {sample} where CORNERS has {over} passes"
     assert mixed >= 10, f"the sweep holds only {mixed} one-edge windows; it has lost its teeth"
     print(f"ok sweep: {len(_SWEEP_SEEDS) * 2} pairs, {mixed} one-edge windows, all timed")
+
+
+def _every_corner_report(a: str, b: str) -> F.Report:
+    """Every corner of session `a` on the focus list (1 Jun), re-measured on `b` (8 Jun), both days
+    recorded dry: the path every surface reads (`Session.focus_report`)."""
+    then, now = _focus_session(a), _focus_session(b)
+    ea = {"fingerprint": f"FP_{a}", "track": "Demo", "date": "2026-06-01", "verified": True,
+          "degraded": False}
+    eb = {**ea, "fingerprint": f"FP_{b}", "date": "2026-06-08"}
+    items = [i for c in then.corners.corner_list() for i in then.focus_items([c.cid], ea)]
+    store = _records((ea["fingerprint"], _record()), (eb["fingerprint"], _record()))
+    return now.focus_report(items, eb, store, "Demo")
+
+
+def test_the_mirrored_circuit_is_another_layout_and_gets_no_verdict():
+    """The demo's corners on the same circuit driven as its mirror image (anticlockwise): same
+    track, same lap length, every corner turning the other way. On main all seven read a verdict,
+    "C1 — 0.35 s faster than 1 Jun" among them, comparing a right-hander with a left-hander."""
+    for a, b in (("demo", "m7"), ("m7", "demo")):
+        report = _every_corner_report(a, b)
+        assert report.outcomes and report.n_verdicts == 0, \
+            [F.outcome_sentence(o) for o in report.outcomes if o.has_verdict]
+        assert all(
+            o.blocker == F.BLOCK_LAYOUT and o.detail == F.LAYOUT_OTHER_WAY and o.delta is None
+            for o in report.outcomes), [(o.item.label, o.kind, o.blocker) for o in report.outcomes]
+        for o in report.outcomes:
+            assert F.outcome_sentence(o) == (f"{o.item.label} — can't say: the corner there today "
+                                             f"turns the other way — a different layout?")
+        n = len(report.outcomes)
+        assert F.report_headline(report) == (f"Focus list · {n} corners · no verdict — the layout "
+                                             f"looks different today"), F.report_headline(report)
+        assert len(F.report_lines(report)) == 1 and "a different layout" in F.report_lines(report)[0]
+    print(f"ok mirrored: {F.report_headline(report)} / {F.report_lines(report)[0]}")
+
+
+def test_same_layout_sessions_are_never_refused_and_claim_only_past_the_step():
+    """The demo against habit-free sessions of its own circuit, both orders: the layout test
+    refuses none of their corners; no "faster"/"slower" stands on a difference under the timing
+    step (on main, 0.020-0.052 s claims at s4, s6 and s7 among these); A → B "faster" exactly when
+    B → A "slower" (on main C5 read "0.05 s slower" demo → s6 and "no change" back); and the
+    demo's planted habit still reads as before on s7."""
+    from studio import library
+    flip = {F.OUTCOME_IMPROVED: F.OUTCOME_SLOWER, F.OUTCOME_SLOWER: F.OUTCOME_IMPROVED}
+    claims = 0
+    for k in _SWEEP_SEEDS:
+        there = _every_corner_report("demo", f"s{k}")
+        back = {o.item.cid: o for o in _every_corner_report(f"s{k}", "demo").outcomes}
+        for o in [*there.outcomes, *back.values()]:
+            assert o.has_verdict, (k, o.item.label, o.blocker, F.outcome_sentence(o))
+            if o.kind != F.OUTCOME_UNCHANGED:
+                claims += 1
+                assert abs(o.delta) >= library.PB_PRECISION_S, (k, F.outcome_sentence(o))
+        for o in there.outcomes:
+            r = back.get(o.item.cid)
+            if r is not None and (o.kind in flip or r.kind in flip):
+                assert r.kind == flip.get(o.kind), (k, F.outcome_sentence(o), F.outcome_sentence(r))
+        if k == 7:
+            assert F.outcome_sentence(there.outcomes[0]) == \
+                "C1 — 0.36 s faster than 1 Jun (3.38 → 3.02 s, 14 → 14 laps).", \
+                F.outcome_sentence(there.outcomes[0])
+    assert claims >= 6, f"only {claims} claims over the sweep; it has lost its teeth"
+    print(f"ok same layout: {len(_SWEEP_SEEDS) * 2} pairs, no refusal, {claims} claims all past "
+          f"the step and symmetric")
 
 
 # --------------------------------------------------------------------------------- the panel

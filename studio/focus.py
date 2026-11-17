@@ -155,6 +155,8 @@ BLOCK_UNVERIFIED = "unverified"    # a provisional start line on either side: th
                                    #   and so every fraction-mapped window, is arbitrary
 BLOCK_DEGRADED = "degraded"        # ESTIMATED absolute timing on either side — the clock itself
 BLOCK_GEOMETRY = "geometry"        # the two lap odometers disagree by more than MAX_LAP_TOTAL_DRIFT
+BLOCK_LAYOUT = "layout"            # today's corner over the stored window turns the other way, or
+                                   #   there is none: another layout of the circuit (`layout_check`)
 BLOCK_NO_RECORD = "no_record"      # one or both sessions have no session record (PR #258's rule)
 BLOCK_CONDITIONS = "conditions"    # the records exist and say the two days were NOT alike
 BLOCK_FEW_LAPS = "few_laps"        # too few clean laps through the window this time
@@ -223,7 +225,7 @@ class FocusItem:
     is measured against, and a list can honestly mix them."""
 
     cid: int                   # the corner id in the session it was promoted from (a LABEL)
-    direction: int             # +1 left / −1 right, for the UI glyph
+    direction: int             # +1 left / −1 right (0 = not stored): the layout check reads it
     enter_frac: float          # the window, as a fraction of the lap odometer — the IDENTITY
     exit_frac: float
     median_s: float            # baseline: median time through that window over the clean laps
@@ -272,7 +274,10 @@ def item_to_dict(item: FocusItem) -> dict:
 def item_from_dict(d: dict) -> FocusItem:
     """One validated stored item back into a ``FocusItem``."""
     return FocusItem(
-        cid=int(d["cid"]), direction=int(d.get("direction", 1)),
+        # Every item written since the store began carries its direction; one that does not says
+        # nothing about the corner's hand, so the layout check skips it (`layout_check`) rather
+        # than reading a guessed left into it.
+        cid=int(d["cid"]), direction=int(d.get("direction", 0)),
         enter_frac=float(d["enter_frac"]), exit_frac=float(d["exit_frac"]),
         median_s=float(d["median_s"]), iqr_s=float(d["iqr_s"]), n_laps=int(d["n_laps"]),
         time_lost=float(d.get("time_lost", 0.0)), reason=str(d.get("reason", "")),
@@ -633,14 +638,49 @@ def baseline_refusal(now_ctx: dict, items: list[FocusItem] | None = None) -> str
     return ""
 
 
+LAYOUT_OTHER_WAY = "other_way"     # BLOCK_LAYOUT's detail: today's corner there turns the other way
+LAYOUT_NO_CORNER = "no_corner"     # …or no corner of today's overlaps the stored window at all
+
+
+def layout_check(item: FocusItem, corners) -> str:
+    """"" when today's corner over `item`'s stored window turns the way the stored one did, else
+    LAYOUT_OTHER_WAY or LAYOUT_NO_CORNER (cool/focus-verdict-gates).
+
+    `corners`: today's (enter_frac, exit_frac, direction) per corner, on its own lap odometer; the
+    corner read is the one overlapping the window most. A circuit's other layout carries the same
+    track name and, driven the other way round, the same lap length to the metre, so neither the
+    track test nor MAX_LAP_TOTAL_DRIFT can tell it: the demo's corners re-measured on its mirrored
+    (anticlockwise) twin read "C1 — 0.35 s faster" between a right-hander and a left-hander; now
+    all 56 windows of the demo and four mirrored seeds, both orders, are refused. Over the demo and
+    16 habit-free sessions of its own layout, both orders, every one of the 224 stored windows
+    overlaps a corner of today's that turns its way: the check refuses none of them.
+
+    An item that stored no direction (0), a caller that passes no corners (None), or a session
+    whose best lap has no detected corner at all ([]) is not checked: the pair is compared as it
+    always was rather than refused on a guess — a session with no corners anywhere says nothing
+    about which way the one under the window turns."""
+    if not corners or not item.direction:
+        return ""
+    best, hand = 0.0, 0
+    for f0, f1, direction in corners:
+        overlap = min(float(f1), item.exit_frac) - max(float(f0), item.enter_frac)
+        if overlap > best:
+            best, hand = overlap, int(direction)
+    if not best:
+        return LAYOUT_NO_CORNER
+    return "" if hand == item.direction else LAYOUT_OTHER_WAY
+
+
 def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
              rec_now: dict | None) -> tuple[str, str]:
     """(BLOCK_*, detail) for one item against the current session, or (BLOCK_NONE, "").
 
     The tests run in a FIXED priority so the reported objection is deterministic and the most
     fundamental one wins: not the same track beats a session older than the baseline beats an
-    arbitrary odometer origin beats an estimated clock beats a mismatched lap length beats an
-    unknown-conditions pair beats a known-different one. The last two are PR #258's rule, said out loud instead of silently: an absent record is
+    arbitrary odometer origin beats an estimated clock beats a mismatched lap length beats another
+    layout beats an unknown-conditions pair beats a known-different one. The layout test reads the
+    stored window on today's odometer, so it needs both start lines trusted first. The last two are
+    PR #258's rule, said out loud instead of silently: an absent record is
     not evidence of like-for-like, and a driver told "+0.3 s, you improved" across a 12 °C swing has
     been told something the app cannot support."""
     if (now_ctx.get("track") or None) != (now_ctx.get("list_track") or None):
@@ -655,6 +695,9 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
     if then_total > 0 and now_total > 0:
         if abs(now_total / then_total - 1.0) > MAX_LAP_TOTAL_DRIFT:
             return BLOCK_GEOMETRY, f"{then_total:.0f} m vs {now_total:.0f} m"
+    layout = layout_check(item, now_ctx.get("corners"))
+    if layout:
+        return BLOCK_LAYOUT, layout
     # PR #258's like-for-like pair, in its own order: "nothing written down" first, because a
     # record that does not exist cannot also disagree.
     if session_record.is_empty(rec_then) or session_record.is_empty(rec_now):
@@ -717,8 +760,15 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # 1.2533 × IQR / 1.349 / √laps, over the six samples in the table at the top of this module)
         # and a significance test would pass almost anything: this asks whether a driver could aim
         # at the difference, not whether it is real.
+        # …AND IT MUST BEAT THE TIMING (cool/focus-verdict-gates): a difference under
+        # `library.PB_PRECISION_S` is level by the app's one rule for two times, whatever the
+        # spread. Over the demo against 16 habit-free sessions of its circuit, both orders, 28 of
+        # 224 verdicts said "faster"/"slower" on 0.020-0.052 s because those corners' spreads were
+        # tight, and four corners read "slower" one way and "no change" the other. An estimated
+        # clock never gets here (BLOCK_DEGRADED), so its wider tie (`lap_race.ESTIMATED_CLOCK_TIE_S`)
+        # has no case to apply to.
         spread = max(item.iqr_s, now.iqr)
-        if abs(delta) < SPREAD_MARGIN * spread:
+        if abs(delta) < SPREAD_MARGIN * spread or library.within_timing_precision(delta):
             kind = OUTCOME_UNCHANGED
         else:
             kind = OUTCOME_IMPROVED if delta < 0 else OUTCOME_SLOWER
@@ -759,10 +809,17 @@ _BLOCK_SENTENCE = {
     BLOCK_DEGRADED: "one of the two sessions has ESTIMATED timing, so the clock itself isn't "
                     "solid enough to difference",
     BLOCK_GEOMETRY: "the two laps measure different lengths",
+    BLOCK_LAYOUT: "the layout looks different today",
     BLOCK_NO_RECORD: "no session record for",
     BLOCK_CONDITIONS: "the two sessions weren't alike",
     BLOCK_FEW_LAPS: "too few clean laps through it today",
 }
+
+# BLOCK_LAYOUT's words, per corner and for a list refused as a whole (`report_lines`).
+_LAYOUT_WHY_ONE = {LAYOUT_OTHER_WAY: "the corner there today turns the other way",
+                   LAYOUT_NO_CORNER: "there's no corner there today"}
+_LAYOUT_WHY_ALL = {LAYOUT_OTHER_WAY: "the corners there today turn the other way",
+                   LAYOUT_NO_CORNER: "there are no corners there today"}
 
 
 def outcome_sentence(o: Outcome) -> str:
@@ -786,20 +843,33 @@ def outcome_sentence(o: Outcome) -> str:
             return f"{label} — can't say: {o.detail}."
         if o.blocker == BLOCK_FEW_LAPS:
             return f"{label} — can't say: {o.detail} through it today."
+        if o.blocker == BLOCK_LAYOUT:
+            return f"{label} — can't say: {_LAYOUT_WHY_ONE[o.detail]} — a different layout?"
         tail = f" ({o.detail})" if o.detail and o.blocker == BLOCK_GEOMETRY else ""
         return f"{label} — can't say: {_BLOCK_SENTENCE.get(o.blocker, 'not comparable')}{tail}."
     assert o.now is not None and o.delta is not None  # has_verdict implies both
+    spread = max(o.item.iqr_s, o.now.iqr)
+    # Level by the timing step alone (`verdict`): its line says so, and prints its two medians to
+    # the millisecond — at two decimals 2.8448 → 2.9097 s (0.0649 s apart) read "2.84 → 2.91 s", a
+    # 0.07 s difference beside "under 0.07 s apart".
+    step_only = o.kind == OUTCOME_UNCHANGED and abs(o.delta) >= SPREAD_MARGIN * spread
+    digits = 3 if step_only else 2
     # Both halves of the comparison, in the order they happened, with the sample each median came
     # from: a verdict that states only its difference cannot be checked by the person reading it.
-    body = (f"{o.item.median_s:.2f} → {o.now.median:.2f} s, "
+    body = (f"{o.item.median_s:.{digits}f} → {o.now.median:.{digits}f} s, "
             f"{o.item.n_laps} → {o.now.n_laps} laps")
     if o.karts:
         # Not silently like-for-like: the kart changed under the comparison, and the line says so
         # in the same then → now grammar as the two pairs before it (session_record.kart_pair).
         body += f", kart {o.karts[0]} → {o.karts[1]}"
+    if step_only:
+        # The FLOOR, never the gap, as the PB line words it (`library._precision_clause`): "0.07 s
+        # apart, inside 0.07 s" would print a 0.0699 s gap as the very size it is said to be under.
+        return (f"{label} — no change you can act on: under {library.PB_PRECISION_S:.2f} s apart, "
+                f"within timing precision ({body}).")
     if o.kind == OUTCOME_UNCHANGED:
         return (f"{label} — no change you can act on: {abs(o.delta):.2f} s apart, inside the "
-                f"corner's own {max(o.item.iqr_s, o.now.iqr):.2f} s spread ({body}).")
+                f"corner's own {spread:.2f} s spread ({body}).")
     word = "faster" if o.kind == OUTCOME_IMPROVED else "slower"
     return f"{label} — {abs(o.delta):.2f} s {word} than {when} ({body})."
 
@@ -865,6 +935,11 @@ def report_lines(report: Report) -> list[str]:
                     f"conditions alone. File ▸ Session record… writes one."]
         if first.blocker == BLOCK_CONDITIONS:
             return [f"{who} — can't say: {first.detail}."]
+        if first.blocker == BLOCK_LAYOUT:
+            details = {o.detail for o in outcomes}
+            why = (_LAYOUT_WHY_ALL[first.detail] if len(details) == 1 else
+                   "the corners there today turn the other way or aren't there")
+            return [f"{who} — can't say: {why} — a different layout of the track?"]
         return [f"{who} — can't say: "
                 f"{_BLOCK_SENTENCE.get(first.blocker, 'not comparable')}."]
     if len(outcomes) > 1 and kinds == {OUTCOME_SET_HERE}:
@@ -932,6 +1007,9 @@ def report_headline(report: Report) -> str:
     refused = sum(1 for o in report.outcomes if o.kind == OUTCOME_NO_VERDICT)
     if all(o.blocker == BLOCK_OLDER for o in report.outcomes):
         return f"Focus list · {n} {noun} · no verdict on an older session"   # never "yet"
+    if all(o.blocker == BLOCK_LAYOUT for o in report.outcomes):
+        # Nor "yet" here: no later look at this session will make its corners the list's.
+        return f"Focus list · {n} {noun} · no verdict — {_BLOCK_SENTENCE[BLOCK_LAYOUT]}"
     if verdicts == 0:
         return f"Focus list · {n} {noun} · no verdict yet — {_refusal_summary(report)}"
     tail = f", {refused} without enough evidence" if refused else ""
