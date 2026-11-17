@@ -6,6 +6,55 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-11-17
+
+A minor release: 5 pull requests from #599 to #603, Wave 9 of the campaign, after discovery round 5
+looked at race day and at a visitor's first minute: the focus list measures what it stored and
+claims only what it can, and a row's loss and the Lap race are each one click away.
+
+### Highlights
+
+- **The focus list measures what it stored.** A corner whose stored stretch ends on one of today's
+  corner boundaries read "can't say: 0 clean laps through it today"; at the demo's circuit C1 now
+  reads "0.36 s faster than 1 Jun (3.38 → 3.02 s, 14 → 14 laps)" (#599)
+- **Its verdict claims only what it can.** A layout that turns the other way is "can't say: … a
+  different layout?"; corners under 0.07 s apart are "no change you can act on: under 0.07 s
+  apart, within timing precision", their medians to the millisecond (#602)
+- **Compare shows a row's loss at the corner.** Each ranked Coaching row has a Compare: on the demo,
+  C1's typical pass (lap 4, 3.39 s) beside the best lap's (lap 13, 3.02 s), both videos at the
+  corner's entry, the charts framed on it, the status line carrying the row's +0.36 s (#601)
+- **A Lap race button you can see.** The map toolbar has one, the same command as View ▸ Lap
+  race and R: ticked while a race runs, greyed with its reason when one can't (#603)
+- **Three figures said at the timing step.** No "— most of it on …" tail on a third under 0.07 s;
+  the theme's share is its printed cells' ratio (the demo: 78 %, was 79 %); a best rolling lap
+  within 0.07 s of the best lap is "best rolling · level", in the app and the report (#600)
+
+### Added
+
+- Map: a "Lap race" button on the map toolbar, the same command as View ▸ Lap race and R: ticked
+  while a race runs, greyed with the menu's reason when it can't, set aside when the bar is narrow.
+  (#603)
+- Coaching: each ranked row has a Compare that puts the corner's typical pass beside your best
+  lap's, both videos at the corner's entry, the charts framed on it (C is unchanged). (#601)
+
+### Changed
+
+- Coaching: a row no longer ends "— most of it on the apex" when the third it names is under the
+  0.07 s timing step; at or over the step the tail is unchanged. (#600)
+- Coaching: the theme's percentages are the ratio of the printed cells (the demo: 78 %, from +0.36
+  of +0.46 s, where it read 79 %); which theme, cause and corners it names is unchanged. (#600)
+- Stats ▸ PACE: a best rolling lap within the timing step of the best lap is captioned "best rolling
+  · level", on the page and in the exported report; its hover says why. (#600)
+
+### Fixed
+
+- Focus list: a corner that turns the other way today (another layout of the track) is "can't say",
+  not a verdict between two different corners; the headline says the layout looks different. (#602)
+- Focus list: corners under 0.07 s apart are "no change you can act on … within timing precision",
+  never "0.03 s faster", so a verdict reads the same compared in either direction. (#602)
+- Focus list: a corner whose stored stretch ends on one of today's corner boundaries is re-measured
+  on every clean lap instead of "can't say: 0 clean laps through it today". (#599)
+
 ## [0.13.1] — 2026-11-17
 
 A patch release: 4 pull requests from #594 to #597, Waves 7 and 8 of the campaign: every surface
@@ -2227,7 +2276,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/eenndan/pacer/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/eenndan/pacer/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/eenndan/pacer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/eenndan/pacer/compare/v0.11.0...v0.12.0
