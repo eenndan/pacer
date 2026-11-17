@@ -43,7 +43,8 @@ _SESSIONS: dict = {}
 def _sessions() -> dict:
     """demo (verified, planted C1 habit), seed7 (verified, a tie), seed7prov (the same drive at an
     unknown origin: PROVISIONAL), twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
-    3, one lap: the ideal is that lap, every corner one pass). Generated once
+    3, one lap: the ideal is that lap, every corner one pass), onedonor (seed 29, two laps, one of
+    them won every segment). Generated once
     per process; the TemporaryDirectory stays alive with them (sessions read their files lazily)."""
     if not _SESSIONS:
         from studio.dev import make_demo as md
@@ -57,7 +58,8 @@ def _sessions() -> dict:
         for name, seed, laps, origin in (("seed7", 7, 12, md.DEMO_ORIGIN),
                                          ("seed7prov", 7, 12, sg.ORIGIN),
                                          ("twolaps", md.DEMO_SEED, 2, md.DEMO_ORIGIN),
-                                         ("onelap", 3, 1, md.DEMO_ORIGIN)):
+                                         ("onelap", 3, 1, md.DEMO_ORIGIN),
+                                         ("onedonor", 29, 2, md.DEMO_ORIGIN)):
             rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin)
             _SESSIONS[name] = Session.load(rec.paths)
     return _SESSIONS
@@ -276,7 +278,17 @@ def test_a_one_lap_report_states_no_zero_as_a_measurement():
     for gone in ("Your ideal lap is", "Summed, that is", "+0.00"):
         assert gone not in body, (gone, body)
     assert "IDEAL LAP" not in text
-    print(f"ok one lap: {len(cells)} Med loss cells dashed, no 0.00 sum, no 0.00 ideal gap")
+    # The rule is the donor gate, not the lap count: seed 29 drives TWO clean laps and one of them
+    # won every segment, so its ideal is that lap too — neither the report's CORNERS note nor the
+    # Stats page's (the same `ideal_gap_s`, through CornersSection._ideal_gap) states a 0.00 gap.
+    from studio.stats_corners import CornersSection
+    two = _sessions()["onedonor"]
+    assert len(two.valid_lap_ids()) == 2 and two.ideal_donor_lap_id() is not None
+    assert CornersSection._ideal_gap(two) is None
+    two_body = _text(_section(ET.fromstring(_report(two)), "CORNERS"))
+    assert "Your ideal lap is" not in two_body, two_body
+    print(f"ok one lap: {len(cells)} Med loss cells dashed, no 0.00 sum, no 0.00 ideal gap "
+          f"(and none on a two-lap, one-donor session)")
 
 
 def test_one_self_contained_page_with_every_string_escaped():
