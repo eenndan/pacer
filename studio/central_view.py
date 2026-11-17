@@ -1782,7 +1782,7 @@ class CentralView(QWidget):
         if cid is not None:
             self._pin_owned_ring(cid)
 
-    def compare_at_corner(self, tp) -> bool:
+    def compare_at_corner(self, tp, lost: str) -> bool:
         """A Coaching row's Compare: SEE the loss the row names. Compare `tp.lap_id` (the lap whose
         pass at corner `tp.cid` is the typical one, pane A) against the best lap (pane B), both
         panes at their own entry to the corner (Jump's seek target), the charts framed on the
@@ -1814,7 +1814,7 @@ class CentralView(QWidget):
         if window is not None:
             self.plots.frame_span(*window)
         self._ring_corner(cid)
-        self.statusNotice.emit(compare_status(tp))
+        self.statusNotice.emit(compare_status(tp, lost))
         return True
 
     # ------------------------------------------------------------- the hovered corner

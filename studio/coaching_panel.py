@@ -1534,10 +1534,14 @@ class ActionCell(QWidget):
         return hint
 
 
-def compare_status(tp: stats_service.TypicalPass) -> str:
-    """What the window says when a row's Compare lands: the two passes, the corner's typical and
-    its gap to the best lap's, every figure as printed (`MATRIX_DECIMALS`), so the gap is the
-    subtraction of the two figures beside it — and the row's Time lost (`TypicalPass`).
+def compare_status(tp: stats_service.TypicalPass, lost: str) -> str:
+    """What the window says when a row's Compare lands: the two passes on screen, the corner's
+    typical, and `lost` — the ROW'S OWN Time lost string (`coaching.lost_text`), passed through,
+    never recomputed. It is the typical loss THROUGH THIS CORNER, which is not the subtraction of
+    the two passes printed beside it (lap 4's pass is one of the passes the median sits between;
+    the printed typical less the printed best is a different rounding, and differed from the row
+    by 0.01 s on 29 of 88 ranked rows of synthetic seeds 1-8). Named as through the corner because
+    the hero above the charts shows the lap's Δ since the start line at the same moment.
 
     HONEST ABOUT WHICH LAP. Pane A's lap is the one whose pass at THIS corner is the typical one
     (`stats.typical_pass_lap`), not the session's median lap, and the typical itself is printed:
@@ -1546,8 +1550,7 @@ def compare_status(tp: stats_service.TypicalPass) -> str:
     d = stats_service.MATRIX_DECIMALS
     return (f"C{tp.cid} · lap {a} {tp.pass_s:.{d}f} s vs lap {b} {tp.best_pass_s:.{d}f} s "
             f"(best lap) — lap {a}'s is your {stats_service.TYPICAL_PASS} here (median of {tp.n}: "
-            f"{tp.typical_s:.{d}f} s, "
-            f"{stats_service.fmt_pass_vs_typical(tp.typical_vs_best_s)} on the best lap's)")
+            f"{tp.typical_s:.{d}f} s); typical loss through C{tp.cid}: {lost}")
 
 
 def compare_tooltip(cid: int, tp: stats_service.TypicalPass | None) -> str:
@@ -1673,7 +1676,7 @@ class OpportunitiesPanel(QWidget):
     # A row's Compare: the corner's typical pass against the best lap's (a stats.TypicalPass), at
     # the corner — CentralView.compare_at_corner. Never on the debrief (RUL-7: no lap-first
     # buttons there), where the column stays hidden.
-    compare_requested = Signal(object)
+    compare_requested = Signal(object, str)   # (TypicalPass, the row's Time lost as printed)
 
     _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", PHASE_HEADER, "", ""]
 
@@ -2179,10 +2182,11 @@ class OpportunitiesPanel(QWidget):
         return max(self._cmp_button(None).sizeHint().width(), JUMP_MIN_PX) + 2 * theme.SPACE_S
 
     def _cmp_button(self, opp: coaching.Opportunity | None, compact: bool = False) -> QPushButton:
-        """One row's Compare: emits ``compare_requested(TypicalPass)`` — the corner's typical pass
-        against the best lap's, at the corner. Disabled, saying why, where the corner has no typical
-        pass (`compare_tooltip`). The app's ordinary button, as every Jump but the first is: one
-        primary per page. With no row it is the template the column budget measures.
+        """One row's Compare: emits ``compare_requested(TypicalPass, lost)`` — the corner's typical
+        pass against the best lap's, at the corner, with the row's own Time lost string. Disabled,
+        saying why, where the corner has no typical pass (`compare_tooltip`). The app's ordinary
+        button, as every Jump but the first is: one primary per page. With no row it is the
+        template the column budget measures.
 
         `compact` is the one stacked under Jump (`ActionCell`): no glyph, because "Compare" with its
         glyph is 108 px and the Jump column 88 px inside its inset; without it, 83 px."""
@@ -2200,7 +2204,9 @@ class OpportunitiesPanel(QWidget):
                            "the row says why.")
             btn.setEnabled(tp is not None)
             if tp is not None:
-                btn.clicked.connect(lambda _checked=False, t=tp: self.compare_requested.emit(t))
+                lost = coaching.lost_text(opp)     # the row's own Time lost, as its cell prints it
+                btn.clicked.connect(lambda _checked=False, t=tp, x=lost:
+                                    self.compare_requested.emit(t, x))
         return btn
 
     def _tune_rows(self):

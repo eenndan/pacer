@@ -543,26 +543,36 @@ def pass_vs_typical_s(val: float | None, typical: float | None) -> float | None:
 def typical_pass_lap(lap_ids, times, typical: float | None, exclude: int | None = None
                      ) -> int | None:
     """WHICH LAP'S PASS IS THE TYPICAL ONE: the counted pass whose PRINTED time is nearest the
-    printed typical (`pass_vs_typical_s`), ties to the lowest lap id, never `exclude` (the best
-    lap, which a typical-vs-best compare cannot put on both sides). None with no typical or no
-    other pass. `lap_ids` and `times` are parallel and already the counted cells.
+    printed typical (`pass_vs_typical_s`); among passes level at print, the one raw-nearest the
+    typical; then the lowest lap id. Never `exclude` (the best lap, which a typical-vs-best compare
+    cannot put on both sides). None with no typical or no other pass. `lap_ids` and `times` are
+    parallel and already the counted cells.
 
     NEAREST, NOT EQUAL. A median over an even count is the mean of its two middle passes and no
     lap need print it: the demo's C1 is 14 passes whose middle two print 3.37 and 3.39 around a
-    typical of 3.38. The two middle passes are then both one hundredth off, and the tie goes to
-    the lower lap. With an odd count, or wherever a pass prints the typical, this is that pass."""
+    typical of 3.38, equally far from it raw too, so the tie goes to the lower lap. With an odd
+    count the median IS a pass, and the raw distance (0 for it) is what keeps a lower-numbered lap
+    printing the same hundredth from taking its place: the PR #601 review found that on 20 of 43
+    odd-count rows of synthetic seeds 1-8. The raw distance is compared to 1e-9 s, so the two
+    middle passes of an even count tie exactly rather than by a last-bit float difference."""
     if typical is None:
         return None
-    pairs = [(abs(pass_vs_typical_s(float(t), typical)), int(i))
+    pairs = [(abs(pass_vs_typical_s(float(t), typical)), round(abs(float(t) - typical), 9),
+              int(i))
              for i, t in zip(lap_ids, times, strict=True)
              if int(i) != exclude and t is not None and np.isfinite(t)]
-    return min(pairs)[1] if pairs else None
+    return min(pairs)[2] if pairs else None
 
 
 @dataclass(frozen=True)
 class TypicalPass:
     """One corner's typical pass beside the best lap's, for a compare at that corner
-    (`CornerMatrix.typical_pass`). Times in seconds, raw; print them with `MATRIX_DECIMALS`."""
+    (`CornerMatrix.typical_pass`). Times in seconds, raw; print them with `MATRIX_DECIMALS`.
+
+    It carries no loss figure on purpose. The Coaching row's Time lost is the median of each pass
+    less the best lap's, rounded once (`coaching.lost_text`); the printed typical less the printed
+    best pass disagreed with it by 0.01 s on 29 of 88 ranked rows of synthetic seeds 1-8 (PR #601
+    review), so a surface beside the row prints the row's own figure."""
 
     cid: int
     lap_id: int          # the lap whose pass is the typical one (`typical_pass_lap`)
@@ -572,11 +582,6 @@ class TypicalPass:
     best_lap_id: int
     best_pass_s: float   # the best lap's time through the same corner
 
-    @property
-    def typical_vs_best_s(self) -> float:
-        """The typical pass against the best lap's AS PRINTED (`printed_gap_s`): what a reader
-        gets by subtracting the two figures a surface prints, and the Coaching row's Time lost."""
-        return printed_gap_s(self.typical_s, self.best_pass_s)
 
 
 def fmt_pass_vs_typical(gap: float) -> str:

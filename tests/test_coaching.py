@@ -3503,6 +3503,59 @@ def _widget_count() -> int:
     return len(QApplication.allWidgets())
 
 
+_SWEEP_SESSIONS: dict = {}
+
+
+def _sweep_sessions() -> dict:
+    """Synthetic recordings of the demo circuit, 8 seeds x 2 lap counts, generated once per process
+    (their TemporaryDirectory kept alive with them: sessions read their files lazily)."""
+    if not _SWEEP_SESSIONS:
+        import tempfile
+
+        from studio.dev import synth_gopro as sg
+        from studio.session import Session
+        tmp = tempfile.TemporaryDirectory(prefix="coach_sweep_")
+        _SWEEP_SESSIONS["_tmp"] = tmp
+        for seed in range(1, 9):
+            for laps in (6, 10):
+                rec = sg.generate(os.path.join(tmp.name, f"s{seed}_l{laps}"), seed, laps,
+                                  chapters=1)
+                _SWEEP_SESSIONS[f"seed {seed}, {laps} laps"] = Session.load(rec.paths)
+    return {k: v for k, v in _SWEEP_SESSIONS.items() if not k.startswith("_")}
+
+
+def test_a_rows_compare_says_the_rows_own_time_lost():
+    """PR #601 review (P1): the status a row's Compare posts named "+0.04 s" beside a row that
+    reads "+0.03 s" — round(median) − round(best) where the row prints the median of (t − best)
+    rounded once — on 29 of 88 ranked rows of synthetic seeds 1-8. The status now carries the
+    row's OWN printed figure, as the loss through the corner. Swept over every enabled Compare the
+    page builds, through the signal it emits, on 8 seeds x 2 lap counts plus the demo."""
+    from studio import coaching_panel as cp
+    from studio.coaching_panel import OpportunitiesPanel
+    sessions = {**_sweep_sessions(), "demo": _level_sessions()["demo"]}
+    checked, bad = 0, []
+    for name, s in sessions.items():
+        page = OpportunitiesPanel(s)
+        got: list = []
+        page.compare_requested.connect(lambda *a, into=got: into.append(a))
+        for opp in page._all_rows:
+            btn = page._cmp_button(opp)
+            if not btn.isEnabled():
+                continue
+            got.clear()
+            btn.click()
+            assert len(got) == 1, (name, opp.cid, got)
+            status = cp.compare_status(*got[0])
+            figure = re.findall(r"[+\u2212-]\d+\.\d\d s", status)[-1]
+            checked += 1
+            if figure != K.lost_text(opp):
+                bad.append(f"{name} C{opp.cid}: status {figure} vs row {K.lost_text(opp)}")
+        page.deleteLater()
+    assert not bad, f"{len(bad)} of {checked} rows:\n" + "\n".join(bad)
+    assert checked >= 20, checked
+    print(f"ok status = row Time lost on all {checked} enabled Compares of {len(sessions)} sessions")
+
+
 def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corner():
     """The published demo in the real window, offscreen: the debrief has no Compare (RUL-7); the C
     key's pair is unchanged; a ranked row's Compare pins (lap 4, the typical C1 pass; lap 13, the
@@ -3579,7 +3632,8 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             assert (tp.lap_id, tp.n, tp.best_lap_id) == (3, 14, best), tp
             assert [f"{x:.2f}" for x in (tp.pass_s, tp.typical_s, tp.best_pass_s)] == [
                 "3.39", "3.38", "3.02"], tp
-            assert S.fmt_pass_vs_typical(tp.typical_vs_best_s) == K.lost_text(rows[0]) == "+0.36 s"
+            assert K.lost_text(rows[0]) == "+0.36 s"
+            assert S.printed_gap_s(tp.typical_s, tp.best_pass_s) == 0.36   # agrees here, not always
             assert S.printed_gap_s(tp.pass_s, tp.best_pass_s) == 0.37
 
             def activate_and_check(button) -> float:
@@ -3611,7 +3665,7 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
                 assert v.map.pinned_corner() == "C1"
                 assert notices[-1] == (
                     "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
-                    "here (median of 14: 3.38 s, +0.36 s on the best lap's)"), notices
+                    "here (median of 14: 3.38 s); typical loss through C1: +0.36 s"), notices
                 assert "median lap" not in notices[-1]
                 return took
 
@@ -3650,7 +3704,7 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
 
             # A RACE ENDS FIRST, the gate C's own compareToggled applies.
             assert v.start_lap_race() and v.is_racing()
-            assert v.compare_at_corner(tp) and not v.is_racing() and c.active
+            assert v.compare_at_corner(tp, K.lost_text(rows[0])) and not v.is_racing() and c.active
 
             # 20 activations, from the grid (the page's Compare is off screen there but its widget
             # is the same), add no widget: each compare tears the last one's panes down.
