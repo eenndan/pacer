@@ -12,6 +12,8 @@ What is asserted here, on inputs whose answer is known by construction:
     compared across two sessions whose corner partitions differ — the failure this design exists
     to prevent, sized on real data in studio/focus.py (C1's window grew 173.4 m → 179.5 m between
     the two working-set recordings, worth +0.170 s of "you got slower" on a corner the driver took 0.029 s quicker over the same stretch);
+    and a stored window with ONE edge on today's corner boundary is timed on every clean lap, as
+    the demo against habit-free sessions of its circuit shows (it read "0 clean laps" before);
   * the GATE: no session record on either side, records that disagree, a provisional start line,
     ESTIMATED timing, mismatched lap lengths and too few clean laps each REFUSE a verdict — and a
     refused verdict carries `delta is None`, so no surface can print a number the evidence does not
@@ -363,6 +365,169 @@ def test_session_report_reads_the_stored_window_even_when_the_corner_moved():
     assert b.median > a.median, (a, b)
     print(f"ok window travel: the stored window reads {a.median:.3f} s where a 40 %-longer one "
           f"reads {b.median:.3f} s on the identical laps")
+
+
+# ------------------------------------------- a stored edge on today's corner boundary (cool/focus-mixed-edge)
+# Corner boundaries sit on a 0.75 m grid (corners.GRID_STEP_M), so an edge of a window stored on one
+# day lands EXACTLY on a boundary of the next day's partition often. When one edge did and the other
+# did not, `focus_samples` read the window off a warp built only from the off-grid edges: the
+# on-grid one was never a knot, every lap was skipped, and the debrief said "C1 — can't say: 0 clean
+# laps through it today" on a session where all 14 laps drove C1 0.36 s faster (the demo's planted
+# habit, gone). 16 of the 112 windows over the demo and seeds +1..+8, both orders, all of them that
+# kind. The sessions: the demo, then habit-free recordings of the demo circuit at DEMO_SEED + k.
+_SWEEP_SEEDS = (2, 3, 4, 5, 6, 7)      # +3, +6, +7 hold such windows; the others hold none
+_FOCUS_SESSIONS: dict = {}
+
+
+def _focus_session(name: str):
+    """The demo ("demo") or the habit-free demo-circuit recording DEMO_SEED + k ("s<k>"), generated
+    once per process (the TemporaryDirectory is kept alive with them: sessions read lazily)."""
+    if name not in _FOCUS_SESSIONS:
+        from studio.dev import make_demo as md
+        from studio.dev import synth_gopro as sg
+        from studio.session import Session
+        tmp = _FOCUS_SESSIONS.setdefault("_tmp", tempfile.TemporaryDirectory(prefix="focus_edge_"))
+        if name == "demo":
+            path = os.path.join(tmp.name, "GX019000.MP4")
+            md.make(path, render=False)
+            paths = [path]
+        else:
+            paths = sg.generate(os.path.join(tmp.name, name), md.DEMO_SEED + int(name[1:]),
+                                md.DEMO_LAPS, chapters=1, origin=md.DEMO_ORIGIN).paths
+        _FOCUS_SESSIONS[name] = Session.load(paths)
+    return _FOCUS_SESSIONS[name]
+
+
+def _corner_windows(s) -> list[tuple[float, float]]:
+    """Every corner of `s` as the stored window `focus_items` would write for it."""
+    corner_list, total = s.corners.basis()
+    return [(c.enter / total, c.exit / total) for c in corner_list]
+
+
+def _on_grid(s, windows) -> list[int]:
+    """Per window, how many of its edges land exactly on one of `s`'s corner boundaries."""
+    corner_list, total = s.corners.basis()
+    frame = [b for c in corner_list for b in (c.enter, c.exit)]
+    return [sum(min(abs(b - f * total) for b in frame) <= 1e-6 for f in w) for w in windows]
+
+
+def _crossing_times(s, window) -> list[float]:
+    """An INDEPENDENT time through `window` on each clean lap of `s`: between the lap's closest
+    approaches to the reference lap's points at the two edges, a plain nearest-segment projection
+    on the lap's own (x, y, t) with only the receiver's rigid shift taken out — no warp, no knots."""
+    rx, ry, rcum = s.corners._best_trace()
+    total = float(s.corners.basis()[1])
+    out = []
+    for lid in s.consistency_lap_ids():
+        t, xs, ys, _v, cum = (np.asarray(z, float) for z in s.corners._lap_columns(lid))
+        sx, sy = s.corners.lap_shift(lid)
+        xs, ys = xs - float(sx), ys - float(sy)
+        at = []
+        for f in window:
+            px, py = np.interp(f * total, rcum, rx), np.interp(f * total, rcum, ry)
+            guess = f * float(cum[-1])
+            j0, j1 = np.searchsorted(cum, [guess - 60.0, guess + 60.0])
+            best = (np.inf, np.nan)
+            for j in range(max(int(j0), 0), min(int(j1), len(cum) - 1)):
+                vx, vy = xs[j + 1] - xs[j], ys[j + 1] - ys[j]
+                u = float(np.clip(((px - xs[j]) * vx + (py - ys[j]) * vy)
+                                  / max(vx * vx + vy * vy, 1e-12), 0.0, 1.0))
+                d2 = (xs[j] + u * vx - px) ** 2 + (ys[j] + u * vy - py) ** 2
+                if d2 < best[0]:
+                    best = (d2, t[j] + u * (t[j + 1] - t[j]))
+            at.append(best[1])
+        out.append(at[1] - at[0])
+    return out
+
+
+def test_a_window_with_one_edge_on_a_boundary_is_timed_on_every_clean_lap():
+    """The discovery case: the demo's C1, C2 and C7 on the focus list, re-measured on a habit-free
+    session at the same circuit. C1's stored window has its exit on a boundary of today's partition
+    and its entry off it; on main it came back None and the verdict said "0 clean laps". Now it is
+    timed on all 14 clean laps, it reads the 0.36 s the habit cost, and an instrument that shares
+    nothing with the warp agrees with it inside a millisecond."""
+    demo, today = _focus_session("demo"), _focus_session("s7")
+    windows = _corner_windows(demo)
+    kinds = _on_grid(today, windows)
+    assert kinds[0] == 1, f"C1's stored window no longer has exactly one edge on a boundary: {kinds}"
+    then = demo.focus_samples(windows)
+    now = today.focus_samples(windows)
+    n = len(today.consistency_lap_ids())
+    for k, (kind, sample) in enumerate(zip(kinds, now, strict=True)):
+        assert sample is not None, f"C{k + 1} ({kind} edge(s) on a boundary): no sample, {now}"
+        assert sample.n_laps == sample.n_of == n, (k + 1, sample, n)
+    c1 = now[0].median - then[0].median
+    assert -0.40 < c1 < -0.32, f"C1 moved {c1:+.3f} s; the demo's habit costs it ~0.36 s"
+    for k in (k for k, kind in enumerate(kinds) if kind == 1):
+        independent = float(np.median(_crossing_times(today, windows[k])))
+        assert abs(independent - now[k].median) < 1e-3, (k + 1, independent, now[k])
+    print(f"ok mixed edge: C1 timed on {now[0].n_laps}/{n} laps, {then[0].median:.3f} → "
+          f"{now[0].median:.3f} s ({c1:+.3f} s)")
+
+
+# main (f80f9a4)'s samples on the demo's windows measured on DEMO_SEED + 6, which holds all three
+# kinds: C1/C6 neither edge on a boundary, C2/C4 both, C3/C5/C7 one (None on main).
+_MAIN_DEMO_ON_S6 = {1: (3.034518341222463, 0.029242716256802748),
+                    2: (2.6650932584884295, 0.045809000825011825),
+                    4: (3.0765045337356263, 0.020535470394976052),
+                    6: (2.8190525979986276, 0.0421673931264408)}
+
+
+def test_windows_with_both_or_neither_edge_on_a_boundary_read_what_they_read_before():
+    """The fix gives one-edge windows a warp of their own; the other two kinds keep theirs, so
+    their numbers are main's bit for bit — measured with the one-edge windows in the same call
+    and without them."""
+    today = _focus_session("s6")
+    windows = _corner_windows(_focus_session("demo"))
+    kinds = _on_grid(today, windows)
+    assert kinds == [0, 2, 1, 2, 1, 0, 1], kinds
+    together = today.focus_samples(windows)
+    alone = today.focus_samples([windows[cid - 1] for cid in _MAIN_DEMO_ON_S6])
+    for (cid, (median, iqr)), single in zip(_MAIN_DEMO_ON_S6.items(), alone, strict=True):
+        got = together[cid - 1]
+        assert (got.median, got.iqr, got.n_laps) == (median, iqr, 14), (cid, got)
+        assert single == got, (cid, single, got)
+    print(f"ok unchanged: {len(_MAIN_DEMO_ON_S6)} windows identical to main, alone or together")
+
+
+def test_a_session_re_measured_against_itself_is_level():
+    """Every corner of a session stored as a baseline, then re-measured on that SAME recording under
+    another identity: every verdict is "no change", by exactly 0."""
+    for name in ("demo", "s7"):
+        s = _focus_session(name)
+        then = {"fingerprint": "SELF_THEN", "track": "Demo", "date": "2026-01-01",
+                "verified": True, "degraded": False}
+        now = {**then, "fingerprint": "SELF_NOW", "date": "2026-01-08"}
+        items = [i for c in s.corners.corner_list() for i in s.focus_items([c.cid], then)]
+        assert len(items) == len(s.corners.corner_list()), items
+        store = _records(("SELF_THEN", _record()), ("SELF_NOW", _record()))
+        report = s.focus_report(items, now, store, "Demo")
+        for o in report.outcomes:
+            assert o.kind == F.OUTCOME_UNCHANGED and o.delta == 0.0, (name, o)
+    print("ok self: every corner of two sessions level against itself")
+
+
+def test_no_stored_window_is_left_without_laps_where_the_corners_table_has_passes():
+    """The sweep: the demo against six habit-free sessions, both orders. Every stored window that
+    overlaps a corner the Stats ▸ CORNERS table timed today is timed on at least as many laps as
+    that corner, so "0 clean laps through it today" is never said of a stretch the laps drove."""
+    mixed = 0
+    for k in _SWEEP_SEEDS:
+        for a, b in (("demo", f"s{k}"), (f"s{k}", "demo")):
+            then, now = _focus_session(a), _focus_session(b)
+            windows = _corner_windows(then)
+            corner_list, total = now.corners.basis()
+            passes = {r.cid: r.n for r in now.corner_report()}
+            mixed += _on_grid(now, windows).count(1)
+            for w, sample in zip(windows, now.focus_samples(windows), strict=True):
+                over = [passes.get(c.cid, 0) for c in corner_list
+                        if c.enter < w[1] * total and c.exit > w[0] * total]
+                if not over or max(over) == 0:
+                    continue
+                assert sample is not None and sample.n_laps >= min(over), \
+                    f"{a} → {b}: window {w} timed on {sample} where CORNERS has {over} passes"
+    assert mixed >= 10, f"the sweep holds only {mixed} one-edge windows; it has lost its teeth"
+    print(f"ok sweep: {len(_SWEEP_SEEDS) * 2} pairs, {mixed} one-edge windows, all timed")
 
 
 # --------------------------------------------------------------------------------- the panel
