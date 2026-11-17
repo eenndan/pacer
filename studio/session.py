@@ -3309,7 +3309,7 @@ class Session:
         extra = tuple(sorted({d for pair in edges for d in pair if d not in frame}))
         # A window with ONE edge on a boundary and one off it needs both edges as knots, and
         # neither warp above has them: `full` lacks the off-grid edge and `extra` the on-grid one,
-        # so on main every lap was skipped and the verdict said "0 clean laps through it today"
+        # so before this fix every lap was skipped and the verdict said "0 clean laps through it today"
         # (boundaries sit on a 0.75 m grid, so a stored edge lands on one of today's often: 16 of
         # 112 windows over the demo and 8 synthetic sessions, both orders). Those windows get
         # their own warp over `extra` plus their on-grid edges; the other two kinds keep theirs,
@@ -3414,6 +3414,10 @@ class Session:
             "date": entry.get("date"),
             "start_ms": int(self._wall_clock_ms()[0]),
             "lap_total": float(basis[1]) if (basis := self.corners.basis()) else 0.0,
+            # Today's corners as lap fractions with their hand: `focus.layout_check` asks whether
+            # the one over each stored window turns the way it did (another layout does not).
+            "corners": [(c.enter / basis[1], c.exit / basis[1], int(c.direction))
+                        for c in basis[0]] if basis and basis[1] > 0 else None,
             **self.focus_trust(entry),
         }
 
