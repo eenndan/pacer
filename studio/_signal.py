@@ -202,11 +202,21 @@ def fmt_time(seconds: float) -> str:
     the pacer-free numpy-helpers module — so the views (plots_view/lap_table/
     compare_controller) can format times without importing session.py, which would drag the
     compiled `pacer` module in transitively. Moved verbatim from session.py (which keeps a
-    compatibility re-export)."""
+    compatibility re-export).
+
+    The minute carries: a time within half a millisecond under a minute printed "0:60.000"
+    (59.9996 s; 599.9996 s printed "9:60.000"), because the seconds field rounds up to 60 AFTER
+    the minute was split off. The carry is applied to the printed field rather than by rounding
+    the input first, so every other value keeps its exact digits: `round(x, 3)` before the split
+    also moved 496 of 10 million swept strings, all negative half-millisecond ties (divmod's
+    `60 + fmod` for a negative input rounds), and this runs once per exported overlay frame."""
     if not math.isfinite(seconds):
         return "—"
     m, s = divmod(seconds, 60)
-    return f"{int(m)}:{s:06.3f}"
+    text = f"{s:06.3f}"
+    if text[0] == "6":  # s < 60, so only "60.000": the rounding reached the next minute
+        return f"{int(m) + 1}:00.000"
+    return f"{int(m)}:{text}"
 
 
 def fmt_hms(seconds: float) -> str:

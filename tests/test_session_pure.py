@@ -25,6 +25,8 @@ Pins five math-dense invariants that had no coverage, each driven on synthetic i
   * THE IDEAL LAP (§6b): the corner/straight-partition composite that `theoretical_best` now IS —
     six properties, each written so the `ideal == best lap time` degeneracy that shipped FAILS
     them (it satisfied every one of the seven lower-envelope invariants that used to live there).
+  * `fmt_time` carries the minute (cool/time-minute-carry): a time within half a millisecond under
+    a minute printed "0:60.000" — the seconds field rounded up after the minute was split off.
 Run: python tests/test_session_pure.py
 """
 import dataclasses
@@ -62,6 +64,7 @@ from studio._signal import (  # noqa: E402
     _band_lap_ids,
     _banded_out_lap_ids,
     _longest_stopped_s,
+    fmt_time,
 )
 from studio.corner_model import SegmentBests  # noqa: E402
 from studio.load import (  # noqa: E402
@@ -1939,6 +1942,47 @@ def test_heuristic_start_base_degenerate_returns_none():
     n = 41
     assert _heuristic_start_base(np.zeros(n), np.zeros(n), np.ones(n)) is None  # no heading
     print("test_heuristic_start_base_degenerate_returns_none OK")
+
+
+def test_fmt_time_carries_the_minute_at_the_boundary():
+    """Under half a millisecond short of a minute rounds UP to the next minute's ":00.000"; the
+    unfixed formatter split the minute off first and printed 0:60.000 / 9:60.000 / 59:60.000."""
+    cases = {
+        59.9994: "0:59.999",
+        59.9995: "0:59.999",      # the double is 59.99949999…: rounds down, no carry
+        59.9996: "1:00.000",
+        59.99951: "1:00.000",
+        119.9999: "2:00.000",
+        599.9996: "10:00.000",
+        3599.9999: "60:00.000",
+        60.0: "1:00.000",
+        0.0: "0:00.000",
+        46.8084: "0:46.808",      # off the boundary: the digits it always printed
+        -0.0001: "0:00.000",      # a negative carries too (was "-1:60.000")
+    }
+    for v, want in cases.items():
+        assert fmt_time(v) == want, (v, fmt_time(v), want)
+    assert fmt_time(float("nan")) == fmt_time(float("inf")) == "—"
+    print("test_fmt_time_carries_the_minute_at_the_boundary OK")
+
+
+def test_fmt_time_never_prints_60_seconds_and_reads_back_its_input():
+    """Seeded sweep: no formatted time holds ":60", and every string reads back as its input to
+    the half-millisecond — the same millisecond `story.printed_ms` (the Δbest arithmetic) counts,
+    so the Time column and the gaps built from it cannot disagree across a minute."""
+    from studio.story import printed_ms
+    rng = np.random.default_rng(20261117)
+    minutes = rng.integers(1, 67, 20_000) * 60.0
+    values = np.concatenate([rng.uniform(0.0, 4000.0, 100_000),
+                             minutes - rng.uniform(0.0, 0.002, 20_000)])
+    for v in values.tolist():
+        text = fmt_time(v)
+        assert ":60" not in text, (v, text)
+        m, s = text.split(":")
+        ms = int(m) * 60_000 + round(float(s) * 1000)
+        assert abs(ms / 1000 - v) <= 0.0005 + 1e-9, (v, text)
+        assert ms == printed_ms(v), (v, text, printed_ms(v))
+    print("test_fmt_time_never_prints_60_seconds_and_reads_back_its_input OK")
 
 
 def test_race_tracks_is_memoized_and_misses_after_a_resegment():
