@@ -686,7 +686,11 @@ def test_compare_sits_under_jump_where_its_column_does_not_fit():
     disabled and says why."""
     from studio import coaching_panel as cp
 
-    p = _panel(_rows(9), (1432, 808))
+    # Every row with its braking-direction line, as the demo's C1 has one: rows of three wrapped
+    # lines are what a docked page stacks in (since #600 a bare reason here is two lines or less).
+    dirs = {c: coaching.BrakeDirection(cid=c, n_laps=16, rho=-0.740, p=0.0011, family=9,
+                                       p_holm=0.0132) for c in range(1, 10)}
+    p = _panel(_rows(9), (1432, 808), directions=dirs)
     t = p.table
     stacked_seen = column_seen = 0
     for w in range(1432, 480, -24):

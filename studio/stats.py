@@ -37,6 +37,7 @@ typical (CornerMatrix says why)."""
 from __future__ import annotations
 
 import datetime
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, overload
@@ -45,6 +46,7 @@ import numpy as np
 
 from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print, lap_label
 from .consistency import sigma
+from .lap_race import ESTIMATED_CLOCK_TIE_S
 from .library import PB_PRECISION_S
 
 if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
@@ -681,6 +683,47 @@ def sigma_caption(middle_half: float | None) -> str:
     """The σ tile's caption: "σ lap", plus the middle half's span when there are laps enough."""
     shown = fmt_middle_half(middle_half)
     return SIGMA_CAPTION if shown is None else f"{SIGMA_CAPTION} · middle half spans {shown}"
+
+
+# ---- the PACE "best rolling" tile's caption (stats_panel), shared with the exported report.
+#
+# A rolling best is never slower than the best lap (a complete lap is one of its windows), and it
+# printed a few ms under it with no note: the demo's 44.945 beside a best lap of 44.950, 0.006 s
+# apart, read as a faster loop the timing cannot see. Under the timing step the two are level, and
+# the caption says "level", the word the Laps tab and the lap strip use for a tie; the tooltip
+# carries their whole sentence. ONE WORD ON PURPOSE: "· level with best lap" widened the grid's
+# first column and, measured at 1280 px in the quadrant, put the page into sideways scroll (the
+# race-pace caption and DATA TRUST clipped); the tile sits beside "best lap". The step is `library.PB_PRECISION_S`, or under an estimated clock that clock's published
+# bound (`lap_race.ESTIMATED_CLOCK_TIE_S`), the pair `story.tie_floor` reads. Words only: both
+# numbers still print. Measured on 8 synthetic seeds × 6/10/20 laps: 16 of 24 sessions level
+# (0.0006-0.069 s), 8 apart (0.073-0.222 s).
+ROLLING_CAPTION = "best rolling"
+
+
+def rolling_level_floor(clock_estimated: bool) -> float:
+    """The step under which the rolling best and the best lap read level."""
+    return ESTIMATED_CLOCK_TIE_S if clock_estimated else PB_PRECISION_S
+
+
+def rolling_caption(rolling: float | None, best: float | None, clock_estimated: bool = False
+                    ) -> str:
+    """"best rolling", or "best rolling · level" when both exist and sit closer than
+    `rolling_level_floor`."""
+    if rolling is None or best is None or not (math.isfinite(rolling) and math.isfinite(best)):
+        return ROLLING_CAPTION   # a non-finite figure is level with nothing (abs(nan) >= x is False)
+    if abs(best - rolling) >= rolling_level_floor(clock_estimated):
+        return ROLLING_CAPTION
+    return f"{ROLLING_CAPTION} · level"
+
+
+def rolling_level_note(rolling: float | None, best: float | None,
+                       clock_estimated: bool = False) -> str:
+    """The tooltip sentence behind the level caption ("" when the caption has none): the floor, not
+    the gap, the way the PB sentences word a level pair (`library._precision_clause`)."""
+    if rolling_caption(rolling, best, clock_estimated) == ROLLING_CAPTION:
+        return ""
+    return (f"Within timing precision (under {rolling_level_floor(clock_estimated):.2f} s apart): "
+            "level with the best lap as far as the timing can tell.")
 
 
 @dataclass(frozen=True)

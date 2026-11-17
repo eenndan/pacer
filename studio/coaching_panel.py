@@ -1516,10 +1516,22 @@ class ActionCell(QWidget):
     def set_stacked(self, on: bool) -> None:
         """Show the stacked Compare (or hide it); the two share the cell's height."""
         for btn in (self.jump, self.compare):
+            # Polish FIRST: the theme's QSS min-height (28 px) lands on polish and would overwrite
+            # a floor set before it — measured, the one row built while scrolled away kept 28 px
+            # buttons in a 48 px cell and overlapped them.
+            btn.ensurePolished()
             btn.setMinimumHeight(STACKED_BUTTON_MIN_PX if on else 0)
         if self.compare.isHidden() == on:
             self.compare.setVisible(on)
         self.updateGeometry()
+        self.layout().activate()
+
+    def showEvent(self, event):
+        """Re-lay the two buttons out when the view shows the cell again: the table hides the
+        widgets of rows it scrolls or tunes away, and a hidden cell resized meanwhile kept the
+        split it had (measured: a 48 px cell showing two 28 px buttons, overlapping by 3 px)."""
+        super().showEvent(event)
+        self.set_stacked(self.is_stacked())   # re-floor after any re-polish (setCellWidget's)
 
     def is_stacked(self) -> bool:
         return not self.compare.isHidden()
