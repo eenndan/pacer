@@ -2227,8 +2227,9 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
             "Consistency is the common thread — 100% of that time is in C5, C2, C8.",
             f"Start with C5, C2 or C8: +0.13 s down to +0.06 s {spread}, so this cannot rank "
             "them."]),
+        # 79 %, the ratio of its printed cells (`coaching._printed_share`); unrounded it is 78 %.
         "SD_19_09_26": (K.THEME_EXECUTION, [
-            "Consistency is the common thread — 78% of the time your 5 ranked corners lose is in "
+            "Consistency is the common thread — 79% of the time your 5 ranked corners lose is in "
             "C1, C7, C2, C3.",
             "Start with C1: +0.15 s, and you have matched it on 4 of 36 laps."]),
         "SD_30_08_26": (K.THEME_EXECUTION, [
@@ -2561,9 +2562,10 @@ def test_the_theme_names_the_one_corner_on_the_reach_line():
     theme = K.session_theme(sd19)
     assert (theme.kind, round(theme.share, 2), theme.lead_cid) == (K.THEME_EXECUTION, 0.78, 1), theme
     said = K.theme_sentence(theme, sd19)
-    # Five ranked corners under a headline summing three: the halves name their base (W8).
-    assert said == ("No single theme: of the time your 5 ranked corners lose, 78% is in corners "
-                    "you have already driven at this pace, 22% in corners you have rarely reached "
+    # Five ranked corners under a headline summing three: the halves name their base (W8). They
+    # print as the cells add up (W9): 79 / 21, where the stored share above is 0.78.
+    assert said == ("No single theme: of the time your 5 ranked corners lose, 79% is in corners "
+                    "you have already driven at this pace, 21% in corners you have rarely reached "
                     "— C1 sits on the line between the two."), said
     # Without the rows the sentence is what it always was (every other caller is unchanged).
     assert K.theme_sentence(theme).startswith("Most of the time on offer is execution"), theme
@@ -3120,9 +3122,10 @@ def test_the_level_step_leaves_the_ranking_as_it_was():
     kinds = [(r.cid, r.reason.kind) for r in demo.ranked_rows()]
     assert kinds == [(1, K.REASON_APEX), (2, K.REASON_LEVEL), (7, K.REASON_LEVEL),
                      (4, K.REASON_LEVEL)], kinds
-    # The theme is unchanged on the demo: the level rows were never its cause.
+    # The theme is unchanged on the demo: the level rows were never its cause. (78 %: its printed
+    # cells, +0.36 of +0.46 s; `test_the_theme_share_is_the_ratio_of_the_printed_cells`.)
     assert K.theme_actions(demo.theme, demo.rows) == [
-        "Apex speed is the common thread — 79% of the time your 4 ranked corners lose is in C1.",
+        "Apex speed is the common thread — 78% of the time your 4 ranked corners lose is in C1.",
         "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."]
     print(f"ok ranking unchanged: {_MAIN_RANKED}")
 
@@ -3411,14 +3414,14 @@ def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
     79% of that time is in C1": 79 % is C1's share of the 0.46 s all 4 RANKED corners lose (of the
     headline's 0.43 s it would be 84 %). The number stays (re-basing is the owner's call, DECISIONS
     §14); the sentence names its base whenever the ranked count is not the shortlist's length, in
-    every percentage form, and is byte-identical to before when the two are equal."""
+    every percentage form, and is byte-identical to before when the two are equal. (Since W9 the
+    share prints as its cells add up, 78 %: `test_the_theme_share_is_the_ratio_of_the_printed_cells`.)"""
     demo = _level_sessions()["demo"].coaching_opportunities()
     assert K.headline(demo).startswith("Whole session · 0.43 s across your top 3 corners"), \
         K.headline(demo)
     assert (demo.theme.n_ranked, len(K.shortlist(demo))) == (4, 3), demo.theme
     assert K.theme_lines(demo)[1][0] == (
-        "Apex speed is the common thread — 79% of the time your 4 ranked corners lose is in C1.")
-    import dataclasses
+        "Apex speed is the common thread — 78% of the time your 4 ranked corners lose is in C1.")
 
     def rows(reaches, kinds, losses=(0.5, 0.3, 0.2, 0.1)):
         return [_ranked_row(i + 1, loss, 0.01, reach=reach, kind=kind, n_laps=40,
@@ -3470,23 +3473,190 @@ def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
             "Apex speed is the common thread — 80% of the time your 4 ranked corners lose is in "
             "C1."),
     }
-    for name, (four, sentence, cause) in cases.items():
+    for name, (four, sentence, _cause) in cases.items():
         th = K.session_theme(four)
         got = (K.theme_sentence(th, four), K.theme_actions(th, four)[0])
         assert got == named[name], (name, got)
         # Without the rows there is no shortlist to compare: main's words.
         assert K.theme_sentence(th) == sentence, (name, K.theme_sentence(th))
-        # Three ranked: the shortlist IS the base, and every form is main's, byte for byte.
+        # Three ranked: the shortlist IS the base, and every form is the unnamed one, byte for
+        # byte. (The theme is the three rows' own since W9: a share prints as THESE rows' cells
+        # add up, so a theme borrowed from four rows would print the three's ratio.)
         three = [r for r in four if r.cid != 4]
-        th3 = dataclasses.replace(th, n_ranked=3)
-        assert (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == (sentence, cause), \
-            name
+        th3 = K.session_theme(three)
+        assert th3.n_ranked == 3, th3
+        assert (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == \
+            (K.theme_sentence(th3), K.theme_actions(th3, [])[0]), name
+        assert "ranked corner" not in K.theme_sentence(th3, three) + K.theme_actions(th3, three)[0]
     # A ranked corner under the display resolution is in the base but not in the shortlist.
     tiny = rows([R, R], [B, B], (0.5, 0.004))
     th = K.session_theme(tiny)
     assert K.theme_actions(th, tiny)[0] == (
         "Braking is the common thread — 100% of the time your 2 ranked corners lose is in C1, C2.")
     print("ok theme base: named when ranked != shortlist, main's words when equal")
+
+
+# ------------------------------------------------- W9: say it at the timing step, from what prints
+def test_a_phase_tail_names_only_a_third_the_timing_step_resolves():
+    """"— most of it on the apex" locates a loss inside the corner, and a named third under the
+    timing step (LEVEL_STEP_S, 0.07 s) is a location the clock cannot resolve: on main 25 of 26
+    tails over 8 synthetic seeds named one (0.005-0.067 s). Under the step the row ends at its
+    lever; at and over it, the tail is main's, in both its forms (the fix location and the
+    "carries to" consequence)."""
+    step = K.LEVEL_STEP_S
+    for named, want_tail in ((step - 0.001, False), (step, True), (step + 0.001, True)):
+        ph = K.PhaseLoss(entry=0.0, apex=named, exit=0.0)
+        fix = K.dominant_phase_clause(_opp_with(K.REASON_APEX, ph, apex_speed_deficit=3.0))
+        ph_exit = K.PhaseLoss(entry=0.0, apex=0.0, exit=named)
+        consequence = K.dominant_phase_clause(_opp_with(K.REASON_BRAKING, ph_exit,
+                                                        brake_extra_s=0.2))
+        if want_tail:
+            assert (fix, consequence) == (" — most of it on the apex", ", and it carries to exit"), \
+                (named, fix, consequence)
+        else:
+            assert (fix, consequence) == ("", ""), (named, fix, consequence)
+    # The real loader: no tail anywhere names a third under the step.
+    for name, s in _level_sessions().items():
+        if name.startswith("_"):
+            continue
+        for r in s.coaching_opportunities().rows:
+            if K.dominant_phase_clause(r):
+                assert max(r.phases.as_tuple()) >= step, (name, r.cid, r.phases)
+    print(f"ok phase tail: only over a named third of {step:.2f} s or more")
+
+
+def _printed_pcts(text: str) -> list[int]:
+    return [int(p) for p in re.findall(r"(\d+)%", text)]
+
+
+def _cells_ratio(part, whole) -> float:
+    """The ratio a reader computes from the printed cells (each "+0.36 s" at 2 dp)."""
+    return sum(round(r.time_lost, 2) for r in part) / sum(round(r.time_lost, 2) for r in whole)
+
+
+def _check_printed_shares(rows) -> int:
+    """Every percentage the theme prints over `rows` is the ratio of the printed cells, except where
+    that ratio crosses the line the words were chosen at (then the unrounded share prints, and the
+    words stay true). Returns how many shares fell back."""
+    theme = K.session_theme(rows)
+    if theme.kind == K.THEME_NONE:
+        return 0
+    ranked = [r for r in rows if r.evidence.ranked]
+    ex = [r for r in ranked if r.evidence.reach == K.REACH_REPEAT]
+    pa = [r for r in ranked if r.evidence.reach in (K.REACH_RARE, K.REACH_NEVER)]
+    fell_back = 0
+    sentence = K.theme_sentence(theme, rows)
+    pcts = _printed_pcts(sentence)
+    if sentence.startswith("No single theme"):
+        ratio = _cells_ratio(ex, ex + pa)
+        clears = max(ratio, 1 - ratio) >= K.THEME_SHARE
+        exec_pct = theme.execution_s / (theme.execution_s + theme.pace_s)
+        # The two halves are ONE rounding: they always add up to 100 (review of #600: cells of
+        # +0.23 / +0.17 are 0.575 / 0.425 exactly, which printed "57% … 42%").
+        assert len(pcts) == 2 and sum(pcts) == 100, (sentence, pcts)
+        if clears == (max(exec_pct, 1 - exec_pct) >= K.THEME_SHARE):
+            assert pcts[0] == int(f"{ratio:.0%}"[:-1]), (sentence, ratio)
+        else:
+            fell_back += 1
+    elif sentence.startswith("Most"):
+        ratio = _cells_ratio(ex if theme.kind == K.THEME_EXECUTION else pa, ranked)
+        if K.THEME_SHARE <= ratio and f"{ratio:.0%}" != "100%":
+            assert pcts == [int(f"{ratio:.0%}"[:-1])], (sentence, ratio)
+        else:
+            fell_back += 1
+            assert pcts == [int(f"{theme.share:.0%}"[:-1])] and pcts != [100], sentence
+    acts = K.theme_actions(theme, rows)
+    if acts and "common thread" in acts[0]:
+        named = [r for r in ranked if r.cid in theme.cause_cids]
+        ratio = _cells_ratio(named, ranked)
+        # 100 % beside a ranked corner the line does not name (its loss prints +0.00) is the
+        # unrounded share, as "Most" is.
+        whole_but_not_all = f"{ratio:.0%}" == "100%" and len(named) < len(ranked)
+        if ratio >= K.THEME_SHARE and not whole_but_not_all:
+            assert _printed_pcts(acts[0]) == [int(f"{ratio:.0%}"[:-1])], (acts[0], ratio)
+        else:
+            fell_back += 1
+            assert _printed_pcts(acts[0]) == [int(f"{theme.cause_share:.0%}"[:-1])], acts[0]
+    return fell_back
+
+
+def test_the_theme_share_is_the_ratio_of_the_printed_cells():
+    """The demo's cause line said 79 % above cells reading +0.36 of +0.46 s, which make 78 %: the
+    share was computed from unrounded losses (0.3601 of 0.4579 s). The headline already sums what
+    prints (`shown_total`); every theme percentage now does too. Display only: the theme, its cause,
+    its corners and the stored shares are as they were.
+
+    Checked on the demo and the two seeded sessions through the real loader, and on 400 seeded row
+    sets whose losses sit on rounding edges, in every form that prints a share (the execution and
+    pace "Most", the split, the cause line). Where the printed ratio would cross the line its words
+    were chosen at — "Most" at 100 %, a split with a half at 60 % — the unrounded share prints."""
+    demo = _level_sessions()["demo"].coaching_opportunities()
+    ranked = demo.ranked_rows()
+    c1 = [r for r in ranked if r.cid == 1]
+    assert (round(K.shown_total(c1), 2), round(K.shown_total(ranked), 2)) == (0.36, 0.46), \
+        [r.time_lost for r in ranked]
+    assert round(demo.theme.cause_share, 4) == 0.7864, demo.theme   # stored: unchanged
+    line = K.theme_actions(demo.theme, demo.rows)[0]
+    assert line == ("Apex speed is the common thread — 78% of the time your 4 ranked corners lose "
+                    "is in C1."), line
+    for name, s in _level_sessions().items():
+        if not name.startswith("_"):
+            assert _check_printed_shares(s.coaching_opportunities().rows) == 0, name
+    # Rounding edges: losses drawn on the half-centisecond, both sides and both kinds.
+    rng = np.random.default_rng(20261117)
+    fell = 0
+    for _ in range(400):
+        n = int(rng.integers(2, 6))
+        losses = np.round(rng.uniform(0.004, 0.25, n), 3) + rng.choice([0.0, 0.0049, 0.0051], n)
+        reaches = rng.choice([K.REACH_REPEAT, K.REACH_RARE], n, p=[0.6, 0.4])
+        kinds = rng.choice([K.REASON_APEX, K.REASON_BRAKING], n, p=[0.7, 0.3])
+        rows = [_ranked_row(i + 1, float(loss), 0.01, reach=str(reach), kind=str(kind), n_laps=40,
+                            reach_laps=12 if reach == K.REACH_REPEAT else 2)
+                for i, (loss, reach, kind) in enumerate(zip(losses, reaches, kinds, strict=True))]
+        rows.sort(key=lambda r: -r.time_lost)
+        fell += _check_printed_shares(rows)
+    # The guard, at its edges. "Most" never prints 100 %: a pace corner at +0.004 s prints +0.00.
+    most = [_ranked_row(1, 0.5, 0.01, n_laps=40),
+            _ranked_row(2, 0.004, 0.01, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    th = K.session_theme(most)
+    assert K.theme_sentence(th, most) == (
+        "Most of the time your 2 ranked corners lose is execution, not pace — 99% of it is in "
+        "corners you have already driven at this pace."), K.theme_sentence(th, most)
+    # A split stays a split in its numbers: cells of +0.06 / +0.04 would read 60 % beside "No single
+    # theme"; the unrounded 59 % prints.
+    split = [_ranked_row(1, 0.0594, 0.001, n_laps=40),
+             _ranked_row(2, 0.0406, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    th = K.session_theme(split)
+    assert th.kind == K.THEME_SPLIT and K.theme_sentence(th, split).startswith(
+        "No single theme: 59% of the time on offer"), K.theme_sentence(th, split)
+    # One cell off the edge, the split prints its cells: +0.06 / +0.05 → 55 % / 45 %.
+    split2 = [_ranked_row(1, 0.0596, 0.001, n_laps=40),
+              _ranked_row(2, 0.0454, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    th = K.session_theme(split2)
+    assert K.theme_sentence(th, split2).startswith(
+        "No single theme: 55% of the time on offer"), K.theme_sentence(th, split2)
+    # Review of #600: cells of +0.17 / +0.23 are 0.425 / 0.575, and two separate roundings printed
+    # "42% … 57%" — 99. One rounding, the second half 100 minus the first.
+    halves = [_ranked_row(1, 0.1726, 0.001, n_laps=40),
+              _ranked_row(2, 0.2284, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    said = K.theme_sentence(K.session_theme(halves), halves)
+    assert said.startswith("No single theme: 42% of the time on offer") and "58% in corners" in \
+        said, said
+    _check_printed_shares(halves)
+    # The cause line never prints 100 % beside a ranked corner it does not name: C2's +0.004 s
+    # prints +0.00, the cells would make 100 %, and the unrounded 99 % prints, as "Most" does.
+    cause = [_ranked_row(1, 0.5, 0.01, kind=K.REASON_APEX, n_laps=40),
+             _ranked_row(2, 0.004, 0.01, kind=K.REASON_BRAKING, n_laps=40)]
+    th = K.session_theme(cause)
+    assert th.cause == K.REASON_APEX and th.cause_cids == (1,), th
+    assert K.theme_actions(th, cause)[0] == (
+        "Apex speed is the common thread — 99% of the time your 2 ranked corners lose is in C1."), \
+        K.theme_actions(th, cause)[0]
+    # Every ranked corner named: 100 % is the cells' own ratio and prints.
+    both = [_ranked_row(1, 0.5, 0.01, kind=K.REASON_APEX, n_laps=40),
+            _ranked_row(2, 0.004, 0.01, kind=K.REASON_APEX, n_laps=40)]
+    assert "— 100% of" in K.theme_actions(K.session_theme(both), both)[0]
+    print(f"ok printed shares: demo {line!r}; 400 row sets, {fell} share(s) kept unrounded")
 
 
 if __name__ == "__main__":

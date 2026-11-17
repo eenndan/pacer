@@ -6282,6 +6282,68 @@ def test_a_short_session_says_why_no_corner_is_marked():
     print("test_a_short_session_says_why_no_corner_is_marked OK")
 
 
+def test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap():
+    """W9: PACE printed a best rolling lap a few ms under the best lap with no note (the demo:
+    0:44.945 beside 0:44.950, 0.006 s apart), as if it were a faster loop. Under the timing step
+    (`library.PB_PRECISION_S`; `lap_race.ESTIMATED_CLOCK_TIE_S` on an estimated clock) the caption
+    says the two are level, in the Laps tab's words; at and over it, the caption is "best rolling".
+    Both numbers print either way, and the exported PACE row carries the same caption."""
+    _app()
+    from studio import export_data
+    from studio import stats as stats_service
+    from studio._signal import fmt_time
+    from studio.data_quality import MEDIA_CLOCK_FALLBACK, TimingQuality
+    from studio.lap_race import ESTIMATED_CLOCK_TIE_S
+    from studio.library import PB_PRECISION_S
+    from studio.stats_panel import StatsView
+    best = 68.2                                  # the fake's pace.best
+    level = "best rolling · level"
+    s = _fake_view_session()
+    v = StatsView(s)
+    # Both sides of the step; a refresh that moves the gap over it restores the plain caption.
+    for gap, clock, want in ((PB_PRECISION_S - 0.001, None, level),
+                             (PB_PRECISION_S + 0.001, None, "best rolling"),
+                             (0.0, None, level),
+                             (ESTIMATED_CLOCK_TIE_S - 0.001, MEDIA_CLOCK_FALLBACK, level),
+                             (ESTIMATED_CLOCK_TIE_S + 0.001, MEDIA_CLOCK_FALLBACK, "best rolling"),
+                             (PB_PRECISION_S - 0.001, None, level)):
+        s.best_rolling_lap = lambda g=gap: best - g
+        s.timing_quality = TimingQuality(clock=clock) if clock else TimingQuality()
+        v.refresh()
+        assert v.t_rolling.caption.text() == want, (gap, clock, v.t_rolling.caption.text())
+        assert v.t_rolling.value.text() == fmt_time(best - gap)   # both numbers still print
+        tip = v.t_rolling.toolTip()
+        assert ("Within timing precision" in tip) == (want == level), tip
+        assert "not a lap you drove" in tip, tip
+        pace = {sec.title: dict(sec.rows) for sec in export_data.stats_summary(s)}["PACE"]
+        assert want in pace, (gap, list(pace))
+    # Low GPS quality degrades the timing but is not an estimated clock: the floor stays 0.07 s, so
+    # a 0.10 s gap is apart (review of #600: a mutant widening on `.degraded` survived).
+    from studio.data_quality import DROPPED_FIX_CONCERN_FRAC
+    s.timing_quality = TimingQuality(dropped_fraction=DROPPED_FIX_CONCERN_FRAC + 0.1)
+    assert s.timing_quality.degraded and not s.timing_quality.media_clock
+    s.best_rolling_lap = lambda: best - 0.10
+    v.refresh()
+    assert v.t_rolling.caption.text() == "best rolling", v.t_rolling.caption.text()
+    s.best_rolling_lap = lambda: best - (PB_PRECISION_S - 0.001)
+    v.refresh()
+    assert v.t_rolling.caption.text() == level, v.t_rolling.caption.text()
+    # A non-finite figure is never "level" with anything (abs(nan) >= floor is False).
+    for bad in (math.nan, math.inf, -math.inf):
+        assert stats_service.rolling_caption(bad, 44.95) == "best rolling", bad
+        assert stats_service.rolling_caption(44.95, bad) == "best rolling", bad
+        assert stats_service.rolling_level_note(bad, 44.95) == "", bad
+    # AT the step is apart (the rule is "under"), checked where the float difference is exact.
+    assert stats_service.rolling_caption(0.0, PB_PRECISION_S) == "best rolling"
+    assert stats_service.rolling_caption(0.0, ESTIMATED_CLOCK_TIE_S, True) == "best rolling"
+    # No best lap to be level with (no clean-lap distribution), or no rolling best: plain caption.
+    assert stats_service.rolling_caption(68.15, None) == "best rolling"
+    assert stats_service.rolling_caption(None, 68.2) == "best rolling"
+    assert stats_service.rolling_level_note(None, 68.2) == ""
+    v.close()
+    print("test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap OK")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it
