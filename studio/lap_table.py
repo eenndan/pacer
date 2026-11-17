@@ -61,7 +61,9 @@ from PySide6.QtWidgets import (
 from . import data_quality, motion, provenance_panel, story, theme, units
 from . import stats as stats_service
 from ._signal import (
+    DIST_DECIMALS,
     PRINT_DECIMALS,
+    SPEED_DECIMALS,
     fmt_signed,
     fmt_time,
     is_best_at_print,
@@ -2009,10 +2011,12 @@ class LapTable(QWidget):
                 (lap_label(lap_id), float(lap_id)),
                 (fmt_time(row["time"]), float(row["time"])),
                 ("", float("nan")),                             # Δbest: _fill_delta writes it
-                (f"{row['dist']:.0f}", float(row["dist"])),
+                # DIST_DECIMALS / SPEED_DECIMALS, not literals: the exported report's Laps table
+                # prints these cells at the same constants (export_data.laps_table, display=True).
+                (f"{row['dist']:.{DIST_DECIMALS}f}", float(row["dist"])),
                 # Entry speed: convert km/h → the display unit for BOTH the shown text and the
                 # numeric sort key so ordering matches what's on screen (identity for km/h).
-                (f"{units.convert_speed(row['entry'], self._speed_unit):.1f}",
+                (f"{units.convert_speed(row['entry'], self._speed_unit):.{SPEED_DECIMALS}f}",
                  units.convert_speed(float(row["entry"]), self._speed_unit)),
             ]
             for i in range(n_splits):
@@ -3100,14 +3104,14 @@ class CornerTable(QWidget):
                 (f"{st.time:.{PRINT_DECIMALS}f}", None),
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (fmt_signed(st.delta, 2), theme.delta_colour(st.delta))),
-                (f"{conv(st.apex_speed, u):.1f}", None),
+                (f"{conv(st.apex_speed, u):.{SPEED_DECIMALS}f}", None),
                 # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
                 # rule (negative = green) is applied to the NEGATED speed delta.
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (fmt_signed(conv(st.apex_speed_delta, u), 1),
                   theme.delta_colour(-st.apex_speed_delta))),
-                (f"{conv(st.entry_speed, u):.1f}", None),
-                (f"{conv(st.exit_speed, u):.1f}", None),
+                (f"{conv(st.entry_speed, u):.{SPEED_DECIMALS}f}", None),
+                (f"{conv(st.exit_speed, u):.{SPEED_DECIMALS}f}", None),
                 (grip_pct, None),
             ]
             # Same tie rule as the split ★ and the Stats grid (`_signal.is_best_at_print`): this

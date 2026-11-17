@@ -39,7 +39,7 @@ from _synthetic import (  # noqa: E402
 
 from studio import export_data, gmeter, units  # noqa: E402
 from studio import stats as stats_service  # noqa: E402
-from studio._signal import fmt_time  # noqa: E402
+from studio._signal import DASH, fmt_time  # noqa: E402
 from studio.corners import Corner  # noqa: E402
 
 # A real 1x1 PNG (the report writer just embeds bytes; Qt does the grabbing in the app).
@@ -214,6 +214,41 @@ def test_laps_table_schema_and_values():
     assert s.dropout_lap_ids() == {2}
     assert by_id[2][4] == export_data.DROPOUT_FLAG
     assert by_id[0][4] == "" and by_id[1][4] == ""
+
+
+def test_the_display_table_prints_the_apps_precision_from_the_raw_values():
+    """cool/report-laps-precision: `display=True` (the report's copy) prints each kind of value at
+    the app's precision — lap time 3, distance 0, speeds 1, splits and corner times PRINT_DECIMALS —
+    and a missing number as the app's dash, while the default (laps.csv's) stays 3 decimals and
+    blank. It rounds the RAW value once: a 3.4051 split is "3.405" in the file, and "3.405" read
+    back and rounded again would print "3.40" where the app prints "3.41"."""
+    s = make_session()
+    real_splits, real_stats = s.lap_sector_splits, s.corners.lap_corner_stats
+    s.lap_sector_splits = lambda i: [3.4051] if i == 0 else real_splits(i)   # a partial lap
+    s.corners.lap_corner_stats = lambda i: [] if i == 0 else real_stats(i)   # no corner stats
+    for unit in (None, "mph"):
+        headers, csv_rows = export_data.laps_table(s, unit)
+        shown_h, shown = export_data.laps_table(s, unit, display=True)
+        assert shown_h == headers and [i for i, _ in shown] == [i for i, _ in csv_rows]
+        col = {h: k for k, h in enumerate(headers)}
+        sfx = "kmh" if unit is None else "mph"
+        assert dict(csv_rows)[0][col["S1_s"]] == "3.405" and dict(shown)[0][col["S1_s"]] == "3.41"
+        for h in ("S2_s", "C1_time_s", f"C1_apex_{sfx}", "C2_time_s", f"C2_apex_{sfx}"):
+            assert dict(csv_rows)[0][col[h]] == "" and dict(shown)[0][col[h]] == DASH, h
+        for r in s.lap_rows():
+            cells = dict(shown)[r["idx"]]
+            assert cells[col["time_s"]] == f"{r['time']:.3f}"
+            assert cells[col["dist_m"]] == f"{r['dist']:.0f}"
+            assert cells[col[f"entry_{sfx}"]] == f"{units.convert_speed(r['entry'], sfx):.1f}"
+            if r["idx"]:
+                st = real_stats(r["idx"])
+                assert cells[col["C2_time_s"]] == f"{st[1].time:.2f}"
+                assert cells[col[f"C2_apex_{sfx}"]] == \
+                    f"{units.convert_speed(st[1].apex_speed, sfx):.1f}"
+            # The non-numeric cells are the file's own.
+            for h in ("lap", "flag", "quality", export_data.INTERPOLATED_COLUMN):
+                assert cells[col[h]] == dict(csv_rows)[r["idx"]][col[h]], h
+    print("ok: the report's laps cells print the app's precision once, from the raw value")
 
 
 def test_laps_table_degenerate_schema():
@@ -1050,6 +1085,7 @@ def test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column():
 
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
+    test_the_display_table_prints_the_apps_precision_from_the_raw_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()
     test_the_csv_discloses_an_interpolated_corner_cell_and_keeps_every_row()

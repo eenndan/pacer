@@ -8,12 +8,14 @@ QFileDialog save prompts, and the widget→PNG grabs (the only Qt-touching part 
 and passes the bytes in. Nothing here ever writes a file without being called explicitly with
 a user-chosen path — there is no implicit/automatic export anywhere.
 
-Float formatting policy (two deliberately different precisions):
+Float formatting policy (three deliberately different precisions):
   * channels.csv — `repr()` of the Python float: the shortest string that round-trips to the
     EXACT same double, so a re-parse with `float()` reproduces the Session arrays
     bit-for-bit (np.array_equal — asserted on the real session at verification).
-  * laps.csv + the report — human-readable 3 decimals: sub-ms digits are GPS noise anyway
-    (the validated timing floor is ~50–90 ms per lap), and the file is meant to be READ.
+  * laps.csv — human-readable 3 decimals: sub-ms digits are GPS noise anyway (the validated
+    timing floor is ~50–90 ms per lap), and the file is meant to be READ.
+  * the report's Laps table — the APP'S precision per kind of value (`_DISPLAY`): a page a person
+    reads beside the app must not print a digit the app's own tables never show.
 
 DISCLOSURES TRAVEL WITH THE NUMBER (§5.4). Everything written here leaves the app: there is no
 tooltip, no neighbouring tile and no hover behind an exported file. So every value that is an
@@ -43,7 +45,16 @@ from typing import NamedTuple, TextIO, cast
 
 from . import APP_NAME, coaching, data_quality, story, units
 from . import stats as stats_service
-from ._signal import DASH, exclusion_summary, fmt_hms, fmt_time, lap_label
+from ._signal import (
+    DASH,
+    DIST_DECIMALS,
+    PRINT_DECIMALS,
+    SPEED_DECIMALS,
+    exclusion_summary,
+    fmt_hms,
+    fmt_time,
+    lap_label,
+)
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
 # dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
@@ -120,8 +131,34 @@ class SummaryRow(NamedTuple):
 
 
 def _f3(v) -> str:
-    """Human 3-decimal float formatting (laps.csv + the report tables)."""
+    """Human 3-decimal float formatting (laps.csv)."""
     return f"{float(v):.3f}"
+
+
+class _CellFormat(NamedTuple):
+    """How `laps_table` prints each KIND of value: the lap time, the lap distance, a speed (already
+    in the column's unit), a sector split or corner time, and the text of a missing number."""
+    time: Callable[[float], str]
+    dist: Callable[[float], str]
+    speed: Callable[[float], str]
+    split: Callable[[float], str]
+    missing: str
+
+
+#: laps.csv: 3 decimals everywhere and a blank for a missing number — the file's machine contract,
+#: byte for byte what it has always written.
+_CSV = _CellFormat(_f3, _f3, _f3, _f3, "")
+#: The report's Laps table: what the app prints for the same cell. The lap time keeps fmt_time's
+#: three decimals (the app's Time column: two laps a thousandth apart must not read level); the
+#: distance is the Laps tab's whole metres; every speed the lap/corner tables' one decimal; a split
+#: or corner time PRINT_DECIMALS, the resolution the app's ★ and ▼ are decided at; a missing number
+#: is the app's dash, never a blank between numbers.
+_DISPLAY = _CellFormat(
+    time=_f3,
+    dist=lambda v: f"{float(v):.{DIST_DECIMALS}f}",
+    speed=lambda v: f"{float(v):.{SPEED_DECIMALS}f}",
+    split=lambda v: f"{float(v):.{PRINT_DECIMALS}f}",
+    missing=DASH)
 
 
 def _atomic_write(path: str, body: Callable[[TextIO], object], *, newline: str | None = None) -> None:
@@ -173,9 +210,10 @@ def _speed_column(unit: str | None):
     return u, lambda v, _u=u: units.convert_speed(v, _u)
 
 
-def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[int, list[str]]]]:
+def laps_table(session, unit: str | None = None, *, display: bool = False
+               ) -> tuple[list[str], list[tuple[int, list[str]]]]:
     """(headers, rows) of the lap table — single-sourced for BOTH `write_laps_csv` and the
-    report's HTML table, so the two always agree on rows, ordering and precision. One row per lap
+    report's HTML table, so the two always agree on rows, ordering and columns. One row per lap
     shown in the app's lap table (`session.lap_rows()` — the valid laps), as `(lap_id, cells)`;
     columns:
 
@@ -223,7 +261,13 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
     `unit` selects the SPEED columns' unit and header suffix (see `_speed_column`): None — the
     default and the ONLY thing the CSV writer passes — keeps the canonical SI km/h; "mph"/"kmh"
     renders `entry_mph` / `C1_apex_mph` for the report's display-unit copy. Distances and times
-    are SI in both modes (the app shows them in the same units on screen)."""
+    are SI in both modes (the app shows them in the same units on screen).
+
+    `display=True` prints every number at the APP'S precision (`_DISPLAY`) — the report's copy —
+    from the same raw values, never by re-rounding the CSV's strings (a 3.4051 split is "3.405" in
+    the file and must still print the app's "3.41", not a twice-rounded "3.40"). Off by default,
+    and the CSV writer never passes it: the rows, their order and the column set are the same."""
+    fmt = _DISPLAY if display else _CSV
     rows_meta = session.lap_rows()
     n_sect = session.sector_count()
     n_splits = n_sect + 1 if n_sect else 0  # N lines -> N+1 sub-sectors; 0 lines -> none
@@ -246,15 +290,16 @@ def laps_table(session, unit: str | None = None) -> tuple[list[str], list[tuple[
         lap_id = r["idx"]
         # `lap` column is the 1-based lap NUMBER (lap_label), matching the app's Lap column;
         # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
-        cells = [lap_label(lap_id), _f3(r["time"]), _f3(r["dist"]), _f3(speed(r["entry"])),
-                 DROPOUT_FLAG if lap_id in dropout_ids else ""]
+        cells = [lap_label(lap_id), fmt.time(r["time"]), fmt.dist(r["dist"]),
+                 fmt.speed(speed(r["entry"])), DROPOUT_FLAG if lap_id in dropout_ids else ""]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
-            cells.append(_f3(splits[i]) if i < len(splits) else "")
+            cells.append(fmt.split(splits[i]) if i < len(splits) else fmt.missing)
         stats = {s.cid: s for s in session.corners.lap_corner_stats(lap_id)}
         for c in corner_list:
             s = stats.get(c.cid)
-            cells += [_f3(s.time), _f3(speed(s.apex_speed))] if s is not None else ["", ""]
+            cells += ([fmt.split(s.time), fmt.speed(speed(s.apex_speed))] if s is not None
+                      else [fmt.missing, fmt.missing])
         # `dropout_ids` is passed in so the per-lap read does not re-fetch the set per row.
         cells.append(" ".join(data_quality.lap_marks(session, lap_id, dropout_ids)))
         cells.append(interpolated_corners(corner_list, resolved_of, lap_id))
@@ -1228,8 +1273,8 @@ def _laps_head(headers) -> str:
 
 
 def _laps_section(session, headers, rows, cue_lap) -> list[str]:
-    """The Laps table (`laps_table`, the CSV's rows, under `report_laps_header`'s words) and the
-    notes that decode it."""
+    """The Laps table (`laps_table`'s rows at the app's precision, `display=True`, under
+    `report_laps_header`'s words) and the notes that decode it."""
     esc = html.escape
     out = ['<section class="wide">', f"<h2>Laps ({len(rows)})</h2>",
            '<table class="laps">' + _laps_head(headers)]
@@ -1312,7 +1357,8 @@ def write_report_html(path: str, session, source_label: str = "",
     `timing_verified` / `timing_quality` — the two facts that qualify every number below it — and
     MOMENTS and the slow-lap notes repeat it under themselves when they carry a timing state."""
     esc = html.escape
-    headers, rows = laps_table(session, unit)
+    # display=True: the table a person reads prints the app's precision, laps.csv keeps its own.
+    headers, rows = laps_table(session, unit, display=True)
     best = session.best_lap_id()
     # THE BEST-LAP CUE FOLLOWS THE APP'S OWN TRUST GATE. On PROVISIONAL timing — an auto-fitted
     # start line nobody confirmed, the state every unrecognised circuit loads in — the app
