@@ -564,3 +564,72 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - The keys 1-5 right after a load, on a real display.
   - Pull request #582's commit list still shows a comment, since removed, that cited a real
     session; main never carried it.
+
+## 14. Recorded at the 0.13.0 release, 2026-11-17
+
+- **v0.13.0 is the report release**: 4 pull requests from #589 to #592, Wave 6 of the campaign
+  section 8 records. The lap card's baseline line and the one-column shortcuts card (#589);
+  Coaching's shortlist rule and page strings moved into `coaching.py`, with one fix, no "+0.00 s"
+  card opportunity (#590); the report's pinned chart and map, its Laps headers and two leak fixes
+  (#591); and the report's front page (#592).
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **The report's figures are pinned, not grabbed** (#591). Chart: the one the app opens on, the
+    best lap against the synthetic ideal lap, falling back to the two fastest laps against the
+    best; a one-lap session gets Speed only. Map: the best lap coloured by speed, its brake glyphs
+    and corner labels, the whole track framed, no drag cue or video marker. Both on distance, in
+    the reader's unit, at fixed sizes (960×480 and 960×600), each captioned. Why: the live grab
+    embedded whatever the window showed, and from the debrief an empty image. The copies are
+    destroyed at once (about 14 MB per report leaked before). A figure that fails leaves a note
+    rather than costing the document.
+  - **The front page** (#592): the lap card beside COACHING, printed from the ordinary Coaching
+    page's text (braking-direction lines included) even when exported from the debrief. No card
+    on provisional timing. With too few laps, the page's own empty state. A closing note tells the
+    headline's total from the ideal lap's gap; the scope note counts the shortlist the headline
+    sums.
+  - **The card's wording** (#589): "typical pass vs your best lap's" (`stats.TYPICAL_PASS`,
+    `coaching.LOSS_BASELINE`). "median vs your best lap" was refused: it reads as the median lap.
+  - **The shortcuts card is 640 px** (#589): one key column for every group, set by its widest
+    cell; gesture rows are a bare verb and name their object in the description. At 560 px eight
+    descriptions wrapped.
+  - **Conservative choices**: the strings moved without rewording (a dump of the Stats page's
+    observable state is equivalent to v0.12.0's); the card shows no opportunity rather than
+    "+0.00 s"; nothing in the live app's look changed; no report screenshot was published.
+- **The media.** `accuracy.png`, `debrief.png` and `moments.png` were re-captured on the synthetic
+  demo in one run and `lapstrip.png` in a run of its own, at a clean commit, all four
+  byte-identical to the files already committed. `hero.png`, `map.png` and `og.png` are waived
+  again as stale, for 0.8.0's reasons: 0.13.0 changed nothing these pictures show (its map change
+  is a report-only copy of the map), and a re-composition of `og.png` is byte-identical.
+  `data-trust.png` and `ideal-lap.png` are renewed: a demo render of both shots from v0.12.0's
+  `studio/` and from 0.13.0 is byte-identical. The export stills `overlay.jpg`, `best-lap.jpg` and
+  `best-lap.mp4` are renewed: 0.13.0 changed no export-video code, and a painter-level render of
+  96 Classic configurations on the demo, 1,536 frames overlay-only and composited, from v0.12.0's
+  `studio/` and from 0.13.0 is byte-identical. The report and the share card have no published
+  image.
+- **What could not run for it.** As at 0.12.0, one recording the real-footage checks take is on
+  this machine; the rest report Skipped by name because their recordings are not here. The
+  transport keys (Space, ←/→, `,` / `.`) could not be confirmed offscreen. The manual half of the
+  golden gate did not run; the core is unchanged.
+- **Open for the owner** (new).
+  - The report's Laps table prints lap times to 3 decimals, where the app shows 91.4.
+  - The theme's "79 % of that time" is a share of all ranked corners, while the headline above it
+    sums the top 3 (0.43 s).
+  - A session reload can strand widgets.
+  - The landing stills, and whether to add a report screenshot.
+  - With nothing ranked, the lap card's "Drive a few more clean laps" sits beside COACHING's "no
+    corner clears its spread".
+  - A one-lap report says "Your ideal lap is 0.00 s under your best."
+  - The map key in the report keeps its collapse chevron.
+  - The capture tool writes different `lapstrip.png` bytes depending on what else the same run
+    captures; this release shot it in a run of its own.
+- **Open for the owner** (carried from section 13): ranking corners that lose under 0.07 s at all;
+  weighing consistency on the middle half rather than σ; the apex and braking reasons have no
+  noise floor; the demo habit is ranked only on its own seed; Classic colours a Δ inside 0.07 s;
+  the overlay's ★/Δ under provisional timing; Broadcast as the default Style; Extras on in
+  Classic; the ◆ glyph; Follow's default; re-shooting the landing stills and a Broadcast still;
+  the keys 1-5 right after a load on a real display; pull request #582's commit list comment; the
+  published real-footage Coaching tables cannot be re-verified offline.
+- **The campaign ends with this release** (discovery round 3: one small wave, then stop).
+  Leftovers, ranked: the open questions above; then the brake glyph colour map against the chart's,
+  the "best rolling" note, one lap in two colours, the speed-panel chip, the welcome page, the
+  "most of it on the apex" tail, and the fifth corner's label under the Broadcast minimap's kart
+  dot.

@@ -6,6 +6,60 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-11-17
+
+The report release: 4 pull requests from #589 to #592, Wave 6 of the campaign to make the app
+cooler and still true: the session report opens the way the app does, its chart and map no longer
+depend on the window, and the lap card says what its opportunity is measured against.
+
+### Highlights
+
+- **The report opens on the answer.** File ▸ Export ▸ Session report (HTML) opens like the debrief:
+  the lap card beside COACHING, with its headline, "Start with C1" and every row in the Coaching
+  page's words, before the Stats groups (#592)
+- **No more empty pictures.** In 0.12.0 a report exported while the first-open debrief was up came
+  out with empty chart and map images. Both are now drawn on their own, the best lap against the
+  ideal and the whole track by speed, identical whatever the window shows (#591)
+- **Two gaps, told apart.** The lap card says what its opportunity measures, "typical pass vs your
+  best lap's" (C1 +0.36 s on the demo, under a +0.32 s ideal-lap gap); the report says why the two
+  differ (#589, #592)
+- **The report speaks the app's words.** Its Laps table carries the app's headers ("Time (s)", "C1"
+  over time and apex), with no sideways scroll at 1100 px; on provisional timing it names the best
+  lap by its time (#591)
+- **No "+0.00 s" opportunity.** When no corner's loss survives rounding, the lap card shows none,
+  as the Coaching page does (#590)
+- **One key column.** The keyboard-shortcuts card (F1 or ?) lines every description up on one
+  column and is wider; each drag or click row names its gesture in the description (#589)
+
+### Changed
+
+- The session report opens like the debrief: the lap card beside a COACHING section (headline,
+  "Start with …", every row and reason, in the Coaching page's words), before the Stats groups.
+  (#592)
+- No lap card on provisional timing, as in the app; with too few laps COACHING says why, as the
+  Coaching page does. Its CORNERS note now ties COACHING, the ideal lap and Med loss together.
+  (#592)
+- The keyboard-shortcuts card lines every description up on one column; its drag and double-click
+  rows name the gesture in the description ("Drag the chart cursor: …"), and the card is wider.
+  (#589)
+
+### Fixed
+
+- Coaching's headline hover counts the corners the headline sums ("top 2", "your worst corner", or
+  no total when none is ranked) instead of always "your top 3 corners". (#592)
+- Report chart: the chart Pacer opens on (best lap vs ideal, else the two fastest), captioned, with
+  no key hint or cursor, whatever laps were up; a one-lap session gets no flat Δ chart. (#591)
+- Report Laps table: the app's headers ("Time (s)", "C1" over time and apex) instead of CSV names;
+  no sideways scroll at 1100 px and no header broken mid-word on paper. (#591)
+- Report map and chart exported from the first-open debrief are no longer empty, and the map is the
+  best lap by speed, whole track framed, whatever the window shows (race, zoom, compare). (#591)
+- On provisional timing the report's figures name the best lap by its time, not its number. (#591)
+- The lap card no longer shows a "+0.00 s" opportunity when every ranked corner's loss rounds to
+  zero; like the Coaching page, it then shows no opportunity. (#590)
+- The lap card's biggest opportunity names its baseline, "typical pass vs your best lap's", so it no
+  longer reads as a part of the "vs your ideal lap" gap above it (on the demo it was the larger).
+  (#589)
+
 ## [0.12.0] — 2026-11-16
 
 The one-story release: 13 pull requests from #574 to #587, Wave 5 of the campaign to make the app
@@ -2130,7 +2184,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/eenndan/pacer/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/eenndan/pacer/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/eenndan/pacer/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/eenndan/pacer/compare/v0.9.0...v0.10.0
