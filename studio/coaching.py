@@ -2015,6 +2015,11 @@ def _lap_account(session) -> tuple[int | None, int]:
             (len(cast("Sized", dropout())) if callable(dropout) else 0))
 
 
+# The one empty state whose remedy is driving more laps — the share card keys its own "drive a few
+# more" line on it (`share_card.no_opportunity_line`), so no other state is told to drive more.
+FEW_LAPS_TITLE = "Not enough clean laps yet."
+
+
 def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
     """(title, body) for the two no-table cases — too few clean laps, or nothing losing time.
 
@@ -2049,7 +2054,7 @@ def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
             return ("Not enough clean laps.",
                     f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
                     "corner by corner. You drove the laps — the GPS lost its fix during them.")
-        return ("Not enough clean laps yet.",
+        return (FEW_LAPS_TITLE,
                 f"{needs}{f' ({lost})' if lost else ''}. Drive a few more laps and reload.")
     return ("No corner is losing time.",
             "Your typical lap matches your best lap all the way round — your best-lap pace is "
@@ -2140,11 +2145,18 @@ BASELINES_SENTENCE = "Different baselines, different questions — not three est
 
 def ideal_gap_s(session) -> float | None:
     """best lap − ideal total, or None when either half is missing (the honesty rule: no number
-    rather than a 0.00 that reads as a measurement)."""
+    rather than a 0.00 that reads as a measurement) — or when ONE lap won every segment
+    (`ideal_donor_lap_id`), the gate every other ideal-lap surface already reads (the IDEAL LAP
+    group, the card's Δ, the Stats tile). The ideal is then that lap, so the gap is 0.00 by
+    construction: a one-lap synthetic session printed "Your ideal lap is 0.00 s under your best."
+    in Stats ▸ CORNERS and the report's CORNERS note, beside an IDEAL LAP section that was hidden."""
     ideal_fn = getattr(session, "ideal_total", None)
     best_fn = getattr(session, "best_lap_id", None)
     time_fn = getattr(session, "lap_time", None)
     if ideal_fn is None or best_fn is None or time_fn is None:
+        return None
+    donor_fn = getattr(session, "ideal_donor_lap_id", None)
+    if donor_fn is not None and donor_fn() is not None:
         return None
     ideal = ideal_fn()
     best_id = best_fn()

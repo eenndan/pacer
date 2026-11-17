@@ -659,6 +659,9 @@ class _MapLegend(QWidget):
         super().__init__()
         self._collapsed = bool(collapsed)   # the USER's choice — the value that persists
         self._fits = True                   # room on the canvas for the full plate (set by MapView)
+        # A still picture of the plate (the report's map, app._grab_report_map_png): no caret, as a
+        # disclosure control in an image is one a click can never open. The title keeps its column.
+        self._document = False
         self._on_resize = on_resize  # MapView re-pins the key when collapse changes its height
         self._on_toggle = on_toggle  # MapView persists the user's choice
         # The brake glyphs CURRENTLY on the plot, as [(pyqtgraph symbol, fill hex, edge hex)] —
@@ -773,10 +776,12 @@ class _MapLegend(QWidget):
         collapsed = self.painted_collapsed()
         # The caret sits in the SAME glyph column the key rows use, so the title word starts on the
         # label column instead of 6 px short of it (it used to be a character inside the title).
-        caret = self._caret_pixmap(collapsed)
-        cw, ch = caret.width() / caret.devicePixelRatio(), caret.height() / caret.devicePixelRatio()
-        p.drawPixmap(QPointF(_LEGEND_PAD + (_LEGEND_GLYPH_W - cw) / 2.0,
-                             _LEGEND_PAD + (_LEGEND_ROW_H - ch) / 2.0), caret)
+        if not self._document:
+            caret = self._caret_pixmap(collapsed)
+            cw = caret.width() / caret.devicePixelRatio()
+            ch = caret.height() / caret.devicePixelRatio()
+            p.drawPixmap(QPointF(_LEGEND_PAD + (_LEGEND_GLYPH_W - cw) / 2.0,
+                                 _LEGEND_PAD + (_LEGEND_ROW_H - ch) / 2.0), caret)
         tx = _LEGEND_PAD + _LEGEND_GLYPH_W + _LEGEND_GAP
         p.drawText(QRectF(tx, _LEGEND_PAD, self._w - tx - _LEGEND_PAD, _LEGEND_ROW_H),
                    int(Qt.AlignVCenter | Qt.AlignLeft), "Map key")

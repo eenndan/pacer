@@ -56,6 +56,10 @@ CARD_H = 1350
 # card's 936 px content box — pinned by tests/test_share_card.py.
 IDEAL_LABEL = "vs your ideal lap"
 
+# The opportunity row's line when there are too few clean laps to rank a corner — and only then
+# (`no_opportunity_line` gives every other no-opportunity state the Coaching page's own words).
+NO_OPP_FEW_LAPS = "Drive a few more clean laps for coaching tips."
+
 
 def ideal_sublabel(laps: int | None) -> str:
     """The honesty line under the Δ-to-ideal hero, CARRYING ITS SAMPLE SIZE.
@@ -214,6 +218,8 @@ class CardData:
     pb: str = ""          # the personal-best mark beside "BEST LAP" (`pb_mark`), or ""
     provenance: str = ""  # what the time is worth, in the exported report's own words
     #                       (`provenance_line`), or "" — the footer then keeps its tagline
+    no_opp: str = ""      # the line in the opportunity's place when `top_opp` is None
+    #                       (`no_opportunity_line`), or "" — the row is then left empty
 
 
 def provenance_line(session) -> str:
@@ -235,15 +241,48 @@ def provenance_line(session) -> str:
         return ""
 
 
-def _top_opportunity(session, unit: str) -> TopOpp | None:
+def no_opportunity_line(session, opps) -> str:
+    """The line the card prints where no corner leads, in the Coaching page's own words for the
+    state it is in — or "" when the opportunity could not be read (the row is then left empty).
+
+    The card used to print `NO_OPP_FEW_LAPS` for every such state, and it is true only for one:
+    synthetic seed 3 with 4 clean laps lists five corners and ranks none, so its COACHING section,
+    beside the card in the exported report, read "no corner clears its own lap-to-lap spread
+    (median of 4 clean laps)" while the card asked for more laps. So:
+      * corners listed, none ranked — the page's headline (`coaching.headline`), word for word;
+      * too few clean laps — the card's own "drive a few more" line, the one state it is true of;
+      * any other empty state (no corner losing time, GPS dropouts took the laps) — its title
+        (`coaching.empty_state_copy`), the page's WHAT HAPPENED."""
+    if opps is None:
+        return ""
+    try:
+        if opps.enough and coaching.shown_rows(opps):
+            return coaching.headline(opps)
+        title, _body = coaching.empty_state_copy(opps, session)
+    except Exception:  # noqa: BLE001 — an empty row beats a broken card
+        return ""
+    return NO_OPP_FEW_LAPS if title == coaching.FEW_LAPS_TITLE else title
+
+
+def _read_opportunities(session):
+    """`session.coaching_opportunities()`, or None when it raises — read ONCE per card (see
+    test_the_card_build_reads_the_coaching_opportunity_once) and shared by the opportunity row
+    and the line that stands in for it."""
+    try:
+        return session.coaching_opportunities()
+    except Exception:  # noqa: BLE001 — the card degrades to "no opportunity", never crashes
+        return None
+
+
+def _top_opportunity(session, unit: str, opps=None) -> TopOpp | None:
     """The biggest coaching opportunity as a display row — or the corners tied with it — or None
     when the session has too few clean laps or no corner is losing time. Reuses the CANONICAL
     coaching model, sentence and tie rule (no new analysis) and the lap table's direction glyph,
     so the card can't drift from the panel. Fully guarded — a card must never be broken by a
-    coaching hiccup."""
+    coaching hiccup. `opps` is the caller's read of the model (None: read it here)."""
     try:
         from .lap_table import CORNER_DIR_GLYPH
-        opps = session.coaching_opportunities()
+        opps = opps if opps is not None else session.coaching_opportunities()
         if not opps.enough:
             return None
         # THE COACHING PAGE'S SHORTLIST, and its first row (`coaching.shortlist`, the one
@@ -329,6 +368,8 @@ def card_data(session, *, unit: str | None = None, pb_standing: dict | None = No
     blocked = provisional or best_id is None
     # A data-quality-degraded (media-clock packet spread / low-GPS) time still renders, but stamped.
     stamp = "estimated timing" if session.timing_quality.degraded else ""
+    opps = _read_opportunities(session)
+    top_opp = _top_opportunity(session, unit, opps) if opps is not None else None
 
     return CardData(
         track=track,
@@ -338,7 +379,8 @@ def card_data(session, *, unit: str | None = None, pb_standing: dict | None = No
         delta_to_ideal_s=delta_ideal,
         ideal_laps=ideal_laps,
         unit=unit,
-        top_opp=_top_opportunity(session, unit),
+        top_opp=top_opp,
+        no_opp=no_opportunity_line(session, opps) if top_opp is None else "",
         blocked=blocked,
         stamp=stamp,
         pb=pb_mark(pb_standing, session.lap_time(best_id) if best_id is not None else None,
@@ -374,6 +416,11 @@ _REASON_PX_STEPS = (30, 27, 24)
 _OPP_PX_STEPS = (46, 40, 34)
 _OPP_GAP = 24     # the least clear space between the corner line and the loss figure
 _OPP_BASE_PX_STEPS = (24, 22, 20)  # the figure's baseline on the heading row (`opp_baseline`)
+# ...and for the line in the opportunity's place (`no_opportunity_line`). The two short lines keep
+# the 28 px they always had; the Coaching headline, measured (Inter, regular), is 1101 px at 28 and
+# 944 at 24 with "median of 4 clean laps", 887 at 22 with a three-digit count — so it draws whole
+# at the last step, the footer's own size, on any session, and an elide stays a guard.
+_NO_OPP_PX_STEPS = (28, 24, 22)
 # A tie's corner row names at most this many corners and counts the rest: "C1 · C4 · C7 · 2 more".
 # The CARD's cap, not the page's. The Coaching page's "Start with" names every tied corner
 # (`coaching.corner_names`), but this row is fixed-width. Measured beside the widest span, a
@@ -568,9 +615,11 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         if opp.reason:
             reason, reason_font = _fit_line(p, opp.reason, right - pad, _REASON_PX_STEPS)
             _draw_text(p, pad, opp_top + 110, reason, reason_font, theme.C.text_dim)
-    else:
-        _draw_text(p, pad, opp_top, "Drive a few more clean laps for coaching tips.",
-                   _font(28), theme.C.text_muted)
+    elif data.no_opp:
+        # Fitted like every other line (`_NO_OPP_PX_STEPS`): the page's headline is the longest
+        # line this row prints.
+        line, line_font = _fit_line(p, data.no_opp, right - pad, _NO_OPP_PX_STEPS)
+        _draw_text(p, pad, opp_top, line, line_font, theme.C.text_muted)
 
     # --- wordmark (subtle, bottom) ---
     # A LOWERCASE LOGOTYPE, BY DESIGN, and not a misspelling of the product: it is set as a
