@@ -6317,6 +6317,22 @@ def test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap():
         assert "not a lap you drove" in tip, tip
         pace = {sec.title: dict(sec.rows) for sec in export_data.stats_summary(s)}["PACE"]
         assert want in pace, (gap, list(pace))
+    # Low GPS quality degrades the timing but is not an estimated clock: the floor stays 0.07 s, so
+    # a 0.10 s gap is apart (review of #600: a mutant widening on `.degraded` survived).
+    from studio.data_quality import DROPPED_FIX_CONCERN_FRAC
+    s.timing_quality = TimingQuality(dropped_fraction=DROPPED_FIX_CONCERN_FRAC + 0.1)
+    assert s.timing_quality.degraded and not s.timing_quality.media_clock
+    s.best_rolling_lap = lambda: best - 0.10
+    v.refresh()
+    assert v.t_rolling.caption.text() == "best rolling", v.t_rolling.caption.text()
+    s.best_rolling_lap = lambda: best - (PB_PRECISION_S - 0.001)
+    v.refresh()
+    assert v.t_rolling.caption.text() == level, v.t_rolling.caption.text()
+    # A non-finite figure is never "level" with anything (abs(nan) >= floor is False).
+    for bad in (math.nan, math.inf, -math.inf):
+        assert stats_service.rolling_caption(bad, 44.95) == "best rolling", bad
+        assert stats_service.rolling_caption(44.95, bad) == "best rolling", bad
+        assert stats_service.rolling_level_note(bad, 44.95) == "", bad
     # AT the step is apart (the rule is "under"), checked where the float difference is exact.
     assert stats_service.rolling_caption(0.0, PB_PRECISION_S) == "best rolling"
     assert stats_service.rolling_caption(0.0, ESTIMATED_CLOCK_TIE_S, True) == "best rolling"

@@ -37,6 +37,7 @@ typical (CornerMatrix says why)."""
 from __future__ import annotations
 
 import datetime
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, overload
@@ -664,8 +665,8 @@ def rolling_caption(rolling: float | None, best: float | None, clock_estimated: 
                     ) -> str:
     """"best rolling", or "best rolling · level" when both exist and sit closer than
     `rolling_level_floor`."""
-    if rolling is None or best is None:
-        return ROLLING_CAPTION
+    if rolling is None or best is None or not (math.isfinite(rolling) and math.isfinite(best)):
+        return ROLLING_CAPTION   # a non-finite figure is level with nothing (abs(nan) >= x is False)
     if abs(best - rolling) >= rolling_level_floor(clock_estimated):
         return ROLLING_CAPTION
     return f"{ROLLING_CAPTION} · level"

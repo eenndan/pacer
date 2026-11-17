@@ -1675,12 +1675,16 @@ def _printed_side_share(theme: Theme, rows: list[Opportunity] | None) -> float:
 def _printed_cause_share(theme: Theme, rows: list[Opportunity] | None) -> float:
     """The cause line's percentage: its corners' printed losses over every ranked row's;
     `theme.cause_share` when no rows ride along or when the printed ratio would fall under the
-    THEME_SHARE that let the line print at all."""
+    THEME_SHARE that let the line print at all, or print as 100 % while a ranked corner it does not
+    name lost time (one under the display floor prints +0.00), as the "Most" form guards."""
     if not rows:
         return theme.cause_share
     ranked, _, _ = _side_rows(rows)
     cause = [r for r in ranked if r.cid in theme.cause_cids]
-    return _printed_share(cause, ranked, theme.cause_share, lo=THEME_SHARE)
+    share = _printed_share(cause, ranked, theme.cause_share, lo=THEME_SHARE)
+    if f"{share:.0%}" == "100%" and len(cause) < len(ranked):
+        return theme.cause_share
+    return share
 
 
 def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
@@ -1742,13 +1746,16 @@ def _split_sentence(theme: Theme, tipping: Opportunity | None = None, base: str 
     tipped ones: the hedge is about which side, not about the numbers. `base` is `_theme_base`'s
     phrase, leading the halves when it is not the headline's shortlist. With `rows` the halves
     print as their cells add up (`_printed_exec_pct`)."""
-    exec_pct = _printed_exec_pct(theme, rows)
+    # ONE rounding, the second half 100 minus the first: a ratio of printed cells is an exact
+    # fraction like 0.17 / 0.40 = 0.425, and two `:.0%` roundings printed "42% … 57%".
+    first = int(f"{_printed_exec_pct(theme, rows):.0%}"[:-1])
+    second = 100 - first
     if base:
-        out = (f"No single theme: of {base}, {exec_pct:.0%} is in corners you have already "
-               f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached")
+        out = (f"No single theme: of {base}, {first}% is in corners you have already "
+               f"driven at this pace, {second}% in corners you have rarely reached")
     else:
-        out = (f"No single theme: {exec_pct:.0%} of the time on offer is in corners you have "
-               f"already driven at this pace, {1 - exec_pct:.0%} in corners you have rarely "
+        out = (f"No single theme: {first}% of the time on offer is in corners you have "
+               f"already driven at this pace, {second}% in corners you have rarely "
                "reached")
     if tipping is None:
         return out + "."

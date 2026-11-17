@@ -3551,9 +3551,11 @@ def _check_printed_shares(rows) -> int:
         ratio = _cells_ratio(ex, ex + pa)
         clears = max(ratio, 1 - ratio) >= K.THEME_SHARE
         exec_pct = theme.execution_s / (theme.execution_s + theme.pace_s)
+        # The two halves are ONE rounding: they always add up to 100 (review of #600: cells of
+        # +0.23 / +0.17 are 0.575 / 0.425 exactly, which printed "57% … 42%").
+        assert len(pcts) == 2 and sum(pcts) == 100, (sentence, pcts)
         if clears == (max(exec_pct, 1 - exec_pct) >= K.THEME_SHARE):
-            assert pcts == [round(100 * ratio), round(100 * (1 - ratio))] or \
-                pcts == [int(f"{ratio:.0%}"[:-1]), int(f"{1 - ratio:.0%}"[:-1])], (sentence, ratio)
+            assert pcts[0] == int(f"{ratio:.0%}"[:-1]), (sentence, ratio)
         else:
             fell_back += 1
     elif sentence.startswith("Most"):
@@ -3565,11 +3567,16 @@ def _check_printed_shares(rows) -> int:
             assert pcts == [int(f"{theme.share:.0%}"[:-1])] and pcts != [100], sentence
     acts = K.theme_actions(theme, rows)
     if acts and "common thread" in acts[0]:
-        ratio = _cells_ratio([r for r in ranked if r.cid in theme.cause_cids], ranked)
-        if ratio >= K.THEME_SHARE:
+        named = [r for r in ranked if r.cid in theme.cause_cids]
+        ratio = _cells_ratio(named, ranked)
+        # 100 % beside a ranked corner the line does not name (its loss prints +0.00) is the
+        # unrounded share, as "Most" is.
+        whole_but_not_all = f"{ratio:.0%}" == "100%" and len(named) < len(ranked)
+        if ratio >= K.THEME_SHARE and not whole_but_not_all:
             assert _printed_pcts(acts[0]) == [int(f"{ratio:.0%}"[:-1])], (acts[0], ratio)
         else:
             fell_back += 1
+            assert _printed_pcts(acts[0]) == [int(f"{theme.cause_share:.0%}"[:-1])], acts[0]
     return fell_back
 
 
@@ -3628,6 +3635,27 @@ def test_the_theme_share_is_the_ratio_of_the_printed_cells():
     th = K.session_theme(split2)
     assert K.theme_sentence(th, split2).startswith(
         "No single theme: 55% of the time on offer"), K.theme_sentence(th, split2)
+    # Review of #600: cells of +0.17 / +0.23 are 0.425 / 0.575, and two separate roundings printed
+    # "42% … 57%" — 99. One rounding, the second half 100 minus the first.
+    halves = [_ranked_row(1, 0.1726, 0.001, n_laps=40),
+              _ranked_row(2, 0.2284, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    said = K.theme_sentence(K.session_theme(halves), halves)
+    assert said.startswith("No single theme: 42% of the time on offer") and "58% in corners" in \
+        said, said
+    _check_printed_shares(halves)
+    # The cause line never prints 100 % beside a ranked corner it does not name: C2's +0.004 s
+    # prints +0.00, the cells would make 100 %, and the unrounded 99 % prints, as "Most" does.
+    cause = [_ranked_row(1, 0.5, 0.01, kind=K.REASON_APEX, n_laps=40),
+             _ranked_row(2, 0.004, 0.01, kind=K.REASON_BRAKING, n_laps=40)]
+    th = K.session_theme(cause)
+    assert th.cause == K.REASON_APEX and th.cause_cids == (1,), th
+    assert K.theme_actions(th, cause)[0] == (
+        "Apex speed is the common thread — 99% of the time your 2 ranked corners lose is in C1."), \
+        K.theme_actions(th, cause)[0]
+    # Every ranked corner named: 100 % is the cells' own ratio and prints.
+    both = [_ranked_row(1, 0.5, 0.01, kind=K.REASON_APEX, n_laps=40),
+            _ranked_row(2, 0.004, 0.01, kind=K.REASON_APEX, n_laps=40)]
+    assert "— 100% of" in K.theme_actions(K.session_theme(both), both)[0]
     print(f"ok printed shares: demo {line!r}; 400 row sets, {fell} share(s) kept unrounded")
 
 
