@@ -718,7 +718,11 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         # `best rolling` sits AFTER the pace rows and OUTSIDE the branch above, where the page puts
         # it: a start-anywhere loop off `Session` is not a pace statistic and survives a session
         # that has no distribution at all.
-        pace_rows.insert(3, ("best rolling", "" if rolling is None else fmt_time(rolling)))
+        # Its label is the tile's caption, "best rolling · level" under the timing step included.
+        estimated = bool(getattr(getattr(session, "timing_quality", None), "media_clock", False))
+        pace_rows.insert(3, (stats_service.rolling_caption(
+            rolling, pace.best if pace is not None else None, estimated),
+            "" if rolling is None else fmt_time(rolling)))
         out.append(SummarySection("PACE", pace_rows))
 
     # --- IDEAL LAP. Same three gates as the page (`IdealSection.refresh`): a composite exists,

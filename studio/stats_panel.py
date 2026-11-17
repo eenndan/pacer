@@ -2255,7 +2255,14 @@ class StatsView(QWidget):
         # Session (never the pace summary) so it survives a session with no clean-lap stats.
         rolling = (session.best_rolling_lap()
                    if hasattr(session, "best_rolling_lap") else None)
-        set_target_tile(self.t_rolling, rolling, ROLLING_TOOLTIP, session)
+        # Level with the best lap beside it under the timing step (`stats.rolling_caption`); the
+        # caption is always passed, so a refresh that moves the gap over the step restores it.
+        best = pace.best if pace is not None else None
+        estimated = bool(getattr(getattr(session, "timing_quality", None), "media_clock", False))
+        level = stats_service.rolling_level_note(rolling, best, estimated)
+        set_target_tile(self.t_rolling, rolling,
+                        f"{level}\n\n{ROLLING_TOOLTIP}" if level else ROLLING_TOOLTIP, session,
+                        caption=stats_service.rolling_caption(rolling, best, estimated))
         self._refresh_spark(session)
         # The runs count is a SESSION total and set here, with the pace group it is derived from
         # (the clean laps), rather than up with the other four: it needs `st`, and a recording with

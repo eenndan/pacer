@@ -1416,6 +1416,13 @@ _REASON_PHASES = {
 # level, under LEVEL_STEP_S, and a "most of it on the apex" after it located a loss smaller than the
 # step the same sentence had just called level — the demo's C7, thirds 0.011 / 0.020 / 0.001 s
 # under "(… under 0.07 s)".
+#
+# THE SAME STEP BOUNDS EVERY TAIL. A row that is not level could still end "— most of it on the
+# apex" over a named third the clock cannot resolve: on 8 synthetic seeds × 6/10/20 laps, 25 of the
+# 26 tails named a third under LEVEL_STEP_S (0.005 to 0.067 s; the one over it, 0.092 s, keeps its
+# tail), and the demo prints none. Such a row now ends at its lever. LEVEL_STEP_S, not the 0.15 s an
+# estimated clock widens lap ties to: the row cannot see its clock, and the level sentence beside
+# it states 0.07 s whatever the clock; a third is a median of differences on ONE clock.
 
 
 def dominant_phase_clause(opp: Opportunity) -> str:
@@ -1430,7 +1437,8 @@ def dominant_phase_clause(opp: Opportunity) -> str:
     (e.g. a braking/entry fix but the exit third dominates) it reads as a CONSEQUENCE instead
     ("… and it carries to exit"), so an entry lever is never phrased as an exit fix.
 
-    "" on a REASON_LEVEL row, whatever its thirds (the note under `_REASON_PHASES`)."""
+    "" on a REASON_LEVEL row, whatever its thirds, and "" whenever the named third is under
+    LEVEL_STEP_S (the notes under `_REASON_PHASES`)."""
     if opp.reason.kind == REASON_LEVEL:
         return ""
     ph = opp.phases
@@ -1439,7 +1447,7 @@ def dominant_phase_clause(opp: Opportunity) -> str:
         return ""
     worst = ph.dominant
     worst_dt = {PHASE_ENTRY: ph.entry, PHASE_APEX: ph.apex, PHASE_EXIT: ph.exit}[worst]
-    if worst_dt <= 1e-6 or worst_dt < 0.5 * total:
+    if worst_dt < LEVEL_STEP_S or worst_dt < 0.5 * total:
         return ""
     compatible = worst in _REASON_PHASES.get(opp.reason.kind, set(PHASES))
     if compatible:
@@ -1604,6 +1612,77 @@ def _theme_base(theme: Theme, rows: list[Opportunity] | None) -> str:
     return f"the time your {plural(n, 'ranked corner')} {'loses' if n == 1 else 'lose'}"
 
 
+# THE PRINTED SHARE IS A RATIO OF PRINTED CELLS. `session_theme` decides on unrounded losses, and
+# printed its shares from them: the demo's cause line said 79 % (0.3601 of 0.4579 s) above cells
+# reading +0.36 of +0.46 s, which make 78 %. The headline already sums what is printed
+# (`shown_total`); the shares now do too, from the same rounding the cells use. DISPLAY ONLY: which
+# theme, which cause, which corners and every stored number are `session_theme`'s, unchanged.
+#
+# THE WORDING STAYS THE UNROUNDED VALUE'S. "Most" / "All of" / "No single theme" / "common thread"
+# were each chosen by an unrounded share against THEME_SHARE (or 100 %), and rounding the cells can
+# carry the printed ratio across that line: a pace corner at +0.004 s prints +0.00, so "Most … is
+# execution" would print 100 % (the LOOK-9 contradiction), and a split at 59.6 % could print 60 %.
+# Then the unrounded share prints, as before. On the demo and 8 seeds × 6/10/20 laps no state
+# crosses (`tests/test_coaching.py` sweeps it); the guard is for the ones that would.
+def _printed_share(part: Iterable[Opportunity], whole: Iterable[Opportunity], unrounded: float,
+                   lo: float = 0.0, hi: float = math.inf) -> float:
+    """`part`'s printed losses over `whole`'s (`shown_total` of each) when that ratio stays inside
+    [lo, hi) — the band the wording beside it was chosen in — else `unrounded`."""
+    tot = shown_total(whole)
+    if tot <= 0:
+        return unrounded
+    share = shown_total(part) / tot
+    return share if lo <= share < hi else unrounded
+
+
+def _side_rows(rows: list[Opportunity]) -> tuple[list[Opportunity], list[Opportunity],
+                                                 list[Opportunity]]:
+    """(ranked, execution, pace) rows, split exactly as `session_theme` splits them."""
+    ranked = [r for r in rows if r.evidence.ranked]
+    return (ranked, [r for r in ranked if r.evidence.reach == REACH_REPEAT],
+            [r for r in ranked if r.evidence.reach in (REACH_RARE, REACH_NEVER)])
+
+
+def _printed_exec_pct(theme: Theme, rows: list[Opportunity] | None) -> float:
+    """The SPLIT form's execution half, of the two halves' printed losses; the unrounded half when
+    no rows ride along or when the printed halves sit the other side of THEME_SHARE from the
+    unrounded ones (a "No single theme" beside a half that clears it, or the reverse)."""
+    total = theme.execution_s + theme.pace_s
+    exec_pct = theme.execution_s / total if total > 0 else 0.0
+    if not rows:
+        return exec_pct
+    _, ex, pa = _side_rows(rows)
+    printed = _printed_share(ex, ex + pa, exec_pct)
+
+    def clears(p: float) -> bool:
+        return max(p, 1 - p) >= THEME_SHARE
+
+    return printed if clears(printed) == clears(exec_pct) else exec_pct
+
+
+def _printed_side_share(theme: Theme, rows: list[Opportunity] | None) -> float:
+    """A "Most of …" form's percentage: the winning side's printed losses over every ranked row's;
+    `theme.share` when no rows ride along, or when the printed ratio would fall under THEME_SHARE or
+    print as 100 % beside the word "Most"."""
+    if not rows:
+        return theme.share
+    ranked, ex, pa = _side_rows(rows)
+    side = ex if theme.kind == THEME_EXECUTION else pa
+    share = _printed_share(side, ranked, theme.share, lo=THEME_SHARE)
+    return theme.share if f"{share:.0%}" == "100%" else share
+
+
+def _printed_cause_share(theme: Theme, rows: list[Opportunity] | None) -> float:
+    """The cause line's percentage: its corners' printed losses over every ranked row's;
+    `theme.cause_share` when no rows ride along or when the printed ratio would fall under the
+    THEME_SHARE that let the line print at all."""
+    if not rows:
+        return theme.cause_share
+    ranked, _, _ = _side_rows(rows)
+    cause = [r for r in ranked if r.cid in theme.cause_cids]
+    return _printed_share(cause, ranked, theme.cause_share, lo=THEME_SHARE)
+
+
 def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     """The session's ONE line — what the twelve findings add up to. "" when nothing is ranked.
 
@@ -1611,6 +1690,8 @@ def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     headline's total only when the headline's shortlist holds every ranked corner. When it does not,
     the percentage forms name their base ("Most of the time your 4 ranked corners lose is …", the
     block above `_theme_base`); without `rows` there is no shortlist to compare and nothing is named.
+    With `rows` the percentages are ratios of the printed cells (`_printed_share`); the wording is
+    still the unrounded share's.
 
     With the session's `rows`, a side that one corner on the reach line decides is not stated as a
     side: the SPLIT form prints instead, both halves, and names that corner (`theme_tipping_row`).
@@ -1620,7 +1701,7 @@ def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     base = _theme_base(theme, rows)
     tipping = theme_tipping_row(theme, rows) if rows else None
     if tipping is not None:
-        return _split_sentence(theme, tipping, base)
+        return _split_sentence(theme, tipping, base, rows)
     # "the time on offer", not "your time": the shares are over the RANKED rows only, and on a
     # short session most of the measured loss can sit in abstained corners (0064's chapter 3 alone:
     # 0.121 s ranked against 0.444 s abstained). The same words the abstain sentence uses for the
@@ -1633,33 +1714,35 @@ def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     # every shortlisted one there too.
     whole = round(theme.share, 2) >= 1.0
     most = f"Most of {base or 'the time on offer'}"
+    share = _printed_side_share(theme, rows)   # as the cells add up (above `_printed_share`)
     if theme.kind == THEME_EXECUTION:
         if whole:
             return ("All of the time on offer is in corners you have already driven at this "
                     "pace: repeat it, no new speed needed.")
-        return (f"{most} is execution, not pace — {theme.share:.0%} of it is "
+        return (f"{most} is execution, not pace — {share:.0%} of it is "
                 "in corners you have already driven at this pace.")
     if theme.kind == THEME_PACE:
         if whole:
             return ("All of the time on offer is in corners you have rarely been quick through: "
                     "it needs new speed, not repetition.")
-        return (f"{most} is pace, not execution — {theme.share:.0%} of it is "
+        return (f"{most} is pace, not execution — {share:.0%} of it is "
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
     # when no side clears THEME_SHARE, and it is a real state: D24's 0060 chapter 2 landed here.
     # No lap set of the working set lands there — 0068 comes closest, at 78 % execution
     # (the THEME table above coaching.THEME_SHARE). Its kind stays execution, yet since COACHING-4
     # this is the form its page prints, naming C1, the corner on the reach line that decides it.
-    return _split_sentence(theme, None, base)
+    return _split_sentence(theme, None, base, rows)
 
 
-def _split_sentence(theme: Theme, tipping: Opportunity | None = None, base: str = "") -> str:
+def _split_sentence(theme: Theme, tipping: Opportunity | None = None, base: str = "",
+                    rows: list[Opportunity] | None = None) -> str:
     """The SPLIT form — both halves of the ranked time — plus, when one corner on the reach line
     decides the side, that corner. The halves are the measured ones (`theme`'s own seconds), not the
     tipped ones: the hedge is about which side, not about the numbers. `base` is `_theme_base`'s
-    phrase, leading the halves when it is not the headline's shortlist."""
-    total = theme.execution_s + theme.pace_s
-    exec_pct = theme.execution_s / total if total > 0 else 0.0
+    phrase, leading the halves when it is not the headline's shortlist. With `rows` the halves
+    print as their cells add up (`_printed_exec_pct`)."""
+    exec_pct = _printed_exec_pct(theme, rows)
     if base:
         out = (f"No single theme: of {base}, {exec_pct:.0%} is in corners you have already "
                f"driven at this pace, {1 - exec_pct:.0%} in corners you have rarely reached")
@@ -1824,7 +1907,7 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
             # The share's base, named when it is not the headline's shortlist (`_theme_base`).
             of = _theme_base(theme, rows) or "that time"
             out.append(f"{_CAUSE_WORD[theme.cause]} is the common thread — "
-                       f"{theme.cause_share:.0%} of {of} is in {corners_txt}.")
+                       f"{_printed_cause_share(theme, rows):.0%} of {of} is in {corners_txt}.")
     else:
         out.append("No single cause dominates these corners — work them one at a time.")
     lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
