@@ -703,3 +703,89 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   Coaching tables cannot be re-verified offline.
 - **The campaign ends with this release.** Discovery round 4 found no unfinished first impression
   and no performance cliff, and asked for these truth fixes and then a stop.
+
+## 16. Recorded at the 0.14.0 release, 2026-11-17
+
+- **v0.14.0 is a minor release**: 5 pull requests from #599 to #603, Wave 9 of the campaign
+  section 8 records, "Close the race-day loop". Discovery round 5 looked through two lenses, race
+  day and a visitor's first minute, and found one truth defect (the focus list said "0 clean laps
+  through it today" for corners driven 14 times) and two things the app could do that nobody would
+  find. The focus list measures a window with one edge on a corner boundary (#599); the timing
+  step in three figures (#600); a Coaching row's Compare (#601); the focus verdict's layout and
+  timing-step gates (#602); and a Lap race button on the map toolbar (#603).
+- **Process.** Each pull request's gate was CI; one local full gate ran on the combined tree
+  before the release, and a QA pass drove all five together in one window for the first time.
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **A focus window with one edge snapped onto a corner boundary is measured** (#599): the
+    snapped edge joins the alignment the other edge builds, so every clean lap through it counts.
+    At the demo's circuit its first corner now reads "0.36 s faster than 1 Jun (3.38 → 3.02 s, 14
+    → 14 laps)".
+  - **The layout check reads the corner's direction** (#602): the stored corner and today's corner
+    over the same window must turn the same way, else "can't say: the corner there today turns the
+    other way — a different layout?", and a list refused whole says "the layout looks different
+    today" in its headline. An item stored without a direction skips the check, as does a session
+    with no detected corner, rather than being refused on a guess.
+  - **No faster or slower under 0.07 s** (#602): a difference under the timing step is "no change
+    you can act on: under 0.07 s apart, within timing precision", its medians printed to the
+    millisecond so the two never read 0.07 s apart beside it.
+  - **The phase tail has a floor** (#600): "— most of it on …" only when the third it names is
+    0.07 s or more.
+  - **The theme's share is the ratio of its printed cells** (#600), with a guard that keeps the
+    unrounded share when rounding would carry the printed ratio across the wording's line: the
+    demo reads 78 %, from +0.36 of +0.46 s, where it read 79 %.
+  - **"best rolling · level"** (#600): the Stats ▸ PACE tile, and the report's PACE row, when the
+    best rolling lap is within the timing step of the best lap; the hover says why.
+  - **Compare is the typical pass against the best lap** (#601): the lap whose pass is nearest the
+    corner's median as printed, ties broken on the raw times, never the best lap itself, beside
+    the best lap's pass, both videos at the corner's entry, the charts framed on it, the corner
+    ringed. The status line prints the row's own Time lost, never a recomputed difference.
+  - **Compare is reachable where Jump is** (#601): its own column on the maximised page; under
+    Jump on a docked tab wide enough for Jump (about 557 px); absent where Jump is, at the default
+    docked width and on the debrief.
+  - **The Lap race button sits outside the toolbar's row** (#603), in the stretch the row leaves,
+    and hides when the map panel is under about 660 px, so the window's minimum width is unchanged.
+    It is View ▸ Lap race's twin: same check, enabled state and reason.
+- **The media.** `debrief.png` (78 %) and `moments.png` ("best rolling · level") were re-captured
+  on the synthetic demo and their bytes changed; `accuracy.png` in the same run and `lapstrip.png`
+  in a run of its own are byte-identical to the files already committed. The waivers are renewed
+  at 0.14.0. `hero.png` now differs from the app in one more visible way: the default window shows
+  a Lap race button on the map toolbar that the picture lacks; it stays as a labelled v0.7 picture
+  and re-shooting it is the owner's call, as is `map.png` (the button is on the panel it is cut
+  from) and `og.png` (a re-composition is byte-identical). `data-trust.png` and `ideal-lap.png`
+  render byte-identically on the demo from v0.13.1's `studio/` and from 0.14.0. The export stills
+  are renewed: no export-video code changed, and 96 Classic configurations, 1,536 frames, render
+  byte-identically from v0.13.1's `studio/` and from 0.14.0.
+- **What could not run for it.** The two focus real-footage checks need a second recording of one
+  track, which is not on this machine, and report Skipped by name with the rest whose recordings
+  are not here. The transport keys (Space, ←/→, `,` / `.`) could not be confirmed offscreen. The
+  manual half of the golden gate did not run; the core is unchanged.
+- **Resolved from section 15**: a row that is not level saying "most of it on …" over thirds under
+  0.07 s (the phase tail's floor); the theme's share from unrounded losses (now the printed cells);
+  a note when the best rolling lap is within 0.07 s of the best lap.
+- **Open for the owner** (new).
+  - The default docked Coaching tab shows neither Jump nor Compare: drop "Done it?" there, or add a
+    header action that acts on the selected row?
+  - Re-shooting the window and landing pictures, now that the default window shows a Lap race
+    button they lack.
+  - The layout check has never seen a real track driven in reverse, or a corner reprofiled.
+  - A marginal corner near the 30° detection limit could read "there's no corner there today".
+  - The mixed headline's "N without enough evidence" counts layout refusals with the rest.
+  - A Compare started from the maximised page returns to the grid and stays there.
+  - The older "No single theme: 100% … 0% …" split on some synthetic sessions.
+  - The focus verdict's spread-based line prints medians to two decimals, so "0.01 s apart (2.67 →
+    2.67 s)" can show two equal medians; the timing-step line already prints three.
+  - FIRST_LAP's loop paragraph does not name the two new verdicts (within timing precision, a
+    different layout), and its step 8 names Jump, not Compare or the Lap race button.
+  - The report's Laps card scroll with sector lines; `fmt_time` negatives; Classic's Δ colour inside
+    0.07 s; Broadcast as the default Style; the welcome screen.
+- **Open for the owner** (carried from section 15): a ranked corner under the display floor counted
+  in "your N ranked corners"; one lap drawn in two colours in a race over a pick; a session reload
+  stranding widgets; whether to add a report screenshot; the capture tool's `lapstrip.png` bytes
+  depending on what else the run captures; ranking corners that lose under 0.07 s at all; weighing
+  consistency on the middle half rather than σ; the apex and braking reasons have no noise floor;
+  the demo habit is ranked only on its own seed; the overlay's ★/Δ under provisional timing; Extras
+  on in Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load
+  on a real display; pull request #582's commit list comment; the published real-footage Coaching
+  tables cannot be re-verified offline.
+- **The campaign ends with this release** unless the owner's next race day says otherwise: the
+  question left is whether the focus loop holds on a second real session of one track.
