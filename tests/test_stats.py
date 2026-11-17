@@ -6282,6 +6282,50 @@ def test_a_short_session_says_why_no_corner_is_marked():
     print("test_a_short_session_says_why_no_corner_is_marked OK")
 
 
+def test_the_typical_pass_is_one_laps_pass_nearest_the_median_at_print():
+    """cool/compare-at-corner: a Coaching row's Compare puts the corner's typical pass beside the
+    best lap's. WHICH lap is `stats.typical_pass_lap`: the counted pass nearest the median at print,
+    ties to the lowest lap, never the best lap; the CORNERS BY LAP column's typical, so only its
+    resolved cells and only where it has one (MATRIX_MIN_LAPS)."""
+    from studio import stats as S
+    pick = S.typical_pass_lap
+    # Odd count: the median IS a pass.
+    assert pick([0, 1, 2, 3, 4], [3.0, 3.2, 3.1, 3.5, 3.4], 3.2) == 1
+    # Even count: the median (3.38) is no lap's; the two middle passes (3.37, 3.39) are each one
+    # hundredth off at print, and the tie goes to the lower lap id whichever order they come in.
+    times = {6: 3.37, 3: 3.39, 9: 3.01, 2: 3.42}
+    assert pick(list(times), list(times.values()), 3.38) == 3
+    assert pick(list(times)[::-1], list(times.values())[::-1], 3.38) == 3
+    # Nearest AT PRINT, not raw: 3.3849 prints 3.38 and 3.3751 prints 3.38 too, so both are the
+    # typical at print and the lower lap wins although lap 7 is raw-nearer to 3.3790.
+    assert pick([7, 5], [3.3751, 3.3849], 3.3790) == 5
+    # Never the excluded (best) lap, even when it prints the typical itself.
+    assert pick([0, 1, 2], [3.00, 3.10, 3.30], 3.10, exclude=1) == 0
+    # No typical, or nothing left once the best lap is out → None.
+    assert pick([0, 1], [3.0, 3.1], None) is None
+    assert pick([4], [3.0], 3.0, exclude=4) is None
+
+    # Through the grid: only resolved cells count, and the best lap's pass rides along.
+    cm = S.corner_matrix
+    ids = list(range(6))
+    rows = [[3.0], [3.4], [3.2], [3.3], [3.1], [9.9]]
+    m = cm(ids, [1], rows, [[True]] * 5 + [[False]])       # lap 5's 9.9 is unresolved
+    tp = m.typical_pass(1, best_lap=0)
+    assert m.medians[0] == 3.2 and tp is not None
+    assert (tp.lap_id, tp.pass_s, tp.typical_s, tp.n, tp.best_lap_id, tp.best_pass_s) == (
+        2, 3.2, 3.2, 5, 0, 3.0), tp
+    assert tp.typical_vs_best_s == 0.2
+    # The best lap printing the typical: the next-nearest pass instead (3.3 and 3.1 tie: lap 3).
+    assert m.typical_pass(1, best_lap=2).lap_id == 3
+    # Too few passes: under MATRIX_MIN_LAPS resolved cells the column has no typical, so no pass.
+    few = cm(ids, [1], rows, [[True]] * (S.MATRIX_MIN_LAPS - 1) + [[False]] * 2)
+    assert few.medians[0] is None and few.typical_pass(1, best_lap=0) is None
+    # A best lap with no resolved cell here, an unknown corner, no best lap → None.
+    assert cm(ids, [1], rows, [[False]] + [[True]] * 5).typical_pass(1, best_lap=0) is None
+    assert m.typical_pass(7, best_lap=0) is None and m.typical_pass(1, best_lap=None) is None
+    print("test_the_typical_pass_is_one_laps_pass_nearest_the_median_at_print OK")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it

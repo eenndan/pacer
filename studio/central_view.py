@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 
 from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
 from ._signal import lap_label, plural
-from .coaching_panel import OpportunitiesPanel
+from .coaching_panel import OpportunitiesPanel, compare_status
 from .compare_controller import CompareController
 from .lap_table import CornerTable, LapTable
 from .map_view import MapView
@@ -937,6 +937,7 @@ class CentralView(QWidget):
         # the map (the Jump-to-corner detail action stays in the modal dialog).
         self.opportunities = OpportunitiesPanel(self.session)
         self.opportunities.corner_clicked.connect(self._ring_corner)
+        self.opportunities.compare_requested.connect(self.compare_at_corner)
         # Stats CORNERS/BRAKING/STRAIGHTS rows → the same apex ring, but maximize-aware: restore
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
@@ -1780,6 +1781,41 @@ class CentralView(QWidget):
             self._playback.followed_lap = self.session.lap_at_time(entry)
         if cid is not None:
             self._pin_owned_ring(cid)
+
+    def compare_at_corner(self, tp) -> bool:
+        """A Coaching row's Compare: SEE the loss the row names. Compare `tp.lap_id` (the lap whose
+        pass at corner `tp.cid` is the typical one, pane A) against the best lap (pane B), both
+        panes at their own entry to the corner (Jump's seek target), the charts framed on the
+        corner as `N` frames a loss, and the corner ringed on the map. It took ~10 actions before:
+        Jump put the best lap alone at the corner, C then compared the two FASTEST laps (0.008 s
+        apart at the demo's C1 against the row's +0.36 s), and the typical pass never appeared.
+
+        The gates are C's: nothing below two valid laps (the toggle's own enablement), and a Lap
+        race in progress ends first (one map, one story — the same end compareToggled triggers).
+        A compare already on is left first, and Esc or a lap pick leaves this one as any other.
+        False when nothing changed."""
+        if not self.video.compare_btn.isEnabled():
+            return False
+        if self.is_racing():
+            self.end_lap_race()
+        if getattr(self, "_maximized_panel", None) is not None:
+            self._restore_splitter_sizes()     # the panes, charts and map are what it shows
+        if self._comparing():
+            self.compare.exit()
+        cid, a, b = tp.cid, tp.lap_id, tp.best_lap_id
+        if not self.compare.enter_pair(a, b):
+            return False
+        corners = self.session.corners
+        for side, lap in ((0, a), (1, b)):
+            entry = corners.corner_entry_media_time(lap, cid)
+            if entry is not None:
+                self.video.seek_pane(side, entry)
+        window = self.session.corner_plot_window(cid, self.plots.axis_mode())
+        if window is not None:
+            self.plots.frame_span(*window)
+        self._ring_corner(cid)
+        self.statusNotice.emit(compare_status(tp))
+        return True
 
     # ------------------------------------------------------------- the hovered corner
     # ONE corner state across three surfaces. Hovering a corner label on the speed chart, or a

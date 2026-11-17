@@ -3489,6 +3489,153 @@ def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
     print("ok theme base: named when ranked != shortlist, main's words when equal")
 
 
+# --------------------------------------------- a row's Compare: see the loss the row names
+# cool/compare-at-corner. Seeing a row's "+0.36 s" took ~10 actions: Jump put the best lap alone at
+# the corner, C compared the two FASTEST laps (0.008 s apart at the demo's C1) and the typical pass
+# never appeared. A ranked row's Compare puts the corner's typical pass beside the best lap's.
+def _widget_count() -> int:
+    """Live widgets once every deferred delete has run (processEvents alone never runs them)."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+    for _ in range(3):
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.processEvents()
+    return len(QApplication.allWidgets())
+
+
+def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corner():
+    """The published demo in the real window, offscreen: the debrief has no Compare (RUL-7); the C
+    key's pair is unchanged; a ranked row's Compare pins (lap 4, the typical C1 pass; lap 13, the
+    best lap), seeks each pane to its own entry to C1, frames the charts on C1 as N frames a loss,
+    rings C1 and names both passes; its figures reconcile with the row; it ends a race; a lap pick
+    leaves it; and 20 activations leave no widget behind."""
+    import tempfile
+    import time
+
+    from test_debrief_landing import _fresh_app_support, _open, _settle
+
+    from studio import coaching_panel as cp
+    from studio import sidecar
+    from studio import stats as S
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    saved = sidecar.save
+    sidecar.save = lambda *a, **k: None
+    with tempfile.TemporaryDirectory(prefix="coach_cmp_") as folder, _fresh_app_support():
+        path = os.path.join(folder, "demo", "GX019001.MP4")
+        md.make(path, render=False)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            _open(win, path)
+            v, s = win.view, win.session
+            page, t = v.opportunities, v.opportunities.table
+            # THE DEBRIEF HAS NO COMPARE: a hidden column, not a narrow one (Jump is on screen).
+            assert page.is_debrief() and t.rowCount() >= 1
+            assert t.isColumnHidden(cp._PANEL_COL_CMP) and not t.isColumnHidden(cp._PANEL_COL_GO)
+            _open(win, path)
+            win._escape_out()
+            v, s = win.view, win.session                 # a load builds a new view
+            page, t = v.opportunities, v.opportunities.table
+            c, best = v.compare, s.best_lap_id()
+            assert best == 12, best                       # lap 13
+            # THE C KEY'S PAIR IS TODAY'S: the playhead's lap (else the selection) against the best.
+            def c_key_pair():
+                valid = s.valid_lap_ids()
+                a = s.lap_at_time(v._playback.applied_t or 0.0)
+                if a not in valid:
+                    a = ([i for i in v.plots.selected_lap_ids() if i in valid] or [best])[0]
+                if a == best:     # then the next-fastest lap
+                    return a, sorted((i for i in valid if i != a), key=s.lap_time)[0]
+                return a, best
+
+            want = c_key_pair()
+            win.toggle_compare()
+            assert c.active and (c.lap_a, c.lap_b) == want, (c.lap_a, c.lap_b, want)
+            win.toggle_compare()
+            assert not c.active
+
+            v.select_lap_tab(3)
+            v.show_coaching_maximized()
+            _settle(0.3)
+            assert not page.is_debrief() and not t.isColumnHidden(cp._PANEL_COL_CMP)
+            rows = page._all_rows[:t.rowCount()]
+            assert rows[0].cid == 1 and rows[0].evidence.ranked
+            for r, opp in enumerate(rows):
+                b = t.cellWidget(r, cp._PANEL_COL_CMP)
+                assert b.text() == "Compare" and b.accessibleName() == f"Compare at C{opp.cid}"
+                assert b.isEnabled() == opp.evidence.ranked, (opp.cid, b.toolTip())
+            btn = t.cellWidget(0, cp._PANEL_COL_CMP)
+            tp = s.typical_passes()[1]
+            assert "not your median lap" in btn.toolTip(), btn.toolTip()
+
+            # RECONCILED WITH THE ROW: 14 passes, whose middle two are lap 5's 3.37 and lap 4's
+            # 3.39 around a typical of 3.38; lap 4 is the lower of the tie. The typical less the
+            # best lap's pass, as printed, is the row's Time lost; lap 4's own pass is 0.01 more,
+            # because it is one of the two passes the median sits between, not the median.
+            assert (tp.lap_id, tp.n, tp.best_lap_id) == (3, 14, best), tp
+            assert [f"{x:.2f}" for x in (tp.pass_s, tp.typical_s, tp.best_pass_s)] == [
+                "3.39", "3.38", "3.02"], tp
+            assert S.fmt_pass_vs_typical(tp.typical_vs_best_s) == K.lost_text(rows[0]) == "+0.36 s"
+            assert S.printed_gap_s(tp.pass_s, tp.best_pass_s) == 0.37
+
+            seeks, notices = [], []
+            real_seek = v.video.seek_pane
+            v.video.seek_pane = lambda side, sec: (seeks.append((side, sec)), real_seek(side, sec))
+            v.statusNotice.connect(notices.append)
+            t0 = time.perf_counter()
+            btn.click()
+            took_ms = 1000 * (time.perf_counter() - t0)
+            _settle(0.2)
+            assert c.active and not c.cross and (c.lap_a, c.lap_b) == (3, best), (c.lap_a, c.lap_b)
+            assert getattr(v, "_maximized_panel", None) is None, "the grid is back for the panes"
+            entry = {side: s.corners.corner_entry_media_time(lap, 1)
+                     for side, lap in ((0, 3), (1, best))}
+            last = {side: sec for side, sec in seeks}
+            assert last == entry, (seeks, entry)
+            x0, x1 = s.corner_plot_window(1, v.plots.axis_mode())
+            lo, hi = v.plots.p_speed.getViewBox().viewRange()[0]
+            pad = x1 - x0
+            assert lo <= x0 and hi >= x1 and lo >= x0 - pad - 1e-6 and hi <= x1 + pad + 1e-6, (
+                lo, hi, x0, x1)
+            assert v.map.pinned_corner() == "C1"
+            assert notices[-1] == (
+                "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
+                "here (median of 14: 3.38 s, +0.36 s on the best lap's)"), notices
+            assert "median lap" not in notices[-1]
+            v.video.seek_pane = real_seek
+
+            # A LAP PICK LEAVES IT, as it leaves any compare; the C key then makes today's pair.
+            v.table.select([5])
+            v._on_laps_selected([5])
+            assert not c.active
+            want = c_key_pair()
+            win.toggle_compare()
+            assert c.active and (c.lap_a, c.lap_b) == want, (c.lap_a, c.lap_b, want)
+            win.toggle_compare()
+
+            # A RACE ENDS FIRST, the gate C's own compareToggled applies.
+            assert v.start_lap_race() and v.is_racing()
+            assert v.compare_at_corner(tp) and not v.is_racing() and c.active
+
+            # 20 activations, from the grid (the page's Compare is off screen there but its widget
+            # is the same), add no widget: each compare tears the last one's panes down.
+            before = _widget_count()
+            for _ in range(20):
+                t.cellWidget(0, cp._PANEL_COL_CMP).click()
+                _settle(0.02)
+            assert _widget_count() == before and c.active and (c.lap_a, c.lap_b) == (3, best)
+            win.toggle_compare()
+            print(f"ok row compare: lap 4 3.39 vs lap 13 3.02 at C1, typical 3.38, +0.36 s; "
+                  f"{took_ms:.0f} ms from the full-window page, {before} widgets after 20")
+        finally:
+            sidecar.save = saved
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

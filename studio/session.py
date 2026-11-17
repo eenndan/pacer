@@ -2774,6 +2774,27 @@ class Session:
         return stats_service.corner_matrix(ids, [c.cid for c in corner_list], times_by_lap,
                                            resolved_by_lap)
 
+    def typical_passes(self) -> dict[int, stats_service.TypicalPass]:
+        """cid → that corner's typical pass beside the best lap's (`CornerMatrix.typical_pass`:
+        the CORNERS BY LAP column's typical, which is the median a Coaching row's Time lost is
+        measured from). A corner with none is absent. Not cached (read on load / re-segment)."""
+        matrix = self.corner_matrix()
+        best = self.best_lap_id()
+        if matrix is None or best is None:
+            return {}
+        found = {cid: matrix.typical_pass(cid, best) for cid in matrix.cids}
+        return {cid: tp for cid, tp in found.items() if tp is not None}
+
+    def corner_plot_window(self, cid: int, mode: str) -> tuple[float, float] | None:
+        """Corner `cid`'s window, enter to exit, on the charts' shared axis in `mode` — the
+        projection `corner_plot_positions` places its apex label by. None without it."""
+        found = [c for c in self.corners.corner_list() if c.cid == cid]
+        if not found:
+            return None
+        xs = self._best_odometer_plot_positions(["enter", "exit"],
+                                                [found[0].enter, found[0].exit], mode)
+        return (float(xs[0][1]), float(xs[1][1])) if len(xs) == 2 else None
+
     def slow_lap_notes(self) -> list[story.SlowLapNote]:
         """Where each slow clean lap's time went (`studio/story.py`): the corners beyond their ▼
         step on `corner_matrix`, or "spread". [] without the grid. Memoized with `session_moments`

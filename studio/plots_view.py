@@ -2163,13 +2163,18 @@ class PlotsView(QWidget):
             self._update_readouts()
             return
         span = self._loss_spans[self._loss_index]
-        # Zoom with the span's own width of context on each side, so the approach and the exit are
-        # both on screen: the answer to "where did I lose it" is rarely inside the loss itself.
-        pad = span.x1 - span.x0
-        self.p_speed.setXRange(span.x0 - pad, span.x1 + pad, padding=0)
+        self.frame_span(span.x0, span.x1)
         self._set_datum(span.x1)
         self._scrub_to(span.x0)
         self._update_readouts()
+
+    def frame_span(self, x0: float, x1: float) -> None:
+        """Zoom the charts (x only, as `N` does) onto plot-x [x0, x1] with the span's own width of
+        context on each side, so the approach and the exit are both on screen: the answer to
+        "where did I lose it" is rarely inside the loss itself. `N` and a Coaching row's Compare
+        (a corner's window) frame through this one rule; `N`'s walk back out restores the lap."""
+        pad = x1 - x0
+        self.p_speed.setXRange(x0 - pad, x1 + pad, padding=0)
 
     def _reset_x_range(self):
         """Put the whole lap back in view — refresh()'s own fitted x-range, replayed.

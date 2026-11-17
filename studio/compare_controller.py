@@ -329,9 +329,22 @@ class CompareController:
             others = sorted((lid for lid in valid if lid != a),
                             key=self.session.lap_time)
             b = others[0] if others else a
+        self.enter_pair(a, b)
+
+    def enter_pair(self, a: int, b: int) -> bool:
+        """Same-recording compare of THIS pair: lap `a` in pane A (it drives the charts' cursor),
+        lap `b` in pane B. `enter` picks the pair from the playhead and the best lap; a Coaching
+        row's Compare names it (the corner's typical pass against the best lap). False, and still
+        out of compare, for an invalid or degenerate pair."""
+        self._cross = False
+        self._session_b = self.session
+        self._prefer_cross = False
+        valid = self.session.valid_lap_ids()
+        if a not in valid or b not in valid or a == b:
+            return False
         wa, wb = self.session.lap_window(a), self.session.lap_window(b)
         if wa is None or wb is None:
-            return  # degenerate window — stay out of compare (flags above are reset, none latched)
+            return False  # degenerate window — stay out of compare (flags above are reset)
         # Each picker lists every valid lap EXCEPT the one the other pane holds (see _picker_items).
         ids_a, labels_a = self._picker_items(valid, b)
         ids_b, labels_b = self._picker_items(valid, a)
@@ -341,6 +354,7 @@ class CompareController:
         spec_b = PaneSpec(b, wb, self._lap_caption(b), source=None,
                           choices=ids_b, choice_labels=labels_b)
         self._enter(spec_a, spec_b)
+        return True
 
     def _enter(self, spec_a: PaneSpec, spec_b: PaneSpec) -> None:
         """Shared enter tail: pin (A,B), build panes, realign S/F, drive overlay + per-pane g,

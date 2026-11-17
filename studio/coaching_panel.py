@@ -39,7 +39,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import coaching, data_quality, focus, theme, trace_paint, units
-from ._signal import fmt_signed, fmt_time, plural
+from . import stats as stats_service
+from ._signal import fmt_signed, fmt_time, lap_label, plural
 from .coaching import PANEL_TOP_N
 from .lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip, set_corner_direction
 from .theme import PROVISIONAL_COLOR, C
@@ -52,6 +53,7 @@ if TYPE_CHECKING:  # the injected session — typed for readers, not imported at
 # columns) come AFTER the reason, so the four the page always had keep their places.
 _COL_CORNER, _COL_LOST = 0, 1
 _PANEL_COL_REACH, _PANEL_COL_REASON, _PANEL_COL_PHASES, _PANEL_COL_GO = 2, 3, 4, 5
+_PANEL_COL_CMP = 6   # a row's Compare (cool/compare-at-corner), after Jump
 # NB (M4): "Time lost" is the cross-lap MEDIAN per-corner delta; the Entry·Apex·Exit column is a
 # DIFFERENT statistic — per third of the corner, the median Δt over the laps (where in the corner
 # the time goes), three medians that need not sum to "Time lost" or share its sign. Its header must
@@ -1475,10 +1477,44 @@ def _reason_cell(opp: coaching.Opportunity, directions: dict,
 REASON_MIN_PX = 180
 
 # The columns the page gives up as it narrows, first to last. The bars are a detail of the row (the
-# reason sentence already names the dominant phase), Jump an action a row click half-does (it rings
-# the corner), "Done it?" a count the sentence also states — see _apply_column_budget.
-_OPTIONAL_COLS = (_PANEL_COL_PHASES, _PANEL_COL_GO, _PANEL_COL_REACH)
+# reason sentence already names the dominant phase; Compare SHOWS where in the corner the passes
+# part, so it outranks them), Compare and Jump actions a row click half-does (it rings the corner),
+# "Done it?" a count the sentence also states — see _apply_column_budget. The page's docked width
+# (515 px at the 1440x900 default) affords none of the three; full-window affords them all.
+_OPTIONAL_COLS = (_PANEL_COL_PHASES, _PANEL_COL_CMP, _PANEL_COL_GO, _PANEL_COL_REACH)
 JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's button padding
+
+
+def compare_status(tp: stats_service.TypicalPass) -> str:
+    """What the window says when a row's Compare lands: the two passes, the corner's typical and
+    its gap to the best lap's, every figure as printed (`MATRIX_DECIMALS`), so the gap is the
+    subtraction of the two figures beside it — and the row's Time lost (`TypicalPass`).
+
+    HONEST ABOUT WHICH LAP. Pane A's lap is the one whose pass at THIS corner is the typical one
+    (`stats.typical_pass_lap`), not the session's median lap, and the typical itself is printed:
+    over an even count no lap prints it (the demo's C1: lap 4 3.39 s, typical 3.38 s)."""
+    a, b = lap_label(tp.lap_id), lap_label(tp.best_lap_id)
+    d = stats_service.MATRIX_DECIMALS
+    return (f"C{tp.cid} · lap {a} {tp.pass_s:.{d}f} s vs lap {b} {tp.best_pass_s:.{d}f} s "
+            f"(best lap) — lap {a}'s is your {stats_service.TYPICAL_PASS} here (median of {tp.n}: "
+            f"{tp.typical_s:.{d}f} s, "
+            f"{stats_service.fmt_pass_vs_typical(tp.typical_vs_best_s)} on the best lap's)")
+
+
+def compare_tooltip(cid: int, tp: stats_service.TypicalPass | None) -> str:
+    """A row's Compare hover: what the click will show, or why it is disabled."""
+    if tp is None:
+        return (f"No {stats_service.TYPICAL_PASS} to compare at C{cid}: that needs at least "
+                f"{stats_service.MATRIX_MIN_LAPS} passes matched on track at both edges of the "
+                "corner, your best lap's among them.")
+    a, b = lap_label(tp.lap_id), lap_label(tp.best_lap_id)
+    d = stats_service.MATRIX_DECIMALS
+    return (f"Compare your {stats_service.TYPICAL_PASS} at C{cid} with your best lap's: lap {a} "
+            f"({tp.pass_s:.{d}f} s) beside lap {b} ({tp.best_pass_s:.{d}f} s), both videos at the "
+            "corner's entry and the charts on the corner.\n"
+            f"Lap {a} is the lap whose pass here is nearest the median of {tp.n} "
+            f"({tp.typical_s:.{d}f} s) — not your median lap.\n"
+            "Like C, it ends a Lap race; C again, or picking a lap, ends the compare.")
 
 # What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
 # quotes it; the live theme + actions are prepended to it (see _refresh_summary_label).
@@ -1585,7 +1621,12 @@ class OpportunitiesPanel(QWidget):
     # The focus list's one line was clicked: show the list whole (the window's Show focus list).
     focus_show_requested = Signal()
 
-    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", PHASE_HEADER, ""]
+    # A row's Compare: the corner's typical pass against the best lap's (a stats.TypicalPass), at
+    # the corner — CentralView.compare_at_corner. Never on the debrief (RUL-7: no lap-first
+    # buttons there), where the column stays hidden.
+    compare_requested = Signal(object)
+
+    _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", PHASE_HEADER, "", ""]
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1610,7 +1651,10 @@ class OpportunitiesPanel(QWidget):
         # The last width each optional column had, so the budget can cost one while it is hidden.
         # The bars and the Jump column are fixed widths; "Done it?" sizes to its content.
         self._col_px = {_PANEL_COL_PHASES: PHASE_COL_PX, _PANEL_COL_REACH: 0,
-                        _PANEL_COL_GO: self._go_column_px()}
+                        _PANEL_COL_GO: self._go_column_px(),
+                        _PANEL_COL_CMP: self._cmp_column_px()}
+        # cid -> the corner's typical pass beside the best lap's (refresh), for the rows' Compare.
+        self._typical: dict = {}
         # The headline (e.g. "0.60 s across your top 3 corners") — the page's one-line framing.
         self._headline = ""
         # Speed display unit (km/h default) for the reason sentence's apex deficit; pushed by the
@@ -1657,7 +1701,8 @@ class OpportunitiesPanel(QWidget):
         # Jump was flat-cut on its right edge. The modal asked the painter once, at build; the page
         # re-budgets on every resize, where asking again would ADD the inset again. So the column
         # is a fixed width: the button's own floor plus that inset on each side.
-        for col, px in ((_PANEL_COL_PHASES, PHASE_COL_PX), (_PANEL_COL_GO, self._go_column_px())):
+        for col, px in ((_PANEL_COL_PHASES, PHASE_COL_PX), (_PANEL_COL_GO, self._go_column_px()),
+                        (_PANEL_COL_CMP, self._cmp_column_px())):
             hdr.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, px)
         # L5-06/L5-08: headers over their own columns, with tooltips, and the padding budget the
@@ -1865,6 +1910,10 @@ class OpportunitiesPanel(QWidget):
         # (one author, so the exported report prints the same line).
         self._shortlist = coaching.shortlist(opps)
         self._headline = coaching.headline(opps)
+        # getattr-guarded as compare_controller's duck-typed reads are: a stand-in session with no
+        # corner grid offers no typical pass, so every Compare is disabled and says why.
+        typical = getattr(self.session, "typical_passes", None)
+        self._typical = typical() if callable(typical) else {}
         self._refresh_summary_label()
 
         # A refresh is new data / a new unit / a new palette, so every cell is rebuilt. The row
@@ -1908,6 +1957,7 @@ class OpportunitiesPanel(QWidget):
                 self.table.setCellWidget(r, _PANEL_COL_PHASES,  # D2
                                          PhaseBar(opp.phases))
                 self.table.setCellWidget(r, _PANEL_COL_GO, self._go_button(opp, primary=r == 0))
+                self.table.setCellWidget(r, _PANEL_COL_CMP, self._cmp_button(opp))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
         finally:
@@ -1974,6 +2024,8 @@ class OpportunitiesPanel(QWidget):
                     - t.columnWidth(_COL_CORNER) - t.columnWidth(_COL_LOST))
             shown = set()
             for col in reversed(_OPTIONAL_COLS):
+                if col == _PANEL_COL_CMP and self._debrief:
+                    continue        # never on the debrief (compare_requested), and costs nothing
                 if room - self._col_px[col] < REASON_MIN_PX:
                     break           # strict priority: never a lesser column in a greater one's place
                 shown.add(col)
@@ -2018,6 +2070,31 @@ class OpportunitiesPanel(QWidget):
             cid, entry = opp.cid, float(opp.entry_dist)
             btn.clicked.connect(lambda _checked=False, c=cid, d=entry:
                                 self.jump_requested.emit(c, d))
+        return btn
+
+    def _cmp_column_px(self) -> int:
+        """The Compare column's width, priced as the Jump column's is (`_go_column_px`)."""
+        return max(self._cmp_button(None).sizeHint().width(), JUMP_MIN_PX) + 2 * theme.SPACE_S
+
+    def _cmp_button(self, opp: coaching.Opportunity | None) -> QPushButton:
+        """One row's Compare: emits ``compare_requested(TypicalPass)`` — the corner's typical pass
+        against the best lap's, at the corner. Disabled, saying why, where the corner has no typical
+        pass (`compare_tooltip`). The app's ordinary button, as every Jump but the first is: one
+        primary per page. With no row it is the template the column budget measures."""
+        btn = QPushButton(theme.icon("ph.columns", color=C.text), "Compare")
+        btn.setMinimumWidth(JUMP_MIN_PX)
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
+        if opp is not None:
+            # Only a RANKED row names a loss to show; an abstained one says why it does not.
+            tp = self._typical.get(opp.cid) if opp.evidence.ranked else None
+            btn.setAccessibleName(f"Compare at C{opp.cid}")
+            btn.setToolTip(compare_tooltip(opp.cid, tp) if opp.evidence.ranked else
+                           f"C{opp.cid} is not ranked, so there is no loss here to compare — "
+                           "the row says why.")
+            btn.setEnabled(tp is not None)
+            if tp is not None:
+                btn.clicked.connect(lambda _checked=False, t=tp: self.compare_requested.emit(t))
         return btn
 
     def _tune_rows(self):
@@ -2095,6 +2172,7 @@ class OpportunitiesPanel(QWidget):
         self._cids = []
         self._all_rows = []
         self._shortlist = []
+        self._typical = {}
         self._tuned_key = None
         self._headline = ""
         self._refresh_summary_label()

@@ -540,6 +540,45 @@ def pass_vs_typical_s(val: float | None, typical: float | None) -> float | None:
     return printed_gap_s(val, typical)
 
 
+def typical_pass_lap(lap_ids, times, typical: float | None, exclude: int | None = None
+                     ) -> int | None:
+    """WHICH LAP'S PASS IS THE TYPICAL ONE: the counted pass whose PRINTED time is nearest the
+    printed typical (`pass_vs_typical_s`), ties to the lowest lap id, never `exclude` (the best
+    lap, which a typical-vs-best compare cannot put on both sides). None with no typical or no
+    other pass. `lap_ids` and `times` are parallel and already the counted cells.
+
+    NEAREST, NOT EQUAL. A median over an even count is the mean of its two middle passes and no
+    lap need print it: the demo's C1 is 14 passes whose middle two print 3.37 and 3.39 around a
+    typical of 3.38. The two middle passes are then both one hundredth off, and the tie goes to
+    the lower lap. With an odd count, or wherever a pass prints the typical, this is that pass."""
+    if typical is None:
+        return None
+    pairs = [(abs(pass_vs_typical_s(float(t), typical)), int(i))
+             for i, t in zip(lap_ids, times, strict=True)
+             if int(i) != exclude and t is not None and np.isfinite(t)]
+    return min(pairs)[1] if pairs else None
+
+
+@dataclass(frozen=True)
+class TypicalPass:
+    """One corner's typical pass beside the best lap's, for a compare at that corner
+    (`CornerMatrix.typical_pass`). Times in seconds, raw; print them with `MATRIX_DECIMALS`."""
+
+    cid: int
+    lap_id: int          # the lap whose pass is the typical one (`typical_pass_lap`)
+    pass_s: float        # that lap's time through the corner
+    typical_s: float     # the corner's typical pass: the median of the counted passes
+    n: int               # how many passes that median is over
+    best_lap_id: int
+    best_pass_s: float   # the best lap's time through the same corner
+
+    @property
+    def typical_vs_best_s(self) -> float:
+        """The typical pass against the best lap's AS PRINTED (`printed_gap_s`): what a reader
+        gets by subtracting the two figures a surface prints, and the Coaching row's Time lost."""
+        return printed_gap_s(self.typical_s, self.best_pass_s)
+
+
 def fmt_pass_vs_typical(gap: float) -> str:
     """`pass_vs_typical_s`'s printed form, "+0.82 s" — the one formatter every surface that prints
     a pass's time against its corner's typical pass goes through."""
@@ -961,6 +1000,27 @@ class CornerMatrix:
         level = sum(1 for f in MATRIX_HEAT_STEPS
                     if abs(gap) >= round(f * scale, MATRIX_DECIMALS))
         return level if gap > 0 else -level
+
+    def typical_pass(self, cid: int, best_lap: int | None) -> TypicalPass | None:
+        """Corner `cid`'s typical pass (`typical_pass_lap` over this column's RESOLVED cells, the
+        cells its median is taken over) beside `best_lap`'s pass. None where the column has no
+        typical (under MATRIX_MIN_LAPS resolved passes), the best lap has no resolved cell here,
+        or no other lap has one."""
+        if best_lap is None or int(cid) not in self.cids:
+            return None
+        col = self.cids.index(int(cid))
+        med = self.medians[col]
+        counted = [(lid, row[col]) for lid, row, ok in zip(self.lap_ids, self.cells, self.resolved,
+                                                           strict=True)
+                   if row[col] is not None and ok[col]]
+        best = [t for lid, t in counted if lid == best_lap]
+        lap = typical_pass_lap([lid for lid, _t in counted], [t for _lid, t in counted], med,
+                               exclude=best_lap)
+        if med is None or not best or lap is None:
+            return None
+        return TypicalPass(cid=int(cid), lap_id=lap, pass_s=float(dict(counted)[lap]),
+                           typical_s=float(med), n=len(counted), best_lap_id=int(best_lap),
+                           best_pass_s=float(best[0]))
 
 
 @dataclass(frozen=True)
