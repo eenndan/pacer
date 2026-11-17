@@ -709,10 +709,14 @@ def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
             # The ⌘K row: off, with the same reason (the rule: disabled while the map is hidden).
             row = palette_row()
             assert not row.enabled and row.reason == StudioWindow._NO_MAP_RACE_REASON, row
-            # Esc leaves the debrief; the cached action is still off — R must race anyway.
+            # Esc leaves the debrief. The map's return now re-reads the gate (the toolbar button's
+            # binding, `app._RaceButtonBinding`), so the cache is fresh here; it is put back stale
+            # by hand so R's own re-gate (`_ShortcutGate`) is still what this exercises.
             QTest.keyClick(win, Qt.Key_Escape)
             _settle(0.3)
-            assert v.map_on_screen() and not act.isEnabled(), "the stale state is not exercised"
+            assert v.map_on_screen() and act.isEnabled(), "the map came back, the gate did not"
+            win._gate_action(act, False, reason)
+            assert not act.isEnabled(), "the stale state is not exercised"
             press_r()
             assert v.is_racing(), "R did not race after Esc left the debrief"
             assert bar.currentMessage() == "", "the refusal outlived the race it refused"
@@ -754,6 +758,153 @@ def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
             _APP.processEvents()
     print("ok R: races once the map is back (Esc, restore, re-open) with no menu opened; says why "
           "on the debrief and under a maximise; the ⌘K row agrees")
+
+
+def _toolbar_fits(v) -> None:
+    """Nothing on the map toolbar is clipped, overlapped or pushed: every laid-out control at its
+    own width, the race button (when shown) clear of the right-hand run, and the map panel's
+    minimum still the run's own need — under the charts panel's, as test_map_key holds."""
+    tb, btn = v._map_toolbar, v.race_btn
+    run = list(tb.leading + tb.controls)
+    for c in run:
+        assert c.width() == c.sizeHint().width(), (type(c).__name__, c.width(), c.sizeHint())
+    assert run[-1].geometry().right() < tb.width(), "the run is pushed out of the bar"
+    if btn.isVisible():
+        assert btn.width() == btn.sizeHint().width(), ("race button clipped", btn.width())
+        assert btn.geometry().right() + tb.layout().spacing() <= run[0].geometry().left(), (
+            "the race button overlaps the run", btn.geometry(), run[0].geometry())
+        assert btn.height() == run[0].height(), "the race button is not the controls' height"
+    assert tb.minimumSizeHint().width() == tb.layout().sizeHint().width()
+    assert v._map_panel.minimumSizeHint().width() <= v._plots_panel.minimumSizeHint().width()
+
+
+def test_the_map_toolbar_button_is_view_lap_race():
+    """The Lap race had no visible entry (View ▸ Lap race, R or ⌘K only). The map toolbar now has a
+    "Lap race" button that IS that command: a click runs the action, and the button carries the
+    action's check, enabled state and tooltip — so every exit route unchecks it, a shut gate greys
+    it with the menu item's own reason, and the map's return re-opens it without a menu sync."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QSplitter
+    from test_debrief_landing import _fresh_app_support, _open
+
+    from studio import sidecar
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    saved = sidecar.save
+    sidecar.save = lambda *a, **k: None
+    with tempfile.TemporaryDirectory(prefix="race_btn_") as folder, _fresh_app_support():
+        path = os.path.join(folder, "demo", "GX019001.MP4")
+        md.make(path, render=False)
+        win = StudioWindow([])
+        win.resize(1280, 800)
+        win.show()
+        try:
+            _open(win, path)            # the demo's first open lands on the debrief
+            v, act = win.view, win._race_action
+            btn = v.race_btn
+            # The debrief: the map is maximised away, and so is the button (not on its picture).
+            assert v._maximized_panel is not None and not btn.isVisible()
+            win._escape_out()
+            _settle(0.3)
+            # The default layout at 1280x800: shown and enabled with no menu opened since the load.
+            assert btn.isVisible() and btn.isEnabled(), (btn.isVisible(), btn.isEnabled())
+            assert btn.text() == act.property("featureText") == "Lap race", btn.text()
+            assert btn.accessibleName() == "Lap race"
+            assert btn.toolTip() == act.toolTip() and btn.toolTip().startswith("Lap race (R): ")
+            assert not btn.icon().isNull(), "a labelled toolbar control without its glyph"
+            assert v._map_toolbar.isAncestorOf(btn) and not v.map.isAncestorOf(btn)
+            _toolbar_fits(v)
+            # The report's map picture is the map widget's: the button is not in it.
+            shown_png = win._grab_report_map()[0]
+            btn.hide()
+            assert win._grab_report_map()[0] == shown_png, "the button changed the report's map"
+            btn.place()
+            assert btn.isVisible()
+            # A click races, and the button reads checked; a lap pick re-points the race, no more.
+            btn.click()
+            assert v.is_racing() and btn.isChecked() and act.isChecked()
+            ids = win.session.valid_lap_ids()
+            v.table.laps_selected.emit([ids[1]])
+            assert v.is_racing() and btn.isChecked(), "a lap pick unticked a running race"
+
+            def start():
+                if not v.is_racing():
+                    btn.click()
+                assert v.is_racing() and btn.isChecked()
+
+            def compare():
+                v.video.compare_btn.click()
+                _settle(0.1)
+                if v.compare.active:
+                    v.video.compare_btn.click()
+                    _settle(0.1)
+
+            def maximise():
+                v._toggle_panel_maximized(v._plots_panel)
+                _settle(0.2)            # the tick ends a race whose map left the screen
+
+            routes = {
+                "the button again": btn.click,
+                "R": lambda: QTest.keyClick(win, Qt.Key_R),
+                "View ▸ Lap race": act.trigger,
+                "Esc": lambda: win.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape,
+                                                           Qt.NoModifier)),
+                "the card's ×": v.race_card.closeRequested.emit,
+                "compare": compare,
+                "a maximise": maximise,
+                "a start-line re-segment": lambda: v.map.timing_lines_changed.emit(
+                    win.session.start_line, list(win.session.sector_lines)),
+                "a trust refresh": v.refresh_timing_trust,
+            }
+            for name, route in routes.items():
+                start()
+                route()
+                _settle(0.05)
+                assert not v.is_racing(), f"{name} did not end the race"
+                assert not btn.isChecked() and not act.isChecked(), f"{name} left it checked"
+                if name == "a maximise":
+                    # Off screen: greyed with the menu item's reason; restored: back with no sync.
+                    win._sync_view_menu()
+                    assert not btn.isEnabled() and btn.toolTip() == win._NO_MAP_RACE_REASON
+                    v._restore_splitter_sizes()
+                    _settle(0.2)
+                    assert btn.isEnabled() and btn.toolTip() == act.toolTip(), btn.toolTip()
+            # Gated: two raceable laps or none — greyed, with the menu item's own reason.
+            real = win.session.race_tracks
+            win.session.race_tracks = lambda *a, **k: None
+            win._sync_view_menu()
+            assert not btn.isEnabled() and not act.isEnabled()
+            assert btn.toolTip() == act.toolTip() == race_controller.NO_RACE_REASON
+            win.session.race_tracks = real
+            win._sync_view_menu()
+            assert btn.isEnabled()
+            # Narrowest map panel the splitter allows: the button steps aside, nothing clips.
+            main = v._map_panel
+            while not (isinstance(main, QSplitter) and main.orientation() == Qt.Horizontal):
+                main = main.parentWidget()
+            main.setSizes([5000, 1])
+            _settle(0.2)
+            assert v._map_panel.width() < 660 and not btn.isVisible(), v._map_panel.width()
+            _toolbar_fits(v)
+            main.setSizes([1, 5000])
+            _settle(0.2)
+            assert btn.isVisible()
+            _toolbar_fits(v)
+            # A new load: the outgoing race ends, and the new view's button starts unchecked.
+            start()
+            old = v
+            _open(win, path)
+            assert not old.race.active and not win.view.race_btn.isChecked()
+            assert not act.isChecked()
+        finally:
+            sidecar.save = saved
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+    print("ok the map toolbar's Lap race button: one command with View ▸ Lap race, checked while a "
+          "race runs, unchecked by every exit, greyed with the menu's reason, fits at 1280x800")
 
 
 def test_follow_is_kept_between_races_and_said_to_the_window():
