@@ -1010,17 +1010,17 @@ class CornerMatrix:
             return None
         col = self.cids.index(int(cid))
         med = self.medians[col]
-        counted = [(lid, row[col]) for lid, row, ok in zip(self.lap_ids, self.cells, self.resolved,
-                                                           strict=True)
-                   if row[col] is not None and ok[col]]
-        best = [t for lid, t in counted if lid == best_lap]
-        lap = typical_pass_lap([lid for lid, _t in counted], [t for _lid, t in counted], med,
-                               exclude=best_lap)
-        if med is None or not best or lap is None:
+        counted: dict[int, float] = {}
+        for lid, row, ok in zip(self.lap_ids, self.cells, self.resolved, strict=True):
+            val = row[col]
+            if val is not None and ok[col]:
+                counted[int(lid)] = float(val)
+        lap = typical_pass_lap(list(counted), list(counted.values()), med, exclude=best_lap)
+        if med is None or best_lap not in counted or lap is None:
             return None
-        return TypicalPass(cid=int(cid), lap_id=lap, pass_s=float(dict(counted)[lap]),
-                           typical_s=float(med), n=len(counted), best_lap_id=int(best_lap),
-                           best_pass_s=float(best[0]))
+        return TypicalPass(cid=int(cid), lap_id=lap, pass_s=counted[lap], typical_s=float(med),
+                           n=len(counted), best_lap_id=int(best_lap),
+                           best_pass_s=counted[best_lap])
 
 
 @dataclass(frozen=True)
