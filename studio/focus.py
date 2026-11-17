@@ -655,9 +655,11 @@ def layout_check(item: FocusItem, corners) -> str:
     16 habit-free sessions of its own layout, both orders, every one of the 224 stored windows
     overlaps a corner of today's that turns its way: the check refuses none of them.
 
-    An item that stored no direction (0), or a caller that passes no corners (None), is not
-    checked: the pair is compared as it always was rather than refused on a guess."""
-    if corners is None or not item.direction:
+    An item that stored no direction (0), a caller that passes no corners (None), or a session
+    whose best lap has no detected corner at all ([]) is not checked: the pair is compared as it
+    always was rather than refused on a guess — a session with no corners anywhere says nothing
+    about which way the one under the window turns."""
+    if not corners or not item.direction:
         return ""
     best, hand = 0.0, 0
     for f0, f1, direction in corners:
@@ -846,22 +848,26 @@ def outcome_sentence(o: Outcome) -> str:
         tail = f" ({o.detail})" if o.detail and o.blocker == BLOCK_GEOMETRY else ""
         return f"{label} — can't say: {_BLOCK_SENTENCE.get(o.blocker, 'not comparable')}{tail}."
     assert o.now is not None and o.delta is not None  # has_verdict implies both
+    spread = max(o.item.iqr_s, o.now.iqr)
+    # Level by the timing step alone (`verdict`): its line says so, and prints its two medians to
+    # the millisecond — at two decimals 2.8448 → 2.9097 s (0.0649 s apart) read "2.84 → 2.91 s", a
+    # 0.07 s difference beside "under 0.07 s apart".
+    step_only = o.kind == OUTCOME_UNCHANGED and abs(o.delta) >= SPREAD_MARGIN * spread
+    digits = 3 if step_only else 2
     # Both halves of the comparison, in the order they happened, with the sample each median came
     # from: a verdict that states only its difference cannot be checked by the person reading it.
-    body = (f"{o.item.median_s:.2f} → {o.now.median:.2f} s, "
+    body = (f"{o.item.median_s:.{digits}f} → {o.now.median:.{digits}f} s, "
             f"{o.item.n_laps} → {o.now.n_laps} laps")
     if o.karts:
         # Not silently like-for-like: the kart changed under the comparison, and the line says so
         # in the same then → now grammar as the two pairs before it (session_record.kart_pair).
         body += f", kart {o.karts[0]} → {o.karts[1]}"
+    if step_only:
+        # The FLOOR, never the gap, as the PB line words it (`library._precision_clause`): "0.07 s
+        # apart, inside 0.07 s" would print a 0.0699 s gap as the very size it is said to be under.
+        return (f"{label} — no change you can act on: under {library.PB_PRECISION_S:.2f} s apart, "
+                f"within timing precision ({body}).")
     if o.kind == OUTCOME_UNCHANGED:
-        spread = max(o.item.iqr_s, o.now.iqr)
-        if abs(o.delta) >= SPREAD_MARGIN * spread:
-            # Level by the timing step alone (`verdict`): the FLOOR, never the gap, as the PB line
-            # words it (`library._precision_clause`) — "0.07 s apart, inside 0.07 s" would print a
-            # 0.0699 s gap as the very size it is said to be under.
-            return (f"{label} — no change you can act on: under {library.PB_PRECISION_S:.2f} s "
-                    f"apart, within timing precision ({body}).")
         return (f"{label} — no change you can act on: {abs(o.delta):.2f} s apart, inside the "
                 f"corner's own {spread:.2f} s spread ({body}).")
     word = "faster" if o.kind == OUTCOME_IMPROVED else "slower"

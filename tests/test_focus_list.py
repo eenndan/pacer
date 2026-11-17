@@ -299,6 +299,20 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
             o = F.verdict([_item(median=1.0, iqr=tight)], _now(),
                           [_sample(1.0 + sign * gap, iqr=tight)], alike).outcomes[0]
             assert abs(o.delta) >= step and o.kind == kind, (gap, sign, o)
+    # …and the boundary itself, exactly: a delta of PB_PRECISION_S to the last bit is a claim (a
+    # `<=` in the rule would call it level; 1.0 ± 0.07 differences back to 0.07000000000000006).
+    assert library.within_timing_precision(step) is False
+    exact = F.verdict([_item(median=0.0, iqr=tight)], _now(), [_sample(step, iqr=tight)],
+                      alike).outcomes[0]
+    assert exact.delta == step and exact.kind == F.OUTCOME_SLOWER, exact
+    # The step-only line prints its medians to the millisecond: at two decimals 2.8448 → 2.9097 s
+    # (0.0649 s apart) read "2.84 → 2.91 s", a 0.07 s difference beside "under 0.07 s apart".
+    near = F.verdict([_item(median=2.8448, iqr=tight)], _now(), [_sample(2.9097, iqr=tight)],
+                     alike).outcomes[0]
+    assert near.kind == F.OUTCOME_UNCHANGED, near
+    assert F.outcome_sentence(near) == ("C4 — no change you can act on: under 0.07 s apart, within "
+                                        "timing precision (2.845 → 2.910 s, 38 → 65 laps)."), \
+        F.outcome_sentence(near)
     # Under the step AND inside the spread: the spread sentence, as before (its number is the why).
     inside = F.verdict([_item(median=4.0, iqr=0.13)], _now(), [_sample(4.05, iqr=0.13)],
                        alike).outcomes[0]
@@ -348,6 +362,12 @@ def test_a_corner_that_turns_the_other_way_today_is_not_compared():
     assert F.verdict([unknown], now, [_sample(4.2)], alike).outcomes[0].has_verdict
     assert F.verdict([_layout_item(4, +1, 0.15, 0.20)], _now(), [_sample(4.2)],
                      alike).outcomes[0].has_verdict
+    # …nor does a session whose best lap has no detected corner at all: an EMPTY list says
+    # nothing about the hand of the corner under the window, so it is not "a different layout".
+    bare = F.verdict([_layout_item(4, +1, 0.15, 0.20)], {**_now(), "corners": []},
+                     [_sample(4.2)], alike)
+    assert bare.outcomes[0].has_verdict, bare.outcomes[0]
+    assert "layout" not in F.report_headline(bare), F.report_headline(bare)
     # It is a structural test: it fires before the record gate, after the start-line one.
     assert F.verdict([_layout_item(4, +1, 0.15, 0.20)], now, [_sample(4.2)],
                      session_record.empty_store()).outcomes[0].blocker == F.BLOCK_LAYOUT
