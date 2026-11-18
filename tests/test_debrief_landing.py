@@ -140,6 +140,57 @@ def test_a_same_day_morning_opened_after_the_afternoon_is_not_a_new_pb():
     assert focus.recorded_before({"fingerprint": "GX9301", "date": day, "start_ms": am_ms}, item)
 
 
+def test_the_default_never_tops_up_a_list_that_ran_the_other_way_round():
+    """cool/layout-reversed-synth: the debrief's pre-fill puts today's corners into the list's FREE
+    slots. A list set on the track driven one way round, topped up on a day driven the other way,
+    holds both rotations — and the check refuses one half of it as LAYOUT_REVERSED on either
+    layout, for good. So a reversed day's list is not topped up on a forward day (nor the other
+    way); the same rotation, or an item stored before rotations were (0), is filled as before."""
+    from types import SimpleNamespace
+
+    from studio import focus
+    from studio.library_controller import LibraryController
+
+    def item(cid, rotation):
+        return focus.FocusItem(cid=cid, direction=-1, enter_frac=0.1 * cid,
+                               exit_frac=0.1 * cid + 0.05, median_s=3.0, iqr_s=0.1, n_laps=14,
+                               time_lost=0.2, reason="", reach="", fingerprint=f"GX{rotation}",
+                               date="2026-09-01", lap_total=961.0, verified=True,
+                               degraded=False, rotation=rotation)
+
+    def day(rotation, stored):
+        """A controller on a session whose laps run `rotation`, over the list `stored`."""
+        session = SimpleNamespace(
+            focus_context=lambda _entry, _track: {"rotation": rotation},
+            focus_items=lambda cids, _entry: [item(c, rotation) for c in cids])
+        ctl = LibraryController(SimpleNamespace(session=session), 0)
+        kept: list = []
+        ctl._focus_entry = lambda: {"fingerprint": "GX0002", "track": "Demo"}
+        ctl._focus_items = lambda _track: list(stored)
+        ctl._save_focus = lambda _track, items: kept.extend(items)
+        ctl._baseline_refusal = lambda *_a: ""
+        ctl.update_focus_list = lambda: None
+        return ctl, kept
+
+    # A reversed (clockwise) day first: its debrief puts its one corner on the empty list.
+    ctl, kept = day(-1, [])
+    assert ctl.pre_promote_focus([7]) == [7] and [i.rotation for i in kept] == [-1], kept
+    reversed_list = list(kept)
+    # …then a forward (anticlockwise) day: two free slots, and none is filled.
+    ctl, kept = day(1, reversed_list)
+    assert ctl.pre_promote_focus([5, 3]) == [] and kept == [], \
+        ("a forward day topped up a reversed day's list", kept)
+    # The same rotation, or an item that stored none, is topped up as before.
+    for stored in (reversed_list, [item(7, 0)]):
+        ctl, kept = day(-1, stored)
+        assert ctl.pre_promote_focus([5, 3]) == [5, 3], stored
+        assert [i.cid for i in kept] == [7, 5, 3], kept
+    # A day that tells no rotation (no loop in its corners) is not stopped either.
+    ctl, kept = day(0, reversed_list)
+    assert ctl.pre_promote_focus([5]) == [5], kept
+    print("ok default: a list is never topped up from a day run the other way round")
+
+
 def test_the_lead_says_it_is_a_default_and_how_to_undo_it():
     three, one, none = debrief_note([7, 5, 3]), debrief_note([4]), debrief_note([])
     assert "Pacer put C7, C5 and C3" in three and "a default, not a decision" in three, three
