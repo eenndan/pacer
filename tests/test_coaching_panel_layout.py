@@ -111,7 +111,7 @@ class _Session:
         # The theme rides on the summary in production (summarize computes it once), so build it
         # the same way here — a fixture with no theme never exercises the block above the table.
         self._opps = coaching.Opportunities(enough=True, n_laps=8, median_lap_id=3, rows=rows,
-                                            theme=coaching.session_theme(rows))
+                                            theme=coaching.headline_theme(rows))
         self._dirs = directions or {}
 
     def coaching_opportunities(self):

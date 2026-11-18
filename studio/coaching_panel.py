@@ -149,9 +149,10 @@ class ThemeBlock(QWidget):
 
     WHY IT LEADS. Twelve ranked corners is a report, not coaching; the compression into one theme
     and a short action list is the part a human coach does and the part every surveyed tool skips.
-    Everything here comes from ``coaching.session_theme`` — which clusters only over what this app
-    MEASURES (the reach axis and the five reason signals) and says "no single theme" rather than
-    inventing one. Empty (and hidden) when nothing is ranked.
+    Everything here comes from ``coaching.headline_theme`` (``session_theme`` over the corners the
+    headline sums) — which clusters only over what this app MEASURES (the reach axis and the five
+    reason signals) and says "no single theme" rather than inventing one. Empty (and hidden) when
+    nothing is ranked.
 
     AND IT YIELDS (``fit_into``), the vertical twin of the page's column budget: it sheds its second
     action, then its first, then itself, rather than take more than ``THEME_MAX_FRACTION`` of the
