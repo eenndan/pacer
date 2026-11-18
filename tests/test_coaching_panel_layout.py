@@ -635,6 +635,9 @@ def _run_all():
     test_compare_sits_under_jump_where_its_column_does_not_fit()
     test_the_docked_pair_says_what_the_rows_say_and_fits_a_two_digit_corner()
     test_the_pair_and_the_rows_actions_never_share_a_width()
+    test_a_re_measured_list_is_never_folded_out_of_sight_by_the_pair()
+    test_a_refresh_keeps_the_picked_row_or_says_it_went()
+    test_a_page_with_no_ranked_row_has_no_pair()
     print("ALL COACHING PANEL LAYOUT TESTS OK")
 
 
@@ -744,6 +747,25 @@ def _focus_report(cids):
     return focus.verdict(items, now, [sample] * len(items), session_record.empty_store())
 
 
+def _verdict_report(cids):
+    """A list re-measured on this session with a verdict for every corner: both sessions are
+    recorded dry, so the gate lets each speak ("C12 — 0.30 s faster than 23 May …")."""
+    from studio import focus, session_record
+    store = session_record.empty_store()
+    for fp in ("GX0060", "GX0062"):
+        session_record.put(store, fp, {**session_record.blank_record(), "conditions": "dry",
+                                       "air_temp_c": 18.0, "track_temp_c": 24.0,
+                                       "tyre_set": "MG Yellow"})
+    items = [focus.FocusItem(cid=c, direction=1, enter_frac=0.15, exit_frac=0.20, median_s=4.50,
+                             iqr_s=0.05, n_laps=38, time_lost=0.22, reason=coaching.REASON_BRAKING,
+                             reach=coaching.REACH_REPEAT, fingerprint="GX0060", date="2026-05-23",
+                             lap_total=1059.2, verified=True, degraded=False) for c in cids]
+    now = {"list_track": "Stadium", "track": "Stadium", "fingerprint": "GX0062",
+           "date": "2026-05-24", "lap_total": 1066.2, "verified": True, "degraded": False}
+    return focus.verdict(items, now, [focus.CornerSample(median=4.2, iqr=0.05, n_laps=65)]
+                         * len(items), store)
+
+
 def _next_tab(w):
     """The next widget Tab would visit after `w` (the focus chain holds containers too)."""
     nxt = w.nextInFocusChain()
@@ -790,7 +812,8 @@ def test_the_docked_pair_says_what_the_rows_say_and_fits_a_two_digit_corner():
         _APP.processEvents()
     assert p.focus_block.isHidden() and p.focus_line.isVisible(), p.focus_line.text()
     whole = "Focus list: C12 · C13 · C14 — Both dry?"
-    assert p.focus_line.text().endswith("…") and whole in p.focus_line.toolTip(), (
+    # Too long beside the pair: the corners go (the hover keeps them), the question stays.
+    assert p.focus_line.text() == "Focus list — Both dry?" and whole in p.focus_line.toolTip(), (
         p.focus_line.text())
     assert p._focus_line_row.height() == own_line, "the chip's line is no taller for the pair"
     assert _whole_rows(t) >= PANEL_TOP_N
@@ -852,6 +875,76 @@ def test_the_pair_and_the_rows_actions_never_share_a_width():
     assert empty.body.currentIndex() == 1 and not empty.jump_button.isVisibleTo(empty)
     assert not empty._focus_line_row.isVisibleTo(empty)
     print(f"ok exclusive: pair at {seen[True]} widths, rows' Jump at {seen[False]}, never both")
+
+
+def test_a_re_measured_list_is_never_folded_out_of_sight_by_the_pair():
+    """Review of #609 (P2): the owner approved folding the focus list's PARAGRAPH to its chip
+    beside the pair, never a verdict. A list re-measured on this session keeps its whole block,
+    the pair on a line of its own, wherever the shortlist leaves room for all of it; where it does
+    not, the chip says how many were re-measured. On the reviewed head the 1440x900 page (515 x
+    418) showed a bare "Focus list: C12 · C13 · C14" over three verdicts nobody could see."""
+    rows = _two_digit_rows()
+    report = _verdict_report((12, 13, 14))
+    assert report.n_verdicts == 3, report
+    for size in (DOCKED_1280, (515, 418), (515, 760)):
+        p = _panel(rows, size)
+        p.set_focus_report(report)
+        for _ in range(6):
+            _APP.processEvents()
+        t, fb = p.table, p.focus_block
+        assert p.jump_button.isVisible() and _whole_rows(t) >= PANEL_TOP_N, (size, _whole_rows(t))
+        whole_block = (fb.isVisible() and fb.headline.isVisible()
+                       and all(lb.isVisible() for lb in fb.lines[:3]))
+        chip = p.focus_line.text() if p.focus_line.isVisible() else ""
+        assert whole_block or chip.endswith("3 of 3 re-measured"), (size, whole_block, chip)
+        assert whole_block or "3 of 3 re-measured" in p.focus_line.toolTip(), size
+        if whole_block:
+            assert not p.focus_line.isVisible(), "the block and its line, never both"
+            assert fb.geometry().bottom() < p._focus_line_row.geometry().top(), size
+        if size == (515, 760):
+            assert whole_block, "a page with the room shows the verdicts themselves"
+        print(f"ok verdicts at {size}: {'whole block' if whole_block else repr(chip)}")
+
+
+def test_a_refresh_keeps_the_picked_row_or_says_it_went():
+    """Review of #609 (P3): a refresh (a unit toggle, a palette change, a re-segmentation) cleared
+    the table's selection without a word, so the map kept C14 ringed while the pair re-aimed at
+    C12. The picked row now survives a refresh while its corner is still on the page; when it is
+    not, `corner_clicked(None)` says so and the pair aims back at the top row."""
+    import dataclasses
+    rows = _two_digit_rows()
+    p = _panel(rows, DOCKED_1280)
+    said = []
+    p.corner_clicked.connect(said.append)
+    p.table.selectRow(2)
+    _APP.processEvents()
+    assert said == [14] and p.jump_button.text() == "Jump to C14", (said, p.jump_button.text())
+    p.refresh()
+    for _ in range(4):
+        _APP.processEvents()
+    assert p._selected_cid() == 14 and p.jump_button.text() == "Jump to C14", p._selected_cid()
+    assert said == [14], said
+    kept = [r for r in rows if r.cid != 14]
+    p.session._opps = dataclasses.replace(p.session._opps, rows=kept,
+                                          theme=coaching.headline_theme(kept))
+    p.refresh()
+    for _ in range(4):
+        _APP.processEvents()
+    assert said == [14, None] and p._selected_cid() is None, said
+    assert p.jump_button.text() == "Jump to C12", p.jump_button.text()
+    print("ok refresh: the picked row kept, and its loss said once")
+
+
+def test_a_page_with_no_ranked_row_has_no_pair():
+    """Review of #609 (P3): rows listed but none ranked is no loss to act on — the design hides
+    the pair there; it aimed at an unranked row."""
+    import dataclasses
+    rows = [dataclasses.replace(r, evidence=dataclasses.replace(
+        r.evidence, abstain=coaching.ABSTAIN_SPREAD)) for r in _rows(6)]
+    p = _panel(rows, DOCKED_1280)
+    assert p.body.currentIndex() == 0 and p.table.rowCount() >= PANEL_TOP_N
+    assert not p.jump_button.isVisibleTo(p) and not p.compare_button.isVisibleTo(p)
+    print("ok no ranked row: no pair")
 
 
 if __name__ == "__main__":

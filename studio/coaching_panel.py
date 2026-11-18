@@ -330,6 +330,8 @@ class FocusBlock(QWidget):
         self._headline = ""
         self._empty = False             # the one-line invitation (an active track, no corners yet)
         self._cids: list[int] = []      # cids currently on the list, in list order
+        self._n_verdicts = 0            # verdicts the report carries (`line_text`)
+        self._remeasured = False        # any corner re-measured here, verdict or refusal
         self._selected: int | None = None
         self._mark_fps: list[str] = []  # the unrecorded sessions the Mark button would write
         self._replace: list[int] = []    # today's top corners the Replace button would store
@@ -408,6 +410,10 @@ class FocusBlock(QWidget):
         loop itself."""
         outcomes = list(report.outcomes) if report is not None else []
         self._cids = [o.item.cid for o in outcomes]
+        # What a re-measure said, for the one line (`line_text`): how many verdicts, and whether
+        # any corner was re-measured at all (a refusal is news too; a list set today is not).
+        self._n_verdicts = report.n_verdicts if report is not None else 0
+        self._remeasured = any(o.kind != focus.OUTCOME_SET_HERE for o in outcomes)
         # `report_lines`, not one sentence per outcome: when every corner is blocked for the SAME
         # reason — the common case, and the one the real recordings land in — three copies of the
         # same 200-character explanation bury the one thing the driver can act on.
@@ -476,8 +482,28 @@ class FocusBlock(QWidget):
         no list: the empty list's invitation and a dormant page get no line."""
         if not self._cids:
             return ""
-        ask = f" — {self.mark_question.text()}" if self._mark_fps else ""
-        return f"Focus list: {' · '.join(f'C{c}' for c in self._cids)}{ask}"
+        return f"Focus list: {' · '.join(f'C{c}' for c in self._cids)}{self._line_status()}"
+
+    def _line_status(self) -> str:
+        """The line's tail: the question waiting on the driver, else what the re-measure said, in
+        the headline's words — a line standing in for verdicts must say there are some (review of
+        #609: "3 of 3 re-measured" folded to a bare list of corners was a verdict hidden)."""
+        if self._mark_fps:
+            return f" — {self.mark_question.text()}"
+        if self._n_verdicts:
+            return f" — {self._n_verdicts} of {len(self._cids)} re-measured"
+        if self._remeasured:
+            return " — no verdict yet" if "no verdict yet" in self._headline else " — no verdict"
+        return ""
+
+    def has_news(self) -> bool:
+        """The list was re-measured on this session (a verdict or a refusal to give one): what the
+        block then says is a result, not just the list."""
+        return self._remeasured and bool(self._headline) and not self._empty
+
+    def full_px(self, width: int) -> int:
+        """The height the whole block (every line) needs at `width`; 0 for a dormant block."""
+        return self._needed_px(width, len(self._lines)) if self._headline else 0
 
     def _sync_buttons(self):
         """Label + enablement from the selection and the list. The button SAYS which corner it
@@ -1601,8 +1627,11 @@ def _jump_tip(cid: int) -> str:
 # column's, so no width shows both or neither. The header sentence itself is ~481 px of the 498,
 # which is why they share the chip's line rather than the header's. While they are up the focus
 # block keeps to its one-line chip (Q1 (a)): at 1440x900 that is 114 px of block down to the line,
-# and the chip's click still shows the list whole. With no chip to share (no focus list on this
-# track, or an empty one) the pair takes a line of its own.
+# and the chip's click still shows the list whole. That is the list's PARAGRAPH; a list re-measured
+# on this session carries verdicts, and those keep their block (the pair on its own line) wherever
+# the shortlist leaves room for the whole of it, else the chip says how many ("3 of 3
+# re-measured"). With no chip to share (no list on this track, or an empty one) the pair takes a
+# line of its own.
 PAIR_JUMP_KEY = "\nReturn in the table does the same."
 
 # What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
@@ -1990,7 +2019,8 @@ class OpportunitiesPanel(QWidget):
         """Recompute the opportunities from the session and rebuild the top-3 rows (or the friendly
         excluded state). Called on load / re-segmentation / unit + palette change — never on the
         30 Hz tick, and never on a lap selection (the summary is session-scoped; see the class note).
-        Clears any held row selection (a stale cid would mis-ring the map)."""
+        Keeps the selected row while its corner is still on the page; otherwise the selection goes
+        and `corner_clicked(None)` says so, so the map's ring and the pair never disagree."""
         opps = self.session.coaching_opportunities()
         directions = self.session.coaching_brake_direction()
         self.theme_block.set_theme(opps)
@@ -2039,7 +2069,7 @@ class OpportunitiesPanel(QWidget):
         # headline shortlist's length, which counts only ranked rows (except on the debrief, whose
         # table IS that shortlist — _row_limit).
         self._render_rows(min(PANEL_TOP_N, self._row_limit()),
-                          keep_selection=False, rebuild=True)
+                          keep_selection=True, rebuild=True)
         self._apply_column_budget()
         self._tune_rows()
 
@@ -2054,7 +2084,8 @@ class OpportunitiesPanel(QWidget):
         gesture is worth. `rebuild=True` (a refresh: new data, new unit, new palette) rebuilds all
         of them."""
         rows = self._all_rows[:max(n, 0)]
-        held = self._selected_cid() if keep_selection else None
+        prior = self._selected_cid()
+        held = prior if keep_selection else None
         self.table.blockSignals(True)
         try:
             self.table.clearSelection()
@@ -2085,7 +2116,10 @@ class OpportunitiesPanel(QWidget):
         _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self.body.setCurrentIndex(0)
         self._sync_pair()   # a refresh or a shrunk table can change the row the pair aims at
-        if held is not None and held not in self._cids:
+        if prior is not None and self._selected_cid() != prior:
+            # The selection went (dropped, or its corner fell off the end): say so once, so the
+            # map's ring, the focus block's Add and the pair all agree there is none.
+            self.focus_block.set_selected_corner(None)
             self.corner_clicked.emit(None)
 
     def _reason_item(self, opp: coaching.Opportunity, directions: dict) -> QTableWidgetItem:
@@ -2294,10 +2328,12 @@ class OpportunitiesPanel(QWidget):
         return self._all_rows[0] if self._all_rows else None
 
     def _pair_on(self) -> bool:
-        """Whether the pair is on screen: on the ordinary page with rows, exactly while the rows
+        """Whether the pair is on screen: on the ordinary page with a RANKED row (a page of only
+        abstained rows has no loss to act on — the design hides the pair), exactly while the rows
         carry no Jump of their own (the Jump column hidden) — never two ways to one action on one
         screen, and never on the debrief, whose rows keep theirs."""
-        return (not self._debrief and self.body.currentIndex() == 0 and bool(self._all_rows)
+        return (not self._debrief and self.body.currentIndex() == 0
+                and any(o.evidence.ranked for o in self._all_rows)
                 and self.table.isColumnHidden(_PANEL_COL_GO))
 
     def _sync_pair(self) -> None:
@@ -2543,6 +2579,17 @@ class OpportunitiesPanel(QWidget):
             # pair's own line is paid for first, ahead of the block, as the chip's line is.
             pair, chip = self._pair_on(), self.focus_block.line_text()
             self._pair_shown = pair
+            # A list that was RE-MEASURED is a result, not a paragraph: the owner approved folding
+            # the list, never a verdict. Its block stays whole beside the pair's own line while
+            # the shortlist keeps its room; else the chip carries the count ("3 of 3
+            # re-measured"), one click from the whole block (review of #609).
+            if pair and chip and self.focus_block.has_news():
+                budget = min(int(height * FOCUS_MAX_FRACTION),
+                             max(room - used - self._pair_line_px(), 0))
+                if self.focus_block.full_px(self.width()) > budget:
+                    budget = 0
+                if budget:
+                    chip = ""
             if pair:
                 used += self._sync_action_line(chip, True)
                 if chip:
@@ -2581,6 +2628,12 @@ class OpportunitiesPanel(QWidget):
             row.setVisible(want)
         return row.sizeHint().height() if want else 0
 
+    def _pair_line_px(self) -> int:
+        """The pair's own line's height, before it is shown: its margins and the taller button."""
+        m = self._focus_line_row.layout().contentsMargins()
+        return m.top() + m.bottom() + max(self.jump_button.sizeHint().height(),
+                                          self.compare_button.sizeHint().height())
+
     def _fit_chip(self, text: str, pair: bool) -> None:
         """Elide the chip into what the line leaves it beside the pair, so the line never asks the
         page for more width than it has; elided, its hover carries the whole list."""
@@ -2592,8 +2645,19 @@ class OpportunitiesPanel(QWidget):
                       + 2 * lay.spacing())
         fm = chip.fontMetrics()
         chrome = chip.sizeHint().width() - fm.horizontalAdvance(chip.text())
-        shown = (text if fm.horizontalAdvance(text) + chrome <= avail
-                 else fm.elidedText(text, Qt.ElideRight, max(avail - chrome, 0)))
+        # The status tail ("— 3 of 3 re-measured", "— Both dry?") is what the line is FOR: the
+        # corners elide, the tail stays whole.
+        # Too long whole, the corners go first (they are the hover's, and the click's), then the
+        # name elides; a part-elided corner list ("C1 · C…") would name a corner that is not one.
+        head, sep, tail = text.partition(" — ")
+        tail = sep + tail
+        # Narrower still (two-digit corners widen the pair), the tail alone beside the chip's
+        # focus-list glyph: the result is what must never be cut.
+        short = head.partition(":")[0] + tail
+        bare = tail.removeprefix(sep)
+        fits = [t for t in (text, short, bare) if t and fm.horizontalAdvance(t) + chrome <= avail]
+        shown = fits[0] if fits else fm.elidedText(bare or short, Qt.ElideRight,
+                                                   max(avail - chrome, 0))
         if (self._chip_text, chip.text()) != (text, shown):
             self._chip_text = text
             chip.setText(shown)

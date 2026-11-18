@@ -3936,6 +3936,13 @@ def test_the_docked_page_jumps_and_compares_without_widening():
             # THE DEBRIEF IS UNCHANGED: its rows carry their Jumps; the line carries no pair.
             assert page.is_debrief() and not t.isColumnHidden(cp._PANEL_COL_GO)
             assert not jump.isVisibleTo(page) and not cmp_.isVisibleTo(page)
+            # ...and Return on its table jumps nowhere: the debrief gains no key either.
+            debrief_jumps = []
+            page.jump_requested.connect(lambda cid, d: debrief_jumps.append(cid))
+            t.setFocus()
+            QTest.keyClick(t, Qt.Key_Return)
+            _settle(0.1)
+            assert debrief_jumps == [] and page.is_debrief(), debrief_jumps
             win._escape_out()
             _settle(0.3)
             v.select_lap_tab(3)
