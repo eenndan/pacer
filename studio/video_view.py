@@ -1467,6 +1467,14 @@ class VideoView(QWidget):
         """Seek to global session time via the primary pane's chapter-aware seek."""
         self.pane.seek(seconds)
 
+    def play_clip(self, start: float, end: float):
+        """Play GLOBAL [start, end] on the primary pane and pause at `end` (PlayerPane.set_clip_end):
+        the Corners tab's Quickest passes. Normal mode only — its caller leaves compare first. The
+        driver's next seek, play or pause drops the end."""
+        self.pane.seek(start)
+        self.pane.play()
+        self.pane.set_clip_end(end)
+
     def step(self, seconds: float):
         """Step ±`seconds`, clamped to the slider range, through the slider-move seek path (so
         compare-window confinement applies). Not while the handle is held: the pointer owns the

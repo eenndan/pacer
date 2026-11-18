@@ -201,6 +201,12 @@ class PlayerPane(QWidget):
         # compare-mode lap window (start_global, end_global): the pane pauses+clamps at end instead
         # of the session end; None in normal mode. See _on_position.
         self._lap_window: tuple[float, float] | None = None
+        # A ONE-SHOT clip end (global telemetry time): playback pauses once there and the end is
+        # dropped. Set by `set_clip_end` after a pass's seek + play (the Corners tab's Quickest
+        # passes); any later seek, play or pause drops it, so a driver who scrubs, presses ▶ or
+        # picks a lap is never paused by a clip he has left. NOT the lap window: that one is
+        # compare's, rewinds on play and clamps the reported position, none of which a clip wants.
+        self._clip_end: float | None = None
         # Media playback rate (1.0 = real time). Remembered because a SOURCE SWITCH does not carry
         # it: the rate is a property of the QMediaPlayer's current media on the FFmpeg backend, so
         # a chapter seam would silently drop a slow-motion review back to 1x. Re-applied in
@@ -354,6 +360,7 @@ class PlayerPane(QWidget):
         # explicit play overrides a pause made mid-seam: honour PLAY on the genuine load (else
         # play-after-pause-during-reopen never resumes).
         self._user_paused_during_reopen = False
+        self._clip_end = None
         if self._pending is not None:
             # ▶ while a seek waits for its source to load (the open's poster, a paused chapter
             # jump): play from THAT target once it lands, not from wherever the load starts.
@@ -370,6 +377,7 @@ class PlayerPane(QWidget):
         # pause mid-reopen: remember it so the deferred resume does not override it (see _apply_pending).
         if self._switching or self._pending is not None:
             self._user_paused_during_reopen = True
+        self._clip_end = None
         self.player.pause()
 
     # ------------------------------------------------------------- playback rate (slow motion)
@@ -432,6 +440,7 @@ class PlayerPane(QWidget):
         the position but presents no frame (every fresh source is Stopped), so a seek that does not
         resume play ends paused: _present_paused."""
         self._drag_held = None   # a deliberate seek drops a drag target still waiting its turn
+        self._clip_end = None    # ...and a clip end: the driver has gone somewhere else
         if self._chapters is None:
             self.player.setPosition(int(seconds * 1000))
             return
@@ -502,6 +511,15 @@ class PlayerPane(QWidget):
     def clear_lap_window(self):
         """Drop the lap window (back to whole-session playback)."""
         self._lap_window = None
+
+    # ------------------------------------------------------------- clip end (a pass's clip)
+    def set_clip_end(self, end_global: float):
+        """Pause once playback reaches GLOBAL `end_global`, then forget it (see `_clip_end`).
+        Call it AFTER the clip's own seek and play, which drop any earlier end."""
+        self._clip_end = float(end_global)
+
+    def clip_end(self) -> float | None:
+        return self._clip_end
 
     # ------------------------------------------------------------- g-meter overlay
     def set_gmeter_visible(self, on: bool):
@@ -708,6 +726,10 @@ class PlayerPane(QWidget):
         position to the end so the pane parks on the lap's last frame; cross-chapter auto-advance is
         untouched (it carries a seam-straddling lap up to that end)."""
         global_s = self._clock().to_telemetry(self._offset() + ms / 1000.0)
+        end = self._clip_end
+        if end is not None and global_s >= end - _WINDOW_STOP_TOL_S and self.is_playing():
+            self._clip_end = None
+            self.player.pause()
         win = self._lap_window
         if win is not None and global_s >= win[1] - _WINDOW_STOP_TOL_S:
             # reached the lap end: pause and report the clamped end (idempotent).

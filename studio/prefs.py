@@ -95,6 +95,10 @@ WINDOW_GEOMETRY = "window_geometry"
 # View ▸ Reduce motion (studio/motion.py): True / False once the user has chosen, absent until then
 # — absent means "follow macOS's own Reduce Motion", so the default is the system's, not ours.
 REDUCE_MOTION = "reduce_motion"
+# Which view the Corners tab shows: "lap" (one lap's corners, the default) or "quickest" (the
+# quickest pass through each corner). Anything else reads as "lap".
+CORNERS_VIEW = "corners_view"
+CORNERS_VIEWS = ("lap", "quickest")
 
 
 def _app_support_dir() -> str:
@@ -328,6 +332,21 @@ def set_map_key_collapsed(collapsed: bool, path: str | None = None) -> None:
     ``set_last_dir`` / ``set_library_size``). MapView calls this from the plate's own click."""
     try:
         set(MAP_KEY_COLLAPSED, bool(collapsed), path)
+    except OSError:
+        pass
+
+
+def corners_view(path: str | None = None) -> str:
+    """The Corners tab's remembered view, "lap" (default) or "quickest"."""
+    view = get(CORNERS_VIEW, CORNERS_VIEWS[0], path)
+    return view if view in CORNERS_VIEWS else CORNERS_VIEWS[0]
+
+
+def set_corners_view(view: str, path: str | None = None) -> None:
+    """Persist the Corners tab's view. Guarded like ``set_map_key_collapsed``: remembering a view
+    must never break the click that chose it."""
+    try:
+        set(CORNERS_VIEW, view if view in CORNERS_VIEWS else CORNERS_VIEWS[0], path)
     except OSError:
         pass
 

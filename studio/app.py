@@ -2988,6 +2988,41 @@ class StudioWindow(QMainWindow):
         """Lap panel ▸ Corners (2)."""
         self._select_lap_tab(1)
 
+    def quickest_pass_commands(self) -> list[tuple[str, Callable[[], None]]]:
+        """⌘K's per-corner rows, one per corner with a quickest pass: "Quickest C3 — lap 13". Read
+        when the palette opens (command_palette.entries), so they follow the session on screen;
+        [] before a load or without the CORNERS BY LAP grid."""
+        view = getattr(self, "view", None)
+        page = getattr(view, "corners_page", None)
+        if getattr(self, "session", None) is None or page is None or not page.has_corners():
+            return []
+        if page.quickest.result is None:
+            page.quickest.refresh()
+        out: list[tuple[str, Callable[[], None]]] = []
+        for qp in page.quickest.passes():
+            if qp.lap_id is None:
+                continue
+            label = page.quickest._labels.get(qp.cid, f"C{qp.cid}")
+            out.append((f"Quickest {label} — lap {lap_label(qp.lap_id)}",
+                        lambda cid=qp.cid: self.play_quickest_pass(cid)))
+        return out
+
+    def play_quickest_pass(self, cid: int) -> bool:
+        """Play the quickest pass through corner `cid` from Corners ▸ Quickest passes — as a click
+        on its row, so a second run plays the next level lap. Shows that view (navigation: neither
+        the remembered tab nor the remembered view changes)."""
+        view = getattr(self, "view", None)
+        page = getattr(view, "corners_page", None)
+        if page is None:
+            return False
+        page.set_view("quickest", remember=False)
+        self._jumping = True
+        try:
+            view.select_lap_tab(1)
+        finally:
+            self._jumping = False
+        return page.quickest.activate(page.quickest.row_of(cid))
+
     def show_stats_tab(self):
         """Lap panel ▸ Stats (3). Not the same as View ▸ Session statistics, which also MAXIMIZES
         the panel — this just flips the page."""
@@ -3467,6 +3502,9 @@ class StudioWindow(QMainWindow):
         # the user had chosen, so quitting from a jump reopened the app on Corners (QA L5-07).
         self._jumping = True
         try:
+            # ...and on its Lap view, whose rows the reveal below points at (navigation: the
+            # remembered view is untouched).
+            view.corners_page.set_view("lap", remember=False)
             view.select_lap_tab(1)
         finally:
             self._jumping = False
