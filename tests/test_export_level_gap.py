@@ -27,6 +27,7 @@ import os
 import sys
 import tempfile
 from dataclasses import replace
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PACER_NO_MEDIA", "1")
@@ -97,15 +98,21 @@ def test_the_classic_strip_colours_a_gap_from_the_printed_step():
     print("ok Classic: printed ±0.06 white, ±0.07 and over coloured, both palettes")
 
 
+def _compare_frames(deltas, cfg):
+    """The compare render's own `build_frames` over a stand-in lock carrying `deltas`."""
+    n = len(deltas)
+    lock = SimpleNamespace(fraction=np.full(n, 0.5), delta=np.asarray(deltas, float),
+                           speed_a=np.full(n, 60.0), speed_b=np.full(n, 60.0),
+                           elapsed_a=np.full(n, 20.0), elapsed_b=np.full(n, 20.0))
+    spec = SimpleNamespace(config=cfg, label_a="LAP 7", label_b="LAP 13")
+    return ec.build_frames(spec, lock)
+
+
 def _paint_compare(deltas, palette, layout=ec.LAYOUT_SIDE):
     """Paint one compare frame per Δ at 720p on a grey picture; return the Δ pill's pixels."""
     cfg = ec.CompareConfig(layout=layout, out_height=720, palette=palette)
     geo = ec.compare_geometry((1920, 1080), (1920, 1080), cfg)
-    frames = [ec.CompareFrame(fraction=0.5, delta=d, caption_a="LAP 7   0:20.000",
-                              caption_b="LAP 13   0:20.000", speed_a_kmh=60.0, speed_b_kmh=60.0,
-                              speed_a="60", speed_b="60",
-                              delta_run=theme.format_delta_run(d, units=False, arrow=True))
-              for d in deltas]
+    frames = _compare_frames(deltas, cfg)
     painter = ec.ComparePainter(geo, cfg, frames, "LAP 7 vs LAP 13")
     box = painter.delta_box()
     out = []
@@ -139,7 +146,47 @@ def test_the_compare_pill_colours_a_gap_from_the_same_step():
                 else:
                     want, other = (n_ahead, n_behind) if d < 0 else (n_behind, n_ahead)
                     assert want > 50 and other == 0, (pal, layout, d, n_ahead, n_behind)
-    print("ok compare: the Δ pill is white at printed ±0.06, coloured from ±0.07, both layouts")
+    # The arrow goes with the colour: a white "Δ +0.01 ▼" would claim the direction the colour
+    # disclaims (the live compare seam drops it too). The sign still prints.
+    runs = {d: f.delta_run for d, f in zip(LEVEL + COLOURED, _compare_frames(
+        LEVEL + COLOURED, ec.CompareConfig()), strict=True)}
+    for d in LEVEL:
+        assert "▲" not in runs[d] and "▼" not in runs[d], (d, runs[d])
+    for d in COLOURED:
+        assert runs[d].endswith("▲" if d < 0 else "▼"), (d, runs[d])
+    assert runs[0.06] == "Δ +0.06" and runs[-0.06] == "Δ −0.06" and runs[0.07] == "Δ +0.07 ▼"
+    print("ok compare: the Δ pill is white and arrowless at printed ±0.06, coloured with its "
+          "arrow from ±0.07, both layouts")
+
+
+def test_the_last_line_decides_on_its_printed_three_decimals():
+    """Broadcast's LAST line prints Δbest to 3 decimals: 0.0698 and 0.0700 both print "+0.070", so
+    both are coloured; 0.0694 prints "+0.069" and is level. (Through `delta_best_gaps` a gap is
+    whole milliseconds, so the raw and printed decisions cannot part on a real session; this holds
+    the rule, not a seen defect.)"""
+    from studio import lap_table
+
+    class _S:
+        timing_verified = True
+
+        @staticmethod
+        def lap_rows():
+            return [{"idx": i, "time": 46.0 + i} for i in range(4)]
+
+        @staticmethod
+        def best_lap_id():
+            return 0
+
+    real = lap_table.delta_best_gaps
+    lap_table.delta_best_gaps = lambda rows, best: {0: 0.0, 1: 0.0698, 2: 0.0700, 3: 0.0694}
+    try:
+        rows = broadcast.last_lap_rows(_S(), theme.PALETTE_STANDARD)
+    finally:
+        lap_table.delta_best_gaps = real
+    assert rows[1][1:] == ("+0.070", EXPORT.behind), rows[1]
+    assert rows[2][1:] == ("+0.070", EXPORT.behind), rows[2]
+    assert rows[3][1:] == ("+0.069", EXPORT.neutral), rows[3]
+    print("ok LAST line: +0.070 is coloured whatever the raw gap; +0.069 is level")
 
 
 def test_the_rule_is_broadcasts_own_object():
@@ -189,14 +236,23 @@ def _frames(spec, s, out_h, stride, overlay_only=True):
 
 
 class _MainRule:
-    """main's colour rule for the duration of a `with` block: the gap coloured even inside the step."""
+    """main's Classic strip for the duration of a `with` block, re-implemented here (not borrowed
+    from the code under test): the gap coloured even inside the step. On main itself it changes
+    nothing, so the "level frames changed" check fails there on behaviour."""
+
+    @staticmethod
+    def _main_tail(delta_s, is_best=False, palette=None):
+        if is_best:
+            return "★ BEST", EXPORT.accent
+        return (theme.format_delta_run(delta_s, units=False, arrow=False),
+                ev.export_delta_colour(delta_s, palette))
 
     def __enter__(self):
-        self._ev, self._ec = ev.burned_delta_colour, ec.burned_delta_colour
-        ev.burned_delta_colour = ec.burned_delta_colour = ev.export_delta_colour
+        self._real = ev.strip_tail
+        ev.strip_tail = self._main_tail
 
     def __exit__(self, *_a):
-        ev.burned_delta_colour, ec.burned_delta_colour = self._ev, self._ec
+        ev.strip_tail = self._real
 
 
 def _spec(s, lap, style="classic", extras=(), **kw):
@@ -316,6 +372,7 @@ def test_an_estimated_clock_keeps_broadcasts_step():
 def _run_all():
     for fn in (test_the_classic_strip_colours_a_gap_from_the_printed_step,
                test_the_compare_pill_colours_a_gap_from_the_same_step,
+               test_the_last_line_decides_on_its_printed_three_decimals,
                test_the_rule_is_broadcasts_own_object,
                test_classic_changes_only_where_the_printed_gap_is_level,
                test_broadcast_extras_and_the_best_lap_are_byte_identical,

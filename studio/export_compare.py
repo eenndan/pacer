@@ -112,6 +112,7 @@ from .export_video import (
     _text_at,
     build_decode_cmd,
     burned_delta_colour,
+    burned_delta_is_level,
     estimate_render_seconds,
     fits_one_frame,
     footage_duration,
@@ -878,7 +879,10 @@ def build_frames(spec: CompareSpec, lock: LockedTrack) -> list[CompareFrame]:
             # inside both laps, which is what the lock guarantees.
             speed_a=theme.speed_number(sa, 0, unit),
             speed_b=theme.speed_number(sb, 0, unit),
-            delta_run=theme.format_delta_run(d, units=False, arrow=arrow),
+            # No ▲/▼ on a level gap: the arrow would claim the direction the white disclaims (the
+            # live compare seam drops it too). The sign still prints.
+            delta_run=theme.format_delta_run(d, units=False,
+                                             arrow=arrow and not burned_delta_is_level(d)),
         ))
     return frames
 

@@ -3004,10 +3004,17 @@ def burned_delta_colour(d: float | None, palette: str | None = None) -> str:
     colour once. The number still prints with its sign; only its colour changes. The Classic lap
     strip and the compare export's Δ pill call this; Broadcast, the corner cards and the LAST line
     apply the same `is_level` / `within_timing_precision` themselves."""
-    from .overlay import broadcast  # deferred: the overlay package's modules import this one
-    if broadcast.is_level(d):
+    if burned_delta_is_level(d):
         return EXPORT.neutral
     return export_delta_colour(d, palette)
+
+
+def burned_delta_is_level(d: float | None) -> bool:
+    """`overlay.broadcast.is_level`, reached from here: whether a burned Δ reads level. The compare
+    pill also drops its ▲/▼ on it (a direction arrow beside a white number would claim what the
+    colour disclaims), as the live compare seam does."""
+    from .overlay import broadcast  # deferred: the overlay package's modules import this one
+    return broadcast.is_level(d)
 
 
 # ------------------------------------------------------------------ what each frame actually says
