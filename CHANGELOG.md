@@ -6,6 +6,71 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-11-18
+
+A minor release: 7 pull requests from #606 to #612, Wave 10 of the campaign, built to three designs
+and two rulings the owner gave on 18 November: a welcome screen, Jump and Compare on the docked
+Coaching tab, a level gap drawn level in exports, and a track driven both ways kept as two records.
+
+### Highlights
+
+- **Jump and Compare at the size you use.** On the docked Coaching tab, at 1280×800 and 1440×900,
+  "Jump to C1" and "Compare C1" sit beside the focus list's chip; pick C2 and they read C2; Return
+  in the table jumps. On the demo, Compare puts lap 4's typical pass beside lap 13's, +0.36 s (#609)
+- **A welcome that says what Pacer is.** "Lap times, corners and coaching from your GoPro's GPS.",
+  the demo first with its 11 MB download named; once the Library has sessions, the five newest,
+  each one click from reopening, a moved file greyed and named (#610; rows checked on test rows)
+- **The theme counts what the headline sums.** On the demo, "Apex speed is the common thread — 84%
+  of that time is in C1" under "0.43 s across your top 3 corners", the same on the debrief, the
+  Coaching page and the exported report (#607)
+- **Both ways round are two records.** The demo's circuit driven in reverse is "First session
+  logged at Synthetic demo circuit this way round: best lap 0:45.105", not 0.18 s off a clockwise
+  lap; the Library names each row's way and charts each way's own PB (#608; synthetic sessions)
+- **The focus list knows a reversed track.** Corners stored clockwise and re-measured on the track
+  driven the other way read "can't say: today's laps run the other way round — a different layout
+  of the track?", never faster or slower (#606; synthetic sessions)
+- **No colour for a gap the timing cannot see.** A Classic export draws a Δ under 0.07 s in white,
+  as Broadcast does: 716 of the 1,359 frames of the demo's lap 7. The best lap and Broadcast export
+  as in 0.14.0; the compare export's Δ follows, with no ▲/▼ under the step (#611)
+
+### Added
+
+- Coaching: at the tab's normal docked size, "Jump to C1" and "Compare C1" sit beside the focus
+  list's chip, for the row you picked (else the top one); Return in the table jumps too. (#609)
+
+### Changed
+
+- Exported video: a Δ under the 0.07 s timing step is drawn white, as Broadcast already does. New
+  Classic exports of a lap that is not your best look different there: "Δ +0.03" is no longer red.
+  (#611)
+- Compare video export: its Δ follows the same rule, with no ▲/▼ under the step; the number and its
+  sign still print. (#611)
+- The welcome screen says what Pacer does and leads with the demo, labelled with its 11 MB download
+  until the demo is on your Mac, and says the demo is generated, not filmed. (#610)
+- Once the Library has sessions, the welcome lists the five newest — one click reopens one; a moved
+  file is greyed and named, a provisional best keeps its mark — with Library… and the demo below.
+  (#610)
+- Coaching's theme counts the corners its headline sums: the demo reads "84% of that time is in C1"
+  under "0.43 s across your top 3 corners", and the theme never names a corner off that shortlist.
+  (#607)
+- With more ranked corners listed below, the theme says "All of the time in your top 3 corners …",
+  not "the time on offer"; "Start with" no longer names a tied corner that prints +0.00 s. (#607)
+
+### Fixed
+
+- A personal best is no longer compared with a session known to have run the track the other way
+  round; a recording logged by an earlier version learns its direction when it is opened again.
+  (#608)
+- The Library names each row's way round on a track driven both ways, and charts its PB line, its
+  summary and its like-for-like line from the selected row's way only. (#608)
+- Focus list: a track driven the other way round is "can't say: today's laps run the other way
+  round" for every corner; it read "0.99 s faster" where a reversed corner turned the stored way.
+  (#606)
+- Focus list: a stored corner that today's detection drops says "no corner was picked out there
+  today — a different layout?", not that the layout changed. (#606)
+- Focus list: the debrief no longer tops up a list set on the track driven the other way round.
+  (#606)
+
 ## [0.14.0] — 2026-11-17
 
 A minor release: 5 pull requests from #599 to #603, Wave 9 of the campaign, after discovery round 5
@@ -2276,7 +2341,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/eenndan/pacer/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/eenndan/pacer/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/eenndan/pacer/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/eenndan/pacer/compare/v0.12.0...v0.13.0
