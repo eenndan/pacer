@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirty-four features were built far enough to **measure**, and the measurement said not to ship
+Thirty-five features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2561,6 +2561,45 @@ in it the time went stays the Coaching row's Entry·Apex·Exit thirds (`Session.
 **What would be new evidence:** a window whose pooled curvature has a real valley, two bends the
 detector merged, and whose ▼ passes lose their time on one side of it, on more than one recording.
 That would have to be worth renumbering every corner after it.
+
+---
+
+## 35. Running the export-video tests on a pull request only when export code changes — refused (#605)
+
+**The idea.** The 24 export-labelled registrations (the 18 `test_export_*` video suites and the 6
+`videotoolbox.*` checks) are 796 of CI's 2,904 test-seconds (27 %, the 0.14.0 release run). Skip
+them on a pull request that touches no export code; run them on every push to main, tag, manual
+and weekly run. The owner approved trying it on 2026-11-18. #605 built it: a ctest label, a CI
+step that reads the PR's changed paths, a path list, and a guard test that derives the list from
+the labelled tests' imports.
+
+**How it was measured.** The guard's static import closure (AST, transitive, function-local imports
+and the `tests/_*.py` helpers included) of the labelled tests, and a replay of the changed-file
+lists of the last 200 merged pull requests (#405–#604) against the path list it forced.
+
+| | |
+|---|---|
+| app modules the export tests import, transitively | **91 of 93** (all but `studio/__main__.py`, `studio/gearing.py`) |
+| why | every export suite builds a `Session`; `studio/session.py` imports `coaching`, `stats`, `focus`… at module level; five suites import `studio/app.py` |
+| a sound path list therefore holds | `studio/*.py` whole, plus the core, the build, the bindings and every test helper |
+| of the last 200 merged PRs, would have skipped the tier | **25** (docs, changelog fragments, non-export tests) |
+| of the last 60 (#545–#604) | **0** |
+| saving on a skipped run | ≈ 200 s of the 736 s ctest step — an **estimate**: no skipped run was ever measured |
+| saving on every other run | ≈ 0 |
+
+**Why it is refused.** A narrow list that would skip the tier on, say, a `coaching.py` change is
+unsound: the guard watched it fail on 75 uncovered files, `studio/coaching.py` among them (imported
+by `session.py`, which every export suite loads). The sound list runs the tier on any app change,
+so in a product-heavy mix it saves nothing, and on the rare docs-only pull request about 3 minutes.
+Against that it costs a label, a CI script, a path list and a guard test, each to keep in step with
+every new suite and every new import. The owner's other ruling the same day — the slowest suites do
+the same checking in less time, measured against planted defects — cuts every run instead.
+
+**What moves because of this refusal: nothing.** Every registration runs on every pull request.
+
+**What would be new evidence:** lazy imports in `studio/session.py` (and the export path) that
+make the export tests' import set small, so a sound list could skip the tier on most app changes;
+or a pull-request mix dominated by docs-only changes, measured over a campaign.
 
 ---
 

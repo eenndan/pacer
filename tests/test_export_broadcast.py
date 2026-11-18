@@ -37,6 +37,7 @@ WHAT IS CHECKED:
 
 Run: python tests/test_export_broadcast.py
 """
+import functools
 import json
 import os
 import subprocess
@@ -175,6 +176,51 @@ def _dialog_frames() -> list[tuple[int, int]]:
     return sorted(frames)
 
 
+def _once_per_spec(test):
+    """Run `test` with each spec's per-frame lookups computed once rather than once per painter.
+
+    An `OverlayPainter` walks every frame of its spec when it is built (`_burned_runs`, and the
+    tower's `prepare`) to fit its plates to the widest string the export burns. Those values depend
+    on the session, the spec and the frame's time, never on the frame's size, so the matrix's 240
+    painters over three specs re-derived the same lookups 240 times: 102 s of this file's 146 s
+    (2026-11-18, load ~7). The real functions still compute every value once; a repeat of the same
+    (session, spec, time) is served from the first. Nothing the painter measures changes: the
+    sizes, fonts, layout and plates are each painter's own."""
+    @functools.wraps(test)
+    def run():
+        real_values, real_burned, real_runs = ev.overlay_values_at, ev._burned_runs, ev._strip_runs
+        values, burned, runs, alive = {}, {}, {}, []
+
+        def values_at(session, t, spec=None):
+            key = (id(session), id(spec), float(t))
+            if key not in values:
+                alive.append(spec)          # an id stays this object's while the memo lives
+                values[key] = real_values(session, t, spec)
+            return values[key]
+
+        def burned_runs(session, spec, fps):
+            key = (id(session), id(spec), float(fps))
+            if key not in burned:
+                alive.append(spec)
+                burned[key] = real_burned(session, spec, fps)
+            return burned[key]
+
+        def strip_runs(session, vals, lap_t0, is_best, palette=None):
+            key = (id(session), id(vals), lap_t0, is_best, palette)
+            if key not in runs:
+                alive.append(vals)
+                runs[key] = real_runs(session, vals, lap_t0, is_best, palette)
+            return runs[key]
+        ev.overlay_values_at, ev._burned_runs, ev._strip_runs = values_at, burned_runs, strip_runs
+        try:
+            return test()
+        finally:
+            ev.overlay_values_at, ev._burned_runs, ev._strip_runs = (real_values, real_burned,
+                                                                     real_runs)
+    return run
+
+
+@_once_per_spec
 def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
     """The whole matrix: every dialog frame × honesty stamp off / three lines × a lap export with
     ghost + cards off / on, and a WHOLE-RECORDING export (its tower carries the reserved LAST
@@ -193,10 +239,14 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
         broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
                          broadcast.STYLE_BROADCAST))),
         t0=s.lap_window(a)[0] - 0.5, t1=s.lap_window(a + 1)[1] + 2.5)
+    # One spec per extras row, built once: a spec is size-free, the painters are not.
+    specs = {(): _spec(s, lap, extras=()), ("ghost", "corner_cards"): _spec(s, lap),
+             "whole": whole}
+    classic_spec = _spec(s, lap, style="classic", extras=())
     for stamped in (False, True):
         for extras in ((), ("ghost", "corner_cards"), "whole"):
             for w, h in frames:
-                spec = whole if extras == "whole" else _spec(s, lap, extras=extras)
+                spec = specs[extras]
                 if stamped:
                     with _Stamped():
                         p = _painter(s, spec, w, h)
@@ -234,7 +284,7 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                         # further past the frame's edge than the Classic one (cut on a frame
                         # narrower than the stamp, as Classic's is).
                         with _Stamped():
-                            classic = _painter(s, _spec(s, lap, style="classic", extras=()), w, h)
+                            classic = _painter(s, classic_spec, w, h)
                         c = _box(classic._stamp_rect)
                         assert not safe.contains(c), what
                         st = boxes[a]

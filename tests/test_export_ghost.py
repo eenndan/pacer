@@ -227,7 +227,16 @@ def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
     # (read with defaults, so the unfixed tree fails on the pixels rather than on a name)
     near_r, ring_r = getattr(ghost, "_NEAR_R", 7.2), getattr(ghost, "_NEAR_RING_R", 9.0)
     ring_px = 2 * math.pi * ring_r * ghost._RING_W     # k = 1 at 1080
-    yy, xx = np.mgrid[0:1080, 0:1920]
+
+    def around(c, r=21):
+        """The pixels within `r` of point `c`, as (rows, cols, ys, xs): every mask below is a
+        disc of radius 20 or less, so cutting the frame to this square reads exactly the pixels
+        the whole-frame grids did, at a 2,000th of the cost (the grids were half this test)."""
+        y0, x0 = max(0, int(c[1]) - r), max(0, int(c[0]) - r)
+        rows = slice(y0, min(1080, int(c[1]) + r + 1))
+        cols = slice(x0, min(1920, int(c[0]) + r + 1))
+        ys, xs = np.mgrid[rows, cols]
+        return rows, cols, ys, xs
     count = {}
     for lap in (close, f["lap"]):          # the closest lap, and the fixture's slowest
         spec = _spec(s, lap, elements=("ghost",))
@@ -245,10 +254,11 @@ def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
                 # The ring is round the BEST LAP'S place, not round the dot: a circle fitted to
                 # its cyan pixels (a fit, not a centroid — the arc behind the dot is cut away)
                 # is centred on the ghost within half a pixel, and not on the dot.
-                m = _cyan(a[..., :3], a[..., 3]) & (np.hypot(xx + 0.5 - want[0],
-                                                            yy + 0.5 - want[1]) < 20)
-                py, px = np.nonzero(m)
-                px, py = px + 0.5, py + 0.5
+                rows, cols, yy, xx = around(want)
+                w_ = a[rows, cols]
+                m = _cyan(w_[..., :3], w_[..., 3]) & (np.hypot(xx + 0.5 - want[0],
+                                                              yy + 0.5 - want[1]) < 20)
+                px, py = xx[m] + 0.5, yy[m] + 0.5
                 sol = np.linalg.lstsq(np.c_[2 * px, 2 * py, np.ones(len(px))],
                                       px ** 2 + py ** 2, rcond=None)[0]
                 miss = float(np.hypot(sol[0] - want[0], sol[1] - want[1]))
@@ -257,14 +267,17 @@ def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
                     f"(ring at {sol[0]:.1f},{sol[1]:.1f}; dot {kart.x():.1f},{kart.y():.1f})")
                 fitted += 1
             if d < 3.0:
+                rows, cols, yy, xx = around((kart.x(), kart.y()))
+                w_ = a[rows, cols]
                 r = np.hypot(xx + 0.5 - kart.x(), yy + 0.5 - kart.y())
-                ink = int((_cyan(a[..., :3], a[..., 3]) & (r < 20)).sum())
+                ink = int((_cyan(w_[..., :3], w_[..., 3]) & (r < 20)).sum())
                 assert ink >= 0.5 * ring_px, (f"t={t:.3f}: {ink} cyan px round the dot (a ring "
                                               f"is {ring_px:.0f}): the ghost is hidden under the "
                                               "kart")
                 _vals, b = _painted(off, s, off_spec, t)
                 core = r <= 3.5
-                assert (a[core] == b[core]).all(), f"t={t:.3f}: the ring covered the kart dot"
+                assert (w_[core] == b[rows, cols][core]).all(), \
+                    f"t={t:.3f}: the ring covered the kart dot"
                 near += 1
             elif d > (near_r + ring_r + 3) * el._k:
                 ghost._NEAR_R = 0.0              # never "beside": the ring as it always was

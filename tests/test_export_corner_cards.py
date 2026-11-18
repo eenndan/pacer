@@ -330,17 +330,24 @@ def test_prepare_renders_each_card_once_and_paint_never_draws_text():
         painter = ev.OverlayPainter(s, spec, 1920, 1080, 30.0)
         el = _element(painter)
         assert len(renders) == len(el.cards), (len(renders), len(el.cards))
-        shown = 0
-        for t in ev.frame_times(spec.t0, spec.t1, 30.0):
+        # Every frame a card is on screen is painted whole, as the render paints it; of the rest
+        # (paint's early return: no card) one in fifteen, every half second. Painting all 1,534
+        # 1080p frames cost 18 s of this file's 33 s for the same verdict (2026-11-18, load ~14).
+        shown = painted = 0
+        for i, t in enumerate(ev.frame_times(spec.t0, spec.t1, 30.0)):
             vals = ev.overlay_values_at(s, float(t), spec)
             dial = painter.advance_and_snapshot(vals)
-            ev._paint_alpha_frame(painter, 1920, 1080, vals, dial)
-            shown += el.active(vals.tt) is not None
+            on = el.active(vals.tt) is not None
+            if on or i % 15 == 0:
+                ev._paint_alpha_frame(painter, 1920, 1080, vals, dial)
+                painted += 1
+            shown += on
     assert len(renders) == len(el.cards), f"cards rendered again while painting: {len(renders)}"
     assert texts == [], f"paint drew text {len(texts)} times"
     assert shown > 30 * len(el.cards), shown
     spec.source.cleanup()
-    print(f"ok {len(el.cards)} cards rendered once in prepare; {shown} frames blitted, no text")
+    print(f"ok {len(el.cards)} cards rendered once in prepare; {shown} frames blitted, no text "
+          f"({painted} frames painted)")
 
 
 def test_the_card_comes_at_the_exit_holds_and_fades_and_a_later_one_replaces_it():
