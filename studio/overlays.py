@@ -1,6 +1,7 @@
-"""Presentational overlay widgets shown over StudioWindow: the first-run empty state (WelcomeView)
-and the personal-best celebration/share toast (PBToast). Self-contained — they take DI callbacks +
-formatted text and route Qt signals; no reach into StudioWindow internals.
+"""Presentational overlay widgets shown over StudioWindow: the no-recording state (WelcomeView —
+what the app does, the demo and the recent sessions) and the personal-best celebration/share
+toast (PBToast). Self-contained — they take DI callbacks + formatted text and route Qt signals; no
+reach into StudioWindow internals.
 
 The one thing an overlay cannot decide for itself is WHERE it belongs, because that depends on
 what the window is currently showing. So there is a small optional protocol instead of a reach:
@@ -26,47 +27,41 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import demo, theme
+from . import demo, library, theme
+from ._signal import fmt_time, plural
 from .theme import C
 
-# What the welcome screen's "Open demo" button says while its resolve is in flight. Owned HERE
-# because this is the module that has to reserve room for it (see WelcomeView.demo_btn); read by
+# What the welcome screen's demo button says while its resolve is in flight. Owned HERE because this
+# is the module that has to reserve room for it (see WelcomeView.demo_btn); read by
 # StudioWindow._set_demo_busy, which sets it — the width the button is floored at and the text that
 # fills it are the same fact, and a second copy of the string is a button that grows again.
 #
-# IT USED TO BE THE WHOLE SENTENCE ("Fetching the demo clip…"), AND THAT IS WHAT INVERTED THE ROW.
-# The button is floored at this label's width so a click on it cannot move the row (D4-06), so the
-# sentence made the SECONDARY action 178 px against the PRIMARY's 133 — the amber CTA was the
-# smaller of the two twins, which is the one thing a primary may never be. The sentence bought that
-# 45 px for a frame that is up for microseconds with the clip on this machine, and for a download
-# on a fresh launch — which is exactly when the card behind it comes up and says the whole thing
-# (DEMO_FETCH_TITLE): a headline has room, a button does not.
+# A WORD, NOT THE SENTENCE ("Fetching the demo clip…"): a button floored at a whole sentence is how
+# the secondary action once became wider than the primary (D4-06). The loading card that comes up
+# behind it, if the fetch is slow, says the whole thing (DEMO_FETCH_TITLE).
 BUSY_DEMO_LABEL = "Fetching…"
 # The loading card's headline for the same wait. Not the button's label: the card is the surface
 # with room for the full sentence, and it is the one that is up long enough to be read.
 DEMO_FETCH_TITLE = "Fetching the demo clip…"
-# The welcome column's action labels, owned here for the same reason: `column_metrics` floors the
-# loading card's Cancel at the width THESE strings ask for, so the one button on screen does not
-# move between the two frames of one wait.
-OPEN_LABEL = "Open recording…"
-# The demo button's two resting labels. It is on every welcome screen (LEFT-24: a fresh launch used
-# to show one action and no mention of a demo), and `studio.demo.demo_available()` — the offline
-# question, env var or cache — picks which one it says: OPEN when the clip is on this machine, GET
-# when the click will download it, with the size stated, because a click that reaches the network
+# THE WELCOME'S WORDS (cool/welcome-screen, owner-approved design 2A). What the app does, in one
+# line, the README's own claim cut to the three things a first screen can promise; the two doors;
+# where a file can be dropped; and the demo, honestly labelled.
+DESCRIPTION = "Lap times, corners and coaching from your GoPro's GPS."
+OPEN_LABEL = "Open a recording…"
+# The demo's two resting labels. `studio.demo.demo_available()` — the offline question, env var or
+# cache — picks which one it says: the short one when the clip is on this machine, the download one
+# when the click will fetch it, with the size stated, because a click that reaches the network
 # should say so before it does. The size is the pinned asset's (`demo.download_mb()`), never typed.
-DEMO_LABEL = "Open demo"
-DEMO_GET_LABEL = f"Get demo · {demo.download_mb()} MB"
+DEMO_LABEL = "Open the demo (synthetic session)"
+DEMO_GET_LABEL = f"{DEMO_LABEL} · {demo.download_mb()} MB download"
+DROP_HINT = "Or drop a GoPro .MP4 anywhere on this window."
+# True of the asset: `studio/dev/make_demo.py` simulates a kart on a fictional circuit (FIRST_LAP.md).
+DEMO_NOTE = "The demo is generated, not filmed: a simulated kart on a made-up circuit."
+RECENT_TITLE = "RECENT SESSIONS"
+LIBRARY_LABEL = "Library…"
 # The drop glyph's pixmap side. Named because the loading card reserves a leading row of exactly
-# this height for its busy bar, so the shared 22 px headline lands on the same baseline in both
-# frames instead of 52 px higher in the second one.
+# this height for its busy bar.
 DROP_GLYPH_PX = 36
-# How many lines the column's SECONDARY line reserves. MEASURED, not chosen: at the card's own
-# measure the welcome tagline takes two, and the loading card's one-line recording label reserves
-# the same two so the two columns are the same height — which is what makes the vertical centring
-# put their cards in the same place. tests/test_first_run_path.py asserts the tagline still takes
-# exactly this many, so a copy edit that changes it goes red here rather than silently un-anchoring
-# the seam.
-SECONDARY_LINES = 2
 
 # The PB toast's dismiss mark, in the app's ONE glyph vocabulary (PR #189: a character in a
 # user-visible string must be drawn by the app's own UI face, or it must be a theme.icon() pixmap).
@@ -78,90 +73,33 @@ DISMISS_ICON = "ph.x"
 
 
 class ColumnMetrics(NamedTuple):
-    """The welcome column's own measurements, so the SECOND frame of the wait can be built on them
-    instead of on a second set of numbers.
+    """The welcome column's own measurements, read off real widgets under the live stylesheet."""
 
-    Every field is read off a real widget under the live stylesheet (see `column_metrics`), never
-    re-typed: the two frames are two milliseconds apart, so anything the eye has to relocate has to
-    be derived from one source or it drifts the first time a label or a type step changes."""
-
-    glyph_h: int       # the leading glyph row — the brand mark's pixmap side
-    error_h: int       # the reserved error slot ABOVE the card, on the canvas
-    secondary_h: int   # the reserved height of the column's secondary line
-    primary_w: int     # what the PRIMARY action is floored at ("Open recording…")
-    secondary_w: int   # what the secondary action is floored at (its widest label); 0 with none
+    glyph_h: int    # the leading glyph row — the brand mark's pixmap side
+    error_h: int    # the reserved error slot ABOVE the card, on the canvas
+    action_w: int   # what every action BUTTON in the column is floored at: the widest it can say
 
 
-def column_metrics(has_demo: bool = True) -> ColumnMetrics:
-    """Measure the welcome column from throwaway widgets polished against the live stylesheet.
+def column_metrics() -> ColumnMetrics:
+    """Measure the welcome column from throwaway widgets polished against the live stylesheet (the
+    app stylesheet reaches every widget, shown or not, so `sizeHint()` is the size the real control
+    takes).
 
-    Throwaway, and deliberately so: the second frame is built when the first one is already gone
-    (`_show_welcome` DESTROYS the view), so there is nothing left to ask. Polishing an unparented
-    widget is how `WelcomeView` already reads its own error-slot line height and its demo button's
-    busy width — the app stylesheet reaches every widget, shown or not, so `sizeHint()` here is the
-    size the real control takes.
-
-    `has_demo` is the SAME question `WelcomeView` answers by being handed an `on_demo` or a None:
-    whether the column HAS a second action. It is no longer "is a demo on this machine" — that only
-    picks the button's label now (studio.demo.demo_available), and the floor below covers every
-    label, so the column is one shape whatever the cache holds and the app always passes True. A
-    caller that builds the view with `on_demo=None` passes False: no second slot to reserve, or a
-    loading card built on it puts Cancel in the centre of a pair that is not there.
-
-    PRIMARY_W IS A FLOOR, NOT A HINT, and the max() is the whole of it: the primary is the amber
-    CTA, so it may never be narrower than the secondary beside it. Deriving that here (rather than
-    pinning a number in the view) is what keeps the loading card's Cancel — floored at the same
-    primary_w — in the primary's exact place.
-    """
+    ACTION_W IS ONE FLOOR FOR BOTH BUTTONS, and the widest of everything either says — the two
+    doors' labels and the busy label. On a first visit the demo is the primary and "Open a
+    recording…" the secondary; stacked at one width, neither can be the smaller twin (§6.7(b)),
+    and a click that swaps a label cannot move the column (D4-06)."""
     err = QLabel("")
     err.setProperty("role", "WelcomeError")
     err.ensurePolished()
-    sub = QLabel("")
-    sub.setProperty("role", "WelcomeSubtitle")
-    sub.ensurePolished()
-    primary = QPushButton(OPEN_LABEL)
-    primary.setProperty("variant", "primary")
-    primary.ensurePolished()
-    secondary = QPushButton(DEMO_LABEL)
-    secondary.ensurePolished()
-    # THE WIDEST OF THE THINGS THE BUTTON WILL EVER SAY, in either direction. The floor used to be
-    # the busy width alone, which was only ever the wider one because the busy label was a whole
-    # sentence; with a busy label SHORTER than the resting one ("Fetching…" against "Open demo") the
-    # same floor let the button SHRINK 7 px on the click, and the centred row slid 3 px — D4-06
-    # again, one seventh the size and just as much a moving target. Measured, not reasoned about:
-    # the sweep in tests/test_first_run_path.py caught it on the first run. BOTH resting labels are
-    # in it (LEFT-24), so a cached clip and a fresh launch build the same column: the loading card
-    # built on it never has to know which of the two frames it replaced.
-    secondary_w = (max(secondary.sizeHint().width(),
-                       busy_button_width(secondary, DEMO_GET_LABEL),
-                       busy_button_width(secondary, BUSY_DEMO_LABEL)) if has_demo else 0)
-    return ColumnMetrics(
-        glyph_h=DROP_GLYPH_PX,
-        error_h=WelcomeView.ERROR_LINES * err.fontMetrics().height(),
-        secondary_h=SECONDARY_LINES * sub.fontMetrics().height(),
-        primary_w=max(primary.sizeHint().width(), secondary_w),
-        secondary_w=secondary_w,
-    )
-
-
-def welcome_card_width(has_demo: bool = True) -> int:
-    """The width WelcomeView's dashed card takes — measured off a throwaway one.
-
-    NOT a ColumnMetrics field, and that is a constraint rather than a preference: ColumnMetrics is
-    what WelcomeView is built FROM, so measuring a WelcomeView inside `column_metrics` would make
-    the view's constructor call itself.
-
-    It exists because the card's width is not a number anyone chose. It is whatever the widest row
-    inside it asks for, and WHICH row that is moves: with the demo button floored at a whole
-    sentence the action row was 327 px and set the card's 427; with an honest button row the
-    WRAPPING TAGLINE sets it instead (303 px + margins = 403), with one action or two, the download
-    label included (tests/test_first_run_path.py holds the two-action card to the one-action one).
-    The loading card — the same screen's second frame — is only ~320 px of content, so it used to
-    match by accident and now has to be told. Measured, not derived: a formula that re-adds margins and spacing here
-    would be a second implementation of the layout, and the 1 px sweep in
-    tests/test_first_run_path.py is exactly a hunt for the pixel such a formula loses."""
-    probe = WelcomeView(lambda: None, (lambda: None) if has_demo else None)
-    return probe.drop_zone.sizeHint().width()
+    btn = QPushButton(OPEN_LABEL)
+    btn.setProperty("variant", "primary")
+    btn.ensurePolished()
+    widest = max(busy_button_width(btn, text)
+                 for text in (OPEN_LABEL, DEMO_LABEL, DEMO_GET_LABEL, BUSY_DEMO_LABEL))
+    return ColumnMetrics(glyph_h=DROP_GLYPH_PX,
+                         error_h=WelcomeView.ERROR_LINES * err.fontMetrics().height(),
+                         action_w=widest)
 
 
 def busy_button_width(btn: QPushButton, busy_text: str) -> int:
@@ -173,169 +111,206 @@ def busy_button_width(btn: QPushButton, busy_text: str) -> int:
             + fm.horizontalAdvance(busy_text) - fm.horizontalAdvance(btn.text()))
 
 
+class Anchors(NamedTuple):
+    """Where the welcome card's landmarks are, in the CARD's own coordinates — what the loading card
+    (its second frame) is built on, so the two cannot be measured against different answers."""
+
+    card: QSize      # the dashed card's outer size
+    glyph: QRect     # the brand-mark row
+    title: QRect     # the "Pacer" headline
+    primary: QRect   # the primary action
+    error_h: int     # the reserved error slot above the card
+
+
+class _ElidedLabel(QLabel):
+    """A row's track: elides its NAME to the room it is given and keeps `keep` (the way and the
+    trust tag, `library.track_text`) whole — the Library's Track cell does the same
+    (cool/pb-per-direction). When even the kept part does not fit beside the name's first letters,
+    the name keeps those letters and the kept part is elided too, never clipped. The full label
+    stays on the row's tooltip and accessible name."""
+
+    def __init__(self, text: str, keep: str = ""):
+        super().__init__(text)
+        self._full, self._keep = text, keep
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+
+    def fitted(self, room: int) -> str:
+        """The label as it is drawn in `room` px."""
+        fm = self.fontMetrics()
+        if fm.horizontalAdvance(self._full) <= room:
+            return self._full
+        name = self._full[:len(self._full) - len(self._keep)]
+        least = fm.horizontalAdvance(name[:5] + "…")
+        left = room - fm.horizontalAdvance(self._keep)
+        if left >= least:
+            return fm.elidedText(name, Qt.ElideRight, left) + self._keep
+        shown = fm.elidedText(name, Qt.ElideRight, least)
+        return shown + fm.elidedText(self._keep, Qt.ElideRight,
+                                     max(0, room - fm.horizontalAdvance(shown)))
+
+    def resizeEvent(self, event):
+        self.setText(self.fitted(self.width()))
+        super().resizeEvent(event)
+
+
 class WelcomeView(QWidget):
-    """First-run / no-recording empty state — the product's tagline made literal: drop a GoPro
-    recording onto the window, or open one. The centred content sits inside a dashed-border DROP
-    ZONE (`drop_zone`, objectName "WelcomeDropZone") so the drag-and-drop affordance is VISIBLE — a
-    user reads "you can drop a file here" instead of just being told, and the zone now LIGHTS UP
-    while a droppable file is over the window (StudioWindow._set_dragover + the
-    `[dragover="true"]` rule; before that, a drag over the window changed zero pixels). `on_open`
-    runs the file picker, `on_demo` resolves and loads a real demo lapping recording (and re-shows
-    this state with an honest message if the demo can't be fetched). An optional `error` (plus the
-    offending `error_path`) is shown when this stands in for a failed first load. The buttons are
-    exposed (`open_btn`/`demo_btn`) and so is `error_label`, for tests.
+    """The no-recording state: what Pacer does, the two doors (a recording, the demo), and — once
+    the Library has rows — the newest sessions, each one click from reopening (cool/welcome-screen,
+    owner-approved design 2A, Q2 = (a)). The column sits inside a dashed DROP ZONE (`drop_zone`,
+    objectName "WelcomeDropZone") so the drag-and-drop affordance is VISIBLE, and the zone lights up
+    while a droppable file is over the window (StudioWindow._set_dragover).
 
-    `on_demo` IS OPTIONAL, AND None MEANS "NO DEMO ACTION" — the same protocol PBToast already
-    uses for its two actions (a None callback hides that action; never a disabled twin: a control
-    disabled at every moment of the app's life is advertising, not an affordance). The app passes
-    it on every welcome screen, and `demo_label` says what the click will do. The history is why
-    both halves exist: the button was first unconditional while the release asset it downloads had
-    never been published — a guaranteed apology on the first screen anyone who built from source
-    saw — then gated on `studio.demo.demo_available()`, which after the synthetic demo WAS published
-    left a fresh launch with one action and no mention of a demo (LEFT-24). So the gate became a
-    label: `StudioWindow._show_welcome` passes DEMO_LABEL when the clip is on this machine and
-    DEMO_GET_LABEL ("Get demo · N MB") when the click downloads it. The label is kept on the view
-    (`demo_label`) because `_set_demo_busy` swaps it out and has to hand back the one it replaced.
+    TWO SHAPES, ONE COLUMN. `recent` is the rows to list (`library.recent_rows`):
+      * none — a FIRST VISIT: the demo is the primary (amber) button and "Open a recording…" the
+        secondary, with the drop hint and a line saying the demo is generated, not filmed;
+      * some — RETURNING: "Open a recording…" is the primary, then RECENT SESSIONS (at most
+        `library.RECENT_LIMIT` rows, newest recording first) with "Library…", then the drop hint
+        and the demo as a small link.
+    A row calls `on_recent(paths)` — the app passes the same `_load` the Library window's
+    double-click calls — and a row whose footage is missing is greyed, disabled, and names the file
+    in the Library's own words. `on_library` opens the Library window.
 
-    THE FAILURE STATE IS THE SAME SHAPE AS THE FIRST-RUN STATE, which it was not. `_show_welcome`
-    DESTROYS and rebuilds this view to show an error, so the two are consecutive frames of one
-    screen — and measured at 1440x900 the error was appended BELOW the buttons INSIDE the card with
-    no width bound, which drove the drop zone from 403x239 to 727x303, collapsed the two-line
-    tagline onto one line and moved both buttons 48 px up, so the control the user's next click is
-    aimed at was not where it had just been (QA D2-09 / D4-06). Three things fix it, all here:
-      * the error slot is ALWAYS constructed, empty and hidden with `RetainSizeWhenHidden`, so the
-        no-error and error frames have the same geometry rather than two different ones;
-      * it sits ABOVE the card, on the canvas — reason before action, and the card cannot be
-        re-flowed by it at all;
-      * the offending PATH is shown as its basename with the absolute path on the tooltip; the raw
-        `/Users/…/track day 2026-08-30/holiday.mp4` was most of the width blow-up.
-    """
+    `on_demo` IS OPTIONAL, AND None MEANS "NO DEMO ACTION" — the protocol PBToast uses for its
+    actions too. The app passes it on every welcome screen, and `demo_label` says what the click
+    will do; it is kept on the view because `_set_demo_busy` swaps it out and has to hand back the
+    one it replaced.
 
-    # How many BODY lines the error slot reserves. MEASURED, not chosen: at the card's own measure
-    # the longest of the app's eight failure sentences (app._load_failure_message plus the demo's)
-    # takes two lines, and the file it names takes a third. A longer one still wraps rather than
-    # clipping — the failure mode is a slightly taller banner over unchanged content, not a lost
-    # word. tests/test_first_run_path.py sweeps all eight against this number, at both sizes.
+    THE FAILURE STATE IS THE SAME SHAPE AS THE CLEAN ONE (QA D2-09 / D4-06): `_show_welcome`
+    DESTROYS and rebuilds this view to show an error, so the error slot is ALWAYS built, empty and
+    hidden with `RetainSizeWhenHidden`, ABOVE the card on the canvas, as wide as the card; the
+    offending path is shown as its basename with the absolute path on the tooltip.
+
+    Keyboard: Tab runs primary → secondary → rows → Library… → the demo link, and Return
+    activates whichever has focus (`keyPressEvent`)."""
+
+    # How many BODY lines the error slot reserves. MEASURED, not chosen: the longest of the app's
+    # failure sentences (app._load_failure_message plus the demo's) takes two at the card's
+    # measure, and the file it names a third. tests/test_first_run_path.py sweeps every one.
     ERROR_LINES = 3
+    # The most of a recent row's width the time-and-laps tail may take (see _build_recent).
+    TAIL_SHARE = 0.4
 
     def __init__(self, on_open, on_demo, error: str | None = None, parent=None,
-                 error_path: str | None = None, demo_label: str = DEMO_LABEL):
+                 error_path: str | None = None, demo_label: str = DEMO_LABEL,
+                 recent: list[dict] | None = None, on_recent=None, on_library=None):
         super().__init__(parent)
-        # ONE measurement of the column, for the error slot AND the two action floors — the column
-        # the loading card is anchored to (see app._show_loading_placeholder), so the two frames
-        # cannot be measured against different answers.
-        m = column_metrics(on_demo is not None)
+        m = column_metrics()
+        self.recent = list(recent or [])
+        returning = bool(self.recent)
         root = QVBoxLayout(self)
         root.setAlignment(Qt.AlignCenter)
+        # No outer margin: five rows have to fit the window's minimum size, and the loading card's
+        # container (app._show_loading_placeholder) is built the same way.
+        root.setContentsMargins(0, 0, 0, 0)
 
-        # The dashed-border drop zone framing the centred content — the VISIBLE target for the
-        # window's drag-and-drop (StudioWindow dragEnter/dropEvent). Restrained, on-theme (a
-        # rounded rect with a dashed hairline over the canvas), not a heavy hero box.
         self.drop_zone = QFrame()
         self.drop_zone.setObjectName("WelcomeDropZone")
         self.drop_zone.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
+        self.drop_zone.setMinimumWidth(theme.WELCOME_CARD_W)
         zone = QVBoxLayout(self.drop_zone)
-        zone.setAlignment(Qt.AlignCenter)
         zone.setContentsMargins(theme.SPACE_3XL, theme.SPACE_2XL,
                                 theme.SPACE_3XL, theme.SPACE_2XL)
-        zone.setSpacing(theme.SPACE_L)
+        # The returning card is the taller one, so it sets its groups one step closer.
+        zone.setSpacing(theme.SPACE_M if returning else theme.SPACE_L)
 
         # THE BRAND MARK, above the wordmark it belongs to — the app's own speed chevron, the same
-        # geometry studio/assets/pacer.icns is drawn from (theme.brand_mark).
-        #
-        # It was `ph.download-simple` — a stock download-tray glyph — which spent the product's one
-        # brand moment on a borrowed icon that also said the wrong thing: nothing is being
-        # downloaded here, a file is being dropped, and the dashed rect + "Drop a GoPro recording
-        # here" already carry that affordance twice. The mark is drawn TILE-FREE: the .icns wears
-        # its rounded gradient tile because a Dock icon needs a body, and at 36 px on this canvas
-        # that tile is a dark rectangle on a dark background with ~14 px of mark inside it (measured
-        # against the 36 px the tile-free mark fills).
+        # geometry studio/assets/pacer.icns is drawn from (theme.brand_mark), drawn tile-free.
         self.drop_icon = QLabel()
         self.drop_icon.setPixmap(theme.brand_mark(DROP_GLYPH_PX))
         self.drop_icon.setAlignment(Qt.AlignCenter)
-        # The pixmap carries no text, so the meaning has to survive where a screen reader reads.
         self.drop_icon.setAccessibleName("Pacer")
         zone.addWidget(self.drop_icon)
+        self.title_label = QLabel("Pacer")
+        self.title_label.setProperty("role", "Title")   # shared with the About / privacy cards
+        self.title_label.setAlignment(Qt.AlignCenter)
+        zone.addWidget(self.title_label)
+        # What the app does — said to a first visit; a returning one is shown its own sessions.
+        self.description = None
+        if not returning:
+            self.description = QLabel(DESCRIPTION)
+            self.description.setProperty("role", "WelcomeSubtitle")
+            self.description.setAlignment(Qt.AlignCenter)
+            self.description.setWordWrap(True)
+            zone.addWidget(self.description)
 
-        # Intentional short brand lockup on the welcome screen — NOT the full APP_NAME wordmark.
-        title = QLabel("Pacer")
-        title.setProperty("role", "Title")   # shared with the About / privacy cards
-        title.setAlignment(Qt.AlignCenter)
-        subtitle = QLabel("Drop a GoPro recording here — or open one — to get your laps.")
-        subtitle.setProperty("role", "WelcomeSubtitle")
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setWordWrap(True)
-        zone.addWidget(title)
-        zone.addWidget(subtitle)
-
-        buttons = QHBoxLayout()
-        buttons.setAlignment(Qt.AlignCenter)
+        # THE DOORS, stacked at one width (column_metrics.action_w), centred.
         self.open_btn = QPushButton(OPEN_LABEL)
-        self.open_btn.setProperty("variant", "primary")
-        self.open_btn.setDefault(True)
         self.open_btn.clicked.connect(on_open)
-        # THE PRIMARY IS FLOORED AT ITS OWN HINT *OR* THE SECONDARY'S, WHICHEVER IS WIDER
-        # (`column_metrics.primary_w`). The amber fill is the theme's whole primary treatment, and
-        # it was being contradicted by size: the CTA measured 133 px beside a 178 px secondary, so
-        # the eye's first target was the lower-commitment one. No new variant, no hand-picked
-        # width — the rank the theme already declares, made true in the other dimension too.
-        self.open_btn.setMinimumWidth(m.primary_w)
-        buttons.addWidget(self.open_btn)
-        # The second action exists whenever a handler does (see the class docstring), saying
-        # `demo_label` — the resting text `_set_demo_busy` restores after its busy label.
         self.demo_btn = None
         self.demo_label = demo_label
         if on_demo is not None:
             self.demo_btn = QPushButton(demo_label)
             self.demo_btn.clicked.connect(on_demo)
-            # FLOOR THE DEMO BUTTON AT ITS WIDEST LABEL. `StudioWindow._set_demo_busy` swaps the
-            # label to BUSY_DEMO_LABEL the moment it is clicked, which grew the button in a CENTRED
-            # row — the PRIMARY "Open recording…" slid 39 px left and the drop zone widened and
-            # moved with it: 9,151 px changed, in response to a click on the OTHER button (QA
-            # D4-06). Sizing the button for the widest thing it will ever say (either resting label
-            # or the busy one, `column_metrics`) buys a row that does not move.
-            self.demo_btn.setMinimumWidth(m.secondary_w)
-            buttons.addWidget(self.demo_btn)
-        zone.addLayout(buttons)
+        doors = QVBoxLayout()
+        zone.addLayout(doors)
+        doors.setSpacing(theme.SPACE_S)
+        if returning or self.demo_btn is None:
+            self.primary_btn = self.open_btn
+            self.open_btn.setProperty("variant", "primary")
+            order = [self.open_btn]
+        else:
+            self.primary_btn = self.demo_btn
+            self.demo_btn.setProperty("variant", "primary")
+            order = [self.demo_btn, self.open_btn]
+        for btn in order:
+            btn.setMinimumWidth(m.action_w)
+            doors.addWidget(btn, 0, Qt.AlignHCenter)
+
+        self.recent_rows: list[QPushButton] = []
+        self.library_btn = None
+        self.drop_hint = QLabel(DROP_HINT)
+        self.drop_hint.setProperty("role", "Hint")
+        self.drop_hint.setAlignment(Qt.AlignCenter)
+        self.demo_note = None
+        if returning:
+            self._build_recent(zone, on_recent, on_library)
+            foot = QVBoxLayout()
+            zone.addLayout(foot)
+            foot.setSpacing(theme.SPACE_XXS)
+            foot.addWidget(self.drop_hint)
+            if self.demo_btn is not None:
+                # Q2 (a): the demo stays, as a small link. Floored at the widest thing it says, so
+                # the busy swap cannot move it.
+                self.demo_btn.setObjectName("WelcomeLink")
+                self.demo_btn.ensurePolished()
+                self.demo_btn.setMinimumWidth(max(
+                    busy_button_width(self.demo_btn, t)
+                    for t in (DEMO_LABEL, DEMO_GET_LABEL, BUSY_DEMO_LABEL)))
+                foot.addWidget(self.demo_btn, 0, Qt.AlignHCenter)
+        else:
+            zone.addWidget(self.drop_hint)
+            if self.demo_btn is not None:
+                self.demo_note = QLabel(DEMO_NOTE)
+                self.demo_note.setProperty("role", "Hint")
+                self.demo_note.setAlignment(Qt.AlignCenter)
+                self.demo_note.setWordWrap(True)
+                zone.addWidget(self.demo_note)
+
+        tab = [b for b in (self.primary_btn, self.open_btn if self.primary_btn is not self.open_btn
+                           else None) if b is not None]
+        tab += [r for r in self.recent_rows if r.isEnabled()]
+        tab += [b for b in (self.library_btn, self.demo_btn if returning else None)
+                if b is not None]
+        for a, b in zip(tab, tab[1:], strict=False):
+            QWidget.setTabOrder(a, b)
 
         # THE ERROR SLOT, ON THE CANVAS ABOVE THE CARD — always built, `RetainSizeWhenHidden`, so
-        # the first-run frame and the failure frame have IDENTICAL geometry and the card is
-        # byte-identical between them. The ⚠ is the glyph the rest of the app marks
-        # low-confidence/attention with, so the failure reads as a failure WITHOUT hue (it pairs
-        # with the amber [role=WelcomeError] styling, which used to be the subtitle's exact grey —
-        # the message hid inside the invitation copy).
-        #
-        # ABOVE, and OUTSIDE the zone, and both halves of that were measured. Above, because the
-        # error is the reason and the buttons are the action, and it used to be appended after them.
-        # Outside, because the longest of the app's load-failure sentences takes FOUR lines at the
-        # card's own 303 px measure: reserving that inside the card would have put an 80 px hole
-        # between the invitation and the buttons on every cold launch, for a failure that usually
-        # does not happen. Out here the reserved band is bare canvas, which the cold launch is
-        # 89.9% made of, so it costs nothing to look at and the card never moves.
-        #
-        # The measure is the CARD's own width — a derivation, not a number picked here — so the
-        # error column and the thing it is about line up, and three lines hold every production
-        # message (see tests/test_studio_features.py).
+        # the clean frame and the failure frame have IDENTICAL geometry. FIXED width (the card's),
+        # not maximum: a centred word-wrapping label is otherwise granted its narrow sizeHint and
+        # clipped inside the lines reserved for it. The ⚠ marks it as a failure without hue.
         self.error_label = QLabel("")
         self.error_label.setProperty("role", "WelcomeError")
         self.error_label.setAlignment(Qt.AlignCenter)
         self.error_label.setWordWrap(True)
-        # FIXED width, not maximum. A word-wrapping QLabel added with Qt.AlignCenter is granted its
-        # own sizeHint, and a wrapping label's sizeHint is a narrow heuristic, not its maximum: with
-        # setMaximumWidth(427) the label was laid out 206 px wide, needed five lines at that measure
-        # and was CLIPPED top and bottom inside the three lines reserved for it. Caught in the
-        # window composite; a maximumWidth read would have reported the intended 427 px and passed.
-        self.error_label.setFixedWidth(self.drop_zone.sizeHint().width())
+        self.error_label.setFixedWidth(self._card_size().width())
         self.error_label.setMinimumHeight(m.error_h)
         policy = self.error_label.sizePolicy()
-        policy.setRetainSizeWhenHidden(True)   # the slot exists whether or not it has anything in it
+        policy.setRetainSizeWhenHidden(True)
         self.error_label.setSizePolicy(policy)
         if error:
             text = f"⚠  {error}"
             if error_path:
-                # The BASENAME, with the absolute path on the tooltip. The modal in front of this
-                # view already showed the full path once; repeating it inside a wrapping label is
-                # what made this line 627 px wide and the card 727 px (QA D2-09).
                 text += f"\n{os.path.basename(error_path)}"
                 self.error_label.setToolTip(error_path)
         else:
@@ -344,6 +319,133 @@ class WelcomeView(QWidget):
         self.error_label.setText(text)
         root.addWidget(self.error_label, 0, Qt.AlignCenter)
         root.addWidget(self.drop_zone, 0, Qt.AlignCenter)
+
+    def _build_recent(self, zone: QVBoxLayout, on_recent, on_library) -> None:
+        """RECENT SESSIONS: a header with "Library…", then one row per `self.recent` entry. The
+        texts are the Library's (`library.recent_rows`); only the time is formatted here, with the
+        app's one formatter, as the Library window formats it."""
+        head = QHBoxLayout()
+        zone.addLayout(head)
+        title = QLabel(RECENT_TITLE)
+        title.setObjectName("WelcomeSection")
+        title.setAccessibleName("Recent sessions")
+        head.addWidget(title)
+        head.addStretch(1)
+        rows = QVBoxLayout()
+        rows.setSpacing(0)
+        zone.addLayout(rows)
+        fm = self.fontMetrics()
+        texts = [self._row_texts(r) for r in self.recent]
+        date_w = max(fm.horizontalAdvance(t["date"]) for t in texts)
+        laps_w = max(fm.horizontalAdvance(t["laps"]) for t in texts)
+        # The time and the lap count share one TAIL, which a missing row's "Footage not found:
+        # <file>" fills instead. CAPPED at TAIL_SHARE of the row: a file name is the user's and can
+        # be any length, and sized to it the column once took every other row's track name (a
+        # 41-character name left ", cloc" and "· pr"). Past the cap the FILE NAME is elided in the
+        # middle — its GX number and extension stay — and the whole sentence is on the hover.
+        content = (theme.WELCOME_CARD_W - 2 * (theme.SPACE_3XL + theme.SPACE_XXS)
+                   - 2 * (theme.SPACE_M + theme.BORDER_PX))
+        tail = max([fm.horizontalAdvance(t["best"]) + theme.SPACE_L + laps_w for t in texts]
+                   + [min(fm.horizontalAdvance(t["missing"]), int(content * self.TAIL_SHARE))
+                      for t in texts if t["missing"]])
+        lead = f"{library.MISSING_FOOTAGE}: "
+        for row, t in zip(self.recent, texts, strict=True):
+            btn = QPushButton()
+            btn.setObjectName("WelcomeRow")
+            btn.setAccessibleName(t["spoken"])
+            btn.setToolTip(t["tip"])
+            cells = QHBoxLayout(btn)
+            cells.setContentsMargins(theme.SPACE_M, theme.SPACE_XS, theme.SPACE_M, theme.SPACE_XS)
+            cells.setSpacing(theme.SPACE_L)
+            track = _ElidedLabel(t["track"], row["way"] + row["tag"])
+            cells.addWidget(track, 1)
+            date = QLabel(t["date"])
+            date.setProperty("role", "Note")
+            date.setFixedWidth(date_w)
+            cells.addWidget(date)
+            if t["missing"]:
+                gone = QLabel(lead + fm.elidedText(
+                    row["name"], Qt.ElideMiddle, tail - fm.horizontalAdvance(lead)))
+                gone.setProperty("role", "Note")
+                gone.setFixedWidth(tail)
+                cells.addWidget(gone)
+                btn.setEnabled(False)
+            else:
+                best = QLabel(t["best"])
+                best.setProperty("role", "Note")
+                best.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                best.setFixedWidth(tail - theme.SPACE_L - laps_w)
+                laps = QLabel(t["laps"])
+                laps.setProperty("role", "Note")
+                laps.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                laps.setFixedWidth(laps_w)
+                cells.addWidget(best)
+                cells.addWidget(laps)
+                if row["trust"]:
+                    # The Library's trust tier: muted + italic on the name and the time, so a
+                    # provisional best never reads as a plain one.
+                    for cell in (track, best):
+                        cell.setProperty("role", "Note")
+                        font = cell.font()
+                        font.setItalic(True)
+                        cell.setFont(font)
+                paths = list(row["paths"])
+                if on_recent is not None:
+                    btn.clicked.connect(lambda _=False, p=paths: on_recent(list(p)))
+            rows.addWidget(btn)
+            self.recent_rows.append(btn)
+        if on_library is not None:
+            self.library_btn = QPushButton(LIBRARY_LABEL)
+            self.library_btn.setObjectName("WelcomeLink")
+            self.library_btn.clicked.connect(on_library)
+            head.addWidget(self.library_btn)
+
+    @staticmethod
+    def _row_texts(row: dict) -> dict:
+        """What one recent row shows, from a `library.recent_rows` dict."""
+        best = row["best"]
+        shown = {
+            "track": row["track"],
+            "date": row["date"] or "—",
+            "best": f"best {fmt_time(best)}" if best is not None else "—",
+            "laps": plural(row["laps"], "lap"),
+            "missing": (f"{library.MISSING_FOOTAGE}: {row['name']}" if row["missing"] else ""),
+        }
+        tail = shown["missing"] or f"{shown['best']}, {shown['laps']}"
+        shown["spoken"] = f"{shown['track'].strip()}, {shown['date']}, {tail}"
+        shown["tip"] = row["missing"] or row["name"]
+        return shown
+
+    def _card_size(self) -> QSize:
+        """The size the card is laid out at: its floor width (a hint ignores a minimum width), and
+        the height its wrapping lines take at that width."""
+        hint = self.drop_zone.sizeHint()
+        w = max(hint.width(), self.drop_zone.minimumWidth())
+        return QSize(w, self.drop_zone.heightForWidth(w) if self.drop_zone.hasHeightForWidth()
+                     else hint.height())
+
+    def anchors(self) -> Anchors:
+        """The card's landmarks, laid out at the card's own size (shown or not)."""
+        zone = self.drop_zone
+        if not zone.isVisible():
+            zone.resize(self._card_size())
+            zone.layout().activate()
+
+        def rect(w):
+            return QRect(w.mapTo(zone, QPoint(0, 0)), w.size())
+
+        return Anchors(card=zone.size(), glyph=rect(self.drop_icon), title=rect(self.title_label),
+                       primary=rect(self.primary_btn), error_h=self.error_label.minimumHeight())
+
+    def keyPressEvent(self, event):
+        """Return / Enter activate the focused action. A QPushButton outside a dialog takes only
+        Space, and passes Return up to here."""
+        btn = self.focusWidget()
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and isinstance(btn, QPushButton)
+                and btn.isEnabled() and self.isAncestorOf(btn)):
+            btn.click()
+            return
+        super().keyPressEvent(event)
 
 
 class PBToast(QWidget):

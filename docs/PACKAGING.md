@@ -143,10 +143,11 @@ Resolution order (`studio/demo.py`):
    to the empty welcome state — it still launches.
 
 **The welcome screen's demo button is on every launch; its LABEL is gated on steps 1–2 only**
-(`demo.demo_available()`, an offline path lookup): "Open demo" when one resolves, "Get demo · N MB"
-(`demo.download_mb()`) when the click will run step 3. So the app never probes the network on its
-own — only that click, which says it downloads, and `--demo` on the command line reach it; either
-one caches the demo, and the button reads "Open demo" on every later launch. **Recording the demo
+(`demo.demo_available()`, an offline path lookup): "Open the demo (synthetic session)" when one
+resolves, "… · N MB download" (`demo.download_mb()`) when the click will run step 3. So the app never
+probes the network on its own — only that click, which says it downloads, and `--demo` on the
+command line reach it; either one caches the demo, and the label drops the download on every later
+launch. **Recording the demo
 video: set `PACER_DEMO_MP4`** and the button points at your clip.
 
 The demo is not a clean session on purpose: since `demo-data-v2` it carries one planted habit

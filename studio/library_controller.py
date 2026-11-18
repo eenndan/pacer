@@ -166,6 +166,10 @@ class LibraryController:
     def __init__(self, win, status_ms: int):
         self.win = win
         self._status_ms = status_ms
+        # Called once the Library window closes (`open_library`), because Forget, Clear, Restore
+        # and a track rename change the index from in there. The window wires it to its welcome
+        # re-read; None — a controller over a stub window, as the tests build it — does nothing.
+        self.on_library_closed = None
         # What the last `update_library` decided, as ONE value (QA r4 CODE-3): `verdict`, a
         # `library.Verdict`, reset on every call. The five names the landing, the notice and the
         # tests read (`opened_new`, `waiting_for_whole`, `waiting_for_line`, `waiting_for_name`,
@@ -751,6 +755,12 @@ class LibraryController:
         # Every record write in there already refreshed both readers (`_records_changed`); this
         # re-read is for a callback that raised part-way, which the dialog swallows.
         self._records_changed()
+        # Forget, Clear, Restore and a track rename all change the index from in there. A welcome
+        # still on screen lists the rows again, or a "cleared" session would stay one click from
+        # being re-opened and re-indexed — whichever door opened this window (menu, ⌘L, the
+        # welcome's own "Library…", the PB card).
+        if self.on_library_closed is not None:
+            self.on_library_closed()
 
     # -------------------------------------------------------- privacy: restore / forget / clear
     def _restore_library(self) -> dict:

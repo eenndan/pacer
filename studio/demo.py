@@ -61,8 +61,8 @@ _DEMO_TIMEOUT_S = 15.0
 
 
 def download_mb() -> int:
-    """The pinned demo's size in whole MB (`_DEMO_BYTES`, rounded): what the welcome's "Get demo"
-    button and the one-time download line say a first click will fetch. Derived, never typed — the
+    """The pinned demo's size in whole MB (`_DEMO_BYTES`, rounded): what the welcome's demo
+    button ("… · N MB download") and the one-time download line say a first click will fetch. Derived, never typed — the
     sha fixes the bytes, and a re-pin moves this with them."""
     return round(_DEMO_BYTES / 1e6)
 
@@ -189,8 +189,8 @@ def resolve_demo_recording(allow_download: bool = True) -> str | None:
 def demo_available() -> bool:
     """Is there a demo recording ON THIS MACHINE, RIGHT NOW, that a click could open?
 
-    This decides what the welcome screen's demo button SAYS — "Open demo" when it is, "Get demo · N
-    MB" (`download_mb`) when the click will download it — and it is deliberately the OFFLINE half
+    This decides what the welcome screen's demo button SAYS — "Open the demo (synthetic
+    session)" when it is, "… · N MB download" (`download_mb`) when the click will download it — and it is deliberately the OFFLINE half
     of `resolve_demo_recording`: the env var or the cache, no network. Two reasons, both about not
     lying to the first-touch screen:
 
@@ -208,6 +208,6 @@ def demo_available() -> bool:
 
     `--demo` on the CLI makes the same request as that click — it tries the download and says
     plainly if it can't (the README's `pixi run studio -- --demo`); once either has, the cache
-    turns the label to "Open demo" on every later launch.
+    drops the download from the label on every later launch.
     """
     return _resolve_local() is not None

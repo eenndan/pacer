@@ -132,6 +132,11 @@ _EXEMPT = {
     ("help_dialog", "<module>", "▸",
      "PRIVACY_PARAGRAPHS' removal route — 'open File ▸ Library…'. The same menu-path connector as "
      "the coaching_panel entry above, and the same hand-off."),
+    ("library", "missing_footage_text", "▸",
+     "The Library window's missing-footage line — '… open it with File ▸ Open…' — moved verbatim "
+     "out of library_dialog.py (unguarded) so the welcome's recent sessions say the same words "
+     "(cool/welcome-screen). The same menu-path connector as the two entries above, and the same "
+     "hand-off."),
 }
 assert all(len(e) == 4 for e in _EXEMPT)
 
