@@ -2570,11 +2570,11 @@ def test_the_theme_names_the_one_corner_on_the_reach_line():
     assert round(K.session_theme(sd19).share, 2) == 0.78
     said = K.theme_sentence(theme, sd19)
     # The halves print as the shortlist's cells add up (W9): +0.15 +0.08 of +0.32 s, 72 / 28. With
-    # one base the sentence no longer names it; it read "of the time your 5 ranked corners lose,
-    # 79% is in … 21% …".
-    assert said == ("No single theme: 72% of the time on offer is in corners you have already "
-                    "driven at this pace, 28% in corners you have rarely reached — C1 sits on the "
-                    "line between the two."), said
+    # base the sentence names the headline's (it read "of the time your 5 ranked corners lose,
+    # 79% is in … 21% …"), in the headline's words, since C2 and C3 are ranked and listed below it.
+    assert said == ("No single theme: 72% of the time in your top 3 corners is in corners you have "
+                    "already driven at this pace, 28% in corners you have rarely reached — C1 sits "
+                    "on the line between the two."), said
     # Without the rows the sentence is what it always was (every other caller is unchanged).
     assert K.theme_sentence(theme).startswith("Most of the time on offer is execution"), theme
     # C7 tips it too (59.9 % < THEME_SHARE): the LARGEST-loss tipping corner is the one named. C5,
@@ -2584,7 +2584,9 @@ def test_the_theme_names_the_one_corner_on_the_reach_line():
 
     for rec, start in (("MK", "All of the time on offer is in corners you have already driven"),
                        ("SD30", "All of the time on offer is in corners you have already driven"),
-                       ("SD3h", "All of the time on offer is in corners you have rarely been quick")):
+                       # SD3h ranks 4 and sums 3: the sentence names the headline's base.
+                       ("SD3h", "All of the time in your top 3 corners is in corners you have "
+                                "rarely been quick")):
         rows = _saved(rec)
         assert K.theme_sentence(K.headline_theme(rows), rows).startswith(start), rec
     print(f"ok COACHING-4: fires on {[r for r, c in fired.items() if c]} — {said!r}")
@@ -3434,16 +3436,21 @@ def test_the_theme_counts_the_headlines_corners():
       Most … pace          the same, pace: 73 % → 80 %
       split                "No single theme: of the time your 4 ranked corners lose, 46% … 54% …" →
                            "No single theme: 42% of the time on offer … 58% …"
-      All of …             unchanged: it never named a base (every corner on one side puts every
-                           counted one there too)."""
+      All of …             it never named a base (every corner on one side puts every counted one
+                           there too).
+
+    Review of #607 (P2): with a fourth ranked corner LISTED under the shortlist, "the time on offer"
+    in the sentence reads as all of it, so there the sentence names the headline's base, "the time
+    in your top 3 corners" (`test_the_sentence_names_its_base_when_more_is_ranked_than_summed`);
+    the three rows alone, and the rows-less call, keep "the time on offer"."""
     demo = _level_sessions()["demo"].coaching_opportunities()
     assert K.headline(demo).startswith("Whole session · 0.43 s across your top 3 corners"), \
         K.headline(demo)
     assert (len(demo.ranked_rows()), demo.theme.n_ranked, len(K.shortlist(demo))) == (4, 3, 3), \
         demo.theme
     sentence, acts = K.theme_lines(demo)
-    assert sentence == ("All of the time on offer is in corners you have already driven at this "
-                        "pace: repeat it, no new speed needed.")
+    assert sentence == ("All of the time in your top 3 corners is in corners you have already "
+                        "driven at this pace: repeat it, no new speed needed.")
     assert acts[0] == "Apex speed is the common thread — 84% of that time is in C1.", acts[0]
     # The printed percentage is the shortlist's printed cells' ratio, the headline's 0.43 s.
     c1 = [r for r in K.shortlist(demo) if r.cid == 1]
@@ -3488,12 +3495,18 @@ def test_the_theme_counts_the_headlines_corners():
     for name, (four, sentence, cause) in cases.items():
         th = K.headline_theme(four)
         got = (K.theme_sentence(th, four), K.theme_actions(th, four)[0])
-        assert got == (sentence, cause), (name, got)
+        # Four ranked and listed, three summed: the sentence names the headline's base.
+        named = sentence.replace("the time on offer", "the time in your top 3 corners", 1)
+        assert named != sentence and got == (named, cause), (name, got)
         assert "ranked corner" not in "".join(got) and "C4" not in "".join(got), (name, got)
-        # The fourth corner never reaches the theme: it is the three rows' own, byte for byte.
+        # Without the rows there is no shortlist to compare: the unrounded share, the unnamed base.
+        assert K.theme_sentence(th) == sentence, (name, K.theme_sentence(th))
+        # The fourth corner never reaches the theme: it is the three rows' own, and with the counts
+        # equal every form is the unnamed one, byte for byte.
         three = four[:3]
         th3 = K.headline_theme(three)
-        assert th3 == th and (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == got
+        assert th3 == th and (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == \
+            (sentence, cause), name
     # The classification is the shortlist's too: over all four the split above is a split at 46 %
     # and the "most" sides 73 %; seed 9 at 20 laps (below) names no cause where all four said apex.
     assert K.session_theme(cases["split"][0]).kind == K.THEME_SPLIT
@@ -3546,6 +3559,9 @@ def test_every_corner_the_theme_names_is_on_the_headlines_shortlist():
         said = K.theme_sentence(th, rows)
         acts = K.theme_actions(th, rows)
         cause = acts[0] if acts and "common thread" in acts[0] else ""
+        # A ranked corner listed under the shortlist: the sentence names the headline's base.
+        listed = sum(r.evidence.ranked and round(r.time_lost, 2) > 0 for r in rows)
+        assert not said or ("the time on offer" in said) == (listed <= len(short)), (name, said)
         named = {int(c) for c in re.findall(r"\bC(\d+)", said + " " + cause)}
         if not named <= {r.cid for r in short}:
             off.append((name, said, cause))
@@ -3559,6 +3575,88 @@ def test_every_corner_the_theme_names_is_on_the_headlines_shortlist():
     print(f"ok theme sweep: {len(sweep)} sessions, {longer} ranking more than the shortlist, "
           f"{fell} share(s) on the guard's fallback")
 
+
+def test_the_sentence_names_its_base_when_more_is_ranked_than_summed():
+    """Review of #607 (P2). The page and the report list every ranked corner, and the headline sums
+    the top 3; "All of the time on offer is in corners you have already driven at this pace" then
+    read as an absolute above a fourth ranked corner that is pace work. Rows R R R P at
+    0.7/0.1/0.1/0.1 printed it with C4 (a pace corner) listed underneath; R R R P P at
+    0.3/0.2/0.2/0.15/0.15 printed it — "repeat it, no new speed needed" — with 30 % of the ranked
+    time in pace corners. When more corners are ranked and listed than the shortlist holds, every
+    sentence form names the headline's base in its words; with the counts equal, today's bytes.
+    Before → after (four or five ranked corners, three summed):
+
+      All of …     "All of the time on offer is in corners …" →
+                   "All of the time in your top 3 corners is in corners …"
+      Most of …    "Most of the time on offer is execution, not pace — 80% of it …" →
+                   "Most of the time in your top 3 corners is execution, not pace — 80% of it …"
+      split        "No single theme: 42% of the time on offer is in …" →
+                   "No single theme: 42% of the time in your top 3 corners is in …"
+
+    The cause line's "that time" follows the sentence and is unchanged."""
+    def rows(reaches, losses):
+        return [_ranked_row(i + 1, loss, 0.01, reach=reach, kind=K.REASON_BRAKING, n_laps=40,
+                            reach_laps=12 if reach == K.REACH_REPEAT else 2)
+                for i, (reach, loss) in enumerate(zip(reaches, losses, strict=True))]
+
+    R, P = K.REACH_REPEAT, K.REACH_RARE
+    all_of = ("All of the time in your top 3 corners is in corners you have already driven at "
+              "this pace: repeat it, no new speed needed.")
+    cases = {
+        "C4, a pace corner, listed under three execution ones": (
+            rows([R, R, R, P], (0.7, 0.1, 0.1, 0.1)), all_of),
+        "30 % of the ranked time in pace corners": (
+            rows([R, R, R, P, P], (0.3, 0.2, 0.2, 0.15, 0.15)), all_of),
+        "all of it pace": (
+            rows([P, P, P, R], (0.7, 0.1, 0.1, 0.1)),
+            "All of the time in your top 3 corners is in corners you have rarely been quick "
+            "through: it needs new speed, not repetition."),
+        "most, execution": (
+            rows([R, R, P, P], (0.5, 0.3, 0.2, 0.1)),
+            "Most of the time in your top 3 corners is execution, not pace — 80% of it is in "
+            "corners you have already driven at this pace."),
+        "most, pace": (
+            rows([P, P, R, R], (0.5, 0.3, 0.2, 0.1)),
+            "Most of the time in your top 3 corners is pace, not execution — 80% of it is in "
+            "corners you have rarely been quick through."),
+        "split": (
+            rows([R, P, P, R], (0.5, 0.4, 0.3, 0.1)),
+            "No single theme: 42% of the time in your top 3 corners is in corners you have "
+            "already driven at this pace, 58% in corners you have rarely reached."),
+    }
+    for name, (ranked, want) in cases.items():
+        said = K.theme_sentence(K.headline_theme(ranked), ranked)
+        assert said == want, (name, said)
+        assert "the time on offer" not in said, (name, said)
+        # The same three corners alone: the counts are equal, and the sentence is today's.
+        three = ranked[:3]
+        alone = K.theme_sentence(K.headline_theme(three), three)
+        assert alone == want.replace("the time in your top 3 corners", "the time on offer"), \
+            (name, alone)
+    # A ranked corner under the display floor is listed nowhere, so it is not "more ranked".
+    tiny = rows([R, R, R, P], (0.5, 0.3, 0.2, 0.004))
+    assert K.theme_sentence(K.headline_theme(tiny), tiny).startswith("All of the time on offer")
+    print("ok theme base: named as the headline's top 3 when more is ranked and listed")
+
+
+def test_a_tied_corner_that_prints_nothing_is_not_named():
+    """Review of #607 (P3). Synthetic seed 5 at 6 laps said "Start with C3 or C1: +0.01 s and
+    +0.00 s sit closer together …": C1 ties with C3 on the spread test, but at +0.003 s it is under
+    the display floor (`DISPLAY_MIN_LOST_S`) and shown on no surface. A tied corner that prints
+    +0.00 s is not named; the tie test itself is unchanged. The lap card asks the same
+    `lead_ties`, so its opportunity there is C3 alone, as on the page."""
+    from studio import share_card
+    s5 = _sweep_sessions()["seed 5, 6 laps"]
+    opps = s5.coaching_opportunities()
+    floor = [r for r in opps.rows if r.evidence.ranked and r.time_lost < K.DISPLAY_MIN_LOST_S]
+    assert [r.cid for r in floor] == [1], floor   # the corner the tie used to name
+    acts = K.theme_actions(opps.theme, list(opps.rows))
+    assert acts[1] == "Start with C3: +0.01 s, and you have matched it on 2 of 6 laps.", acts
+    assert "+0.00 s" not in " ".join(acts) and "C1" not in acts[1], acts
+    assert [r.cid for r in K.lead_ties(list(opps.rows), 3)] == [3]
+    top = share_card._top_opportunity(s5, "kmh")
+    assert top is not None and top.cids == (3,) and top.tied_low_s is None, top
+    print(f"ok sub-floor tie: {acts[1]!r}; card {top.corner_label!r}")
 
 # --------------------------------------------- a row's Compare: see the loss the row names
 # cool/compare-at-corner. Seeing a row's "+0.36 s" took ~10 actions: Jump put the best lap alone at

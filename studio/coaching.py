@@ -1718,6 +1718,30 @@ def _printed_cause_share(theme: Theme, rows: list[Opportunity] | None) -> float:
     return share
 
 
+# "THE TIME ON OFFER" ONLY WHEN THE PAGE LISTS NOTHING ELSE RANKED (review of #607). The shortlist is
+# the top PANEL_TOP_N ranked rows, and the page goes on to list the rest of the ranking under it (the
+# maximised page, the report). Then "All of the time on offer is in corners you have already driven"
+# over three execution corners reads as an absolute above a ranked pace corner listed fourth (rows
+# R R R P at 0.7/0.1/0.1/0.1 printed it with C4 underneath; 0.3/0.2/0.2/0.15/0.15 as R R R P P
+# printed it with 30 % of the ranked time in pace corners). So when the rows rank MORE shown
+# corners than the shortlist, the sentence names its base in the headline's own words, "the time in
+# your top 3 corners"; with the counts equal it keeps "the time on offer", byte for byte. A
+# sub-floor ranked row is listed nowhere, so it does not count here (`shortlist_of`'s floor).
+def _offer_words(rows: list[Opportunity] | None) -> str:
+    """The theme sentence's base: "the time on offer" — or, when `rows` rank more shown corners
+    than the headline's shortlist, the headline's own words for it ("the time in your top 3
+    corners", "the time in your worst corner")."""
+    if not rows:
+        return "the time on offer"
+    top = shortlist_of(rows)
+    n_ranked = sum(1 for r in rows if r.time_lost >= DISPLAY_MIN_LOST_S
+                   and getattr(getattr(r, "evidence", None), "ranked", True))
+    if n_ranked <= len(top):
+        return "the time on offer"
+    return ("the time in your worst corner" if len(top) == 1
+            else f"the time in your top {len(top)} corners")
+
+
 def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     """The session's ONE line — what the twelve findings add up to. "" when nothing is ranked.
 
@@ -1736,23 +1760,25 @@ def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     # "the time on offer", not "your time": the shares are over the headline's ranked shortlist
     # only, and on a short session most of the measured loss can sit in abstained corners (0064's
     # chapter 3 alone: 0.121 s ranked against 0.444 s abstained). The time on offer is what the
-    # headline right above it offers (THE BASE IS THE HEADLINE'S, above).
+    # headline right above it offers (THE BASE IS THE HEADLINE'S, above) — named in its words when
+    # the page lists more ranked corners than it sums (`_offer_words`).
     #
     # "ALL", NOT "MOST", AT 100 % (LOOK-9 / copy #2, QA 2026-09-26): "Most of the time on offer is
     # execution, not pace — 100% of it is …" contradicted itself in one sentence on MK_18_09.
     whole = round(theme.share, 2) >= 1.0
     share = _printed_side_share(theme, rows)   # as the cells add up (above `_printed_share`)
+    base = _offer_words(rows)                  # the headline's base, named when more is listed
     if theme.kind == THEME_EXECUTION:
         if whole:
-            return ("All of the time on offer is in corners you have already driven at this "
+            return (f"All of {base} is in corners you have already driven at this "
                     "pace: repeat it, no new speed needed.")
-        return (f"Most of the time on offer is execution, not pace — {share:.0%} of it is "
+        return (f"Most of {base} is execution, not pace — {share:.0%} of it is "
                 "in corners you have already driven at this pace.")
     if theme.kind == THEME_PACE:
         if whole:
-            return ("All of the time on offer is in corners you have rarely been quick through: "
+            return (f"All of {base} is in corners you have rarely been quick through: "
                     "it needs new speed, not repetition.")
-        return (f"Most of the time on offer is pace, not execution — {share:.0%} of it is "
+        return (f"Most of {base} is pace, not execution — {share:.0%} of it is "
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
     # when no side clears THEME_SHARE, and it is a real state: D24's 0060 chapter 2 landed here.
@@ -1773,7 +1799,7 @@ def _split_sentence(theme: Theme, tipping: Opportunity | None = None,
     # fraction like 0.17 / 0.40 = 0.425, and two `:.0%` roundings printed "42% … 57%".
     first = int(f"{_printed_exec_pct(theme, rows):.0%}"[:-1])
     second = 100 - first
-    out = (f"No single theme: {first}% of the time on offer is in corners you have "
+    out = (f"No single theme: {first}% of {_offer_words(rows)} is in corners you have "
            f"already driven at this pace, {second}% in corners you have rarely "
            "reached")
     if tipping is None:
@@ -1851,14 +1877,17 @@ def _tie_margin(a: Opportunity, b: Opportunity) -> float:
 
 
 def lead_ties(rows: list[Opportunity], lead_cid: int | None) -> list[Opportunity]:
-    """The ranked rows whose loss the measurement cannot separate from the lead's, biggest first
-    and the lead itself in front. [] when no ranked row carries `lead_cid`; a ONE-element result
+    """The shown ranked rows whose loss the measurement cannot separate from the lead's, biggest
+    first and the lead itself in front. [] when no ranked row carries `lead_cid`; a ONE-element result
     means the lead stands alone and can be named on its own."""
     ranked = sorted((r for r in rows if r.evidence.ranked), key=lambda r: -r.time_lost)
     lead = next((r for r in ranked if r.cid == lead_cid), None)
     if lead is None:
         return []
-    return [lead] + [r for r in ranked if r is not lead
+    # A tied corner under the display floor is shown nowhere (`shown_rows`), so it is not named:
+    # seed 5 at 6 laps said "Start with C3 or C1: +0.01 s and +0.00 s" (review of #607). The tie
+    # test itself is unchanged; only a corner that prints +0.00 s drops out of the list.
+    return [lead] + [r for r in ranked if r is not lead and r.time_lost >= DISPLAY_MIN_LOST_S
                      and abs(lead.time_lost - r.time_lost) < _tie_margin(lead, r)]
 
 
