@@ -320,7 +320,6 @@ def test_the_card_paints_the_model():
 
 
 # ---------------------------------------------------------------- the real window
-@contextlib.contextmanager
 def _demo_copy(folder: str) -> str:
     """The published demo's recording (`make_demo.make`, `render=False`) at
     `<folder>/demo/GX019001.MP4`. Made ONCE per run and copied into each test's own folder, so
@@ -340,6 +339,7 @@ def _demo_copy(folder: str) -> str:
 _DEMO: dict = {}
 
 
+@contextlib.contextmanager
 def _window():
     """A real, jailed StudioWindow on the PUBLISHED DEMO's recording: `make_demo.make`, the recipe
     the downloadable demo is built from (its driver habit included), with the flat placeholder
