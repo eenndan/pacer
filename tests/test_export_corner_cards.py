@@ -330,17 +330,36 @@ def test_prepare_renders_each_card_once_and_paint_never_draws_text():
         painter = ev.OverlayPainter(s, spec, 1920, 1080, 30.0)
         el = _element(painter)
         assert len(renders) == len(el.cards), (len(renders), len(el.cards))
-        shown = 0
-        for t in ev.frame_times(spec.t0, spec.t1, 30.0):
-            vals = ev.overlay_values_at(s, float(t), spec)
-            dial = painter.advance_and_snapshot(vals)
-            ev._paint_alpha_frame(painter, 1920, 1080, vals, dial)
-            shown += el.active(vals.tt) is not None
+        # Every frame a card is on screen is painted whole, as the render paints it, and so is one
+        # in fifteen of the rest. Every OTHER frame still goes through the element's own `paint`
+        # (the function the render and text counters watch) on one small image: with no card up
+        # it returns at once, so a stray render or text draw a few frames long is still seen.
+        # Painting all 1,534 frames whole at 1080p cost 18 s of this file's 33 s (2026-11-18).
+        from PySide6.QtGui import QImage, QPainter
+        scratch = QImage(64, 64, QImage.Format_ARGB32_Premultiplied)
+        qp = QPainter(scratch)
+        shown = painted = 0
+        try:
+            for i, t in enumerate(ev.frame_times(spec.t0, spec.t1, 30.0)):
+                vals = ev.overlay_values_at(s, float(t), spec)
+                dial = painter.advance_and_snapshot(vals)
+                on = el.active(vals.tt) is not None
+                if on or i % 15 == 0:
+                    ev._paint_alpha_frame(painter, 1920, 1080, vals, dial)
+                    painted += 1
+                else:
+                    qp.save()
+                    el.paint(qp, vals)
+                    qp.restore()
+                shown += on
+        finally:
+            qp.end()
     assert len(renders) == len(el.cards), f"cards rendered again while painting: {len(renders)}"
     assert texts == [], f"paint drew text {len(texts)} times"
     assert shown > 30 * len(el.cards), shown
     spec.source.cleanup()
-    print(f"ok {len(el.cards)} cards rendered once in prepare; {shown} frames blitted, no text")
+    print(f"ok {len(el.cards)} cards rendered once in prepare; {shown} frames blitted, no text "
+          f"({painted} frames painted)")
 
 
 def test_the_card_comes_at_the_exit_holds_and_fades_and_a_later_one_replaces_it():

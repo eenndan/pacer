@@ -68,6 +68,9 @@ from studio.central_view import CentralView  # noqa: E402
 _WALL_CLOCK_MS = 1_756_555_200_000
 
 
+_SEAM_NAMES: list[str] = []
+
+
 def _jail_every_live_app_support_seam():
     """Point every `studio` app-support seam that STILL resolves to the developer's real
     `~/Library/Application Support/pacer` at a throwaway dir, and leave alone any seam the calling
@@ -90,7 +93,12 @@ def _jail_every_live_app_support_seam():
     from studio.dev import _jail
     real = os.path.abspath(_jail._REAL_DIR)
     target = None
-    for name in sorted(seams_in_studio()):
+    # Which modules HAVE a seam is a property of the source, read once per process (it parses every
+    # studio/*.py: 0.31 s, paid on every one of this file's 62 views until 2026-11-18). Where each
+    # seam POINTS is still checked on every call below.
+    if not _SEAM_NAMES:
+        _SEAM_NAMES.extend(sorted(seams_in_studio()))
+    for name in _SEAM_NAMES:
         mod = importlib.import_module(f"studio.{name}")
         if os.path.abspath(mod._app_support_dir()) == real:
             target = target or tempfile.mkdtemp(prefix="pacer-test-realqt-")

@@ -51,6 +51,7 @@ import gc
 import json
 import math
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -1022,6 +1023,33 @@ def test_the_report_export_states_a_layout_width_for_every_figure():
 
 
 # ============================================================ discovery 3, K3 — the report's chart
+_DEMO_FILES: dict = {}
+
+
+def _demo_recording(provisional: bool, folder: str) -> str:
+    """The recording `_demo` opens, made ONCE per run per kind and copied into the calling
+    test's `folder`, at the same place under it: every window still opens a file nothing before it
+    has touched, and the copy costs milliseconds where the make cost ~1.9 s, nine times in this
+    file (2026-11-18)."""
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    if provisional not in _DEMO_FILES:
+        made = tempfile.TemporaryDirectory(prefix="pacer-test-report-demo-")
+        if provisional:
+            src = sg.generate(os.path.join(made.name, "rec"), make_demo.DEMO_SEED,
+                              make_demo.DEMO_LAPS, chapters=1, origin=sg.ORIGIN,
+                              habit=make_demo.DEMO_HABIT).paths[0]
+        else:
+            src = os.path.join(made.name, "GX010777.MP4")
+            make_demo.make(src, render=False)
+        _DEMO_FILES[provisional] = (made, src)
+    made, src = _DEMO_FILES[provisional]
+    path = os.path.join(folder, os.path.relpath(src, made.name))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    shutil.copyfile(src, path)
+    return path
+
+
 @contextlib.contextmanager
 def _demo(*, provisional: bool = False):
     """The REAL window on the shipped demo recording (verified timing on its built-in circuit),
@@ -1034,8 +1062,6 @@ def _demo(*, provisional: bool = False):
     folder — is put back in a `finally`, so a load that fails cannot leak into later tests."""
     import importlib
 
-    from studio.dev import make_demo
-    from studio.dev import synth_gopro as sg
     folder = tempfile.TemporaryDirectory(prefix="pacer-test-report-chart-")
     seams = [importlib.import_module(f"studio.{n}") for n in ("library", "focus", "session_record")]
     saved = [mod._app_support_dir for mod in seams]
@@ -1043,13 +1069,7 @@ def _demo(*, provisional: bool = False):
     try:
         for mod in seams:
             mod._app_support_dir = lambda d=folder.name: d
-        if provisional:
-            path = sg.generate(os.path.join(folder.name, "rec"), make_demo.DEMO_SEED,
-                               make_demo.DEMO_LAPS, chapters=1, origin=sg.ORIGIN,
-                               habit=make_demo.DEMO_HABIT).paths[0]
-        else:
-            path = os.path.join(folder.name, "GX010777.MP4")
-            make_demo.make(path, render=False)
+        path = _demo_recording(provisional, folder.name)
         win = StudioWindow([])
         win.resize(1440, 900)
         win.show()

@@ -22,6 +22,7 @@ Run: python tests/test_race_controller.py   (~20 s; the pixi env's ffmpeg writes
 """
 import contextlib
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -319,6 +320,25 @@ def test_the_card_paints_the_model():
 
 
 # ---------------------------------------------------------------- the real window
+def _demo_copy(folder: str) -> str:
+    """The published demo's recording (`make_demo.make`, `render=False`) at
+    `<folder>/demo/GX019001.MP4`. Made ONCE per run and copied into each test's own folder, so
+    every window still opens a file nothing before it has touched: the copy costs milliseconds,
+    the make 1.9 s, and this file made it nine times (2026-11-18)."""
+    if "src" not in _DEMO:
+        from studio.dev import make_demo as md
+        _DEMO["dir"] = tempfile.TemporaryDirectory(prefix="race_demo_")
+        _DEMO["src"] = os.path.join(_DEMO["dir"].name, "GX019001.MP4")
+        md.make(_DEMO["src"], render=False)
+    path = os.path.join(folder, "demo", "GX019001.MP4")
+    os.makedirs(os.path.dirname(path))
+    shutil.copyfile(_DEMO["src"], path)
+    return path
+
+
+_DEMO: dict = {}
+
+
 @contextlib.contextmanager
 def _window():
     """A real, jailed StudioWindow on the PUBLISHED DEMO's recording: `make_demo.make`, the recipe
@@ -328,12 +348,10 @@ def _window():
 
     from studio import sidecar
     from studio.app import StudioWindow
-    from studio.dev import make_demo as md
     saved = sidecar.save
     sidecar.save = lambda *a, **k: None     # a start-line test must not write beside the clip
     with tempfile.TemporaryDirectory(prefix="race_ctl_") as folder, _fresh_app_support():
-        path = os.path.join(folder, "demo", "GX019001.MP4")
-        md.make(path, render=False)
+        path = _demo_copy(folder)
         win = StudioWindow([])
         win.resize(1440, 900)
         win.show()
@@ -679,7 +697,6 @@ def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
 
     from studio import command_palette, sidecar
     from studio.app import StudioWindow
-    from studio.dev import make_demo as md
 
     def press_r():
         QTest.keyClick(win, Qt.Key_R)
@@ -693,8 +710,7 @@ def test_r_races_whenever_the_map_is_on_screen_and_says_why_when_not():
     saved = sidecar.save
     sidecar.save = lambda *a, **k: None
     with tempfile.TemporaryDirectory(prefix="race_key_") as folder, _fresh_app_support():
-        path = os.path.join(folder, "demo", "GX019001.MP4")
-        md.make(path, render=False)
+        path = _demo_copy(folder)
         win = StudioWindow([])
         win.resize(1440, 900)
         win.show()
@@ -791,12 +807,10 @@ def test_the_map_toolbar_button_is_view_lap_race():
 
     from studio import sidecar
     from studio.app import StudioWindow
-    from studio.dev import make_demo as md
     saved = sidecar.save
     sidecar.save = lambda *a, **k: None
     with tempfile.TemporaryDirectory(prefix="race_btn_") as folder, _fresh_app_support():
-        path = os.path.join(folder, "demo", "GX019001.MP4")
-        md.make(path, render=False)
+        path = _demo_copy(folder)
         win = StudioWindow([])
         win.resize(1280, 800)
         win.show()
