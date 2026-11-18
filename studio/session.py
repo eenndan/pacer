@@ -3396,8 +3396,13 @@ class Session:
                 fingerprint=str(entry.get("fingerprint") or ""), date=entry.get("date"),
                 lap_total=total, verified=bool(entry.get("verified", False)),
                 degraded=bool(entry.get("degraded", False)),
-                start_ms=int(self._wall_clock_ms()[0])))
+                start_ms=int(self._wall_clock_ms()[0]), rotation=self._lap_rotation()))
         return items[:focus.MAX_ITEMS]
+
+    def _lap_rotation(self) -> int:
+        """Which way round this session's laps run, off its corners (`focus.lap_rotation`)."""
+        basis = self.corners.basis()
+        return focus.lap_rotation(c.direction * c.turn_deg for c in basis[0]) if basis else 0
 
     def focus_report(self, items: list[focus.FocusItem], entry: dict,
                      records: dict | None = None,
@@ -3439,6 +3444,9 @@ class Session:
             # the one over each stored window turns the way it did (another layout does not).
             "corners": [(c.enter / basis[1], c.exit / basis[1], int(c.direction))
                         for c in basis[0]] if basis and basis[1] > 0 else None,
+            # …and which way round its laps run: the same tarmac reversed passes the hand test
+            # on the corners that happen to line up (`focus.layout_check`).
+            "rotation": self._lap_rotation(),
             **self.focus_trust(entry),
         }
 

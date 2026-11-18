@@ -270,6 +270,49 @@ def test_a_habit_moves_only_its_corner_on_its_laps():
         f"outside the line ({line_s:.1f} m) .. C{after.cid} ({after.apex_s:.1f} m)")
 
 
+# The demo's telemetry, every GPMF byte (`make_demo.make` writes these under its picture), measured
+# on main at c171628 before the layout options existed: the shipped demo's sha256 (studio/demo.py)
+# is of a file whose picture is ffmpeg's, so this is the half of it no ffmpeg build can move.
+DEMO_TELEMETRY_SHA256 = "561a539dc912aa69b89091f9f7e69885b12afaa198ce5ef85be4e2bccb97fd9a"
+
+
+def test_the_layout_options_leave_the_demo_and_drive_the_same_tarmac():
+    """The opt-in layouts (cool/layout-reversed-synth) change nothing by default — the demo's
+    telemetry is the bytes it was — and each is what it says. `reverse`: every point where it was
+    (the same built-in track and line), the lap as long, the corners reversed in order and in hand,
+    the IMU's heading turned with the travel. `reprofiled`: one corner rebuilt, the tarmac away from
+    it where it was, a replacement that does not turn the corner's angle refused."""
+    from studio.dev import make_demo as md
+
+    _t, per = sg.build(md.DEMO_SEED, md.DEMO_LAPS, chapters=1, origin=md.DEMO_ORIGIN,
+                       habit=md.DEMO_HABIT)
+    digest = hashlib.sha256(b"".join(b"".join(ch) for ch in per)).hexdigest()
+    assert digest == DEMO_TELEMETRY_SHA256, f"the demo's telemetry moved: {digest}"
+    a, r = sg.build_circuit(), sg.build_circuit(reverse=True)
+    assert r.length == a.length and r.x[0] == r.x[-1] and r.y[0] == r.y[-1]
+    gap = max(float(np.min(np.hypot(a.x - x, a.y - y))) for x, y in zip(r.x, r.y, strict=True))
+    assert gap < 1e-9, f"the reversed circuit leaves the tarmac by {gap} m"
+    assert [k.turn_deg for k in r.corners] == [-k.turn_deg for k in reversed(a.corners)]
+    mid = sum(a.straights[0]) / 2.0
+    assert r.straights[0] == (0.0, a.straights[0][1]) and np.allclose(r.at(mid)[:2], a.at(mid)[:2])
+    heading = np.arctan2(np.diff(r.y), np.diff(r.x))
+    assert np.abs(np.angle(np.exp(1j * (heading - r.heading[:-1])))).max() < 0.02
+    tight = sg.build_circuit(layout=sg.reprofiled(6, ("C", 70.0, 12.0)))
+    off = [float(np.min(np.hypot(tight.x - x, tight.y - y))) for x, y in zip(a.x, a.y, strict=True)]
+    moved = a.s[:-1][np.asarray(off[:-1]) > 0.3]
+    c6 = a.corners[5]
+    assert moved.size and np.abs(moved - c6.apex_s).max() < 40.0, \
+        f"tightening C6 moved tarmac {np.abs(moved - c6.apex_s).max():.0f} m from its apex"
+    try:
+        sg.reprofiled(6, ("C", 60.0, 12.0))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a replacement turning 60° of C6's 70° was accepted")
+    print(f"  demo telemetry {digest[:12]}…, reversed on the tarmac to {gap:.0e} m, tightened C6 "
+          f"moved {moved.size} points within {np.abs(moved - c6.apex_s).max():.0f} m of its apex")
+
+
 def _run_all():
     for fn in (test_the_real_loader_times_every_lap_on_the_gps9_clock,
                test_noise_free_laps_are_exact_to_the_millisecond,
@@ -279,7 +322,8 @@ def _run_all():
                test_the_stats_tiles_and_the_coaching_page_are_populated,
                test_the_imu_is_one_rigid_motion_with_the_gps,
                test_the_same_seed_gives_the_same_recording,
-               test_a_habit_moves_only_its_corner_on_its_laps):
+               test_a_habit_moves_only_its_corner_on_its_laps,
+               test_the_layout_options_leave_the_demo_and_drive_the_same_tarmac):
         t0 = time.time()
         fn()
         print(f"ok {fn.__name__} ({time.time() - t0:.1f} s)")

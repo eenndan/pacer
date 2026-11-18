@@ -147,11 +147,83 @@ def _integrate(k):
     return th, x, y
 
 
-def build_circuit(mirror: bool = False) -> Circuit:
+def _chord(segments) -> np.ndarray:
+    """Where `segments` end, from the origin heading +x (exact arcs, before any smoothing)."""
+    at, h = np.zeros(2), 0.0
+    for seg in segments:
+        if seg[0] == "S":
+            at = at + seg[1] * np.array([math.cos(h), math.sin(h)])
+        else:
+            turn = math.radians(seg[1])
+            at = at + 2.0 * seg[2] * math.sin(abs(turn) / 2.0) * np.array(
+                [math.cos(h + turn / 2.0), math.sin(h + turn / 2.0)])
+            h += turn
+    return at
+
+
+def reprofiled(cid: int, *segments, layout=LAYOUT) -> tuple:
+    """`layout` with its corner `cid` (1-based, LAYOUT order) rebuilt as `segments` — a tighter
+    radius, a chicane, a kink before the corner — and EVERY OTHER SEGMENT WHERE IT WAS: the
+    corner and the straights either side of it are rebuilt as a straight, `segments` and a
+    straight, the two straights solved so the stretch leaves where the straight before the corner
+    began and joins where the one after it ended. The rest of the circuit is the same tarmac (a
+    reprofile, not another circuit), and the loop closes as it did. Raises when the replacement
+    does not turn the corner's net angle, or cannot reach that point going forwards."""
+    arcs = [i for i, seg in enumerate(layout) if seg[0] == "C"]
+    i = arcs[cid - 1]
+    if i - 1 in CLOSE_ON or (i + 1) % len(layout) in CLOSE_ON:
+        raise ValueError(f"C{cid} borders a straight the loop is closed on")
+    stretch = layout[i - 1:i + 2]
+    turn = layout[i][1]
+    net = sum(seg[1] for seg in segments if seg[0] == "C")
+    if abs(net - turn) > 1e-9:
+        raise ValueError(f"C{cid} turns {turn}°; its replacement turns {net}°")
+    gap = _chord(stretch) - _chord(segments)
+    exit_h = math.radians(turn)
+    lead_in, lead_out = np.linalg.solve(
+        np.array([[1.0, math.cos(exit_h)], [0.0, math.sin(exit_h)]]), gap)
+    if min(lead_in, lead_out) < 1.0:
+        raise ValueError(f"C{cid}'s replacement does not fit its stretch ({lead_in:.1f}, "
+                         f"{lead_out:.1f} m of lead)")
+    rebuilt = (("S", float(lead_in)), *(tuple(seg) for seg in segments), ("S", float(lead_out)))
+    return tuple(layout[:i - 1]) + rebuilt + tuple(layout[i + 2:])
+
+
+def _reversed(c: Circuit) -> Circuit:
+    """The same centreline driven the other way round: every point where it was (the same tarmac,
+    so the same built-in track and start line), the corners in reverse order and each turning the
+    other way, the lap the same length. Lap distance 0 is still the start of the main straight —
+    now its other end — so `straights[0]` is the main straight and the line at its middle is the
+    one the clockwise kart crossed."""
+    n = len(c.s) - 1
+    i0 = int(round(c.straights[0][1] / DS))          # the main straight's end: the new s = 0
+    idx = np.mod(i0 - np.arange(n + 1), n)
+    seg = np.mod(i0 - np.arange(n) - 1, n)           # new segment i is old segment (i0 - i - 1)
+    length = c.length
+
+    def back(s: float) -> float:
+        return float(np.mod(c.straights[0][1] - s, length))
+
+    corners = sorted((back(k.apex_s), -k.turn_deg, k.radius) for k in c.corners)
+    straights = [(0.0, c.straights[0][1])] + sorted(
+        (back(b), back(b) + (b - a)) for a, b in c.straights[1:])
+    k = -c.kappa[:-1][seg]
+    return Circuit(s=c.s.copy(), x=c.x[idx], y=c.y[idx], heading=np.unwrap(c.heading[idx] + np.pi),
+                   kappa=np.append(k, k[0]),
+                   corners=tuple(CornerTruth(cid=j + 1, turn_deg=t, radius=r, apex_s=a)
+                                 for j, (a, t, r) in enumerate(corners)),
+                   straights=tuple(straights))
+
+
+def build_circuit(mirror: bool = False, *, reverse: bool = False, layout=None) -> Circuit:
     """The fixed circuit, closed by re-solving the CLOSE_ON straights (a straight's length enters the
     end-point gap linearly, along its own heading), then sheared by the last few centimetres of
-    rounding so the loop meets itself exactly. `mirror` flips it anticlockwise."""
-    layout = [tuple(seg) for seg in LAYOUT]
+    rounding so the loop meets itself exactly. `mirror` flips it anticlockwise (another circuit:
+    its mirror image); `reverse` drives THIS one the other way round (`_reversed`); `layout`
+    replaces LAYOUT (`reprofiled`, `retuned`)."""
+    if reverse:
+        return _reversed(build_circuit(mirror, layout=layout))
+    layout = [tuple(seg) for seg in (LAYOUT if layout is None else layout)]
     if mirror:
         layout = [seg if seg[0] == "S" else ("C", -seg[1], seg[2]) for seg in layout]
     for _ in range(4):
@@ -341,8 +413,11 @@ def _driver(rng, circuit: Circuit, n_laps: int):
     nc = len(apex)
     form = 1.0 + rng.normal(0.0, 0.004, n_laps)
     form[1:3] -= (0.03, 0.015)                          # the first two flying laps: cold tyres
-    grip = (1.0 + np.array(CORNER_BIAS)[None, :nc]
-            + rng.normal(0.0, 1.0, (n_laps, nc)) * np.array(CORNER_SIGMA)[None, :nc])
+    # A layout with more corners than LAYOUT (a chicane, `reprofiled`) repeats the last value.
+    bias = np.array(CORNER_BIAS + CORNER_BIAS[-1:] * max(0, nc - len(CORNER_BIAS)))
+    sigma = np.array(CORNER_SIGMA + CORNER_SIGMA[-1:] * max(0, nc - len(CORNER_SIGMA)))
+    grip = (1.0 + bias[None, :nc]
+            + rng.normal(0.0, 1.0, (n_laps, nc)) * sigma[None, :nc])
     grip = grip * form[:, None]
     brake = np.clip(rng.normal(1.0, 0.06, (n_laps, nc)), 0.85, 1.1)
     return nearest, grip, brake
@@ -350,7 +425,8 @@ def _driver(rng, circuit: Circuit, n_laps: int):
 
 def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
-             origin: tuple[float, float] = ORIGIN, *, habit: Habit | None = None) -> Truth:
+             origin: tuple[float, float] = ORIGIN, *, habit: Habit | None = None,
+             reverse: bool = False, layout=None) -> Truth:
     """The kart's motion: out of the pits, `laps` timed laps (one of them slow), an in-lap, a stop.
 
     Speed comes from the classic two-pass limit on a distance grid — the corner limit
@@ -358,9 +434,10 @@ def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
     lap's grip varying per corner. Distance and time are exact under constant acceleration between
     nodes, so the time at any distance (and back) is known to microseconds. `origin` anchors the
     circuit's local frame: the same circuit, driven the same way, placed somewhere else. `habit`
-    (opt-in) plants one repeatable loss at one corner (`Habit`)."""
+    (opt-in) plants one repeatable loss at one corner (`Habit`); `reverse` and `layout` change the
+    circuit (`build_circuit`), and the defaults leave every byte as it was."""
     rng = np.random.default_rng(seed)
-    c = build_circuit(mirror)
+    c = build_circuit(mirror, reverse=reverse, layout=layout)
     length = c.length
     s_start = sum(c.straights[PIT_STRAIGHT]) / 2.0
     # Lap j counts lap distance from s=0 (the start of the main straight). The kart leaves the pit
@@ -772,10 +849,12 @@ class Recording:
 def build(seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2, gps_noise: float = 1.0,
           mirror: bool = False, gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
           origin: tuple[float, float] = ORIGIN, *,
-          habit: Habit | None = None) -> tuple[Truth, list[list[bytes]]]:
+          habit: Habit | None = None, reverse: bool = False,
+          layout=None) -> tuple[Truth, list[list[bytes]]]:
     """The recording's telemetry — one list of GPMF payloads per chapter — and its ground truth.
     Pure and deterministic: no files, no ffmpeg; the same arguments give the same bytes."""
-    truth = simulate(seed, laps, mirror, gps_lag_s, media_ppm, origin, habit=habit)
+    truth = simulate(seed, laps, mirror, gps_lag_s, media_ppm, origin, habit=habit,
+                     reverse=reverse, layout=layout)
     rng = np.random.default_rng([seed, 1])
     total = math.ceil(truth.t_end * (1.0 + truth.media_ppm * 1e-6) / PAYLOAD_S)
     gps = _gps_rows(truth, rng, gps_noise)
@@ -790,7 +869,8 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
              origin: tuple[float, float] = ORIGIN, video=None, *,
              frames_per_payload: int = FRAMES_PER_PAYLOAD, audio: bool = False,
-             timecode: str | None = None, habit: Habit | None = None) -> Recording:
+             timecode: str | None = None, habit: Habit | None = None, reverse: bool = False,
+             layout=None) -> Recording:
     """Write the synthetic recording into `out_dir` (created; must not already hold files) and return
     its chapter paths and ground truth. Only the video bytes depend on the ffmpeg build.
 
@@ -802,7 +882,8 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
     OPT-IN, and off by default so the default files stay byte for byte what they were: `audio` adds
     a TONE_HZ tone as each chapter's sound track, and `timecode` ("HH:MM:SS:FF", NDF) a GoPro-style
     `tmcd` track starting chapter 1 there, each later chapter continuing the count; `habit` plants
-    one repeatable loss at one corner (`Habit`)."""
+    one repeatable loss at one corner (`Habit`); `reverse` drives the circuit the other way round
+    and `layout` rebuilds it (`build_circuit`: `reprofiled`, `retuned`)."""
     # PATH first (a `pixi run` puts the env's bin there), then the running interpreter's own env.
     ffmpeg = (ffmpeg or os.environ.get("PACER_FFMPEG") or shutil.which("ffmpeg")
               or shutil.which("ffmpeg", path=os.path.join(sys.prefix, "bin")))
@@ -812,7 +893,7 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
     if os.listdir(out_dir):
         raise FileExistsError(f"{out_dir} is not empty; synth_gopro never writes over anything")
     truth, per_chapter = build(seed, laps, chapters, gps_noise, mirror, gps_lag_s, media_ppm,
-                               origin, habit=habit)
+                               origin, habit=habit, reverse=reverse, layout=layout)
     paths = []
     first = 0
     with tempfile.TemporaryDirectory(prefix="synth_gopro_") as tmp:
@@ -842,13 +923,15 @@ def main(argv=None) -> int:
     ap.add_argument("--chapters", type=int, default=2)
     ap.add_argument("--gps-noise", type=float, default=1.0)
     ap.add_argument("--mirror", action="store_true", help="drive the circuit anticlockwise")
+    ap.add_argument("--reverse", action="store_true",
+                    help="drive the same circuit the other way round")
     ap.add_argument("--fps60", action="store_true", help="a 59.94 fps picture, as a HERO13 records")
     ap.add_argument("--audio", action="store_true", help=f"a {TONE_HZ} Hz tone as the sound track")
     ap.add_argument("--timecode", metavar="HH:MM:SS:FF", help="a GoPro-style NDF tmcd track")
     args = ap.parse_args(argv)
     rec = generate(args.out, args.seed, args.laps, args.chapters, args.gps_noise, args.mirror,
                    frames_per_payload=60 if args.fps60 else FRAMES_PER_PAYLOAD, audio=args.audio,
-                   timecode=args.timecode)
+                   timecode=args.timecode, reverse=args.reverse)
     with open(os.path.join(args.out, "truth.json"), "x") as f:
         json.dump(rec.truth.to_json(), f, indent=1)
     for p in rec.paths:

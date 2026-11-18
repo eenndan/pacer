@@ -243,6 +243,8 @@ class FocusItem:
     method: str = METHOD_MATCHED  # how the baseline was measured (METHOD_*): the re-measure too
     start_ms: int = 0          # its recording's first GPS fix, epoch ms: orders two sessions of
     #                            one day (QA REG-1); 0 = not stamped (stored before 0.5.1)
+    rotation: int = 0          # which way round its laps ran (`lap_rotation`): +1 anticlockwise,
+    #                            −1 clockwise, 0 = not told (stored before 0.14.1, or no loop)
 
     @property
     def label(self) -> str:
@@ -267,7 +269,7 @@ def item_to_dict(item: FocusItem) -> dict:
         "fingerprint": str(item.fingerprint), "date": item.date,
         "lap_total": float(item.lap_total), "verified": bool(item.verified),
         "degraded": bool(item.degraded), "n_of": int(item.n_of), "method": str(item.method),
-        "start_ms": int(item.start_ms),
+        "start_ms": int(item.start_ms), "rotation": int(item.rotation),
     }
 
 
@@ -287,7 +289,9 @@ def item_from_dict(d: dict) -> FocusItem:
         # An item that does not say how it was measured is a v1 item: the fraction instrument.
         n_of=int(d.get("n_of", 0)), method=str(d.get("method", METHOD_FRACTION)),
         # No stamp is no order within a day, never a guessed one (`recorded_before`).
-        start_ms=int(d.get("start_ms", 0)))
+        start_ms=int(d.get("start_ms", 0)),
+        # No rotation stored says nothing about which way round the laps ran: not checked.
+        rotation=int(d.get("rotation", 0)))
 
 
 def _finite(v) -> bool:
@@ -320,6 +324,8 @@ def _valid_item(d) -> bool:
         return False
     start = d.get("start_ms", 0)
     if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+        return False
+    if d.get("rotation", 0) not in (-1, 0, 1) or isinstance(d.get("rotation"), bool):
         return False
     return d.get("method", METHOD_FRACTION) in _METHODS
 
@@ -640,11 +646,34 @@ def baseline_refusal(now_ctx: dict, items: list[FocusItem] | None = None) -> str
 
 LAYOUT_OTHER_WAY = "other_way"     # BLOCK_LAYOUT's detail: today's corner there turns the other way
 LAYOUT_NO_CORNER = "no_corner"     # …or no corner of today's overlaps the stored window at all
+LAYOUT_REVERSED = "reversed"       # …or today's laps run the other way round the track
+
+# How much net turn a lap's corners must add up to before it says which way round it ran: a
+# circuit's corners turn one whole circle less what the detector leaves out (the demo's seven read
+# −358.5° of −360°), while a figure of eight turns about none and says nothing.
+MIN_ROTATION_DEG = 180.0
 
 
-def layout_check(item: FocusItem, corners) -> str:
+def lap_rotation(turns) -> int:
+    """+1 when a lap whose corners turn `turns` (signed degrees, + = left) runs anticlockwise, −1
+    clockwise, 0 when they do not add up to a direction (no corners, a figure of eight)."""
+    net = float(sum(turns))
+    return 0 if abs(net) < MIN_ROTATION_DEG else (1 if net > 0 else -1)
+
+
+def layout_check(item: FocusItem, corners, rotation: int = 0) -> str:
     """"" when today's corner over `item`'s stored window turns the way the stored one did, else
-    LAYOUT_OTHER_WAY or LAYOUT_NO_CORNER (cool/focus-verdict-gates).
+    LAYOUT_OTHER_WAY or LAYOUT_NO_CORNER (cool/focus-verdict-gates) — and first LAYOUT_REVERSED
+    when today's laps run the other way round from the baseline's (`rotation`, `lap_rotation`).
+
+    THE SAME TARMAC DRIVEN THE OTHER WAY ROUND (cool/layout-reversed-synth) is a kart track's usual
+    other layout: the same name, the same start line, the same lap length, every corner reversed
+    in order and in hand. The hand alone cannot see it: a stored window's fraction lands, on the
+    reversed lap, on whichever corner lies that far from the line the other way, and when that
+    corner happens to turn the stored way it passes. Measured on the demo's circuit driven in
+    reverse (two seeds, both orders): 3 of 7 windows refused, 4 compared, and they read "C5 —
+    1.00 s faster" and "C3 — 1.35 s faster than 1 Jun" between two different corners. Which way
+    round the lap runs is the test that sees it whole: every item refused, none compared.
 
     `corners`: today's (enter_frac, exit_frac, direction) per corner, on its own lap odometer; the
     corner read is the one overlapping the window most. A circuit's other layout carries the same
@@ -658,7 +687,10 @@ def layout_check(item: FocusItem, corners) -> str:
     An item that stored no direction (0), a caller that passes no corners (None), or a session
     whose best lap has no detected corner at all ([]) is not checked: the pair is compared as it
     always was rather than refused on a guess — a session with no corners anywhere says nothing
-    about which way the one under the window turns."""
+    about which way the one under the window turns. Nor is the rotation when either side does not
+    tell it (0: an item stored before it was, or a lap whose corners do not add up to a loop)."""
+    if rotation and item.rotation and rotation != item.rotation:
+        return LAYOUT_REVERSED
     if not corners or not item.direction:
         return ""
     best, hand = 0.0, 0
@@ -695,7 +727,7 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
     if then_total > 0 and now_total > 0:
         if abs(now_total / then_total - 1.0) > MAX_LAP_TOTAL_DRIFT:
             return BLOCK_GEOMETRY, f"{then_total:.0f} m vs {now_total:.0f} m"
-    layout = layout_check(item, now_ctx.get("corners"))
+    layout = layout_check(item, now_ctx.get("corners"), int(now_ctx.get("rotation") or 0))
     if layout:
         return BLOCK_LAYOUT, layout
     # PR #258's like-for-like pair, in its own order: "nothing written down" first, because a
@@ -816,10 +848,19 @@ _BLOCK_SENTENCE = {
 }
 
 # BLOCK_LAYOUT's words, per corner and for a list refused as a whole (`report_lines`).
+# A window with no corner over it today is not by itself another layout: a corner near the
+# detector's MIN_TURN_DEG (studio/corners.py) comes and goes with the line and the receiver. On
+# the demo's circuit with a 32.5° kink before C4 (`synth_gopro.reprofiled`), 6 of 12 seeds detect
+# it, and in all 36 pairs where the baseline did and today did not, the kink's line said "there's
+# no corner there today — a different layout?" beside the rest of the list measured level. So it
+# says what was measured, and names both readings.
 _LAYOUT_WHY_ONE = {LAYOUT_OTHER_WAY: "the corner there today turns the other way",
-                   LAYOUT_NO_CORNER: "there's no corner there today"}
+                   LAYOUT_NO_CORNER: "no corner was detected there today",
+                   LAYOUT_REVERSED: "today's laps run the other way round"}
 _LAYOUT_WHY_ALL = {LAYOUT_OTHER_WAY: "the corners there today turn the other way",
-                   LAYOUT_NO_CORNER: "there are no corners there today"}
+                   LAYOUT_NO_CORNER: "no corners were detected there today",
+                   LAYOUT_REVERSED: "today's laps run the other way round"}
+_LAYOUT_ASK = {LAYOUT_NO_CORNER: "too gentle to pick out, or a different layout"}
 
 
 def outcome_sentence(o: Outcome) -> str:
@@ -844,7 +885,8 @@ def outcome_sentence(o: Outcome) -> str:
         if o.blocker == BLOCK_FEW_LAPS:
             return f"{label} — can't say: {o.detail} through it today."
         if o.blocker == BLOCK_LAYOUT:
-            return f"{label} — can't say: {_LAYOUT_WHY_ONE[o.detail]} — a different layout?"
+            ask = _LAYOUT_ASK.get(o.detail, "a different layout")
+            return f"{label} — can't say: {_LAYOUT_WHY_ONE[o.detail]} — {ask}?"
         tail = f" ({o.detail})" if o.detail and o.blocker == BLOCK_GEOMETRY else ""
         return f"{label} — can't say: {_BLOCK_SENTENCE.get(o.blocker, 'not comparable')}{tail}."
     assert o.now is not None and o.delta is not None  # has_verdict implies both
@@ -938,8 +980,11 @@ def report_lines(report: Report) -> list[str]:
         if first.blocker == BLOCK_LAYOUT:
             details = {o.detail for o in outcomes}
             why = (_LAYOUT_WHY_ALL[first.detail] if len(details) == 1 else
-                   "the corners there today turn the other way or aren't there")
-            return [f"{who} — can't say: {why} — a different layout of the track?"]
+                   "the corners there today turn the other way or aren't there"
+                   if LAYOUT_REVERSED not in details else _BLOCK_SENTENCE[BLOCK_LAYOUT])
+            ask = (_LAYOUT_ASK.get(first.detail, "a different layout") if len(details) == 1
+                   else "a different layout")
+            return [f"{who} — can't say: {why} — {ask} of the track?"]
         return [f"{who} — can't say: "
                 f"{_BLOCK_SENTENCE.get(first.blocker, 'not comparable')}."]
     if len(outcomes) > 1 and kinds == {OUTCOME_SET_HERE}:
@@ -1009,7 +1054,12 @@ def report_headline(report: Report) -> str:
         return f"Focus list · {n} {noun} · no verdict on an older session"   # never "yet"
     if all(o.blocker == BLOCK_LAYOUT for o in report.outcomes):
         # Nor "yet" here: no later look at this session will make its corners the list's.
-        return f"Focus list · {n} {noun} · no verdict — {_BLOCK_SENTENCE[BLOCK_LAYOUT]}"
+        # Only "the layout looks different" when something measured says so: a list whose
+        # corners were all just not detected says that (`_LAYOUT_ASK`).
+        undetected = all(o.detail == LAYOUT_NO_CORNER for o in report.outcomes)
+        why = ((_LAYOUT_WHY_ONE if n == 1 else _LAYOUT_WHY_ALL)[LAYOUT_NO_CORNER] if undetected
+               else _BLOCK_SENTENCE[BLOCK_LAYOUT])
+        return f"Focus list · {n} {noun} · no verdict — {why}"
     if verdicts == 0:
         return f"Focus list · {n} {noun} · no verdict yet — {_refusal_summary(report)}"
     tail = f", {refused} without enough evidence" if refused else ""

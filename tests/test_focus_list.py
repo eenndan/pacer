@@ -24,7 +24,12 @@ What is asserted here, on inputs whose answer is known by construction:
     (library.PB_PRECISION_S), whatever the spread, so a verdict reads the same in both directions;
   * the LAYOUT: a stored corner whose window today lies on a corner turning the other way (the
     demo's circuit driven as its mirror image) is not compared, and the headline says the layout
-    looks different; no same-layout session of the demo's circuit is refused that way;
+    looks different; nor is any corner on the same tarmac driven the other way round, whose
+    laps run the other way (half its corners line up with a stored hand); no same-layout session of
+    the demo's circuit is refused that way, and a corner near the detection limit that today's
+    detector drops is said to be undetected, not called another layout; a reprofiled corner that
+    keeps its hand is compared — what the check cannot see — and every corner away from it reads as
+    on the unchanged layout;
   * the PANEL: the block is dormant until the app hands it a report, it names the corner its Add
     button would promote, the two gestures are signals (the window owns the store), and it yields
     its height to the ranked list exactly as the theme block does;
@@ -350,8 +355,9 @@ def test_a_corner_that_turns_the_other_way_today_is_not_compared():
                                          "way — a different layout?"), F.outcome_sentence(other)
     none = F.verdict([_layout_item(5, -1, 0.70, 0.75)], now, [_sample(4.2)], alike).outcomes[0]
     assert none.blocker == F.BLOCK_LAYOUT and none.delta is None, none
-    assert F.outcome_sentence(none) == ("C5 — can't say: there's no corner there today — a "
-                                        "different layout?"), F.outcome_sentence(none)
+    assert F.outcome_sentence(none) == ("C5 — can't say: no corner was detected there today — "
+                                        "too gentle to pick out, or a different layout?"), \
+        F.outcome_sentence(none)
     # The corner overlapping MOST decides: a window straddling both reads the left-hander here.
     straddle = F.verdict([_layout_item(6, +1, 0.19, 0.45)], now, [_sample(4.2)], alike).outcomes[0]
     assert straddle.has_verdict, straddle
@@ -497,10 +503,26 @@ _SWEEP_SEEDS = (2, 3, 4, 5, 6, 7)      # +3, +6, +7 hold such windows; the other
 _FOCUS_SESSIONS: dict = {}
 
 
+# The demo circuit rebuilt (`synth_gopro.reprofiled`, every other segment where it was): "t<k>" its
+# C6 tightened from 26 m to 12 m, same hand; "c<k>" its C3 a chicane, a 30° right then an 80°
+# left; "k<k>" (at DEMO_SEED + 100 + k) a 32.5° right-hand kink 45 m before C4, which the detector
+# picks out on 6 of 12 seeds (k0, k3, k4, k6, k8, k10).
+_KINK_DEG = 32.5
+
+
+def _layout(name: str):
+    from studio.dev import synth_gopro as sg
+    return {"t": lambda: sg.reprofiled(6, ("C", 70.0, 12.0)),
+            "c": lambda: sg.reprofiled(3, ("C", -30.0, 12.0), ("S", 6.0), ("C", 80.0, 12.0)),
+            "k": lambda: sg.reprofiled(4, ("C", -_KINK_DEG, 20.0), ("S", 45.0),
+                                       ("C", -(90.0 - _KINK_DEG), 18.0))}.get(name[0], lambda: None)()
+
+
 def _focus_session(name: str):
     """The demo ("demo") or the habit-free demo-circuit recording DEMO_SEED + k ("s<k>"), or that
-    recording driven on the circuit's mirror image, anticlockwise ("m<k>"), generated once per
-    process (the TemporaryDirectory is kept alive with them: sessions read lazily)."""
+    recording driven on the circuit's mirror image, anticlockwise ("m<k>"), or on the same circuit
+    the other way round ("r<k>"), or on a rebuilt layout (`_layout`), generated once per process
+    (the TemporaryDirectory is kept alive with them: sessions read lazily)."""
     if name not in _FOCUS_SESSIONS:
         from studio.dev import make_demo as md
         from studio.dev import synth_gopro as sg
@@ -511,9 +533,10 @@ def _focus_session(name: str):
             md.make(path, render=False)
             paths = [path]
         else:
-            paths = sg.generate(os.path.join(tmp.name, name), md.DEMO_SEED + int(name[1:]),
-                                md.DEMO_LAPS, chapters=1, origin=md.DEMO_ORIGIN,
-                                mirror=name.startswith("m")).paths
+            seed = md.DEMO_SEED + int(name[1:]) + (100 if name[0] == "k" else 0)
+            paths = sg.generate(os.path.join(tmp.name, name), seed, md.DEMO_LAPS, chapters=1,
+                                origin=md.DEMO_ORIGIN, mirror=name.startswith("m"),
+                                reverse=name.startswith("r"), layout=_layout(name)).paths
         _FOCUS_SESSIONS[name] = Session.load(paths)
     return _FOCUS_SESSIONS[name]
 
@@ -665,17 +688,19 @@ def _every_corner_report(a: str, b: str) -> F.Report:
 def test_the_mirrored_circuit_is_another_layout_and_gets_no_verdict():
     """The demo's corners on the same circuit driven as its mirror image (anticlockwise): same
     track, same lap length, every corner turning the other way. On main all seven read a verdict,
-    "C1 — 0.35 s faster than 1 Jun" among them, comparing a right-hander with a left-hander."""
+    "C1 — 0.35 s faster than 1 Jun" among them, comparing a right-hander with a left-hander. Its
+    laps run anticlockwise where the demo's run clockwise, so that is the refusal said (each
+    corner's hand is refused too: `test_a_corner_that_turns_the_other_way_today_is_not_compared`)."""
     for a, b in (("demo", "m7"), ("m7", "demo")):
         report = _every_corner_report(a, b)
         assert report.outcomes and report.n_verdicts == 0, \
             [F.outcome_sentence(o) for o in report.outcomes if o.has_verdict]
         assert all(
-            o.blocker == F.BLOCK_LAYOUT and o.detail == F.LAYOUT_OTHER_WAY and o.delta is None
+            o.blocker == F.BLOCK_LAYOUT and o.detail == F.LAYOUT_REVERSED and o.delta is None
             for o in report.outcomes), [(o.item.label, o.kind, o.blocker) for o in report.outcomes]
         for o in report.outcomes:
-            assert F.outcome_sentence(o) == (f"{o.item.label} — can't say: the corner there today "
-                                             f"turns the other way — a different layout?")
+            assert F.outcome_sentence(o) == (f"{o.item.label} — can't say: today's laps run the "
+                                             f"other way round — a different layout?")
         n = len(report.outcomes)
         assert F.report_headline(report) == (f"Focus list · {n} corners · no verdict — the layout "
                                              f"looks different today"), F.report_headline(report)
@@ -711,6 +736,126 @@ def test_same_layout_sessions_are_never_refused_and_claim_only_past_the_step():
     assert claims >= 6, f"only {claims} claims over the sweep; it has lost its teeth"
     print(f"ok same layout: {len(_SWEEP_SEEDS) * 2} pairs, no refusal, {claims} claims all past "
           f"the step and symmetric")
+
+
+# ------------------------------------------- reversed, reprofiled, marginal (cool/layout-reversed-synth)
+def test_which_way_round_a_lap_runs_is_read_off_its_corners_and_stored():
+    """`focus.lap_rotation`: the sign of the corners' net turn, or 0 when it does not add up to a
+    loop. An item carries it; one stored before it carries none and is not checked for it."""
+    assert F.lap_rotation([-100, -60, 50, -90, -130, 70, -100]) == -1
+    assert F.lap_rotation([100, 60, -50, 90, 130, -70, 100]) == 1
+    assert F.lap_rotation([]) == 0 and F.lap_rotation([90, -90, 120, -110]) == 0   # a figure of 8
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    now = {**_now(), "corners": [(0.14, 0.205, -1)], "rotation": 1}
+    clockwise = F.FocusItem(**{**vars(_layout_item(4, -1, 0.15, 0.20)), "rotation": -1})
+    o = F.verdict([clockwise], now, [_sample(4.2)], alike).outcomes[0]
+    assert (o.blocker, o.detail, o.delta) == (F.BLOCK_LAYOUT, F.LAYOUT_REVERSED, None), o
+    assert F.outcome_sentence(o) == ("C4 — can't say: today's laps run the other way round — a "
+                                     "different layout?"), F.outcome_sentence(o)
+    # Either side not telling is not checked: an item stored before the field, a lap that did not.
+    legacy = F.item_from_dict({k: v for k, v in F.item_to_dict(clockwise).items()
+                               if k != "rotation"})
+    assert legacy.rotation == 0
+    assert F.verdict([legacy], now, [_sample(4.2)], alike).outcomes[0].has_verdict
+    assert F.verdict([clockwise], {**now, "rotation": 0}, [_sample(4.2)],
+                     alike).outcomes[0].has_verdict
+    assert F.item_from_dict(F.item_to_dict(clockwise)) == clockwise
+    assert not F._valid_item({**F.item_to_dict(clockwise), "rotation": 2})
+    assert not F._valid_item({**F.item_to_dict(clockwise), "rotation": True})
+    print("ok rotation: read, stored, and checked only when both sides tell it")
+
+
+def test_the_same_tarmac_driven_the_other_way_round_gets_no_verdict():
+    """The demo's circuit driven in reverse: the same track, the same start line, the same lap
+    length to under a metre, every corner reversed in order and in hand. The hand test alone lets
+    through every stored window that lands on a reversed corner turning its way — on main the
+    demo's list read "C5 — 0.99 s faster" and "C3 — 0.30 s slower than 1 Jun" on r7, and
+    "C3 — 1.35 s faster" the other way, each between two different corners. Every corner is now
+    refused, once, for the reason measured."""
+    for a, b in (("demo", "r7"), ("r7", "demo")):
+        report = _every_corner_report(a, b)
+        now = _focus_session(b)
+        ctx = now.focus_context({"fingerprint": f"FP_{b}", "track": "Demo", "verified": True})
+        hand_only = [o for o in report.outcomes if not F.layout_check(o.item, ctx["corners"])]
+        assert len(hand_only) >= 3, f"{a} → {b}: the hand alone refuses all but " \
+            f"{len(hand_only)}; the case has lost its teeth"
+        assert report.outcomes and report.n_verdicts == 0, \
+            [F.outcome_sentence(o) for o in report.outcomes if o.has_verdict]
+        assert {(o.blocker, o.detail) for o in report.outcomes} == \
+            {(F.BLOCK_LAYOUT, F.LAYOUT_REVERSED)}, [F.outcome_sentence(o) for o in report.outcomes]
+        assert F.report_lines(report) == [
+            f"{F._corner_list(report.outcomes)} — can't say: today's laps run the other way round "
+            f"— a different layout of the track?"], F.report_lines(report)
+        n = len(report.outcomes)
+        assert F.report_headline(report) == (f"Focus list · {n} corners · no verdict — the layout "
+                                             f"looks different today"), F.report_headline(report)
+    print(f"ok reversed: {len(hand_only)} windows the hand passed, all refused / "
+          f"{F.report_lines(report)[0]}")
+
+
+def _deltas(report: F.Report) -> dict:
+    return {o.item.cid: (o.kind, o.delta) for o in report.outcomes}
+
+
+def test_a_reprofiled_corner_is_compared_and_the_rest_read_as_before():
+    """One corner rebuilt, the rest of the circuit where it was (`synth_gopro.reprofiled`). WHAT
+    THE CHECK CANNOT SEE, pinned so a change to it is a decision: a corner that keeps its hand is
+    compared, so the demo's C6 tightened from 26 m to 12 m reads ~0.6 s "slower", and its C3 made
+    a chicane (a 30° right the detector does not pick out, then an 80° left) ~0.7 s "slower" —
+    the time is the tarmac's, not the driver's. Every corner away from the change reads what the
+    unchanged layout on the same seed reads, within the timing step: same kind, Δ under 0.07 s
+    apart. (The chicane's next corner, C4, is left out: its approach is the chicane's exit.)"""
+    from studio import library
+    base = _deltas(_every_corner_report("demo", "s7"))
+    said = []
+    for name, changed, near in (("t7", 6, ()), ("c7", 3, (4,))):
+        got = _deltas(_every_corner_report("demo", name))
+        kind, delta = got[changed]
+        assert kind == F.OUTCOME_SLOWER and delta > 0.5, (name, changed, got[changed])
+        said.append(f"{name} C{changed} {delta:+.2f} s")
+        for cid, (kind, delta) in got.items():
+            if cid in (changed, *near):
+                continue
+            assert kind == base[cid][0] and abs(delta - base[cid][1]) < library.PB_PRECISION_S, \
+                (name, cid, got[cid], base[cid])
+    print(f"ok reprofiled: {', '.join(said)} compared; the rest as on s7")
+
+
+def test_a_corner_the_detector_drops_today_is_said_to_be_undetected():
+    """A 32.5° kink, the same layout both days: k0's detector picks it out and k1's does not (6
+    of 12 seeds do; in all 36 such ordered pairs main said "there's no corner there today — a
+    different layout?" beside the rest of the list measured level). The kink is still refused —
+    nothing measured it today — and the line says what was measured and names both readings; the
+    other corners keep their verdicts, and none is a claim. The other way round, k1's list has no
+    kink on it, and every corner gets a verdict."""
+    def kink(s):
+        return [c.cid for c in s.corners.corner_list()
+                if c.direction == -1 and c.turn_deg < 35.0 and 0.42 < c.enter / s.corners.basis()[1]
+                < 0.44]
+
+    assert kink(_focus_session("k0")) and not kink(_focus_session("k1")), \
+        "the kink is no longer detected on k0 alone; the case has lost its teeth"
+    (cid,) = kink(_focus_session("k0"))
+    report = _every_corner_report("k0", "k1")
+    for o in report.outcomes:
+        if o.item.cid == cid:
+            assert (o.blocker, o.detail, o.delta) == (F.BLOCK_LAYOUT, F.LAYOUT_NO_CORNER, None), o
+            assert F.outcome_sentence(o) == (f"C{cid} — can't say: no corner was detected there "
+                                             f"today — too gentle to pick out, or a different "
+                                             f"layout?"), F.outcome_sentence(o)
+        else:
+            assert o.kind == F.OUTCOME_UNCHANGED, F.outcome_sentence(o)
+    n = len(report.outcomes)
+    assert F.report_headline(report) == (f"Focus list · {n - 1} of {n} corners re-measured, 1 "
+                                         f"without enough evidence"), F.report_headline(report)
+    back = _every_corner_report("k1", "k0")
+    assert all(o.kind == F.OUTCOME_UNCHANGED for o in back.outcomes), \
+        [F.outcome_sentence(o) for o in back.outcomes]
+    # Every corner of a list undetected today: the headline says that, not "a different layout".
+    alone = F.Report(track="Demo", outcomes=[o for o in report.outcomes if o.item.cid == cid])
+    assert F.report_headline(alone) == ("Focus list · 1 corner · no verdict — no corner was "
+                                        "detected there today"), F.report_headline(alone)
+    print(f"ok marginal: {F.outcome_sentence(next(o for o in report.outcomes if o.item.cid == cid))}")
 
 
 # --------------------------------------------------------------------------------- the panel
