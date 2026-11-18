@@ -924,7 +924,8 @@ ROTATION_WORDS = {1: "anticlockwise", -1: "clockwise"}
 def rotation_of(e: dict) -> int:
     """The row's stored ``rotation``, −1 or +1, else 0 (absent, written before it, or unusable)."""
     v = e.get("rotation")
-    return v if v in (-1, 1) and not isinstance(v, bool) else 0
+    # An int, exactly: `1.0 in (-1, 1)` is true, and a float or a bool is not what this build writes.
+    return v if type(v) is int and v in (-1, 1) else 0
 
 
 def other_way(entry: dict, rotation: int | None) -> bool:
@@ -948,17 +949,27 @@ def both_ways(index: dict, track: str | None) -> bool:
     return {1, -1} <= seen
 
 
-def _set_aside(entries: list, track: str, rotation: int | None) -> bool:
-    """Whether a trustworthy best at `track` was left out of a comparison for running the other
-    way round — the one case a PB sentence says "this way round", so a first in a new direction
-    does not read as the track's first session."""
-    return any(e.get("track") == track and e.get("best") is not None and is_trustworthy(e)
-               and other_way(e, rotation) for e in entries)
+def _a_best_at(e: dict, track: str) -> bool:
+    """Whether `e` holds a trustworthy best at `track` — a row ``prior_best`` would compare."""
+    return e.get("track") == track and e.get("best") is not None and is_trustworthy(e)
+
+
+def _this_way(entries: list, track: str, rotation: int | None) -> dict:
+    """``{"this_way": True}`` when a PB sentence may say "this way round": a trustworthy best at
+    `track` was left out for running the other way round (so a first in a new direction does not
+    read as the track's first session), AND every best still compared is KNOWN to have run
+    `rotation`. A compared row that does not know its way (written before the field) keeps the
+    sentence direction-free: its figure may be a lap the other way round, and "this way round"
+    beside it would name a direction it does not have. Otherwise ``{}``."""
+    if not any(_a_best_at(e, track) and other_way(e, rotation) for e in entries):
+        return {}
+    kept = [e for e in entries if _a_best_at(e, track) and not other_way(e, rotation)]
+    return {"this_way": True} if all(rotation_of(e) == rotation for e in kept) else {}
 
 
 def _at(track: str, moment: dict) -> str:
     """The place a PB sentence names: the track, "this way round" when rows the other way round were
-    left out of it (``_set_aside``)."""
+    left out of it and every row it was compared with ran this way (``_this_way``)."""
     return f"{track} this way round" if moment.get("this_way") else track
 
 
@@ -1028,7 +1039,8 @@ def pb_moment(index: dict, track: str | None, best: float | None,
 
     `rotation` is which way round this session's laps ran: an OTHER recording known to run the
     other way round is not one of its priors at all (see "THE OTHER WAY ROUND"), and a moment
-    decided without one carries ``"this_way": True`` so its words say so. No `rotation` → no split."""
+    decided without one, and only against rows known to run its way, carries ``"this_way": True``
+    so its words say so (``_this_way``). No `rotation` → no split."""
     if not track or best is None or not math.isfinite(best):
         return None
     # Split by identity — by POSITION, never by value: two entries can compare equal.
@@ -1036,7 +1048,7 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     for e in index.get("entries", []):
         target = mine if fingerprint_key and e.get("fingerprint") == fingerprint_key else others
         target.append(e)
-    way = {"this_way": True} if _set_aside(others, track, rotation) else {}
+    way = _this_way(others, track, rotation)
     others = [e for e in others if not other_way(e, rotation)]
     later = [e for e in others if _recorded_after(e, date, start_ms)]
     if prior_best({"entries": later}, track) is not None:
@@ -1187,7 +1199,7 @@ def pb_standing_for(verified: bool, index: dict, track: str | None, best: float 
     prior = prior_best(one_way(index, rotation), track)
     if prior is None or best < prior:
         return None
-    way = {"this_way": True} if _set_aside(entries, track, rotation) else {}
+    way = _this_way(entries, track, rotation)
     return {"kind": "behind", "track": track, "best": float(best), "prior": float(prior),
             "gap": float(best) - float(prior), **way}
 

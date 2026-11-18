@@ -77,6 +77,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -86,6 +87,8 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -245,6 +248,7 @@ FP_ROLE = Qt.UserRole + 4       # the entry's fingerprint key (on the Date cell)
 FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the search box (on Date)
 COND_ROLE = Qt.UserRole + 6     # the row's session-record conditions tag, "" if untagged (on Date)
 HAS_RECORD_ROLE = Qt.UserRole + 7  # True when the row HAS a session record at all (on Date)
+KEEP_ROLE = Qt.UserRole + 8     # (", <way>", trust tag): what survives eliding (on Track)
 
 # The track-filter combo's two sentinels (a real track name never equals either): "all tracks" at
 # index 0, and an UNKNOWN-TRACK bucket appended when some recording's circuit isn't in the track
@@ -396,6 +400,40 @@ def _backup_when(mtime: float | None) -> str:
         return " taken " + datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
     except (ValueError, OSError, OverflowError):
         return ""
+
+
+class _KeepTailDelegate(QStyledItemDelegate):
+    """The Track column's delegate: a cell carrying a ``KEEP_ROLE`` way elides its NAME, never the
+    way. On a track driven both ways round the two rows differ only in that word — at the dialog's
+    default 740 px a right-elided "Synthetic demo …" hid exactly it — so the cell reads
+    "Synth…, anticlockwise" instead (cool/pb-per-direction). When even that does not fit, the name
+    keeps its first few letters and the trust tag after the way is what gives (it is also said by
+    the cell's italic). A cell without a way, or one that fits, is drawn exactly as Qt draws it;
+    the tooltip leads with the full label in every case (see ``_fill_rows``)."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        way, suffix = index.data(KEEP_ROLE) or ("", "")
+        text = option.text
+        if not way or not text.endswith(way + suffix):
+            return
+        style = option.widget.style() if option.widget else QApplication.style()
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, option, option.widget)
+        # The style's own text margin on each side (QCommonStyle's item-view text layout).
+        avail = rect.width() - 2 * (style.pixelMetric(QStyle.PM_FocusFrameHMargin, None,
+                                                      option.widget) + 1)
+        fm = option.fontMetrics
+        if fm.horizontalAdvance(text) <= avail:
+            return
+        name = text[:len(text) - len(way + suffix)]
+        least = fm.horizontalAdvance(name[:5] + "…")
+        room = avail - fm.horizontalAdvance(way + suffix)
+        if room >= least:
+            option.text = fm.elidedText(name, Qt.ElideRight, room) + way + suffix
+            return
+        shown = fm.elidedText(name, Qt.ElideRight, least)
+        option.text = shown + fm.elidedText(way + suffix, Qt.ElideRight,
+                                            max(0, avail - fm.horizontalAdvance(shown)))
 
 
 class _LapTimeAxis(pg.AxisItem):
@@ -703,6 +741,8 @@ class LibraryDialog(QDialog):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
+        self._track_delegate = _KeepTailDelegate(self.table)
+        self.table.setItemDelegateForColumn(_COL_TRACK, self._track_delegate)
         for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO, _COL_COND, _COL_TYRES):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The sample's mechanism, on the columns it is about (see the header-tip constants).
@@ -1228,6 +1268,9 @@ class LibraryDialog(QDialog):
             track_text = f"{track or _UNKNOWN_LABEL}{f', {way}' if way else ''}{suffix}"
 
             track_item = QTableWidgetItem(track_text)
+            if way:
+                # The way (and the tag after it) survives eliding; the name gives way instead.
+                track_item.setData(KEEP_ROLE, (f", {way}", suffix))
 
             # The SAMPLE both time cells beside it are a minimum over (see _COL_LAPS). Numeric
             # like them, so "sort by Laps" answers "is this ranking pace or session length?" in
@@ -1329,11 +1372,17 @@ class LibraryDialog(QDialog):
         """(the index the selected row's track is read from, the name it goes by): only the rows
         that ran the way the selected row did, or do not know, and "<track>, clockwise" — when the
         track has rows stored each way round (``library.both_ways``). Otherwise the whole index and
-        the plain name, exactly as before (cool/pb-per-direction)."""
+        the plain name, exactly as before (cool/pb-per-direction). The name says the way only when
+        EVERY row read under it is known to have run it: a row written before the field is still
+        read (it may be either way), and its best beside "anticlockwise" would name a direction it
+        does not have — so then the rows are the same, and the name is the plain one."""
         if not track or not rotation or not _library.both_ways(self._index, track):
             return self._index, track or ""
-        return (_library.one_way(self._index, rotation),
-                f"{track}, {_library.ROTATION_WORDS[rotation]}")
+        index = _library.one_way(self._index, rotation)
+        if all(_library.rotation_of(e) == rotation for e in index["entries"]
+               if e.get("track") == track):
+            return index, f"{track}, {_library.ROTATION_WORDS[rotation]}"
+        return index, track
 
     def _show_missing(self, entry: dict | None) -> None:
         """Say where a selected missing row's footage was, and why Open is off; clear both for any

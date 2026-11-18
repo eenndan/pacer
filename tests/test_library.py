@@ -2209,7 +2209,7 @@ def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
     from studio.library_controller import LibraryController
     from studio.session import Session
 
-    def _open(paths, laps, best, theo):
+    def _open(paths, laps, best, theo, rotation=0):
         s = Session.__new__(Session)          # bare; seed only what library_entry reads
         s._valid_cache = list(range(laps))
         s._best_cache = 0
@@ -2217,7 +2217,7 @@ def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
         s.laps = type("L", (), {"lap_time": staticmethod(lambda i: best)})()
         s.session_date = lambda: "2026-09-19"
         s.theoretical_best = lambda: theo
-        s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
+        s._lap_rotation = lambda: rotation   # 0: the way round unknown, as a row written before
         s.dropout_lap_ids = lambda: set()
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
         win.session = SimpleNamespace(
@@ -2233,15 +2233,21 @@ def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
             with open(c, "wb"):
                 pass
         _open([ch1, ch2], 36, 46.808, 46.196)                # the full drop-load
-        _open([ch2], 9, 46.808, 46.426)                      # chapter 2 alone (the CLI)
-        _open([ch1], 26, 46.862, 46.224)                     # chapter 1 alone (the CLI)
+        # The partials know their way round, the full row (written as before) does not: a partial
+        # open does not displace the fuller row, so it does not add its direction to it either
+        # (cool/pb-per-direction) — the row is the full measurement's, field for field.
+        _open([ch2], 9, 46.808, 46.426, rotation=-1)         # chapter 2 alone (the CLI)
+        _open([ch1], 26, 46.862, 46.224, rotation=-1)        # chapter 1 alone (the CLI)
         idx = library.load()
         assert len(idx["entries"]) == 1, idx["entries"]
         e = idx["entries"][0]
         assert (e["lap_count"], e["best"], e["theoretical"], len(e["paths"])) == \
             (36, 46.808, 46.196, 2), f"a partial open displaced the full recording's row: {e}"
+        assert "rotation" not in e, f"a partial open gave the kept full row a direction: {e}"
         summary = library.track_summary(idx, "Sandown Park")
         assert summary["best"] == 46.808, summary
+        _open([ch1, ch2], 36, 46.808, 46.196, rotation=-1)  # the full recording, re-opened
+        assert library.load()["entries"][0].get("rotation") == -1, "a covering open re-measures"
     print("ok app path: full -> ch2 -> ch1 leaves 36 laps · 0:46.808 · ideal 0:46.196")
 
 
@@ -3254,14 +3260,16 @@ def test_an_older_build_reads_a_row_that_carries_a_rotation():
 
 
 def test_the_library_charts_a_track_driven_both_ways_one_way_at_a_time():
-    """The Library on a track with rows each way round: each row names its way, and the summary,
-    the PB chart and the like-for-like line read only the selected row's way (a row that does not
-    know is in both). A track driven one way reads exactly as before."""
+    """The Library on a track with rows each way round, every one knowing its way: each row names
+    its way, and the summary, the PB chart and the like-for-like line read only the selected row's
+    way. A track driven one way reads exactly as before. (A row that does not know its way: the
+    mixed-library test below.)"""
     from studio import session_record as sr
     rows = [_way("GX019101", 44.929, -1), _way("GX019112", 45.105, 1, date="2026-06-02"),
-            _way("GX019100", 45.5, None, date="2026-05-01"),
+            _way("GX019100", 45.5, -1, date="2026-05-01"),
+            _way("GX019113", 45.6, 1, date="2026-05-02"),
             _entry("GX019200", track="Daytona MK", best=68.0, paths=[])]
-    rows[3]["rotation"] = 1
+    rows[4]["rotation"] = 1
     records = sr.empty_store()
     for e in rows:
         e["paths"] = [os.path.abspath(__file__)]       # present footage: an openable row
@@ -3271,30 +3279,154 @@ def test_the_library_charts_a_track_driven_both_ways_one_way_at_a_time():
     cells = {dlg.table.item(r, _COL_DATE).data(FP_ROLE): dlg.table.item(r, _COL_TRACK).text()
              for r in range(dlg.table.rowCount())}
     assert cells == {"GX9101": f"{_DEMO}, clockwise", "GX9112": f"{_DEMO}, anticlockwise",
-                     "GX9100": _DEMO, "GX9200": "Daytona MK"}, cells
+                     "GX9100": f"{_DEMO}, clockwise", "GX9113": f"{_DEMO}, anticlockwise",
+                     "GX9200": "Daytona MK"}, cells
     for r in range(dlg.table.rowCount()):
         dlg.table.selectRow(r)
         fp = dlg.table.item(r, _COL_DATE).data(FP_ROLE)
         summary, title, like = (dlg._summary.text(), dlg._pb_title.text(),
                                 dlg._compare_line.text())
-        if fp == "GX9112":
+        if fp in ("GX9112", "GX9113"):
             assert summary.startswith(f"{_DEMO}, anticlockwise  ·  2 sessions  ·  best 0:45.105"), \
                 summary
             assert title == f"PB progression — {_DEMO}, anticlockwise  (0:45.105 best over 2 " \
                 "sessions)", title
-            assert like == "", like            # it IS the best this way round
-        elif fp == "GX9101":
+            if fp == "GX9112":
+                assert like == "", like        # it IS the best this way round
+            else:
+                assert like.startswith("Comparable with your best here (2026-06-02)"), like
+        elif fp in ("GX9101", "GX9100"):
             assert summary.startswith(f"{_DEMO}, clockwise  ·  2 sessions  ·  best 0:44.929"), \
                 summary
             assert "clockwise  (0:44.929 best over 2 sessions)" in title, title
-        elif fp == "GX9100":           # knows no way: today's read, the whole track
-            assert summary.startswith(f"{_DEMO}  ·  3 sessions  ·  best 0:44.929"), summary
-            assert like.startswith("Comparable with your best here (2026-06-01)"), like
+            if fp == "GX9100":
+                assert like.startswith("Comparable with your best here (2026-06-01)"), like
         else:
             assert summary.startswith("Daytona MK  ·  1 session"), summary
             assert title == "PB progression — Daytona MK  (1 session: 1:08.000)", title
     dlg.deleteLater()
     print("ok library: two ways, two PB lines; one way, as before")
+
+
+def _mixed():
+    """The review's mixed library: two forward rows written before rows knew their way (f1 0:44.929,
+    f2 0:44.978), a forward row that knows it (clockwise), and the circuit in reverse."""
+    return [_way("GX019101", 44.929, None), _way("GX019102", 44.978, None, date="2026-05-31"),
+            _way("GX019103", 45.0, -1, date="2026-06-02"),
+            _way("GX019104", 45.094, 1, date="2026-06-03")]
+
+
+def test_a_mixed_library_never_says_this_way_round_beside_an_unknown_rows_figure():
+    """cool/pb-per-direction's review (P2): with old rows of unknown direction still compared — as
+    designed — "this way round" named a direction the quoted figure did not have: the reverse
+    session read "Best lap 0:45.094 at Synthetic demo circuit this way round, 0.16 s off your
+    personal best there (0:44.929)", the 0:44.929 a forward lap whose row predates the field. The
+    words now say the way only when every row compared is known to have run it."""
+    f1, f2, f3, r1 = _mixed()
+    std = {"fingerprint_key": "GX9104", "date": "2026-06-03", "rotation": 1}
+    idx = _index(f1, f2, f3)
+    behind = library.pb_standing_for(True, idx, _DEMO, 45.094, **std)
+    assert behind == {"kind": "behind", "track": _DEMO, "best": 45.094, "prior": 44.929,
+                      "gap": behind["gap"]}, behind            # no "this_way"
+    assert library.pb_standing_text(behind, fmt_time) == (
+        f"Best lap 0:45.094 at {_DEMO}, 0.16 s off your personal best there (0:44.929)."), \
+        library.pb_standing_text(behind, fmt_time)
+    assert library.previous_pb(idx, _DEMO, "GX9104", "2026-06-03", rotation=1)["fingerprint"] == \
+        "GX9101"                                              # the comparison is unchanged
+    beat = library.pb_moment_for(True, idx, _DEMO, 44.5, **std)
+    assert beat["kind"] == "beat" and beat["prior"] == 44.929 and "this_way" not in beat, beat
+    assert library.pb_standing_text(beat, fmt_time).startswith(
+        f"New personal best at {_DEMO}: 0:44.500"), library.pb_standing_text(beat, fmt_time)
+    # Back-catalogue too: a later forward row of unknown way is still compared, so no "this way".
+    later = _index(_way("GX019101", 44.929, None, date="2026-07-01"), f3)
+    fastest = library.pb_moment(later, _DEMO, 44.8, "GX9104", "2026-06-03", rotation=1)
+    assert fastest["kind"] == "fastest" and "this_way" not in fastest, fastest
+    # An unknown row that is NOT compared (untrustworthy) does not take the words away.
+    shaky = _index({**f1, "verified": False}, f3, _way("GX019105", 45.2, 1))
+    m = library.pb_moment_for(True, shaky, _DEMO, 45.1, **std)
+    assert m["kind"] == "beat" and m.get("this_way") is True, m
+    print("ok mixed: an unknown row compared → the line names no way")
+
+
+def test_a_mixed_library_dialog_names_no_way_over_rows_that_do_not_know_it():
+    """The same mixed library in the Library dialog: selecting the reverse row read "Synthetic demo
+    circuit, anticlockwise · 3 sessions · best 0:44.929" (and its chart title the same), the best a
+    forward lap of unknown way. The selected way's rows are still the ones read; the NAME drops the
+    way unless every one of them is known to have run it. Each row's own Track cell still names a
+    way it knows."""
+    rows = _mixed()
+    for e in rows:
+        e["paths"] = [os.path.abspath(__file__)]
+    dlg = LibraryDialog(_index(*rows), _OpenSpy())
+    cells = {dlg.table.item(r, _COL_DATE).data(FP_ROLE): dlg.table.item(r, _COL_TRACK).text()
+             for r in range(dlg.table.rowCount())}
+    assert cells == {"GX9101": _DEMO, "GX9102": _DEMO, "GX9103": f"{_DEMO}, clockwise",
+                     "GX9104": f"{_DEMO}, anticlockwise"}, cells
+    seen = {}
+    for r in range(dlg.table.rowCount()):
+        dlg.table.selectRow(r)
+        seen[dlg.table.item(r, _COL_DATE).data(FP_ROLE)] = (dlg._summary.text(),
+                                                            dlg._pb_title.text())
+    assert seen["GX9104"][0].startswith(f"{_DEMO}  ·  3 sessions  ·  best 0:44.929"), seen
+    assert seen["GX9104"][1].startswith(f"PB progression — {_DEMO}  (0:44.929 best over 3"), seen
+    assert seen["GX9103"][0].startswith(f"{_DEMO}  ·  3 sessions  ·  best 0:44.929"), seen
+    assert not any("clockwise" in t for pair in seen.values() for t in pair), seen
+    dlg.deleteLater()
+    print("ok mixed dialog: no way named over rows that do not know it")
+
+
+def test_the_way_round_survives_eliding_at_the_default_size():
+    """Review P3: at the dialog's default 740×740 the Track column is ~160 px, and Qt's right-elide
+    drew "Synthetic demo …" on both rows — hiding the one word that tells them apart. The cell now
+    elides the NAME and keeps the way ("Synth…, anticlockwise"); when even that is too wide the
+    trust tag after the way gives. Every tooltip still leads with the full label."""
+    from PySide6.QtWidgets import QStyleOptionViewItem
+    rows = [_way("GX019301", 44.929, -1), _way("GX019302", 45.105, 1, date="2026-06-02"),
+            _way("GX019304", 45.3, -1, date="2026-06-04", verified=False)]
+    for e in rows:
+        e["paths"] = [os.path.abspath(__file__)]
+    dlg = LibraryDialog(_index(*rows), _OpenSpy())
+    dlg.resize(740, 740)
+    dlg.show()
+    _APP.processEvents()
+    width = dlg.table.columnWidth(_COL_TRACK)
+    assert width < 200, f"the case needs a narrow Track column: {width}"
+    shown = {}
+    for r in range(dlg.table.rowCount()):
+        it = dlg.table.item(r, _COL_TRACK)
+        assert it.toolTip().startswith(it.text()), it.toolTip()
+        index = dlg.table.model().index(r, _COL_TRACK)
+        opt = QStyleOptionViewItem()
+        opt.initFrom(dlg.table.viewport())
+        opt.rect, opt.widget = dlg.table.visualRect(index), dlg.table
+        delegate = dlg.table.itemDelegateForColumn(_COL_TRACK) or dlg.table.itemDelegate()
+        delegate.initStyleOption(opt, index)       # the text the cell is painted with
+        assert opt.fontMetrics.horizontalAdvance(opt.text) < width, (opt.text, width)
+        shown[it.text()] = opt.text
+    for full, text in shown.items():
+        way = ", anticlockwise" if "anticlockwise" in full else ", clockwise"
+        assert way in text and text.startswith("Synt") and "…" in text, (full, text)
+    dlg.deleteLater()
+    print(f"ok eliding: {sorted(shown.values())}")
+
+
+def test_a_rotation_must_be_an_int():
+    """`1.0 in (-1, 1)` is true in Python, so a float passed the old check: only an int that is
+    not a bool is a direction; anything else costs the row its direction and keeps the row."""
+    for v in (1.0, -1.0, True, False, "1", None, 0, 2):
+        assert library.rotation_of({"rotation": v}) == 0, v
+        assert "rotation" not in library._norm_entry(_way("GX019101", 44.9, v)), v
+    assert library.rotation_of({"rotation": 1}) == 1 and library.rotation_of({"rotation": -1}) == -1
+    idx = _index(_way("GX019101", 44.929, 1.0))
+    assert len(idx["entries"]) == 1 and idx["entries"][0]["best"] == 44.929
+    # ...so a float row is compared as one that does not know: no "this way round" against it.
+    m = library.pb_moment_for(True, idx, _DEMO, 45.0, fingerprint_key="GX9104",
+                              date="2026-06-03", rotation=-1)
+    assert m is None, m
+    st = library.pb_standing_for(True, idx, _DEMO, 45.0, fingerprint_key="GX9104",
+                                 date="2026-06-03", rotation=-1)
+    assert st["kind"] == "behind" and "this_way" not in st, st
+    print("ok rotation: an int, never a float or a bool")
 
 
 # ------------------------------------------------------------------ runner
