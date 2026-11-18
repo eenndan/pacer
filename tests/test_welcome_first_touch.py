@@ -810,7 +810,10 @@ def test_a_missing_or_provisional_row_says_what_the_library_says():
                      dlg.table.item(i, _COL_TRACK).text() for i in range(dlg.table.rowCount())}
             for btn, row in zip(r, rows, strict=True):
                 track = btn.findChildren(QLabel)[0]
-                assert track._full == cells[tuple(row["paths"])], (track._full, cells)
+                # The missing row says it once on the welcome — in its "Footage not found" cell —
+                # where the Library window's Track cell adds "(file missing)".
+                said = track._full + ("  (file missing)" if btn is gone else "")
+                assert said == cells[tuple(row["paths"])], (said, cells)
             assert r[0].accessibleName().startswith("Track A, clockwise")
             assert r[1].accessibleName().startswith("Track A, anticlockwise")
             dlg.deleteLater()
@@ -872,6 +875,189 @@ def test_the_demo_link_opens_the_demo():
         _none_state()
         _no_rows()
     print("test_the_demo_link_opens_the_demo OK")
+
+
+# The two libraries a review broke the rows with: one missing recording with a 41- and a 70-character
+# file name, beside a track driven both ways, a provisional row and an unknown track.
+_LONG_NAMES = ("Track B practice 2026-11-12 session 3.MP4",
+               "Track B practice day 2026-11-12 afternoon session 3 of 4, wet tyres.MP4")
+
+
+def _long_name_library(name):
+    os.makedirs(_FOOT, exist_ok=True)
+    gone = _row(604, track="Track C", date="2026-11-12", missing=True)
+    gone["paths"] = [os.path.join(_FOOT, name)]
+    rows = [_row(600, date="2026-11-16", rotation=-1), _row(601, date="2026-11-14", rotation=1),
+            _row(602, track="Track B", date="2026-11-13", verified=False), gone,
+            _row(605, track=None, date="2026-11-10")]
+    _with_rows(rows)
+    return rows
+
+
+@_offline
+def test_a_long_missing_file_name_never_takes_the_other_rows():
+    """Review P1: the time-and-laps column was sized to the widest "Footage not found: <file>", so
+    one long file name squeezed EVERY row's track to its clipped tail (", cloc", "· pr", "(file")
+    or to nothing, and the best lap went with it. At both shipped sizes and the minimum window,
+    every row now draws a track that starts with its name, its date and — for footage that is
+    there — its best lap, each whole within its cell; the provisional italic survives; the missing
+    row says "Footage not found: …" once, the file name elided in the MIDDLE, the full sentence
+    on the hover."""
+    from studio.overlays import _ElidedLabel
+
+    _none_state()
+    try:
+        for name in _LONG_NAMES:
+            rows = _long_name_library(name)
+            for size in ((1059, 546), (1280, 800), (1440, 900)):
+                win = _window(size)
+                try:
+                    view = win.centralWidget()
+                    for btn, row in zip(view.recent_rows, rows, strict=True):
+                        cells = btn.findChildren(QLabel)
+                        for q in cells:
+                            assert q.text() and q.fontMetrics().horizontalAdvance(q.text()) \
+                                <= q.width(), (name, size, q.text(), q.width())
+                        track, date = cells[0], cells[1]
+                        want = (row["track"] or library.UNKNOWN_TRACK)[:5]
+                        assert track.text().startswith(want), (name, size, track.text())
+                        assert date.text() == row["date"], (name, size, date.text())
+                        if row is rows[3]:
+                            assert cells[2].text().startswith("Footage not found: "), cells[2].text()
+                            assert cells[2].text().endswith(".MP4") and "…" in cells[2].text()
+                            assert "(file missing)" not in track.text()   # said once
+                            assert btn.toolTip() == library.missing_footage_text(row)
+                        else:
+                            assert cells[2].text().startswith("best "), (name, size, cells[2].text())
+                        if row is rows[2]:
+                            assert track.font().italic() and cells[2].font().italic()
+                finally:
+                    win.close()
+                    _settle(0.1)
+        # Less room than the kept part itself: the name keeps its first letters, the way is
+        # elided — never a clipped tail.
+        lab = _ElidedLabel("Track A, anticlockwise  · provisional", ", anticlockwise  · provisional")
+        for room in (40, 70, 120):
+            got = lab.fitted(room)
+            assert got.startswith("Track") or got.startswith("Tra"), (room, got)
+            assert lab.fontMetrics().horizontalAdvance(got) <= max(
+                room, lab.fontMetrics().horizontalAdvance("Track…")), (room, got)
+    finally:
+        _no_rows()
+    print("test_a_long_missing_file_name_never_takes_the_other_rows OK (41 + 70 chars, 3 sizes)")
+
+
+@_offline
+def test_same_day_sessions_read_in_the_library_windows_order():
+    """Review P3: three recordings of one day appear on the welcome in the order the Library window
+    lists them (its Date sort keeps a tie in index order), so the two screens agree."""
+    from studio.library_dialog import _COL_DATE, PATHS_ROLE, LibraryDialog
+
+    rows = [{**_row(700 + k, date="2026-11-16"), "start_ms": 1000 + k} for k in range(3)]
+    rows.append(_row(703, date="2026-11-17"))
+    _with_rows(rows)
+    try:
+        win = _window((1440, 900))
+        try:
+            loaded = []
+            win._load = lambda paths, **kw: loaded.append(list(paths))
+            for btn in win.centralWidget().recent_rows:
+                btn.click()
+            dlg = LibraryDialog(library.load(), open_recording=lambda p: None)
+            listed = [list(dlg.table.item(i, _COL_DATE).data(PATHS_ROLE))
+                      for i in range(dlg.table.rowCount())]
+            dlg.deleteLater()
+            assert loaded == listed, (loaded, listed)
+        finally:
+            win.close()
+            _settle(0.1)
+    finally:
+        _no_rows()
+    print("test_same_day_sessions_read_in_the_library_windows_order OK")
+
+
+class _StubLibraryWindow:
+    """Stands in for LibraryDialog inside `LibraryController.open_library`: `exec` runs `act` with
+    the callbacks the real window would be handed (forget / clear), then closes."""
+    act = None
+
+    def __init__(self, index, open_recording, **kw):
+        self.index, self.kw = index, kw
+
+    def exec(self):
+        if _StubLibraryWindow.act is not None:
+            _StubLibraryWindow.act(self)
+        return 0
+
+
+@_offline
+def test_file_library_refreshes_the_welcome_after_forget_and_clear():
+    """Review P1 (privacy): File ▸ Library… (and ⌘L) left the welcome's list as it was after
+    Forget or Clear library, so a "cleared" session stayed one click from being re-opened and
+    re-indexed. Driven through the MENU action, with the real controller's forget/clear."""
+    from studio import library_controller
+
+    _none_state()
+    rows = [_row(800, date="2026-11-16"), _row(801, date="2026-11-10")]
+    real = library_controller.LibraryDialog
+    library_controller.LibraryDialog = _StubLibraryWindow
+    try:
+        _with_rows(rows)
+        win = _window((1440, 900))
+        try:
+            assert len(win.centralWidget().recent_rows) == 2
+            _StubLibraryWindow.act = lambda d: d.kw["forget_recording"](rows[0])
+            win._library_action.trigger()
+            _settle(0.1)
+            names = [b.accessibleName() for b in win.centralWidget().recent_rows]
+            assert len(names) == 1 and "2026-11-10" in names[0], names
+            _StubLibraryWindow.act = lambda d: d.kw["clear_library"]()
+            win._library_action.trigger()
+            _settle(0.1)
+            view = win.centralWidget()
+            assert library.load()["entries"] == []
+            assert view.recent_rows == [] and view.primary_btn is view.demo_btn, \
+                "the welcome still lists a cleared library"
+        finally:
+            win.close()
+            _settle(0.1)
+    finally:
+        _StubLibraryWindow.act = None
+        library_controller.LibraryDialog = real
+        _no_rows()
+    print("test_file_library_refreshes_the_welcome_after_forget_and_clear OK")
+
+
+@_offline
+def test_showing_the_welcome_never_writes_the_library():
+    """The welcome only READS the index: shown twenty times, and with the real Library window
+    opened and closed over it, `library.json` keeps its size, mtime and inode."""
+    from studio import library_controller
+
+    _none_state()
+    _with_rows([_row(900, date="2026-11-16"), _row(901, date="2026-11-01", missing=True)])
+    path = library.library_path()
+    before = os.stat(path)
+    real_exec = library_controller.LibraryDialog.exec
+    library_controller.LibraryDialog.exec = lambda self: 0
+    try:
+        win = _window((1440, 900))
+        try:
+            for _ in range(20):
+                win._show_welcome()
+            win.centralWidget().library_btn.click()
+            win._show_welcome(error="anything")
+            _settle(0.1)
+        finally:
+            win.close()
+            _settle(0.1)
+        after = os.stat(path)
+        assert (after.st_size, after.st_mtime_ns, after.st_ino) == \
+            (before.st_size, before.st_mtime_ns, before.st_ino), "showing the welcome wrote the Library"
+    finally:
+        library_controller.LibraryDialog.exec = real_exec
+        _no_rows()
+    print("test_showing_the_welcome_never_writes_the_library OK (21 welcomes + the Library window)")
 
 
 # ==================================================== (c) the brand moment
@@ -1013,6 +1199,10 @@ def _run_all():
     test_a_missing_or_provisional_row_says_what_the_library_says()
     test_the_list_is_current_when_the_welcome_comes_back()
     test_the_demo_link_opens_the_demo()
+    test_a_long_missing_file_name_never_takes_the_other_rows()
+    test_same_day_sessions_read_in_the_library_windows_order()
+    test_file_library_refreshes_the_welcome_after_forget_and_clear()
+    test_showing_the_welcome_never_writes_the_library()
     test_the_drop_glyph_is_the_apps_own_mark_and_it_composites()
     test_the_mark_is_the_icons_geometry_not_a_second_copy_of_it()
     test_the_mark_is_whole_on_a_retina_screen()

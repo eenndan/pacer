@@ -1415,12 +1415,13 @@ def track_text(entry: dict, both: set[str], *, missing: bool = False,
 
 
 def recent_entries(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
-    """The welcome screen's recent sessions: newest recording first (its date, then its first fix's
-    clock), undated rows last, at most `limit`. A no-laps row is left out — the Library quarantines
+    """The welcome screen's recent sessions: newest recording date first, undated rows last, at most
+    `limit` — ordered as the Library window orders them (its Date column, descending, ties kept in
+    index order), so the two screens agree. A no-laps row is left out — the Library quarantines
     it and Open Recent skips it, so there is nothing for one click to open. A row whose footage is
     missing is KEPT: it is still the recording, and the welcome greys it as the Library does."""
     rows = [e for e in index.get("entries", []) if e.get("lap_count")]
-    rows.sort(key=lambda e: (e.get("date") or "", _start_ms(e) or 0), reverse=True)
+    rows.sort(key=lambda e: e.get("date") or "", reverse=True)   # stable: ties keep index order
     return rows[:limit]
 
 
@@ -1435,6 +1436,10 @@ def recent_rows(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
     for e in recent_entries(index, limit):
         gone = entry_missing(e)
         label, way, tag = track_text(e, both, missing=gone)
+        if gone:
+            # The welcome says it ONCE, in its own "Footage not found: <file>" cell; the Library
+            # window's Track cell keeps its "(file missing)".
+            label, tag = label[:len(label) - len(tag)], ""
         out.append({"paths": list(e.get("paths") or []), "track": label, "way": way, "tag": tag,
                     "date": e.get("date"), "best": e.get("best"), "laps": e["lap_count"],
                     "trust": None if gone else trust_label(e), "name": entry_name(e),

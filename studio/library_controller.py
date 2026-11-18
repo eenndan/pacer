@@ -751,6 +751,13 @@ class LibraryController:
         # Every record write in there already refreshed both readers (`_records_changed`); this
         # re-read is for a callback that raised part-way, which the dialog swallows.
         self._records_changed()
+        # Forget, Clear, Restore and a track rename all change the index from in there. A welcome
+        # still on screen lists the rows again, or a "cleared" session would stay one click from
+        # being re-opened and re-indexed — whichever door opened this window (menu, ⌘L, the
+        # welcome's own "Library…", the PB card).
+        refresh = getattr(self.win, "_refresh_welcome", None)
+        if refresh is not None:
+            refresh()
 
     # -------------------------------------------------------- privacy: restore / forget / clear
     def _restore_library(self) -> dict:

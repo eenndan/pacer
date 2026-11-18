@@ -423,6 +423,40 @@ def test_the_demo_lands_on_its_debrief_and_keeps_nothing():
           "re-open; no row, PB, focus list, record or Open Recent entry")
 
 
+def test_the_demo_opened_from_the_welcome_never_reaches_the_library():
+    """cool/welcome-screen review: the welcome's demo button on a first visit (the clip cached, so
+    nothing is fetched), then the gesture that re-writes a row — Save as track and a line drag call
+    `refresh_library_entry`. That later write is guarded only by `_library_excludes`' demo check
+    (the load path returns before it), and no test reached it: the demo must still have no row, and
+    the welcome it hands back must still be the first-visit one."""
+    from studio import demo, library
+    with tempfile.TemporaryDirectory(prefix="landsright_") as folder, _fresh_app_support():
+        a, _b = _two_recordings(folder)
+        cached = demo.demo_cache_path()
+        os.makedirs(os.path.dirname(cached), exist_ok=True)
+        shutil.copyfile(a, cached)
+        with _window() as win:
+            welcome = win.centralWidget()
+            assert welcome.recent_rows == [] and welcome.primary_btn is welcome.demo_btn
+            done = {"v": False}
+            conn = win.loadFinished.connect(lambda: done.__setitem__("v", True))
+            welcome.demo_btn.click()
+            for _ in range(12000):
+                if done["v"]:
+                    break
+                _settle(0.01)
+            win.loadFinished.disconnect(conn)
+            assert done["v"], "the demo did not load from the welcome"
+            _settle(0.4)
+            win.library_ctl.refresh_library_entry()
+            assert not _rows(), ("the demo reached the Library", list(_rows()))
+            assert not os.path.exists(library.library_path()) or \
+                library.load()["entries"] == []
+            win._show_welcome()
+            assert win.centralWidget().recent_rows == [], "the welcome gained the demo"
+    print("ok: the demo opened from the welcome, then re-written by a gesture, keeps no row")
+
+
 def test_the_walkthrough_says_what_the_demo_keeps_in_the_apps_words():
     """docs/FIRST_LAP.md tells a reader what the demo's debrief will say it keeps; the app's line is
     the source, so an edit to one cannot leave the other promising something else."""

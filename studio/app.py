@@ -914,6 +914,7 @@ class StudioWindow(QMainWindow):
         load hands back lists the session just analysed at the top."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
+        self._welcome_error = (error, error_path)
         self.setCentralWidget(self._welcome_view(error, error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
             # Through the gate, not a bare setEnabled: a welcome screen reached by a FAILED reload
@@ -945,17 +946,17 @@ class StudioWindow(QMainWindow):
         view = WelcomeView(self._open_file, self._open_demo, error, error_path=error_path,
                            parent=parent, demo_label=DEMO_LABEL if cached else DEMO_GET_LABEL,
                            recent=recent, on_recent=lambda paths: self._load(paths),
-                           on_library=self._library_from_welcome if has_library else None)
+                           on_library=(lambda: self.library_ctl.open_library())
+                           if has_library else None)
         view.demo_btn.setToolTip(DEMO_OPEN_TIP if cached else demo_get_tip())
         return view
 
-    def _library_from_welcome(self):
-        """The welcome's "Library…": the Library window, and — if the welcome is still what is on
-        screen when it closes (nothing was opened from it) — the list read again, because a row
-        may have been forgotten, or the whole library cleared or restored, in there."""
-        self.library_ctl.open_library()
+    def _refresh_welcome(self):
+        """Read the welcome's list again if the welcome is what is on screen — called by
+        `LibraryController.open_library` once the Library window closes, since Forget, Clear and
+        Restore change the index from in there. The failure line on screen, if any, is kept."""
         if isinstance(self.centralWidget(), WelcomeView):
-            self._show_welcome()
+            self._show_welcome(*getattr(self, "_welcome_error", (None, None)))
 
     def _open_demo(self):
         """The welcome's demo button (overlays.DEMO_LABEL / DEMO_GET_LABEL): resolve the demo OFF

@@ -652,10 +652,11 @@ def test_trust_label_reasons_and_priority():
 
 def test_recent_rows_are_the_newest_recordings_in_the_librarys_words():
     """The welcome screen's list (cool/welcome-screen): newest RECORDING date first (the index has
-    no "last opened"; the first fix's clock breaks a same-day tie, undated rows last), at most
-    RECENT_LIMIT, no no-laps row (nothing to open), a missing-footage row KEPT with the Library's
-    missing sentence, and every label the Library window's (`track_text`): the trust tag on an
-    untrustworthy row, the way on a track driven both ways, the placeholder for no track."""
+    no "last opened"), a same-day tie kept in index order and undated rows last — the Library
+    window's own Date sort — at most RECENT_LIMIT, no no-laps row (nothing to open), a
+    missing-footage row KEPT with the Library's missing sentence (said once: its Track label drops
+    the dialog's "(file missing)"), and every other label the Library window's (`track_text`): the
+    trust tag on an untrustworthy row, the way on a track driven both ways, the placeholder."""
     with tempfile.TemporaryDirectory() as d:
         here = os.path.join(d, "GX010003.MP4")
         with open(here, "wb") as f:
@@ -674,15 +675,19 @@ def test_recent_rows_are_the_newest_recordings_in_the_librarys_words():
         assert len(got) == 8, [r["name"] for r in got]                      # the no-laps row is not offered
         assert [r["date"] for r in got] == ["2026-05-01"] * 3 + [
             "2026-04-01", "2026-03-01", "2026-02-01", "2026-01-01", None], got
-        assert got[0]["track"] == "Daytona MK" and got[1]["track"] == "Daytona MK"
-        assert got[2]["track"] == "Daytona MK  · provisional" and got[2]["trust"] == "provisional"
+        stems = [e["stem"] for e in library.recent_entries(index, 99)]
+        assert stems[:3] == ["GX010003", "GX010004", "GX010005"], stems   # index order, start_ms or not
+        assert got[0]["track"] == "Daytona MK  · provisional" and got[0]["trust"] == "provisional"
+        assert got[1]["track"] == "Daytona MK" and got[2]["track"] == "Daytona MK"
         assert got[3]["track"] == library.UNKNOWN_TRACK
         assert got[4]["track"] == "Daytona MK, anticlockwise" and got[4]["way"] == ", anticlockwise"
         assert got[5]["track"] == "Daytona MK, clockwise"
         gone = got[6]
         assert gone["missing"] == library.missing_footage_text(rows[0]) and gone["trust"] is None
         assert gone["missing"].startswith(f"{library.MISSING_FOOTAGE}: GX010001.MP4 was in")
-        assert gone["track"] == "Daytona MK  (file missing)"
+        assert gone["track"] == "Daytona MK" and gone["tag"] == ""
+        both = library.tracks_both_ways(index)
+        assert library.track_text(rows[0], both, missing=True)[0] == "Daytona MK  (file missing)"
         assert len(library.recent_rows(index)) == library.RECENT_LIMIT == 5
 
 

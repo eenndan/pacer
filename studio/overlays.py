@@ -125,7 +125,9 @@ class Anchors(NamedTuple):
 class _ElidedLabel(QLabel):
     """A row's track: elides its NAME to the room it is given and keeps `keep` (the way and the
     trust tag, `library.track_text`) whole — the Library's Track cell does the same
-    (cool/pb-per-direction). The full label stays on the row's tooltip and accessible name."""
+    (cool/pb-per-direction). When even the kept part does not fit beside the name's first letters,
+    the name keeps those letters and the kept part is elided too, never clipped. The full label
+    stays on the row's tooltip and accessible name."""
 
     def __init__(self, text: str, keep: str = ""):
         super().__init__(text)
@@ -133,14 +135,22 @@ class _ElidedLabel(QLabel):
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
-    def resizeEvent(self, event):
-        fm, room = self.fontMetrics(), self.width()
+    def fitted(self, room: int) -> str:
+        """The label as it is drawn in `room` px."""
+        fm = self.fontMetrics()
         if fm.horizontalAdvance(self._full) <= room:
-            self.setText(self._full)
-        else:
-            name = self._full[:len(self._full) - len(self._keep)]
-            left = max(0, room - fm.horizontalAdvance(self._keep))
-            self.setText(fm.elidedText(name, Qt.ElideRight, left) + self._keep)
+            return self._full
+        name = self._full[:len(self._full) - len(self._keep)]
+        least = fm.horizontalAdvance(name[:5] + "…")
+        left = room - fm.horizontalAdvance(self._keep)
+        if left >= least:
+            return fm.elidedText(name, Qt.ElideRight, left) + self._keep
+        shown = fm.elidedText(name, Qt.ElideRight, least)
+        return shown + fm.elidedText(self._keep, Qt.ElideRight,
+                                     max(0, room - fm.horizontalAdvance(shown)))
+
+    def resizeEvent(self, event):
+        self.setText(self.fitted(self.width()))
         super().resizeEvent(event)
 
 
@@ -178,6 +188,8 @@ class WelcomeView(QWidget):
     # failure sentences (app._load_failure_message plus the demo's) takes two at the card's
     # measure, and the file it names a third. tests/test_first_run_path.py sweeps every one.
     ERROR_LINES = 3
+    # The most of a recent row's width the time-and-laps tail may take (see _build_recent).
+    TAIL_SHARE = 0.4
 
     def __init__(self, on_open, on_demo, error: str | None = None, parent=None,
                  error_path: str | None = None, demo_label: str = DEMO_LABEL,
@@ -326,10 +338,17 @@ class WelcomeView(QWidget):
         texts = [self._row_texts(r) for r in self.recent]
         date_w = max(fm.horizontalAdvance(t["date"]) for t in texts)
         laps_w = max(fm.horizontalAdvance(t["laps"]) for t in texts)
-        # The time and the lap count share one TAIL, as wide as the widest missing-file line, so a
-        # missing row's file name lines up under the columns it replaces.
+        # The time and the lap count share one TAIL, which a missing row's "Footage not found:
+        # <file>" fills instead. CAPPED at TAIL_SHARE of the row: a file name is the user's and can
+        # be any length, and sized to it the column once took every other row's track name (a
+        # 41-character name left ", cloc" and "· pr"). Past the cap the FILE NAME is elided in the
+        # middle — its GX number and extension stay — and the whole sentence is on the hover.
+        content = (theme.WELCOME_CARD_W - 2 * (theme.SPACE_3XL + theme.SPACE_XXS)
+                   - 2 * (theme.SPACE_M + theme.BORDER_PX))
         tail = max([fm.horizontalAdvance(t["best"]) + theme.SPACE_L + laps_w for t in texts]
-                   + [fm.horizontalAdvance(t["missing"]) for t in texts if t["missing"]])
+                   + [min(fm.horizontalAdvance(t["missing"]), int(content * self.TAIL_SHARE))
+                      for t in texts if t["missing"]])
+        lead = f"{library.MISSING_FOOTAGE}: "
         for row, t in zip(self.recent, texts, strict=True):
             btn = QPushButton()
             btn.setObjectName("WelcomeRow")
@@ -345,7 +364,8 @@ class WelcomeView(QWidget):
             date.setFixedWidth(date_w)
             cells.addWidget(date)
             if t["missing"]:
-                gone = QLabel(t["missing"])
+                gone = QLabel(lead + fm.elidedText(
+                    row["name"], Qt.ElideMiddle, tail - fm.horizontalAdvance(lead)))
                 gone.setProperty("role", "Note")
                 gone.setFixedWidth(tail)
                 cells.addWidget(gone)
