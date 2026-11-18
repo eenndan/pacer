@@ -708,6 +708,7 @@ class StudioWindow(QMainWindow):
         self._library_unwritable = False
         self._pb_toast = None
         self.library_ctl = LibraryController(self, STATUS_MS)
+        self.library_ctl.on_library_closed = self._refresh_welcome
         self._build_menu()
         self._build_shortcuts()
         # MATERIALISE THE STATUS BAR NOW, not on the first message. QMainWindow.statusBar() CREATES
