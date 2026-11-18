@@ -22,6 +22,9 @@ Schema (version 4) — one JSON object::
         "date":        "YYYY-MM-DD" | null,  # GPS9 wall-clock date (Session.session_date)
         "start_ms":    <int epoch ms>,       # OPTIONAL: the first fix's UTC clock; absent on rows
                                              #   written before it (see ``identity``)
+        "rotation":    -1 | 1,               # OPTIONAL: which way round the laps ran
+                                             #   (`focus.lap_rotation`); absent when unknown or
+                                             #   written before it (see "THE OTHER WAY ROUND")
         "lap_count":   <int>,                # valid lap count — THE SAMPLE both time columns
                                              #   below are a minimum over (see the note)
         "best":        <float seconds> | null,    # best lap time
@@ -252,6 +255,9 @@ def _norm_entry(e: dict) -> dict:
         # without a wall clock) keeps exactly the keys it had, so it re-saves byte for byte, and an
         # unusable value costs the row only its start (`identity` then falls back to the date).
         **({"start_ms": start} if start is not None else {}),
+        # The same rule as `start_ms`: absent unless the row knows its direction, and a value that
+        # is not -1 or +1 costs the row only that (see `other_way`).
+        **({"rotation": way} if (way := rotation_of(e)) else {}),
         "lap_count": int(e["lap_count"]),
         "best": None if best is None else float(best),
         "theoretical": None if theo is None else float(theo),
@@ -898,9 +904,67 @@ def _short_day(date: str | None) -> str:
     return f"{int(day[8:10])} {_MONTHS[int(day[5:7]) - 1]}"
 
 
+# THE OTHER WAY ROUND (cool/pb-per-direction). A kart track is often run both ways: the same name,
+# the same start line, the same lap length, every corner reversed — and a different lap. Keyed by
+# track alone, the PB compared the two: on the demo's circuit, a forward session (clockwise, best
+# 0:44.929) then the same circuit driven in reverse (0:45.105) read "0.18 s off your personal best
+# there (0:44.929)", and the other order read "New personal best … 0.16 s faster than your previous
+# best", with a NEW PB mark on the lap card and a Compare that loaded the other layout's lap.
+#
+# So a row carries ``rotation`` — `focus.lap_rotation`, the definition the focus list's layout
+# check uses: +1 anticlockwise, −1 clockwise — and a row KNOWN to have run the other way round from
+# today is never a prior, a previous PB, nor on the PB chart beside today's. Whatever does not know
+# its direction is compared exactly as before: a row written before the field (it is absent, never
+# guessed, and is filled only when its own recording is opened again and re-measured — the way
+# every field of a row is refreshed, see "A ROW IS A MEASUREMENT"), and a session whose corners do
+# not add up to a loop (0).
+ROTATION_WORDS = {1: "anticlockwise", -1: "clockwise"}
+
+
+def rotation_of(e: dict) -> int:
+    """The row's stored ``rotation``, −1 or +1, else 0 (absent, written before it, or unusable)."""
+    v = e.get("rotation")
+    return v if v in (-1, 1) and not isinstance(v, bool) else 0
+
+
+def other_way(entry: dict, rotation: int | None) -> bool:
+    """True only when `entry` and a session running `rotation` are KNOWN to run opposite ways."""
+    mine = rotation if rotation in (-1, 1) else 0
+    theirs = rotation_of(entry)
+    return bool(mine and theirs and mine != theirs)
+
+
+def one_way(index: dict, rotation: int | None) -> dict:
+    """`index` without the rows known to run the other way round from `rotation` (``other_way``):
+    the rows a session running `rotation` may be compared with. Everything, for a `rotation` of 0."""
+    return {**index, "entries": [e for e in index.get("entries", [])
+                                 if not other_way(e, rotation)]}
+
+
+def both_ways(index: dict, track: str | None) -> bool:
+    """Whether `track` has rows stored running each way round — the only case in which a surface
+    names the direction (a track driven one way reads exactly as it always has)."""
+    seen = {rotation_of(e) for e in index.get("entries", []) if track and e.get("track") == track}
+    return {1, -1} <= seen
+
+
+def _set_aside(entries: list, track: str, rotation: int | None) -> bool:
+    """Whether a trustworthy best at `track` was left out of a comparison for running the other
+    way round — the one case a PB sentence says "this way round", so a first in a new direction
+    does not read as the track's first session."""
+    return any(e.get("track") == track and e.get("best") is not None and is_trustworthy(e)
+               and other_way(e, rotation) for e in entries)
+
+
+def _at(track: str, moment: dict) -> str:
+    """The place a PB sentence names: the track, "this way round" when rows the other way round were
+    left out of it (``_set_aside``)."""
+    return f"{track} this way round" if moment.get("this_way") else track
+
+
 def pb_moment(index: dict, track: str | None, best: float | None,
               fingerprint_key: str | None = None, date: str | None = None,
-              start_ms: int | None = None) -> dict | None:
+              start_ms: int | None = None, rotation: int | None = None) -> dict | None:
     """Decide the "new personal best" moment for a freshly-analysed session, comparing its `best`
     lap (seconds) against `track`'s ``prior_best`` in the CURRENT index (BEFORE this session is
     upserted). Pacer-free — the caller (app) supplies the values from Session accessors and owns the
@@ -960,7 +1024,11 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     the only moment left is ``{"kind": "fastest", "track", "best", "date", "prior",
     "improvement"}`` when its best is under EVERY other recording's (``prior`` = the fastest of
     them, today's PB), with the same own-best rule as a beat. A slower one gets None here and its
-    debrief line reads "behind" today's PB (``pb_standing_for``). No `date` → no split."""
+    debrief line reads "behind" today's PB (``pb_standing_for``). No `date` → no split.
+
+    `rotation` is which way round this session's laps ran: an OTHER recording known to run the
+    other way round is not one of its priors at all (see "THE OTHER WAY ROUND"), and a moment
+    decided without one carries ``"this_way": True`` so its words say so. No `rotation` → no split."""
     if not track or best is None or not math.isfinite(best):
         return None
     # Split by identity — by POSITION, never by value: two entries can compare equal.
@@ -968,6 +1036,8 @@ def pb_moment(index: dict, track: str | None, best: float | None,
     for e in index.get("entries", []):
         target = mine if fingerprint_key and e.get("fingerprint") == fingerprint_key else others
         target.append(e)
+    way = {"this_way": True} if _set_aside(others, track, rotation) else {}
+    others = [e for e in others if not other_way(e, rotation)]
     later = [e for e in others if _recorded_after(e, date, start_ms)]
     if prior_best({"entries": later}, track) is not None:
         bar = prior_best({"entries": others}, track)
@@ -975,21 +1045,22 @@ def pb_moment(index: dict, track: str | None, best: float | None,
         if bar is None or (own and min(own) < bar) or not best < bar:
             return None
         return {"kind": "fastest", "track": track, "best": float(best), "date": date,
-                "prior": float(bar), "improvement": float(bar) - float(best)}
+                "prior": float(bar), "improvement": float(bar) - float(best), **way}
     prior = prior_best({"entries": others}, track)
     if prior is None:
-        return None if mine else {"kind": "first", "track": track, "best": float(best)}
+        return None if mine else {"kind": "first", "track": track, "best": float(best), **way}
     own = [float(e["best"]) for e in mine if e.get("best") is not None and is_trustworthy(e)]
     if own and min(own) < prior:
         return None
     if best < prior:
         return {"kind": "beat", "track": track, "best": float(best),
-                "prior": float(prior), "improvement": float(prior) - float(best)}
+                "prior": float(prior), "improvement": float(prior) - float(best), **way}
     return None
 
 
 def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = None,
-                date: str | None = None, start_ms: int | None = None) -> dict | None:
+                date: str | None = None, start_ms: int | None = None,
+                rotation: int | None = None) -> dict | None:
     """The library ROW a new personal best beat — the entry holding `track`'s fastest trustworthy
     best among the OTHER recordings (board review PS-B4: "compare with your previous PB").
 
@@ -998,18 +1069,20 @@ def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = No
     trustworthy subset (``best_entry``), so the row and the number the PB line quotes are one
     fact: a recording can no more be its own previous PB here than there. None when there is no
     such row (no track, or no other trustworthy best). `date` and `start_ms` are this session's
-    day and first-fix clock: a row recorded LATER is never its "previous" PB (``_recorded_after``)."""
+    day and first-fix clock: a row recorded LATER is never its "previous" PB (``_recorded_after``),
+    nor one run the other way round from `rotation` (``other_way``)."""
     if not track:
         return None
     others = [e for e in index.get("entries", [])
               if not (fingerprint_key and e.get("fingerprint") == fingerprint_key)
-              and not _recorded_after(e, date, start_ms)]
+              and not _recorded_after(e, date, start_ms) and not other_way(e, rotation)]
     return best_entry({"entries": others}, track)
 
 
 def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | None,
                   degraded: bool = False, fingerprint_key: str | None = None,
-                  date: str | None = None, start_ms: int | None = None) -> dict | None:
+                  date: str | None = None, start_ms: int | None = None,
+                  rotation: int | None = None) -> dict | None:
     """``pb_moment`` gated on BOTH timing axes: returns None (never celebrates) when either
 
       * `verified` is False (TIMING TRUST) — a lap number referenced to an arbitrary provisional
@@ -1025,10 +1098,10 @@ def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | 
     key, forwarded to ``pb_moment``, which partitions the index on it so a recording is compared
     against the OTHER recordings rather than against itself (see there), and `date` the session's
     recorded day and `start_ms` its first-fix clock, which keep a later row from being one of its
-    priors (see there too)."""
+    priors (see there too), and `rotation` which way round its laps ran (see there as well)."""
     if not verified or degraded:
         return None
-    return pb_moment(index, track, best, fingerprint_key, date, start_ms)
+    return pb_moment(index, track, best, fingerprint_key, date, start_ms, rotation)
 
 
 def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
@@ -1036,8 +1109,9 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     `fmt_time` (studio._signal.fmt_time — kept out of this pacer-free module so it stays Qt/format-
     agnostic and testable). A "beat" leads with the celebration + the gap to the old PB — unless the
     gap is inside timing precision, when it says the two are level instead (``PB_PRECISION_S``); a
-    "first" is a gentler acknowledgement. The one place the celebration wording lives."""
-    track = moment["track"]
+    "first" is a gentler acknowledgement. The one place the celebration wording lives. A moment
+    decided without the sessions run the other way round names the track "this way round"."""
+    track = _at(moment["track"], moment)
     best = fmt_time(moment["best"])
     if moment["kind"] == "fastest":
         # Back-catalogue, not news: the prior is a LATER session's, so neither "previous" nor
@@ -1079,14 +1153,16 @@ def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
     # first session on this track" (board review UX-9a). The words are the debrief's own first-open
     # line (pb_standing_text), so the card and the debrief say one thing one way.
     return (
-        "First session logged here",
+        "First session logged this way round" if moment.get("this_way")
+        else "First session logged here",
         f"{track} — best lap {best}, the time to beat next time.",
     )
 
 
 def pb_standing_for(verified: bool, index: dict, track: str | None, best: float | None,
                     degraded: bool = False, fingerprint_key: str | None = None,
-                    date: str | None = None, start_ms: int | None = None) -> dict | None:
+                    date: str | None = None, start_ms: int | None = None,
+                    rotation: int | None = None) -> dict | None:
     """Where a session's best lap stands against its track's personal best — the debrief's one
     PB line (board review PS-B1). ``pb_moment_for``'s answer when there is one (``beat`` /
     ``first``), and otherwise, for a recording the index does NOT hold yet, ``{"kind": "behind",
@@ -1097,9 +1173,10 @@ def pb_standing_for(verified: bool, index: dict, track: str | None, best: float 
     was measured and refused (studio/docs/refused-2026-09.md §8). A recording already in the index
     gets only its moment — its own row may be the PB, and "behind" would then be false. A session
     recorded before a later trusted row (`date`, `start_ms`) gets ``fastest`` or "behind" today's PB, never
-    ``first`` or ``beat`` (``pb_moment``)."""
+    ``first`` or ``beat`` (``pb_moment``). "Behind" is measured only against the rows that ran the
+    way `rotation` did, or do not know (``one_way``)."""
     moment = pb_moment_for(verified, index, track, best, degraded, fingerprint_key, date,
-                           start_ms)
+                           start_ms, rotation)
     if moment is not None or not verified or degraded or not track:
         return moment
     if best is None or not math.isfinite(best):
@@ -1107,11 +1184,12 @@ def pb_standing_for(verified: bool, index: dict, track: str | None, best: float 
     entries = index.get("entries", [])
     if fingerprint_key and any(e.get("fingerprint") == fingerprint_key for e in entries):
         return None
-    prior = prior_best(index, track)
+    prior = prior_best(one_way(index, rotation), track)
     if prior is None or best < prior:
         return None
+    way = {"this_way": True} if _set_aside(entries, track, rotation) else {}
     return {"kind": "behind", "track": track, "best": float(best), "prior": float(prior),
-            "gap": float(best) - float(prior)}
+            "gap": float(best) - float(prior), **way}
 
 
 def pb_standing_text(standing: dict, fmt_time) -> str:
@@ -1119,7 +1197,7 @@ def pb_standing_text(standing: dict, fmt_time) -> str:
     one line, since the debrief replaces the card rather than repeating it. A best lap within timing
     precision of the PB, either side of it, is "level with your personal best there": one rule in
     both directions, so a 0.004 s beat is not "0.00 s faster" and a 0.03 s deficit not "0.03 s off"."""
-    track, best = standing["track"], fmt_time(standing["best"])
+    track, best = _at(standing["track"], standing), fmt_time(standing["best"])
     if standing["kind"] in ("beat", "fastest", "behind"):
         gap = standing["gap" if standing["kind"] == "behind" else "improvement"]
         if within_timing_precision(gap):

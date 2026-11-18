@@ -28,6 +28,9 @@ Pinned here:
      open's debrief with its pre-fill marked "Pacer's default", a focus edit and a Mark-dry click
      marked "by hand", and none on a re-open. The pre-fill writes focus.json with no click, so
      without these lines a race-day read could not tell a list he touched from one he left.
+  5. THE OTHER WAY ROUND on the real window (cool/pb-per-direction): the demo, then its circuit
+     forward, in reverse and faster in reverse: the reverse is a first "this way round" (no PB line
+     against the forward lap, no Compare, no card mark) and the faster reverse a PB over it.
 
 Run: python tests/test_debrief_landing.py   (~10 s; the pixi env's ffmpeg writes the video trak)
 """
@@ -536,6 +539,98 @@ def test_the_journey_on_the_real_window():
                 setattr(QMessageBox, k, fn)
     print(f"ok journey: {short} promoted, C{gone} dropped in one click, Esc to Corners, the "
           f"second open filled the slot with C{gone} and reached a verdict in one click")
+
+
+def _way_recordings(folder: str) -> list[str]:
+    """The demo's circuit forward (seed 1), then in reverse twice (seeds 4 and 6, 0:45.142 then
+    0:45.044), each under its own recording number: every synthetic recording is GX019001, and the
+    Library would see three as one."""
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    out = []
+    for n, (off, rev) in zip(("9301", "9302", "9303"), ((1, False), (4, True), (6, True)),
+                             strict=True):
+        key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev)
+        if key not in _GEN:
+            gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
+            rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
+                              origin=key[3], reverse=rev)
+            _GEN[key] = (gen, rec.paths[0])
+        os.makedirs(os.path.join(folder, n))
+        out.append(os.path.join(folder, n, f"GX01{n}.MP4"))
+        shutil.copyfile(_GEN[key][1], out[-1])
+    return out
+
+
+def test_a_personal_best_is_never_compared_with_the_other_way_round():
+    """cool/pb-per-direction, on the real window, jailed: the shipped demo (lands, keeps nothing,
+    as before), then the demo's circuit forward, then in reverse, then a faster reverse. Before, the
+    first reverse read "0.18 s off your personal best there" against the forward lap (and the other
+    order "New personal best … 0.16 s faster"). Now: a first this way round, no Compare, no mark on
+    its lap card; and the faster reverse IS a personal best, over the reverse lap."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio import share_card
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    from studio.library_controller import DEMO_DEBRIEF_LINE
+
+    boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information", "question")}
+    for k in boxes:
+        setattr(QMessageBox, k, staticmethod(lambda *a, **_kw: (_ for _ in ()).throw(
+            AssertionError(f"a modal opened: {a[1:3]}"))))
+    saved_env = os.environ.get("PACER_DEMO_MP4")
+    with tempfile.TemporaryDirectory(prefix="debrief_rec_") as folder, _fresh_app_support():
+        demo = os.path.join(folder, "demo", "GX019000.MP4")
+        os.makedirs(os.path.dirname(demo))
+        md.make(demo, render=False)
+        os.environ["PACER_DEMO_MP4"] = demo
+        fwd, rev, faster = _way_recordings(folder)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+
+        def said():
+            ctl = win.library_ctl
+            card = share_card.card_data(win.session, pb_standing=ctl.pb_standing,
+                                        prior_date=(ctl.previous_pb or {}).get("date"))
+            return (ctl.debrief_pb_line(), card.pb, (ctl.previous_pb or {}).get("fingerprint"),
+                    ctl.offers_pb_compare(ctl.pb_standing))
+
+        try:
+            _open(win, demo)
+            assert win.library_ctl.debrief_pb_line() == DEMO_DEBRIEF_LINE
+            assert library.load()["entries"] == [], "the demo kept a row"
+            _open(win, fwd)
+            track, t = win.session.track_name, fmt_time(win.session.lap_time(
+                win.session.best_lap_id()))
+            assert said() == (f"First session logged at {track}: best lap {t}, the time to beat "
+                              "next time.", "", None, False), said()
+            _open(win, rev)
+            slow = fmt_time(win.session.lap_time(win.session.best_lap_id()))
+            assert win.view.is_debrief()
+            assert said() == (f"First session logged at {track} this way round: best lap {slow}, "
+                              "the time to beat next time.", "", None, False), said()
+            assert "personal best" not in win.view.opportunities.debrief_block.full_text()
+            _open(win, faster)
+            fast = win.session.lap_time(win.session.best_lap_id())
+            line, mark, prev, compare = said()
+            assert line == (f"New personal best at {track} this way round: {fmt_time(fast)}, "
+                            f"0.10 s faster than your previous best ({slow})."), line
+            assert mark == "NEW PB · −0.10 s vs 1 Jun" and prev == "GX9302" and compare, said()
+            rows = {e["fingerprint"]: e.get("rotation") for e in library.load()["entries"]}
+            assert rows == {"GX9301": -1, "GX9302": 1, "GX9303": 1}, rows
+        finally:
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+            for k, fn in boxes.items():
+                setattr(QMessageBox, k, fn)
+            if saved_env is None:
+                os.environ.pop("PACER_DEMO_MP4", None)
+            else:
+                os.environ["PACER_DEMO_MP4"] = saved_env
+    print(f"ok other way round: a first this way round at {slow}, then a PB at {fmt_time(fast)}")
 
 
 def test_esc_returns_a_driver_who_never_dragged_a_splitter_to_the_default_grid():

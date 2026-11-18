@@ -271,6 +271,7 @@ def _window(best, laps, track=_TRACK):
     s.laps = type("L", (), {"lap_time": staticmethod(lambda i: best)})()
     s.session_date = lambda: "2026-09-05"
     s.theoretical_best = lambda: best - 1.0
+    s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
     s.dropout_lap_ids = lambda: set()
 
     win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)

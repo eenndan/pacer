@@ -3492,6 +3492,9 @@ class Session:
             # The first fix's UTC clock (0 = none, dropped on store): what tells another camera's
             # recording with this GoPro number apart without trusting a local date (library.identity).
             "start_ms": int(self._wall_clock_ms()[0]),
+            # Which way round the laps ran (0 = can't tell, dropped on store): a PB is compared
+            # only with sessions run the same way round (library "THE OTHER WAY ROUND").
+            "rotation": self._lap_rotation(),
             "lap_count": len(self.valid_lap_ids()),
             "best": best,
             "theoretical": self.theoretical_best(),

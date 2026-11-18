@@ -24,7 +24,11 @@ Covered:
     seconds) through the same fmt_time the table uses; a filter matching nothing says so, counts
     what is on screen and drops the de-selected row's axis range; the Unknown-track filter bucket
     reaches null-track rows; a Track cell's tooltip carries its own elided label + the filename;
-    and the header/clear-confirm plurals come from the module's own _plural.
+    and the header/clear-confirm plurals come from the module's own _plural;
+  * the other way round (cool/pb-per-direction): a row stores which way round its laps ran, a PB is
+    compared only with rows run the same way (or that do not know, compared exactly as before),
+    the Library names each way on a track driven both ways and charts one way at a time, and the
+    field is additive: an old file re-saves byte for byte and an older build ignores the key.
 
 Run: python tests/test_library.py   (no pacer, no telemetry file)
 """
@@ -75,6 +79,7 @@ from studio.library_dialog import (  # noqa: E402
     _PB_PLOT_MAX_H,
     _SCREEN_MARGIN,
     _UNKNOWN_TRACK,
+    FP_ROLE,
     MISSING_ROLE,
     NUM_ROLE,
     PRIVACY_NOTE,
@@ -2091,6 +2096,7 @@ def test_library_entry_stores_absolute_paths():
     s.laps = type("L", (), {"lap_time": staticmethod(lambda i: 68.4)})()
     s.session_date = lambda: "2024-05-01"
     s.theoretical_best = lambda: 67.9
+    s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
     # Trust-flag accessors (library schema v2). timing_verified reads track_name (set → Verified)
     # and timing_quality is getattr-guarded to high-quality on a bare Session; dropout_lap_ids walks
     # real lap columns absent here, so stub it (this recording has no dropout lap).
@@ -2128,6 +2134,7 @@ def test_library_entry_dropout_flag_describes_the_BEST_lap_only():
         s.laps = type("L", (), {"lap_time": staticmethod(lambda i: 68.4)})()
         s.session_date = lambda: "2024-05-01"
         s.theoretical_best = lambda: 67.9
+        s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
         s.dropout_lap_ids = lambda: set(dropouts)
         return s
 
@@ -2210,6 +2217,7 @@ def test_partial_opens_never_displace_the_full_recordings_row(monkeypatch):
         s.laps = type("L", (), {"lap_time": staticmethod(lambda i: best)})()
         s.session_date = lambda: "2026-09-19"
         s.theoretical_best = lambda: theo
+        s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
         s.dropout_lap_ids = lambda: set()
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
         win.session = SimpleNamespace(
@@ -3097,6 +3105,196 @@ def test_u2_pb_title_total_agrees_with_the_summary_when_sessions_are_left_out():
     dlg1._show_pb("MK")
     assert "(1 of 2 sessions: 1:10.000)" in dlg1._pb_title.text(), dlg1._pb_title.text()
     dlg1.deleteLater()
+
+
+# ------------------------------- the other way round is another lap (cool/pb-per-direction)
+_DEMO = "Synthetic demo circuit"
+
+
+def _way(stem, best, rotation, *, date="2026-06-01", **kw):
+    """A row of the demo's circuit run `rotation` round (+1 anticlockwise, −1 clockwise, None for a
+    row written before rows knew)."""
+    e = _entry(stem, track=_DEMO, date=date, best=best, **kw)
+    if rotation is not None:
+        e["rotation"] = rotation
+    return e
+
+
+def _index(*rows):
+    idx = library.empty_index()
+    for r in rows:
+        library.upsert(idx, r)
+    return idx
+
+
+def test_a_lap_the_other_way_round_is_never_a_personal_best_to_compare_with():
+    """Measured on the real window over the demo's circuit (seed 1 forward, seed 2 in reverse): the
+    reverse session read "0.18 s off your personal best there (0:44.929)" — a forward lap — and the
+    other order read "New personal best … 0.16 s faster than your previous best", with a NEW PB
+    mark on its lap card and a Compare that loaded the other layout's lap. Every PB surface reads
+    these four functions, so each is held here: the first session in a new direction is a FIRST,
+    said "this way round"; a slower or a faster one is neither behind nor a beat; no previous PB."""
+    fwd = _index(_way("GX019101", 44.929, -1))
+    key, std = "GX9112", {"fingerprint_key": "GX9112", "date": "2026-06-02"}
+    for best in (45.105, 44.500):          # slower than the forward lap, and faster
+        standing = library.pb_standing_for(True, fwd, _DEMO, best, rotation=1, **std)
+        assert standing == {"kind": "first", "track": _DEMO, "best": best, "this_way": True}, \
+            standing
+        assert library.pb_moment_for(True, fwd, _DEMO, best, rotation=1, **std) == standing
+        assert library.previous_pb(fwd, _DEMO, key, "2026-06-02", rotation=1) is None
+    line = library.pb_standing_text(
+        library.pb_standing_for(True, fwd, _DEMO, 45.105, rotation=1, **std), fmt_time)
+    assert line == (f"First session logged at {_DEMO} this way round: best lap 0:45.105, the time "
+                    "to beat next time."), line
+    title, body = library.pb_moment_text(
+        library.pb_moment(fwd, _DEMO, 44.5, key, "2026-06-02", rotation=1), fmt_time)
+    assert (title, body) == ("First session logged this way round",
+                             f"{_DEMO} this way round — best lap 0:44.500, the time to beat next "
+                             "time."), (title, body)
+    assert "personal best" not in line and "faster" not in body
+    # A later session the other way round is not what makes an older one back-catalogue either.
+    later_fwd = _index(_way("GX019101", 44.929, -1, date="2026-07-01"))
+    assert library.pb_moment(later_fwd, _DEMO, 45.0, key, "2026-06-02", rotation=1)["kind"] == \
+        "first"
+    print("ok other way: a forward record is no PB for a reverse lap, slower or faster")
+
+
+def test_a_faster_lap_the_same_way_round_is_a_personal_best():
+    """Reverse, then a faster reverse (seeds 4 and 6: 0:45.142 then 0:45.044), with the forward
+    record still on file: the beat is against the reverse lap, and says which way round."""
+    idx = _index(_way("GX019101", 44.929, -1), _way("GX019104", 45.142, 1))
+    std = {"fingerprint_key": "GX9116", "date": "2026-06-03", "rotation": 1}
+    moment = library.pb_moment_for(True, idx, _DEMO, 45.044, **std)
+    assert moment["kind"] == "beat" and moment["prior"] == 45.142 and moment["this_way"], moment
+    assert library.previous_pb(idx, _DEMO, "GX9116", "2026-06-03", rotation=1)["fingerprint"] == \
+        "GX9104"
+    assert library.pb_standing_text(moment, fmt_time) == (
+        f"New personal best at {_DEMO} this way round: 0:45.044, 0.10 s faster than your previous "
+        "best (0:45.142)."), library.pb_standing_text(moment, fmt_time)
+    assert library.pb_moment_text(moment, fmt_time)[0] == "New personal best!"
+    behind = library.pb_standing_for(True, idx, _DEMO, 45.30, **std)
+    assert behind["kind"] == "behind" and behind["prior"] == 45.142, behind
+    assert library.pb_standing_text(behind, fmt_time) == (
+        f"Best lap 0:45.300 at {_DEMO} this way round, 0.16 s off your personal best there "
+        "(0:45.142)."), library.pb_standing_text(behind, fmt_time)
+    # With no record the other way round on file, the words are exactly what they always were.
+    alone = _index(_way("GX019104", 45.142, 1))
+    m = library.pb_moment_for(True, alone, _DEMO, 45.044, **std)
+    assert "this_way" not in m and library.pb_standing_text(m, fmt_time).startswith(
+        f"New personal best at {_DEMO}: 0:45.044"), m
+    print("ok same way: a faster reverse beats the reverse record, not the forward one")
+
+
+def test_a_row_or_a_session_that_does_not_know_its_way_round_is_compared_as_before():
+    """An old row has no ``rotation`` (it is never guessed), and a session whose corners do not add
+    up to a loop reads 0: either way every answer is byte-identical to the build before."""
+    old = [_way("GX019101", 44.929, None), _way("GX019102", 45.3, None, date="2026-06-02")]
+    known = [_way("GX019101", 44.929, -1), _way("GX019102", 45.3, -1, date="2026-06-02")]
+    cases = [(old, 1), (old, -1), (known, 0), (known, None)]
+    for rows, rotation in cases:
+        idx = _index(*rows)
+        for best in (44.5, 44.95, 45.1):
+            for fn in (library.pb_moment_for, library.pb_standing_for):
+                before = fn(True, idx, _DEMO, best, fingerprint_key="GX9200", date="2026-06-03")
+                after = fn(True, idx, _DEMO, best, fingerprint_key="GX9200", date="2026-06-03",
+                           rotation=rotation)
+                assert after == before and "this_way" not in (after or {}), (rotation, after)
+                if after:
+                    assert library.pb_standing_text(after, fmt_time) == \
+                        library.pb_standing_text(before, fmt_time)
+            assert library.previous_pb(idx, _DEMO, "GX9200", "2026-06-03", rotation=rotation) == \
+                library.previous_pb(idx, _DEMO, "GX9200", "2026-06-03")
+        assert library.one_way(idx, rotation)["entries"] == idx["entries"]
+        assert not library.both_ways(idx, _DEMO)
+    print("ok unknown: no rotation on either side compares exactly as before")
+
+
+def test_rotation_is_stored_only_when_known_and_an_old_file_resaves_byte_for_byte():
+    """The field is ADDITIVE, like ``start_ms``: absent unless the row knows its way round, so an
+    index written before it loads and re-saves to the same bytes; a value that is not −1 or +1
+    costs the row only its direction, never the row."""
+    with tempfile.TemporaryDirectory(prefix="pacer-way-") as d:
+        path = os.path.join(d, "library.json")
+        old = {"version": 4, "entries": [library._norm_entry(_way("GX019101", 44.929, None))]}
+        with open(path, "w") as f:
+            json.dump(old, f)
+        library.save(library.load(path), path)
+        with open(path) as f:
+            first = f.read()
+        library.save(library.load(path), path)
+        with open(path) as f:
+            assert f.read() == first and "rotation" not in first
+        assert json.loads(first) == old
+        rows = [_way("GX019102", 45.1, 1), _way("GX019103", 45.2, -1)] + [
+            _way(f"GX01910{i}", 45.3, bad) for i, bad in ((4, 0), (5, "x"), (6, True), (7, 2))]
+        library.save(_index(*rows), path)
+        got = {e["fingerprint"]: e.get("rotation", "absent") for e in library.load(path)["entries"]}
+        assert got == {"GX9102": 1, "GX9103": -1, "GX9104": "absent", "GX9105": "absent",
+                       "GX9106": "absent", "GX9107": "absent"}, got
+    print("ok stored: ±1 kept, anything else absent, an old file re-saves byte for byte")
+
+
+def test_an_older_build_reads_a_row_that_carries_a_rotation():
+    """What v0.14.0 does with a file this build writes, through the two rules it relies on (its
+    library.py is this one minus the field): the schema VERSION is unchanged, so an older build
+    never takes the newer-file path (best-effort load and a .bak before its first save); and an
+    entry is validated on the fields it knows, so a key it does not know costs nothing — the row
+    loads, and the key is dropped on its next save. The row then reads as "does not know its way",
+    which compares exactly as before (above), until this build re-opens that recording."""
+    assert library.VERSION == 4, "a bump sends v0.14.0 down its newer-file path: say so in the PR"
+    with tempfile.TemporaryDirectory(prefix="pacer-way-") as d:
+        path = os.path.join(d, "library.json")
+        row = {**library._norm_entry(_way("GX019101", 44.929, 1)), "from_a_later_build": [1, 2]}
+        with open(path, "w") as f:
+            json.dump({"version": library.VERSION, "entries": [row]}, f)
+        (got,) = library.load(path)["entries"]
+        assert "from_a_later_build" not in got and got["best"] == 44.929, got
+        assert not os.path.exists(library.backup_path(path))
+    print("ok older build: an unknown key is ignored, the row and its best kept")
+
+
+def test_the_library_charts_a_track_driven_both_ways_one_way_at_a_time():
+    """The Library on a track with rows each way round: each row names its way, and the summary,
+    the PB chart and the like-for-like line read only the selected row's way (a row that does not
+    know is in both). A track driven one way reads exactly as before."""
+    from studio import session_record as sr
+    rows = [_way("GX019101", 44.929, -1), _way("GX019112", 45.105, 1, date="2026-06-02"),
+            _way("GX019100", 45.5, None, date="2026-05-01"),
+            _entry("GX019200", track="Daytona MK", best=68.0, paths=[])]
+    rows[3]["rotation"] = 1
+    records = sr.empty_store()
+    for e in rows:
+        e["paths"] = [os.path.abspath(__file__)]       # present footage: an openable row
+        sr.put(records, library.fingerprint(e["stem"]), sr._norm_record(
+            {**sr.blank_record(), "conditions": "dry"}))
+    dlg = LibraryDialog(_index(*rows), _OpenSpy(), records=records)
+    cells = {dlg.table.item(r, _COL_DATE).data(FP_ROLE): dlg.table.item(r, _COL_TRACK).text()
+             for r in range(dlg.table.rowCount())}
+    assert cells == {"GX9101": f"{_DEMO}, clockwise", "GX9112": f"{_DEMO}, anticlockwise",
+                     "GX9100": _DEMO, "GX9200": "Daytona MK"}, cells
+    for r in range(dlg.table.rowCount()):
+        dlg.table.selectRow(r)
+        fp = dlg.table.item(r, _COL_DATE).data(FP_ROLE)
+        summary, title, like = (dlg._summary.text(), dlg._pb_title.text(),
+                                dlg._compare_line.text())
+        if fp == "GX9112":
+            assert summary.startswith(f"{_DEMO}, anticlockwise  ·  2 sessions  ·  best 0:45.105"), \
+                summary
+            assert title == f"PB progression — {_DEMO}, anticlockwise  (0:45.105 best over 2 " \
+                "sessions)", title
+            assert like == "", like            # it IS the best this way round
+        elif fp == "GX9101":
+            assert summary.startswith(f"{_DEMO}, clockwise  ·  2 sessions  ·  best 0:44.929"), \
+                summary
+            assert "clockwise  (0:44.929 best over 2 sessions)" in title, title
+        elif fp == "GX9100":           # knows no way: today's read, the whole track
+            assert summary.startswith(f"{_DEMO}  ·  3 sessions  ·  best 0:44.929"), summary
+            assert like.startswith("Comparable with your best here (2026-06-01)"), like
+        else:
+            assert summary.startswith("Daytona MK  ·  1 session"), summary
+            assert title == "PB progression — Daytona MK  (1 session: 1:08.000)", title
+    dlg.deleteLater()
+    print("ok library: two ways, two PB lines; one way, as before")
 
 
 # ------------------------------------------------------------------ runner

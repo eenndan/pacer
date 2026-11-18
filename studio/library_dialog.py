@@ -1172,6 +1172,8 @@ class LibraryDialog(QDialog):
         selectable but never openable, and a no-laps row is greyed and disabled. Sorting is OFF
         here (re-enabled by the caller) so insertion order is preserved while filling."""
         dim = QBrush(QColor(C.text_muted))
+        both = {t for t in {e.get("track") for e in self._entries}
+                if t and _library.both_ways(self._index, t)}
         for r, e in enumerate(self._entries):
             missing = _entry_missing(e)
             junk = _entry_junk(e)
@@ -1219,7 +1221,11 @@ class LibraryDialog(QDialog):
             trust = None if disabled else _library.trust_label(e)
             suffix = ("  (no laps)" if junk else "  (file missing)" if missing
                       else f"  · {trust}" if trust else "")
-            track_text = f"{track or _UNKNOWN_LABEL}{suffix}"
+            # A track driven both ways round names each row's way, the one thing that tells its
+            # two PB lines apart (cool/pb-per-direction); a row that does not know says nothing.
+            way = _library.ROTATION_WORDS.get(_library.rotation_of(e), "") \
+                if track in both else ""
+            track_text = f"{track or _UNKNOWN_LABEL}{f', {way}' if way else ''}{suffix}"
 
             track_item = QTableWidgetItem(track_text)
 
@@ -1314,9 +1320,20 @@ class LibraryDialog(QDialog):
         self._show_missing(entry if missing else None)
         self._sync_record_btn(entry)
         track = item.data(TRACK_ROLE)
-        self._show_pb(track)
-        self._show_summary(track)
+        rotation = _library.rotation_of(entry or {})
+        self._show_pb(track, rotation)
+        self._show_summary(track, rotation)
         self._show_record(entry)
+
+    def _one_way(self, track: str | None, rotation: int) -> tuple[dict, str]:
+        """(the index the selected row's track is read from, the name it goes by): only the rows
+        that ran the way the selected row did, or do not know, and "<track>, clockwise" — when the
+        track has rows stored each way round (``library.both_ways``). Otherwise the whole index and
+        the plain name, exactly as before (cool/pb-per-direction)."""
+        if not track or not rotation or not _library.both_ways(self._index, track):
+            return self._index, track or ""
+        return (_library.one_way(self._index, rotation),
+                f"{track}, {_library.ROTATION_WORDS[rotation]}")
 
     def _show_missing(self, entry: dict | None) -> None:
         """Say where a selected missing row's footage was, and why Open is off; clear both for any
@@ -1386,7 +1403,8 @@ class LibraryDialog(QDialog):
         track = entry.get("track")
         if not track or record is None:
             return ""
-        best = _library.best_entry(self._index, track)
+        # The best here THIS way round: a lap the other way round is not the one to be like.
+        best = _library.best_entry(self._one_way(track, _library.rotation_of(entry))[0], track)
         if not best or best.get("fingerprint") == entry.get("fingerprint"):
             return ""
         other = self._record_for(best)
@@ -1425,16 +1443,18 @@ class LibraryDialog(QDialog):
             self._reload_records_guarded()
         self._rerender()
 
-    def _show_summary(self, track: str | None):
+    def _show_summary(self, track: str | None, rotation: int = 0):
         """Set the light cross-session progress line for `track` from ``library.track_summary``
         (trustworthy subset). Blank when there's no track selected; otherwise a compact honest read:
         ``"<track> · 12 sessions · best 68.42 (2026-06-14) · 3 PBs · improving"``. A track with no
-        trustworthy dated best just reports its session count (nothing to boast yet)."""
-        summary = _library.track_summary(self._index, track) if track else None
+        trustworthy dated best just reports its session count (nothing to boast yet). On a track
+        driven both ways round, it reads the selected row's way only (``_one_way``)."""
+        index, name = self._one_way(track, rotation)
+        summary = _library.track_summary(index, track) if track else None
         if not summary:
             self._summary.setText("")
             return
-        parts = [summary["track"], _plural(summary["sessions"], "session")]
+        parts = [name, _plural(summary["sessions"], "session")]
         if summary["best"] is not None:
             best = fmt_time(summary["best"])
             date = f" ({summary['best_date']})" if summary["best_date"] else ""
@@ -1448,7 +1468,7 @@ class LibraryDialog(QDialog):
                 parts.append(trend)
         self._summary.setText("  ·  ".join(parts))
 
-    def _show_pb(self, track: str | None):
+    def _show_pb(self, track: str | None, rotation: int = 0):
         """Plot best-lap-vs-date for `track`: line for >=2 dated bests, a framed single marker for
         1, empty-state for 0. No track means one of THREE different states — an empty library,
         nothing selected, or a selected recording whose circuit the track database doesn't know
@@ -1469,7 +1489,10 @@ class LibraryDialog(QDialog):
                 message = "Select a recording to see its track's PB progression"
             self._set_pb_empty(message)
             return
-        series = _library.pb_series(self._index, track)
+        # A track driven both ways round charts the selected row's way only: two layouts' laps on
+        # one line would draw the other way's best as a PB of this one (cool/pb-per-direction).
+        index, name = self._one_way(track, rotation)
+        series = _library.pb_series(index, track)
         xs, ys = [], []
         for date, best in series:
             x = _epoch_seconds(date)
@@ -1481,13 +1504,13 @@ class LibraryDialog(QDialog):
         # U2: the summary line above counts EVERY row of the track ("3 sessions") while this title
         # counted only the charted ones ("best over 2 sessions") — two totals for one track on one
         # screen. When rows are left off, the title states both numbers.
-        why = _library.pb_left_out(self._index, track)
+        why = _library.pb_left_out(index, track)
         total = why["sessions"]
         over = (f"{len(ys)} of {_plural(total, 'session')}" if total > len(ys)
                 else _plural(len(ys), "session"))
         if len(ys) >= 2:
             self._pb_title.setText(
-                f"PB progression — {track}  ({fmt_time(min(ys))} best over {over})")
+                f"PB progression — {name}  ({fmt_time(min(ys))} best over {over})")
             self._set_pb_empty(None)
             self.pb_plot.enableAutoRange()
             self.pb_plot.autoRange()
@@ -1499,19 +1522,19 @@ class LibraryDialog(QDialog):
             # count and the time — "PB progression — <track>  (1 session: 1:08.201)" — which is the
             # same fact stated where it does not overlap the mark. Empty state and data layer are
             # mutually exclusive now, in both directions.
-            self._pb_title.setText(f"PB progression — {track}  ({over}: {fmt_time(ys[0])})")
+            self._pb_title.setText(f"PB progression — {name}  ({over}: {fmt_time(ys[0])})")
             self._frame_single_point(xs[0], ys[0])
             self._set_pb_empty(None)
         else:
             left_out = [f"{why[r]} {r}" for r in _library.PB_LEFT_OUT_REASONS if why[r]]
             if left_out:
                 # The rows exist; say what kept each one off, in the tags the table rows print.
-                self._pb_title.setText(f"PB progression — {track}  (0 of {_plural(total, 'session')}"
+                self._pb_title.setText(f"PB progression — {name}  (0 of {_plural(total, 'session')}"
                                        " charted)")
                 self._set_pb_empty(f"{_plural(total, 'session')} on this track, but no dated best "
                                    f"lap that counts as a PB: {', '.join(left_out)}")
             else:
-                self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
+                self._pb_title.setText(f"PB progression — {name}  (no dated best laps)")
                 self._set_pb_empty("Not enough sessions on this track yet to chart progression")
 
     def _set_pb_axes(self, plotted: bool):

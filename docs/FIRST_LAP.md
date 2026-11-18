@@ -50,7 +50,8 @@ circuit — and on any track you've saved, this step is done for you.)*
 
 A recording's first open, once its lap timing is trusted (step 2), lands on its **debrief** rather
 than the four panels: the **Coaching** page (step 5), full-window. Its first line says where this
-session's best lap stands against your personal best at that track, and Pacer has already put the
+session's best lap stands against your personal best at that track, driven the same way round (a
+track run the other way round keeps a record of its own), and Pacer has already put the
 session's top corners (three at most) on that track's **focus list**, each with a baseline measured
 on this session and a **Remove** beside it: a default, not a decision. **Esc** returns to your usual
 layout. On timing Pacer calls estimated (a GPS5 camera's video clock, for one) it gives neither the
