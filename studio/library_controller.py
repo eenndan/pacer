@@ -1311,7 +1311,12 @@ class LibraryController:
         where the verdict could never speak — no track (nowhere to keep a list), a provisional
         start line or ESTIMATED timing (`focus._blocker` refuses every comparison with such a
         baseline, so an auto-made list would refuse forever). Nor onto a list with a baseline
-        recorded after this session (QA REG-1): an older session's corners are not today's plan."""
+        recorded after this session (QA REG-1): an older session's corners are not today's plan.
+
+        Nor onto a list whose items ran the other way round from today (`focus.lap_rotation`): the
+        check refuses every one of them today as LAYOUT_REVERSED, and today's corners beside them
+        would make a list part of which is refused on either layout, for good. An item that stored
+        no rotation (before it was kept) does not stop it, as the check does not."""
         entry = self._focus_entry()
         track = entry.get("track")
         if not track:
@@ -1320,6 +1325,9 @@ class LibraryController:
             items = self._focus_items(track)
             if self._baseline_refusal(entry, track, items):
                 return []           # a default says nothing: the page's own line says why
+            today = int(self.win.session.focus_context(entry, track).get("rotation") or 0)
+            if today and any(i.rotation and i.rotation != today for i in items):
+                return []           # the other way round: the page's verdict line says so
             taken = {i.cid for i in items}
             free = focus.MAX_ITEMS - len(items)
             wanted = [int(c) for c in cids if int(c) not in taken][:max(free, 0)]

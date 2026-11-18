@@ -355,9 +355,8 @@ def test_a_corner_that_turns_the_other_way_today_is_not_compared():
                                          "way — a different layout?"), F.outcome_sentence(other)
     none = F.verdict([_layout_item(5, -1, 0.70, 0.75)], now, [_sample(4.2)], alike).outcomes[0]
     assert none.blocker == F.BLOCK_LAYOUT and none.delta is None, none
-    assert F.outcome_sentence(none) == ("C5 — can't say: no corner was detected there today — "
-                                        "too gentle to pick out, or a different layout?"), \
-        F.outcome_sentence(none)
+    assert F.outcome_sentence(none) == ("C5 — can't say: no corner was picked out there today — "
+                                        "a different layout?"), F.outcome_sentence(none)
     # The corner overlapping MOST decides: a window straddling both reads the left-hander here.
     straddle = F.verdict([_layout_item(6, +1, 0.19, 0.45)], now, [_sample(4.2)], alike).outcomes[0]
     assert straddle.has_verdict, straddle
@@ -825,7 +824,7 @@ def test_a_corner_the_detector_drops_today_is_said_to_be_undetected():
     """A 32.5° kink, the same layout both days: k0's detector picks it out and k1's does not (6
     of 12 seeds do; in all 36 such ordered pairs main said "there's no corner there today — a
     different layout?" beside the rest of the list measured level). The kink is still refused —
-    nothing measured it today — and the line says what was measured and names both readings; the
+    nothing measured it today — and the line says only what was measured, no cause; the
     other corners keep their verdicts, and none is a claim. The other way round, k1's list has no
     kink on it, and every corner gets a verdict."""
     def kink(s):
@@ -840,9 +839,9 @@ def test_a_corner_the_detector_drops_today_is_said_to_be_undetected():
     for o in report.outcomes:
         if o.item.cid == cid:
             assert (o.blocker, o.detail, o.delta) == (F.BLOCK_LAYOUT, F.LAYOUT_NO_CORNER, None), o
-            assert F.outcome_sentence(o) == (f"C{cid} — can't say: no corner was detected there "
-                                             f"today — too gentle to pick out, or a different "
-                                             f"layout?"), F.outcome_sentence(o)
+            assert F.outcome_sentence(o) == (f"C{cid} — can't say: no corner was picked out "
+                                             f"there today — a different layout?"), \
+                F.outcome_sentence(o)
         else:
             assert o.kind == F.OUTCOME_UNCHANGED, F.outcome_sentence(o)
     n = len(report.outcomes)
@@ -854,8 +853,41 @@ def test_a_corner_the_detector_drops_today_is_said_to_be_undetected():
     # Every corner of a list undetected today: the headline says that, not "a different layout".
     alone = F.Report(track="Demo", outcomes=[o for o in report.outcomes if o.item.cid == cid])
     assert F.report_headline(alone) == ("Focus list · 1 corner · no verdict — no corner was "
-                                        "detected there today"), F.report_headline(alone)
+                                        "picked out there today"), F.report_headline(alone)
     print(f"ok marginal: {F.outcome_sentence(next(o for o in report.outcomes if o.item.cid == cid))}")
+
+
+def test_a_list_refused_for_mixed_layout_reasons_says_each_once():
+    """A list refused for SEVERAL layout reasons collapses to one line that says each reason once:
+    no "the layout looks different today — a different layout of the track?" (the same thing
+    twice) when some items stored a rotation and the rest found a corner turning the other way,
+    and no "aren't there" for a corner nothing picked out today."""
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    # today: anticlockwise, a right-hander at 0.14-0.205, nothing at 0.70-0.75
+    now = {**_now(), "corners": [(0.14, 0.205, -1), (0.40, 0.46, 1)], "rotation": 1}
+    reversed_ = F.FocusItem(**{**vars(_layout_item(2, -1, 0.40, 0.46)), "rotation": -1})
+    other_way = _layout_item(4, +1, 0.15, 0.20)          # stored no rotation: the hand test
+    missing = _layout_item(5, -1, 0.70, 0.75)
+
+    def line(*items):
+        report = F.verdict(list(items), now, [_sample(4.2)] * len(items), alike)
+        assert {o.blocker for o in report.outcomes} == {F.BLOCK_LAYOUT}, report.outcomes
+        (got,) = F.report_lines(report)
+        return got
+
+    assert line(reversed_, other_way) == (
+        "C2 and C4 — can't say: today's laps run the other way round, or the corners there today "
+        "turn the other way — a different layout of the track?")
+    assert line(reversed_, missing) == (
+        "C2 and C5 — can't say: today's laps run the other way round, or the corners there today "
+        "weren't picked out — a different layout of the track?")
+    assert line(other_way, missing) == (
+        "C4 and C5 — can't say: the corners there today turn the other way or weren't picked "
+        "out — a different layout of the track?")
+    assert line(reversed_, other_way, missing) == (
+        "C2, C4 and C5 — can't say: today's laps run the other way round, or the corners there "
+        "today turn the other way or weren't picked out — a different layout of the track?")
+    print(f"ok mixed: {line(reversed_, other_way, missing)}")
 
 
 # --------------------------------------------------------------------------------- the panel

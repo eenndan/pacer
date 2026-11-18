@@ -853,14 +853,27 @@ _BLOCK_SENTENCE = {
 # the demo's circuit with a 32.5° kink before C4 (`synth_gopro.reprofiled`), 6 of 12 seeds detect
 # it, and in all 36 pairs where the baseline did and today did not, the kink's line said "there's
 # no corner there today — a different layout?" beside the rest of the list measured level. So it
-# says what was measured, and names both readings.
+# says only what was measured — nothing was picked out — and leaves the cause open: a gentle
+# corner, a GPS dropout over the window and another layout all read the same here.
 _LAYOUT_WHY_ONE = {LAYOUT_OTHER_WAY: "the corner there today turns the other way",
-                   LAYOUT_NO_CORNER: "no corner was detected there today",
+                   LAYOUT_NO_CORNER: "no corner was picked out there today",
                    LAYOUT_REVERSED: "today's laps run the other way round"}
 _LAYOUT_WHY_ALL = {LAYOUT_OTHER_WAY: "the corners there today turn the other way",
-                   LAYOUT_NO_CORNER: "no corners were detected there today",
+                   LAYOUT_NO_CORNER: "no corners were picked out there today",
                    LAYOUT_REVERSED: "today's laps run the other way round"}
-_LAYOUT_ASK = {LAYOUT_NO_CORNER: "too gentle to pick out, or a different layout"}
+
+
+def _layout_why_mixed(details: set) -> str:
+    """One sentence for a list refused for SEVERAL layout reasons, each said once: the laps run the
+    other way round (items that stored a rotation), and the corners under the rest turn the other
+    way or were not picked out. Never "the layout looks different" before "a different layout?",
+    and never that a corner "isn't there" when nothing was picked out."""
+    corner = [w for d, w in ((LAYOUT_OTHER_WAY, "turn the other way"),
+                             (LAYOUT_NO_CORNER, "weren't picked out")) if d in details]
+    parts = [_LAYOUT_WHY_ALL[LAYOUT_REVERSED]] if LAYOUT_REVERSED in details else []
+    if corner:
+        parts.append("the corners there today " + " or ".join(corner))
+    return ", or ".join(parts)
 
 
 def outcome_sentence(o: Outcome) -> str:
@@ -885,8 +898,7 @@ def outcome_sentence(o: Outcome) -> str:
         if o.blocker == BLOCK_FEW_LAPS:
             return f"{label} — can't say: {o.detail} through it today."
         if o.blocker == BLOCK_LAYOUT:
-            ask = _LAYOUT_ASK.get(o.detail, "a different layout")
-            return f"{label} — can't say: {_LAYOUT_WHY_ONE[o.detail]} — {ask}?"
+            return f"{label} — can't say: {_LAYOUT_WHY_ONE[o.detail]} — a different layout?"
         tail = f" ({o.detail})" if o.detail and o.blocker == BLOCK_GEOMETRY else ""
         return f"{label} — can't say: {_BLOCK_SENTENCE.get(o.blocker, 'not comparable')}{tail}."
     assert o.now is not None and o.delta is not None  # has_verdict implies both
@@ -979,12 +991,9 @@ def report_lines(report: Report) -> list[str]:
             return [f"{who} — can't say: {first.detail}."]
         if first.blocker == BLOCK_LAYOUT:
             details = {o.detail for o in outcomes}
-            why = (_LAYOUT_WHY_ALL[first.detail] if len(details) == 1 else
-                   "the corners there today turn the other way or aren't there"
-                   if LAYOUT_REVERSED not in details else _BLOCK_SENTENCE[BLOCK_LAYOUT])
-            ask = (_LAYOUT_ASK.get(first.detail, "a different layout") if len(details) == 1
-                   else "a different layout")
-            return [f"{who} — can't say: {why} — {ask} of the track?"]
+            why = (_LAYOUT_WHY_ALL[first.detail] if len(details) == 1
+                   else _layout_why_mixed(details))
+            return [f"{who} — can't say: {why} — a different layout of the track?"]
         return [f"{who} — can't say: "
                 f"{_BLOCK_SENTENCE.get(first.blocker, 'not comparable')}."]
     if len(outcomes) > 1 and kinds == {OUTCOME_SET_HERE}:
@@ -1055,7 +1064,7 @@ def report_headline(report: Report) -> str:
     if all(o.blocker == BLOCK_LAYOUT for o in report.outcomes):
         # Nor "yet" here: no later look at this session will make its corners the list's.
         # Only "the layout looks different" when something measured says so: a list whose
-        # corners were all just not detected says that (`_LAYOUT_ASK`).
+        # corners were all just not picked out today says that, and no more.
         undetected = all(o.detail == LAYOUT_NO_CORNER for o in report.outcomes)
         why = ((_LAYOUT_WHY_ONE if n == 1 else _LAYOUT_WHY_ALL)[LAYOUT_NO_CORNER] if undetected
                else _BLOCK_SENTENCE[BLOCK_LAYOUT])

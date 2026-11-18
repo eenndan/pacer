@@ -220,7 +220,7 @@ def build_circuit(mirror: bool = False, *, reverse: bool = False, layout=None) -
     end-point gap linearly, along its own heading), then sheared by the last few centimetres of
     rounding so the loop meets itself exactly. `mirror` flips it anticlockwise (another circuit:
     its mirror image); `reverse` drives THIS one the other way round (`_reversed`); `layout`
-    replaces LAYOUT (`reprofiled`, `retuned`)."""
+    replaces LAYOUT (`reprofiled`)."""
     if reverse:
         return _reversed(build_circuit(mirror, layout=layout))
     layout = [tuple(seg) for seg in (LAYOUT if layout is None else layout)]
@@ -883,7 +883,7 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
     a TONE_HZ tone as each chapter's sound track, and `timecode` ("HH:MM:SS:FF", NDF) a GoPro-style
     `tmcd` track starting chapter 1 there, each later chapter continuing the count; `habit` plants
     one repeatable loss at one corner (`Habit`); `reverse` drives the circuit the other way round
-    and `layout` rebuilds it (`build_circuit`: `reprofiled`, `retuned`)."""
+    and `layout` rebuilds it (`build_circuit`, `reprofiled`)."""
     # PATH first (a `pixi run` puts the env's bin there), then the running interpreter's own env.
     ffmpeg = (ffmpeg or os.environ.get("PACER_FFMPEG") or shutil.which("ffmpeg")
               or shutil.which("ffmpeg", path=os.path.join(sys.prefix, "bin")))
