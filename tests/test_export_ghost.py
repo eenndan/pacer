@@ -233,8 +233,11 @@ def test_beside_the_kart_the_ghost_is_a_ring_round_the_dot():
         disc of radius 20 or less, so cutting the frame to this square reads exactly the pixels
         the whole-frame grids did, at a 2,000th of the cost (the grids were half this test)."""
         y0, x0 = max(0, int(c[1]) - r), max(0, int(c[0]) - r)
-        rows = slice(y0, min(1080, int(c[1]) + r + 1))
-        cols = slice(x0, min(1920, int(c[0]) + r + 1))
+        # Both ends clamped into the frame: a centre more than r off its edge must give an empty
+        # window (as the whole-frame disc is empty there), never a negative stop that Python would
+        # count from the far end. int() truncates toward 0, which can only widen the window.
+        rows = slice(y0, max(0, min(1080, int(c[1]) + r + 1)))
+        cols = slice(x0, max(0, min(1920, int(c[0]) + r + 1)))
         ys, xs = np.mgrid[rows, cols]
         return rows, cols, ys, xs
     count = {}

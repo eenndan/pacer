@@ -185,7 +185,9 @@ def _once_per_spec(test):
     painters over three specs re-derived the same lookups 240 times: 102 s of this file's 146 s
     (2026-11-18, load ~7). The real functions still compute every value once; a repeat of the same
     (session, spec, time) is served from the first. Nothing the painter measures changes: the
-    sizes, fonts, layout and plates are each painter's own."""
+    sizes, fonts, layout and plates are each painter's own. Valid only while the three memoised
+    functions are pure in their arguments: if one ever reads painter state (the honesty stamp, a
+    frame size), a repeat would hand one painter another's answer, so drop the memo then."""
     @functools.wraps(test)
     def run():
         real_values, real_burned, real_runs = ev.overlay_values_at, ev._burned_runs, ev._strip_runs
