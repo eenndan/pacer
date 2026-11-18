@@ -3312,6 +3312,11 @@ class QuickestPassTable(QWidget):
     def _on_cell_clicked(self, row: int, _col: int) -> None:
         self.activate(row)
 
+    def _on_play_clicked(self) -> None:
+        btn = self.sender()
+        if btn is not None:
+            self.activate(int(btn.property("row")))
+
     def level_s(self) -> float:
         return self.result.level_s if self.result is not None else PB_PRECISION_S
 
@@ -3420,7 +3425,12 @@ class QuickestPassTable(QWidget):
             btn.setFocusPolicy(Qt.NoFocus)
             btn.setEnabled(qp.lap_id is not None)
             btn.setAccessibleName(f"Play the quickest pass through {label}")
-            btn.clicked.connect(lambda _checked=False, row=r: self.activate(row))
+            # A bound method and the row on the button, NOT a lambda over `self`: a lambda held by
+            # the connection makes view → button → lambda → view a cycle only the GC can break, and
+            # the GC can run on a load worker's thread, where deleting these widgets crashed
+            # test_studio_features (a bus error in test_reentrant_load_applies_only_latest).
+            btn.setProperty("row", r)
+            btn.clicked.connect(self._on_play_clicked)
             self.table.setCellWidget(r, QUICKEST_PLAY_COL, btn)
         self._paint_playing()
         if row >= 0:
@@ -3521,8 +3531,12 @@ class CornersPage(QWidget):
 
     def refresh_quickest(self) -> None:
         """Rebuild the Quickest view (the Lap view refreshes on its own path) and re-decide
-        whether the switch shows: a re-segment can find or lose every corner."""
-        self.quickest.refresh()
+        whether the switch shows: a re-segment can find or lose every corner. Off screen it is
+        only marked stale (no grid read on a rebuild nobody sees); `set_view` rebuilds it."""
+        if self._view == CORNERS_VIEW_QUICKEST:
+            self.quickest.refresh()
+        else:
+            self.quickest.result = None
         self._apply()
 
     def _apply(self) -> None:

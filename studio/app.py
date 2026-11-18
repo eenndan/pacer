@@ -3,6 +3,7 @@ load; the panel layout lives in CentralView."""
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import sys
@@ -1182,6 +1183,12 @@ class StudioWindow(QMainWindow):
 
     def _start_load_worker(self, token: int, paths: list[str]):
         """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
+        # Free any Qt garbage held in reference cycles HERE, on the GUI thread, before a worker
+        # starts allocating: Python's cyclic GC runs on whichever thread trips its threshold, and
+        # a widget it frees on the load worker's thread crashed or deadlocked in ~QTableView
+        # (test_studio_features' reentrant load, measured with 441 cyclic Qt/studio objects from
+        # earlier windows pending: LapTable's own closures hold it in cycles).
+        gc.collect()
         worker = SessionLoadWorker(token, paths)
         self._load_worker = worker  # the current worker
         self._load_workers.add(worker)  # hold the in-flight worker so it isn't GC'd mid-load
