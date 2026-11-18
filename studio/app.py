@@ -3504,7 +3504,9 @@ class StudioWindow(QMainWindow):
         try:
             # ...and on its Lap view, whose rows the reveal below points at (navigation: the
             # remembered view is untouched).
-            view.corners_page.set_view("lap", remember=False)
+            page = getattr(view, "corners_page", None)
+            if page is not None:
+                page.set_view("lap", remember=False)
             view.select_lap_tab(1)
         finally:
             self._jumping = False

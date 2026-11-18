@@ -1634,7 +1634,8 @@ class CentralView(QWidget):
 
         Cheap: a handful of in-place repaints / redraws, no session recompute."""
         self.table.refresh()
-        self.corners_page.refresh()
+        self.corner_table.refresh()
+        self._refresh_quickest()
         self.map.refresh_palette()
         self.opportunities.refresh()
         self._stats.refresh_palette()   # raw: it re-renders (or defers) on its own — see above
@@ -1829,6 +1830,13 @@ class CentralView(QWidget):
             self._playback.followed_lap = self.session.lap_at_time(entry)
         if cid is not None:
             self._pin_owned_ring(cid)
+
+    def _refresh_quickest(self):
+        """Corners ▸ Quickest passes follows every rebuild the Lap view does. getattr-guarded: a
+        test double may carry a corner_table and no page."""
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.refresh_quickest()
 
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
@@ -2642,7 +2650,8 @@ class CentralView(QWidget):
         self.map.forget_corner_hover()       # ...and a pointer still on a label re-names it
         self.plots.forget_corner_hover()
         self._push_corner_emphasis()
-        self.corners_page.refresh()
+        self.corner_table.refresh()
+        self._refresh_quickest()
         # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
         self.opportunities.refresh()

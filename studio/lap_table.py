@@ -3519,8 +3519,9 @@ class CornersPage(QWidget):
         """The Lap button names the lap its view shows."""
         self.lap_btn.setText("Lap" if lap_id is None else f"Lap {lap_label(lap_id)}")
 
-    def refresh(self) -> None:
-        self.lap_view.refresh()
+    def refresh_quickest(self) -> None:
+        """Rebuild the Quickest view (the Lap view refreshes on its own path) and re-decide
+        whether the switch shows: a re-segment can find or lose every corner."""
         self.quickest.refresh()
         self._apply()
 
