@@ -37,7 +37,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
@@ -90,8 +89,6 @@ from .overlays import (
     DEMO_GET_LABEL,
     DEMO_LABEL,
     WelcomeView,
-    column_metrics,
-    welcome_card_width,
 )
 from .race_controller import NO_RACE_REASON
 from .video_view import PLAYBACK_RATES
@@ -202,15 +199,15 @@ LOAD_LOG_LINE = "To open the log, paste this path into Finder ▸ Go ▸ Go to F
 # they are the same sentence and they had drifted into two copies of it.
 #
 # IT NAMES THE RETRY BY ITS LABEL, because the retry is on the screen: the welcome it lands on
-# carries the demo button in every state now (LEFT-24), and with no clip on the machine that
-# button says "Get demo · N MB" (overlays.DEMO_GET_LABEL). It used to say "Pacer doesn't ship
-# one", true while the asset had never been published, and then to offer no retry at all while
-# `demo_available` took the button away. The only way here is a download that failed — offline,
-# or not the pinned file — so it names that, the button to try again, and the door that always
-# works.
+# carries the demo in every state (LEFT-24), and with no clip on the machine it says "Open the
+# demo (synthetic session) · N MB download" (overlays.DEMO_GET_LABEL). It used to say "Pacer
+# doesn't ship one", true while the asset had never been published, and then to offer no retry at
+# all while `demo_available` took the button away. The only way here is a download that failed —
+# offline, or not the pinned file — so it names that, the button to try again, and the door that
+# always works.
 DEMO_UNAVAILABLE_MESSAGE = (
-    "The demo session couldn't be downloaded — check the connection and try Get demo again, or "
-    "use Open recording… below, or drop a GoPro .mp4 on this window.")
+    "The demo session couldn't be downloaded — check the connection and try Open the demo again, "
+    "or use Open a recording… below, or drop a GoPro .mp4 on this window.")
 # The demo button's tooltip, per label: what the click does, and — for the one that reaches the
 # network, the app's only fetch — where it goes and how much it brings back, before it does.
 DEMO_OPEN_TIP = ("Opens Pacer's synthetic demo session, already on this computer — generated, "
@@ -218,7 +215,7 @@ DEMO_OPEN_TIP = ("Opens Pacer's synthetic demo session, already on this computer
 
 
 def demo_get_tip() -> str:
-    """The "Get demo" tooltip. WHERE is the host of the URL the fetch will use
+    """The demo download's tooltip. WHERE is the host of the URL the fetch will use
     (`demo.download_url()`), read when the welcome is built: "GitHub" for the pinned release
     asset, else the dev-only PACER_DEMO_URL mirror's host (when it names none, as a file: mirror
     does, its URL as `demo.shown_url` renders it). It said "from GitHub" while a mirror sent the
@@ -845,7 +842,7 @@ class StudioWindow(QMainWindow):
     def _open_recordings(self, paths: list[str], whole: bool = True, gesture: str = "Dropped"):
         """Group `paths` into recordings and load the first, never merging unrelated recordings.
 
-        THE ONE DOOR: a drop, File ▸ Open…, the welcome's Open recording… and the command line all
+        THE ONE DOOR: a drop, File ▸ Open…, the welcome's Open a recording… and the command line all
         open through here. `whole` expands the chosen recording to its full on-disk chapter set via
         discover_siblings, so a dropped or picked chapter chains its siblings; the command line
         passes it only with --full, because an explicit path there asks for exactly that chapter.
@@ -903,39 +900,21 @@ class StudioWindow(QMainWindow):
             self.statusBar().showMessage(drop_notice, STATUS_MS)
 
     def _show_welcome(self, error: str | None = None, error_path: str | None = None):
-        """Install the no-recording welcome empty state (also the first-load-failure fallback).
+        """Install the no-recording welcome state (also the load-failure fallback).
 
         `error_path` is the OFFENDING FILE, passed separately rather than glued onto `error`: the
-        view shows its basename and puts the absolute path on the tooltip, because a raw
-        `/Users/…/track day 2026-08-30/holiday.mp4` inside a word-wrapping label is what drove the
-        drop zone from 403x239 to 727x303 and collapsed the tagline (QA D2-09).
+        view shows its basename and puts the absolute path on the tooltip (QA D2-09).
 
-        THE SESSION-ONLY MENUS ARE RE-SYNCED HERE, beside the "Load full recording" disable that was
-        already doing it one action at a time. Every other caller reaches this state by *never having
-        had* a session, so the menus were already off and nobody noticed the gap; the recovery paths
-        arrive here FROM a loaded session, and left Session statistics, the excluded-laps toggle,
-        Opportunities and the reference picker enabled over a welcome screen. The handlers all
-        early-return, so this is advertising rather than a crash — except that a disabled QAction's
-        SHORTCUT is inert too, which is the whole reason ⌘⇧S is gated on the action at all (L1-06).
-        Both syncs derive from live state (`hasattr(self, "session")` / `self.view`), so calling them
-        from every welcome path can never over-disable anything.
+        THE SESSION-ONLY MENUS ARE RE-SYNCED HERE: the recovery paths arrive here FROM a loaded
+        session, and left Session statistics, Opportunities and the reference picker enabled over
+        a welcome screen (L1-06). Both syncs derive from live state, so calling them from every
+        welcome path can never over-disable anything.
 
-        THE SECOND CTA IS ALWAYS OFFERED, AND ITS LABEL SAYS WHAT THE CLICK WILL DO.
-        `demo.demo_available()` is the offline half of the resolver (env var or cache — no
-        network), and it decides the LABEL: "Open demo" when the clip is on this machine, "Get demo
-        · N MB" when the click downloads it (the size from the pinned asset). It used to decide
-        whether the button existed at all — born while the release asset was unpublished, when the
-        click on a first run could only apologise (§6.7) — which after the synthetic demo WAS
-        published left a fresh launch with one action and no mention of a demo (LEFT-24). The app
-        still reaches the network only on that click, which says it downloads; a failed fetch
-        comes back here with the button, and `--demo` on the CLI runs the same resolve."""
+        THE LIST IS READ HERE, EVERY TIME (`_welcome_view`), so the screen a failed or cancelled
+        load hands back lists the session just analysed at the top."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
-        cached = demo.demo_available()
-        view = WelcomeView(self._open_file, self._open_demo, error, error_path=error_path,
-                           parent=self, demo_label=DEMO_LABEL if cached else DEMO_GET_LABEL)
-        view.demo_btn.setToolTip(DEMO_OPEN_TIP if cached else demo_get_tip())
-        self.setCentralWidget(view)
+        self.setCentralWidget(self._welcome_view(error, error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
             # Through the gate, not a bare setEnabled: a welcome screen reached by a FAILED reload
             # would otherwise keep the clause the previous session left on this item.
@@ -943,8 +922,43 @@ class StudioWindow(QMainWindow):
         self._sync_coaching_menu()
         self._sync_view_menu()
 
+    def _welcome_view(self, error: str | None = None, error_path: str | None = None,
+                      parent=None) -> WelcomeView:
+        """The welcome state as it would be shown NOW — `_show_welcome` installs it, and the loading
+        card measures an unshown one when it has no welcome frame to follow.
+
+        THE DEMO IS ALWAYS OFFERED, AND ITS LABEL SAYS WHAT THE CLICK WILL DO. `demo_available()`
+        is the offline half of the resolver (env var or cache — no network): "Open the demo
+        (synthetic session)" when the clip is on this machine, "… · N MB download" when the click
+        downloads it (LEFT-24). The app reaches the network only on that click, or `--demo`.
+
+        THE RECENT SESSIONS are the Library's newest rows (`library.recent_rows`); a row reopens
+        through `_load`, the call the Library window's double-click makes. Reading the index can
+        never cost the welcome: any failure lists nothing, which is the first-visit screen."""
+        cached = demo.demo_available()
+        try:
+            recent = library.recent_rows(library.load())
+        except Exception:  # noqa: BLE001 — the list is additive; never break the first screen
+            _log.warning("recent sessions unavailable", exc_info=True)
+            recent = []
+        has_library = getattr(self, "library_ctl", None) is not None
+        view = WelcomeView(self._open_file, self._open_demo, error, error_path=error_path,
+                           parent=parent, demo_label=DEMO_LABEL if cached else DEMO_GET_LABEL,
+                           recent=recent, on_recent=lambda paths: self._load(paths),
+                           on_library=self._library_from_welcome if has_library else None)
+        view.demo_btn.setToolTip(DEMO_OPEN_TIP if cached else demo_get_tip())
+        return view
+
+    def _library_from_welcome(self):
+        """The welcome's "Library…": the Library window, and — if the welcome is still what is on
+        screen when it closes (nothing was opened from it) — the list read again, because a row
+        may have been forgotten, or the whole library cleared or restored, in there."""
+        self.library_ctl.open_library()
+        if isinstance(self.centralWidget(), WelcomeView):
+            self._show_welcome()
+
     def _open_demo(self):
-        """Welcome-screen "Open demo" / "Get demo · N MB": resolve the synthetic demo session OFF
+        """The welcome's demo button (overlays.DEMO_LABEL / DEMO_GET_LABEL): resolve the demo OFF
         the UI thread (env / cache / a one-time release download — see studio.demo), then load it.
 
         The resolve used to run inline in this slot, so a first run with no cache did a network
@@ -988,7 +1002,7 @@ class StudioWindow(QMainWindow):
         # the row used to re-centre on the click and slide the primary CTA 39 px (D4-06), and the
         # resting label was a second copy of a string the view already owns. The RESTING one is
         # the view's own (`demo_label`), not a constant: there are two since LEFT-24, and writing
-        # "Open demo" back onto a fresh launch's "Get demo · N MB" would claim the clip is here.
+        # the cached label back onto a fresh launch's download label would claim the clip is here.
         btn.setText(BUSY_DEMO_LABEL if busy else getattr(view, "demo_label", DEMO_LABEL))
 
     def _arm_demo_placeholder(self, token: int):
@@ -1044,7 +1058,7 @@ class StudioWindow(QMainWindow):
             # A download that failed (offline, or not the pinned file) — the usual way here since
             # the button is offered on a fresh launch — or a clip that went away between the check
             # and the click. Say the true thing and come back to a welcome screen whose button,
-            # now saying "Get demo · N MB", is the retry the message names.
+            # now saying it downloads (DEMO_GET_LABEL), is the retry the message names.
             self._show_welcome(error=DEMO_UNAVAILABLE_MESSAGE)
             return
         self._load([path])
@@ -1678,149 +1692,81 @@ class StudioWindow(QMainWindow):
         happening · that it is still happening · how to stop it), which is what SPACE_L is for.
 
         IT IS ALSO THE SECOND FRAME OF THE WELCOME SCREEN, and it used to share no structure with
-        the first. Measured two milliseconds apart at 1440x900: the dashed 403x239 container went to
-        nothing, the headline dropped from 22 px `role="Title"` in `C.text` to a 13 px muted
-        `role="LoadingTitle"`, and the one button on screen moved 62.9 px (QA D4-05). So the card is
-        built on the SAME column as WelcomeView's drop zone — same content margins, same SPACE_L
-        rhythm, same headline role — and the headline is its own label now, with the recording it is
-        reading as a separate muted line underneath rather than fused into one string by "\\n\\n".
-        There is deliberately no dashed border here: dashes mean "drop a file here", which stopped
-        being true the moment a file was dropped. (This is the shape D2 §8.1's proposed
-        `widgets.EmptyState` takes — icon?/title/body/busy/action on one rhythm — so it can adopt
-        that object when it lands, without a competing one being invented here first.)
-
-        THE RHYTHM LANDED; THE ANCHORS DID NOT, AND THAT IS WHAT THE FOUR `column_metrics` READS
-        ARE FOR. Sharing margins, spacing and the headline role made the two frames the same
-        MATERIAL while leaving them in different PLACES — measured after that fix, the headline
-        jumped 57.0 px and the one button 108.7 px, both FURTHER than before it (13.5 and 62.9),
-        because three correct repairs each moved one frame without re-measuring the other. Four
-        reads off the welcome column close it, and none of them undoes a repair:
-
-          * the same reserved ERROR SLOT above the card. D2-09 put the welcome's failure message on
-            the canvas above its card; the loading card had no such slot, so the two cards were
-            centred against different column heights.
-          * a leading row of exactly the drop glyph's height, holding the busy bar. The welcome's
-            glyph sits 52 px above its headline; without that row the loading headline started at
-            the card's top margin. The bar moving up into it is also the better reading — the
-            indicator, then what it is doing, then how to stop it.
-          * the secondary line reserving the tagline's two lines, so the two columns are the same
-            HEIGHT and vertical centring puts their cards in the same place. The slot exists even
-            when there is no recording label (the demo fetch), for the same reason the error slot
-            exists when there is no error.
-          * Cancel floored at the PRIMARY action's width, in an action row that reserves the
-            secondary action's slot beside it. D4-06 floored `demo_btn` at its busy width so a
-            click on it stops moving the row; that correctly slid the centred pair, which left
-            "Open recording…" 97 px left of a centred Cancel. Reserving the same second slot here
-            puts Cancel in the primary's place instead of in the pair's centre.
-
-            THE SECOND SLOT IS RESERVED BECAUSE THE FRAME BEFORE IT ALWAYS HAS ONE. The welcome
-            column carries the demo button in every state (see _show_welcome; until LEFT-24 only
-            when a clip was cached, and this card asked the same predicate), and `column_metrics`
-            floors it at the widest of its labels, so the column is one shape whatever the cache
-            holds. Reserving a slot for an action that was not there would put Cancel 55 px left
-            of the primary it stands in for — the offset this reservation exists to remove."""
-        m = column_metrics(has_demo=True)
+        the first: measured two milliseconds apart, the headline dropped from 22 px `role="Title"`
+        to a 13 px muted line and the one button on screen moved 62.9 px (QA D4-05); a fix that
+        shared only margins and rhythm then left the headline 57 px and the button 108.7 px from
+        where they had been (SW2-02). So the card is built ON THE WELCOME FRAME'S OWN GEOMETRY
+        (`WelcomeView.anchors`): the same reserved error slot above a box of the card's size, the
+        busy bar in the brand mark's row, the headline in "Pacer"'s place and Cancel in the
+        primary action's — in both of the welcome's shapes (cool/welcome-screen), and with no
+        welcome on screen, in the shape a failure would bring back. The recording it is reading is
+        a separate muted line under Cancel. There is deliberately no dashed border here: dashes
+        mean "drop a file here", which stopped being true the moment a file was dropped."""
+        # THE WELCOME FRAME THIS ONE FOLLOWS: the one on screen, or — with none (a reload, the
+        # command line) — the one a failure would bring back, measured unshown.
+        welcome = self.centralWidget()
+        probe = None
+        if not isinstance(welcome, WelcomeView):
+            welcome = probe = self._welcome_view()
+        a = welcome.anchors()
+        if probe is not None:
+            probe.deleteLater()
         label = chapters.recording_label(paths)
         headline = title or "Loading telemetry…"
         container = QWidget()
         outer = QVBoxLayout(container)
         outer.setAlignment(Qt.AlignCenter)
+        outer.setContentsMargins(0, 0, 0, 0)   # as WelcomeView's root
         # The welcome frame's reserved error slot — the SAME widget, empty and hidden with
-        # RetainSizeWhenHidden. This card has no failure message of its own, but it must be centred
-        # against the same column or it sits higher than the frame it replaces. A real hidden
-        # widget rather than `outer.addSpacing(...)`: Qt marks an explicit spacing item so the
-        # layout puts NO spacing beside it, which would have dropped the 6 px the welcome column
-        # has under its slot and left the two cards 1 px apart for no stated reason.
+        # RetainSizeWhenHidden. A real hidden widget rather than `outer.addSpacing(...)`: Qt puts NO
+        # layout spacing beside an explicit spacing item, which would move the card.
         error_slot = QLabel("")
         error_slot.setProperty("role", "WelcomeError")
-        error_slot.setAlignment(Qt.AlignCenter)
-        error_slot.setWordWrap(True)
-        error_slot.setMinimumHeight(m.error_h)
+        error_slot.setFixedWidth(a.card.width())
+        error_slot.setMinimumHeight(a.error_h)
         slot_policy = error_slot.sizePolicy()
         slot_policy.setRetainSizeWhenHidden(True)
         error_slot.setSizePolicy(slot_policy)
         error_slot.setVisible(False)
         outer.addWidget(error_slot, 0, Qt.AlignCenter)
+        # THE CARD IS THE WELCOME CARD'S BOX, AND EVERY LANDMARK IS PLACED ON THE WELCOME'S OWN
+        # GEOMETRY (`WelcomeView.anchors`): the busy bar in the brand mark's row, the headline in
+        # "Pacer"'s rect, Cancel in the primary action's — so nothing the eye was on moves between
+        # the two frames (QA D4-05, SW2-02). It used to rebuild the column from a parallel set of
+        # measurements; with a column that has two shapes and up to five rows, reading the frame
+        # itself is the only answer that cannot drift. No dashed border: dashes mean "drop a file
+        # here", which stopped being true the moment a file was dropped.
         card = QFrame()
-        v = QVBoxLayout(card)
-        v.setAlignment(Qt.AlignCenter)
-        # The welcome zone's own margins PLUS its dashed hairline, which is part of that box and
-        # not of this one (`QFrame#WelcomeDropZone { border: SPACE_XXS dashed }`). Without it the
-        # two cards differ by exactly the border on all four sides — 427x239 against 423x235 — and
-        # the content inside them by 2 px, which is the whole residual once the rows line up.
-        v.setContentsMargins(theme.SPACE_3XL + theme.SPACE_XXS, theme.SPACE_2XL + theme.SPACE_XXS,
-                             theme.SPACE_3XL + theme.SPACE_XXS, theme.SPACE_2XL + theme.SPACE_XXS)
-        v.setSpacing(theme.SPACE_L)
-        # THE COLUMN'S OWN MEASURE, carried by the headline row below — the fifth read off the
-        # welcome frame, and the one that had been getting away with an accident. This card's
-        # widest row is its 220 px busy bar; the welcome card's is its WRAPPING TAGLINE (303 px),
-        # and the two matched only while the demo button, floored at a whole sentence, made the
-        # action row wider than both. With an honest button row the card narrowed 83 px between two
-        # frames two milliseconds apart, and the headline moved with it. Both layouts are centred
-        # and shrink-wrap to their content, so the measure has to be set on the CONTENT (the card's
-        # margins are the zone's plus its border, so the same measure gives the same card width).
-        content_w = welcome_card_width(has_demo=True) - 2 * (theme.SPACE_3XL + theme.SPACE_XXS)
+        card.setFixedSize(a.card)
         outer.addWidget(card, 0, Qt.AlignCenter)
         bar = QProgressBar()
         bar.setObjectName("LoadingBar")
         bar.setRange(0, 0)          # indeterminate: self-animates, no timer to leak, dies with the widget
         bar.setTextVisible(False)
         bar.setFixedWidth(220)
-        # The glyph slot, holding the bar: a plain QWidget with no objectName, so it paints nothing
-        # (Qt only runs the stylesheet's box painting for a QWidget subclass with WA_StyledBackground
-        # set) and only carries the row's height.
-        busy_row = QWidget()
-        busy_row.setFixedHeight(m.glyph_h)
+        busy_row = QWidget(card)
+        busy_row.setGeometry(a.glyph)
         busy = QVBoxLayout(busy_row)
         busy.setContentsMargins(0, 0, 0, 0)
         busy.addWidget(bar, 0, Qt.AlignCenter)
-        v.addWidget(busy_row, 0, Qt.AlignCenter)
-        title_label = QLabel(headline)
+        title_label = QLabel(headline, card)
         title_label.setProperty("role", "Title")
         title_label.setAlignment(Qt.AlignCenter)
-        title_label.setWordWrap(True)
-        # ADDED WITHOUT AN ALIGNMENT FLAG, so the label FILLS the card's content width and its own
-        # AlignCenter centres the text inside it — exactly how the welcome column adds its "Pacer"
-        # headline. A widget centred by the LAYOUT is shrink-wrapped to its text and positioned at
-        # an integer offset, so the two headlines' centres differ by the parity of
-        # (content − text) / 2: measured at 1 px on the narrower card this PR gives it. Filling the
-        # row makes the two rects identical rather than nearly identical.
-        title_label.setMinimumWidth(content_w)
-        v.addWidget(title_label)
-        subject = QLabel(label)
+        title_label.setGeometry(a.title)
+        subject = QLabel(label, card)
         subject.setProperty("role", "LoadingTitle")
         subject.setAlignment(Qt.AlignCenter)
         subject.setWordWrap(True)
-        subject.setMinimumHeight(m.secondary_h)
-        if not label:   # the demo fetch names no recording — the SLOT still has to be there
-            policy = subject.sizePolicy()
-            policy.setRetainSizeWhenHidden(True)
-            subject.setSizePolicy(policy)
-            subject.setVisible(False)
-        v.addWidget(subject, 0, Qt.AlignCenter)
+        # Under the one control, where the welcome had its hints and rows: the column above it has
+        # no spare line in the returning shape.
+        subject.setGeometry(a.title.x(), a.primary.bottom() + 1 + theme.SPACE_M, a.title.width(),
+                            2 * subject.fontMetrics().height())
+        subject.setVisible(bool(label))   # the demo fetch names no recording
         if on_cancel is not None:   # every production path passes one; see _arm_loading_placeholder
-            cancel = QPushButton("Cancel")
+            cancel = QPushButton("Cancel", card)
             cancel.setObjectName("LoadingCancel")
-            cancel.setMinimumWidth(m.primary_w)
+            cancel.setGeometry(a.primary)
             cancel.clicked.connect(on_cancel)
-            # MOUNT, THEN FILL (§3.9): a free-standing layout has no widget, so `addWidget` on it
-            # can only HALF move a child — dropped from its old layout, unable to reparent. Safe
-            # here (both children are fresh), and the #200 SIGSEGV for the first caller who hands
-            # over a mounted one. `v.addLayout` first costs nothing and removes the shape.
-            actions = QHBoxLayout()
-            v.addLayout(actions)
-            actions.setAlignment(Qt.AlignCenter)
-            actions.setContentsMargins(0, 0, 0, 0)
-            actions.addWidget(cancel)
-            if m.secondary_w:
-                # The welcome row's SECOND slot, kept open. A real (empty) widget for the same
-                # reason the error slot above is one — an `addSpacing` item suppresses the layout
-                # spacing beside it, which is 16 px of the offset this row exists to remove. It
-                # paints the canvas the blanket QWidget rule gives it, which is the colour already
-                # behind it.
-                reserved = QWidget()
-                reserved.setFixedWidth(m.secondary_w)
-                actions.addWidget(reserved)
         # Held so a long UI-thread stage can rename the headline on the card ALREADY ON SCREEN
         # (see _announce_stage) instead of leaving it asserting a stage that finished.
         self._loading_card = container
@@ -3178,7 +3124,7 @@ class StudioWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _open_file(self):
-        """File ▸ Open… and the welcome's Open recording… (the same handler): pick a GoPro MP4 and
+        """File ▸ Open… and the welcome's Open a recording… (the same handler): pick a GoPro MP4 and
         open the RECORDING it belongs to — its sibling chapters on disk, in chapter order, exactly
         as a drop does (`_open_recordings`).
 

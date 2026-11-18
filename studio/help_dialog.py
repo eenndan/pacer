@@ -234,7 +234,7 @@ SHORTCUT_GROUPS: list[tuple[str, list[tuple[Keys, str]]]] = shortcut_groups()
 PRIVACY_TITLE = "Your data & privacy"
 PRIVACY_PARAGRAPHS = [
     # "NO NETWORK" STOPPED BEING TRUE BY CONSTRUCTION when the welcome screen began offering the
-    # demo on a fresh launch (LEFT-24): "Get demo · N MB" is one click from the first screen, and
+    # demo on a fresh launch (LEFT-24): "… · N MB download" is one click from the first screen, and
     # it is the app's one fetch. So the claim names its exception — reworded inside the same three
     # lines, measured (the body stays 667 px of its 680 px cap); ", offline" paid for it.
     "Pacer Studio runs entirely on your Mac. It does not upload, sync or share anything — no "
@@ -277,7 +277,7 @@ PRIVACY_PARAGRAPHS = [
     # the card on a scrollbar. The words added below land on this paragraph's last line, so the card
     # is exactly as tall as it was; longer wordings ("the app's warnings log …") measured one line
     # over. What the log holds is said where it is needed: the crash dialog names it.
-    # THE DEMO'S CACHE (demo/, the clip "Get demo" downloads: the pinned `demo._DEMO_BYTES`) is
+    # THE DEMO'S CACHE (demo/, the clip the welcome downloads: the pinned `demo._DEMO_BYTES`) is
     # named the same way and for the same reason, and it had even less room: this paragraph's last
     # line was full, so "the whole index", "your preferences" and "log file" gave back the
     # characters "the demo (demo/)" costs. Measured: 7 lines before and after, the body still 667 px.

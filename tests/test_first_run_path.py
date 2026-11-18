@@ -62,6 +62,34 @@ with open(_DEMO_CLIP, "wb") as _f:
     _f.write(b"\x00" * 16)
 
 
+class _returning:
+    """`with _returning(n):` — a Library with `n` openable rows (stub footage in the jail), so the
+    welcome is its RETURNING shape: "Open a recording…" the primary, the recent sessions below."""
+
+    def __init__(self, n=5):
+        self.n = n
+
+    def __enter__(self):
+        foot = os.path.join(_SEAMS, "footage")
+        os.makedirs(foot, exist_ok=True)
+        rows = []
+        for i in range(self.n):
+            stem = f"GX01{9000 + i}"
+            path = os.path.join(foot, f"{stem}.MP4")
+            with open(path, "wb") as f:
+                f.write(b"\x00" * 16)
+            rows.append({"fingerprint": library.fingerprint(stem), "stem": stem,
+                         "track": "Track A", "date": f"2026-0{i + 1}-01", "lap_count": 10 + i,
+                         "best": 51.0 + i, "theoretical": None, "verified": True,
+                         "degraded": False, "dropout": False, "paths": [path]})
+        library.save({"version": library.VERSION, "entries": rows})
+        return self
+
+    def __exit__(self, *exc):
+        library.save(library.empty_index())
+        return False
+
+
 class _nothing:
     """The negative of `_demo_available` as a context manager, so a state sweep can write one
     `with` instead of branching around it."""
@@ -546,35 +574,31 @@ def test_clicking_open_demo_does_not_move_the_primary_button():
 
 def test_the_primary_cta_is_never_the_smaller_twin():
     """§6.7(b): the amber PRIMARY measured 133 px beside a 178 px SECONDARY — the theme's own
-    hierarchy contradicted by size, so the eye's biggest target on the first screen was the
-    lower-commitment action. The floor is derived (`column_metrics.primary_w` is a max), so this
-    holds for whatever the two labels become."""
+    hierarchy contradicted by size. The doors are one column now, floored at ONE width
+    (`column_metrics.action_w`, the widest thing either says), so whichever is the primary — the
+    demo on a first visit — is never the smaller, through the busy swap too."""
     from studio.overlays import BUSY_DEMO_LABEL as BUSY
-    from studio.overlays import busy_button_width, column_metrics
+    from studio.overlays import column_metrics
 
-    # Both resting labels the app builds the button with (see app._show_welcome): the download one
-    # is the longest thing the twin says, so it is the one that could invert the pair.
     for resting in (DEMO_LABEL, DEMO_GET_LABEL):
         v = WelcomeView(lambda: None, lambda: None, demo_label=resting)
         v.resize(1440, 900)
         v.show()
         _settle()
         try:
-            assert v.demo_btn is not None and v.demo_btn.text() == resting
-            assert v.open_btn.width() >= v.demo_btn.width(), (
-                f"the primary is the smaller twin beside {resting!r}: {v.open_btn.width()} px "
-                f"vs {v.demo_btn.width()} px")
-            # …and it stays that way through the one label swap the row can do.
-            wide = busy_button_width(v.demo_btn, BUSY)
-            assert v.open_btn.width() >= wide, (v.open_btn.width(), wide)
-            m = column_metrics(True)
-            assert m.primary_w >= m.secondary_w, m
+            assert v.primary_btn is v.demo_btn and v.demo_btn.text() == resting
+            assert v.primary_btn.width() >= v.open_btn.width(), (
+                f"the primary is the smaller twin beside {resting!r}: {v.primary_btn.width()} px "
+                f"vs {v.open_btn.width()} px")
+            v.demo_btn.setText(BUSY)
+            _settle()
+            assert v.primary_btn.width() >= v.open_btn.width(), "the busy label shrank the primary"
         finally:
             v.close()
             v.deleteLater()
             _settle()
     print(f"test_the_primary_cta_is_never_the_smaller_twin OK "
-          f"(primary {column_metrics(True).primary_w} ≥ secondary {column_metrics(True).secondary_w})")
+          f"(both doors {column_metrics().action_w} px)")
 
 
 # ==================================================== D4-10 · the status bar that appeared late
@@ -665,7 +689,7 @@ def _frame_anchors(win):
     central = win.centralWidget()
     if isinstance(central, WelcomeView):
         title = next(q for q in central.findChildren(QLabel) if q.text() == "Pacer")
-        return rect(title), rect(central.open_btn), rect(central.drop_zone)
+        return rect(title), rect(central.primary_btn), rect(central.drop_zone)
     title = win._loading_headline
     cancel = next(b for b in central.findChildren(QPushButton)
                   if b.objectName() == "LoadingCancel")
@@ -696,8 +720,9 @@ def test_the_two_frames_of_one_wait_are_anchored_to_each_other():
         worst = {"headline": (0, None), "button": (0, None)}
         full = ([(1440, h) for h in range(700, 901)]
                 + [(w, 900) for w in range(973, 1441)])
-        for demo_on, sizes in ((False, full), (True, full[::8])):
-            with _demo_available() if demo_on else _nothing():
+        for demo_on, sizes, rows in ((False, full, 0), (True, full[::8], 0),
+                                     (False, full[::8], 5)):
+            with _demo_available() if demo_on else _nothing(), _returning(rows):
                 for size in sizes:
                     swept += 1
                     win._show_welcome()
@@ -713,73 +738,68 @@ def test_the_two_frames_of_one_wait_are_anchored_to_each_other():
                         dy = b.center().y() - a.center().y()
                         jump = (dx * dx + dy * dy) ** 0.5
                         if jump > worst[name][0]:
-                            worst[name] = (jump, (size, demo_on, a, b))
+                            worst[name] = (jump, (size, demo_on, rows, a, b))
                     assert w_card == l_card, (
-                        f"{size} (demo={demo_on}): the two frames' cards are {w_card} and {l_card}")
+                        f"{size} (demo={demo_on}, rows={rows}): the two frames' cards are "
+                        f"{w_card} and {l_card}")
         for name, (jump, where) in worst.items():
             assert jump == 0, f"the {name} moves {jump:.1f} px between the two frames at {where}"
     finally:
         win.close()
         _settle()
     print(f"test_the_two_frames_of_one_wait_are_anchored_to_each_other OK "
-          f"({swept} sizes swept in both demo states, headline and button both 0.0 px)")
+          f"({swept} sizes swept in both demo states and the returning shape, headline and button "
+          f"both 0.0 px)")
 
 
-def test_the_loading_cards_reserved_lines_are_the_welcome_columns_own():
-    """The two reservations the anchor rests on, checked against the thing they are copied from —
-    so a copy edit or a type-step change goes RED here instead of silently un-anchoring the seam.
+def test_the_loading_card_is_built_on_the_welcome_frames_own_anchors():
+    """The loading card no longer rebuilds the welcome column from a parallel set of measurements
+    (`column_metrics`' tagline lines and button floors, which a two-shape column with up to five
+    rows would have outgrown): it reads `WelcomeView.anchors()` off the frame it replaces. Held
+    here landmark by landmark, in BOTH shapes and both demo states — the card box, the brand-mark
+    row holding the bar, the headline, Cancel in the primary's place — and, with no welcome on
+    screen (a reload), against the frame a failure would bring back."""
+    from studio.overlays import column_metrics
 
-      * `SECONDARY_LINES` is the number of lines the welcome tagline actually takes at the card's
-        own measure. The loading card's one-line recording label reserves the same, which is what
-        makes the two columns the same height under a centred layout.
-      * `column_metrics().primary_w` is what "Open recording…" is floored at, and Cancel is
-        floored at it, so the one button on screen lands in the primary's slot rather than in the
-        centred pair's middle (D4-06 floored the demo button, which slid that pair 40 px left).
-
-    Checked in BOTH demo states. Until LEFT-24 `column_metrics` answered a different secondary_w
-    for each (0 with no clip); the welcome carries the demo button in both now, floored at the
-    widest of every label it can say, so the two states must be the SAME column — and the second
-    button must not be what sets the card's width (the wrapping tagline does, as it did when a
-    fresh launch had one button)."""
-    from studio.overlays import SECONDARY_LINES, column_metrics, welcome_card_width
-
-    m = column_metrics()   # ONE answer for both states: the loop below holds each view to it
-    assert m.secondary_w > 0, m
-    one_action = welcome_card_width(False)
-    assert welcome_card_width() == one_action, (
-        f"the demo button widens the card {one_action} -> {welcome_card_width()} px")
-    for demo_on in (False, True):
-        with _demo_available() if demo_on else _nothing():
+    m = column_metrics()
+    for demo_on, rows in ((False, 0), (True, 0), (False, 5), (True, 2)):
+        with _demo_available() if demo_on else _nothing(), _returning(rows):
             win = StudioWindow([])
             win.resize(1440, 900)
             win.show()
             _settle(8)
             try:
                 welcome = win.centralWidget()
-                subtitle = next(q for q in welcome.findChildren(QLabel)
-                                if q.property("role") == "WelcomeSubtitle")
-                assert subtitle.height() == m.secondary_h, (
-                    f"the tagline is {subtitle.height()} px but the loading card reserves "
-                    f"{m.secondary_h} ({SECONDARY_LINES} lines)")
-                assert welcome.open_btn.width() == m.primary_w, (welcome.open_btn.width(),
-                                                                 m.primary_w)
-                # The second slot is there in both states, with the state's own label.
-                assert welcome.demo_btn is not None, demo_on
-                assert welcome.demo_btn.text() == (DEMO_LABEL if demo_on else DEMO_GET_LABEL)
-                assert welcome.demo_btn.width() == m.secondary_w, (welcome.demo_btn.width(),
-                                                                   m.secondary_w)
-                assert welcome.drop_zone.width() == one_action, (welcome.drop_zone.width(),
-                                                                 one_action)
-                assert welcome.error_label.height() == m.error_h, (welcome.error_label.height(),
-                                                                   m.error_h)
-                assert welcome.drop_icon.height() == m.glyph_h, (welcome.drop_icon.height(),
-                                                                 m.glyph_h)
+                a = welcome.anchors()
+                assert a.card == welcome.drop_zone.size(), (a.card, welcome.drop_zone.size())
+                assert a.glyph.height() == m.glyph_h and a.error_h == m.error_h, (a, m)
+                assert welcome.primary_btn.width() >= m.action_w, (welcome.primary_btn.width(), m)
+                # an UNSHOWN welcome measures the same landmarks as the one on screen
+                probe = win._welcome_view()
+                assert probe.anchors() == a, (probe.anchors(), a)
+                probe.deleteLater()
+                win._show_loading_placeholder(["/nowhere/GX010062.MP4"], on_cancel=lambda: None)
+                _settle(4)
+                card = win._loading_headline.parentWidget()
+                cancel = next(b for b in card.findChildren(QPushButton)
+                              if b.objectName() == "LoadingCancel")
+                bar = card.findChild(QProgressBar)
+                assert card.size() == a.card, (card.size(), a.card)
+                assert win._loading_headline.geometry() == a.title, (
+                    win._loading_headline.geometry(), a.title)
+                assert cancel.geometry() == a.primary, (cancel.geometry(), a.primary)
+                assert bar.parentWidget().geometry() == a.glyph, (bar.parentWidget().geometry(),
+                                                                  a.glyph)
+                # …and from a non-welcome frame, the shape a failure would bring back.
+                win._show_loading_placeholder(["/nowhere/GX010062.MP4"], on_cancel=lambda: None)
+                _settle(4)
+                assert win._loading_headline.parentWidget().size() == a.card
             finally:
                 win.close()
                 _settle()
-    print("test_the_loading_cards_reserved_lines_are_the_welcome_columns_own OK "
-          f"(glyph {m.glyph_h} · error {m.error_h} · secondary {m.secondary_h} · "
-          f"primary {m.primary_w} · secondary action {m.secondary_w})")
+    print("test_the_loading_card_is_built_on_the_welcome_frames_own_anchors OK "
+          f"(first visit + returning, both demo states; glyph {m.glyph_h} · error {m.error_h} · "
+          f"doors {m.action_w} px)")
 
 
 def test_the_demo_card_offers_the_same_cancel_the_file_card_does():
@@ -833,7 +853,7 @@ def _run_all():
     test_the_loading_card_names_the_stage_that_is_about_to_block()
     test_the_loading_card_is_the_welcome_screens_second_frame()
     test_the_two_frames_of_one_wait_are_anchored_to_each_other()
-    test_the_loading_cards_reserved_lines_are_the_welcome_columns_own()
+    test_the_loading_card_is_built_on_the_welcome_frames_own_anchors()
     test_the_demo_card_offers_the_same_cancel_the_file_card_does()
     print("ALL FIRST-RUN-PATH TESTS OK")
     _ = chapters

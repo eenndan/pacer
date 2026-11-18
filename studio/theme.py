@@ -153,6 +153,7 @@ FOCUS_RING_PX = 2            # keyboard focus ring width (see the focus-ring sec
 GRID_ROW_H = CTRL_H          # 28 — a grid whose ROW is the primary click/seek target
 GRID_ROW_DENSE_H = HIT_MIN   # 24 — a report grid; still a legal pointer target
 EMPTY_MEASURE_PX = 440       # the widest a column of PROSE may be set (widgets.EmptyState)
+WELCOME_CARD_W = 640         # the welcome card's width: a calm card, not the whole screen (2A)
 # The Laps tab's Δbest bar (lap_table._TowerDelegate): sizes of a THING, so they sit here.
 LAP_BAR_H = 6                # the bar's thickness, centred on the row
 LAP_BAR_MIN_PX = 56          # the bar's track, added to the Δ column's own text width
@@ -2182,6 +2183,54 @@ QLabel[role="WelcomeError"] {{
     color: {C.accent};
     font-size: {BODY}px;
     font-weight: 600;
+}}
+/* the welcome's RECENT SESSIONS (cool/welcome-screen): a small-caps header, flat rows that take
+   the button hover and ring, and two text links (Library…, the demo) in the PB toast's link dress.
+   No new colour: a missing-footage row is disabled, and its cells take the muted ink. */
+QLabel#WelcomeSection {{
+    background: transparent;
+    color: {C.text_dim};
+    font-size: {PANEL_HEADER}px;
+    font-weight: 600;
+}}
+QPushButton#WelcomeRow {{
+    background: transparent;
+    border: {BORDER_PX}px solid transparent;
+    text-align: left;
+}}
+QPushButton#WelcomeRow:hover {{
+    background-color: {C.surface_hover};
+    border-color: {C.border};
+}}
+QPushButton#WelcomeRow:focus {{
+    border: {FOCUS_RING_PX}px solid {C.accent_hover};
+    padding: {focus_pad(SPACE_XS)}px {focus_pad(SPACE_M)}px;
+}}
+QPushButton#WelcomeRow:disabled {{
+    background: transparent;
+    border-color: transparent;
+}}
+QPushButton#WelcomeRow QLabel {{
+    background: transparent;
+}}
+QPushButton#WelcomeRow QLabel:disabled {{
+    color: {C.text_muted};
+}}
+QPushButton#WelcomeLink {{
+    background: transparent;
+    border: none;
+    color: {C.accent};
+    font-size: {CAPTION}px;
+    font-weight: 600;
+    padding: {SPACE_XXS}px {SPACE_S}px;
+    min-height: {ctrl_content_h(HIT_MIN, SPACE_XXS, border_v=0)}px;
+}}
+QPushButton#WelcomeLink:hover, QPushButton#WelcomeLink:focus {{
+    color: {C.accent_hover};
+    text-decoration: underline;
+}}
+QPushButton#WelcomeLink:disabled {{
+    color: {C.text_muted};
 }}
 /* load busy state: a muted "Loading telemetry…" title over an INDETERMINATE bar (QProgressBar
    range 0,0) — a multi-second GoPro ingest reads as "working", not frozen. The bar self-animates,

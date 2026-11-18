@@ -70,7 +70,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 from collections.abc import Callable
 
 import pyqtgraph as pg
@@ -271,8 +270,9 @@ _NO_RECORD = "No record"
 EMPTY_LIBRARY_ICON = "ph.folder-open"
 
 # What a Track cell reads when the registry doesn't know the circuit — shown in the cell, matched by
-# the search box, and the label the unknown-track filter bucket stands for.
-_UNKNOWN_LABEL = "unknown track"
+# the search box, and the label the unknown-track filter bucket stands for. The library's own word,
+# so the welcome screen's recent sessions say the same (cool/welcome-screen).
+_UNKNOWN_LABEL = _library.UNKNOWN_TRACK
 
 # Privacy disclosure — the promise in ONE LINE, and the whole account one click away (the dialog's
 # "Your data & privacy…" button opens Help ▸ Your data & privacy). It was the full account here:
@@ -477,26 +477,11 @@ class _SessionDateAxis(pg.DateAxisItem):
         return out
 
 
-def _entry_missing(entry: dict) -> bool:
-    """True iff none of the recording's path(s) exist on disk (any one surviving chapter is enough
-    to re-open); no recorded paths counts as missing."""
-    paths = entry.get("paths") or []
-    return not any(os.path.exists(p) for p in paths)
-
-
-def _missing_footage_text(entry: dict) -> str:
-    """The one line a selected missing row gets (QA VIEW-6): which file, the folder Pacer last saw
-    it in, and the way back. The way back is real: File ▸ Open… loads the whole recording from
-    wherever it is now, and the same chapters are a re-measurement that replaces the row with its
-    new paths (``library._keeps``, pinned by tests/test_library_truth.py)."""
-    paths = entry.get("paths") or []
-    if not paths:
-        return "No footage is on record for this recording, so there is nothing to open."
-    folder, home = os.path.dirname(paths[0]), os.path.expanduser("~")
-    if folder == home or folder.startswith(home + os.sep):
-        folder = "~" + folder[len(home):]
-    return (f"Footage not found: {os.path.basename(paths[0])} was in {folder}. Reconnect its "
-            "drive (or find where it went) and open it with File ▸ Open… — this row then updates.")
+# The row words live in studio/library.py now (Qt-free), shared with the welcome screen's recent
+# sessions; the dialog keeps its own names for them.
+_entry_missing = _library.entry_missing
+_missing_footage_text = _library.missing_footage_text
+_entry_name = _library.entry_name
 
 
 def _entry_junk(entry: dict) -> bool:
@@ -506,15 +491,6 @@ def _entry_junk(entry: dict) -> bool:
     a real best and a real file to re-open. It renders as "unknown track" with the row's usual trust
     tag (``library.trust_label`` → "provisional" while the start line is auto-fitted)."""
     return not entry.get("lap_count")
-
-
-def _entry_name(entry: dict) -> str:
-    """The recording's FILENAME — its first chapter's basename, i.e. what the user sees in Finder.
-    Falls back to the stored first-chapter stem when the entry recorded no paths."""
-    paths = entry.get("paths") or []
-    if paths:
-        return os.path.basename(paths[0])
-    return entry.get("stem") or "this recording"
 
 
 def _entry_tooltip(entry: dict) -> str:
@@ -1212,8 +1188,7 @@ class LibraryDialog(QDialog):
         selectable but never openable, and a no-laps row is greyed and disabled. Sorting is OFF
         here (re-enabled by the caller) so insertion order is preserved while filling."""
         dim = QBrush(QColor(C.text_muted))
-        both = {t for t in {e.get("track") for e in self._entries}
-                if t and _library.both_ways(self._index, t)}
+        both = _library.tracks_both_ways(self._index)
         for r, e in enumerate(self._entries):
             missing = _entry_missing(e)
             junk = _entry_junk(e)
@@ -1257,20 +1232,17 @@ class LibraryDialog(QDialog):
             # A junk row says so; a present-but-missing-file row keeps its established label. An
             # UNTRUSTWORTHY-but-openable row gets a muted trust tag (provisional/estimated/dropout)
             # so the user can see WHICH sessions the PB chart excludes — reusing the theme's trust
-            # tier (italic + PROVISIONAL_COLOR, palette-safe).
+            # tier (italic + PROVISIONAL_COLOR, palette-safe). A track driven both ways round names
+            # each row's way, the one thing that tells its two PB lines apart
+            # (cool/pb-per-direction). The words are `library.track_text`, which the welcome
+            # screen's recent sessions read too.
             trust = None if disabled else _library.trust_label(e)
-            suffix = ("  (no laps)" if junk else "  (file missing)" if missing
-                      else f"  · {trust}" if trust else "")
-            # A track driven both ways round names each row's way, the one thing that tells its
-            # two PB lines apart (cool/pb-per-direction); a row that does not know says nothing.
-            way = _library.ROTATION_WORDS.get(_library.rotation_of(e), "") \
-                if track in both else ""
-            track_text = f"{track or _UNKNOWN_LABEL}{f', {way}' if way else ''}{suffix}"
+            track_text, way, suffix = _library.track_text(e, both, missing=missing, junk=junk)
 
             track_item = QTableWidgetItem(track_text)
             if way:
                 # The way (and the tag after it) survives eliding; the name gives way instead.
-                track_item.setData(KEEP_ROLE, (f", {way}", suffix))
+                track_item.setData(KEEP_ROLE, (way, suffix))
 
             # The SAMPLE both time cells beside it are a minimum over (see _COL_LAPS). Numeric
             # like them, so "sort by Laps" answers "is this ranking pace or session length?" in

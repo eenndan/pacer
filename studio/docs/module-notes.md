@@ -307,7 +307,7 @@ Pure-Python (no `pacer`): the GoPro chaptered-filename parser, sibling **discove
 
 A long GoPro recording is split, at a file-size limit, into **chapters** (`GX<CC><NNNN>.MP4`:
 prefix, 2-digit chapter `CC`, 4-digit recording `NNNN`). Every GUI door — a drop, **File ▸
-Open…**, the welcome's **Open recording…** — opens the whole recording: the chapter's siblings
+Open…**, the welcome's **Open a recording…** — opens the whole recording: the chapter's siblings
 (same recording `NNNN`, same folder, ordered by `CC`) chained into one continuous session. The
 command line loads exactly the chapters it names; **`--full`** (or `--chaptered`), or **File ▸
 Load full recording** in the UI, chains the rest — see [Chaptered sessions](#chapterspy).
@@ -318,7 +318,7 @@ that share a recording number and increment a chapter index, e.g. recording 0062
 not at a lap), so a lap can span a chapter boundary.
 
 - **Whole in the GUI, explicit on the command line.** A drop, File ▸ Open… and the welcome's
-  Open recording… all go through `StudioWindow._open_recordings`, which chains the siblings
+  Open a recording… all go through `StudioWindow._open_recordings`, which chains the siblings
   (`chapters.discover_siblings`: same recording `NNNN` + same prefix, same folder, ordered
   ascending by chapter `CC` — never mixes recordings; a single-chapter recording loads
   gracefully). File ▸ Open used to load the picked file alone, and on a new recording that
@@ -400,7 +400,7 @@ The **session record** (pacer-free AND Qt-free): one record per recording — co
 
 ## `demo.py`
 
-**Demo recording resolution** for `--demo` / the welcome's demo button: resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache (one folder per pinned tag, so an older demo's copy is never found again) → the pinned demo-data pre-release's asset (`_DEMO_TAG`), kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and picks the welcome button's LABEL — "Open demo", or "Get demo · N MB" (`download_mb()`, from the pinned size) when the click will download it. It was born as a gate while the asset was unpublished; once the demo was published, hiding the button left a fresh launch with no demo at all (LEFT-24). The app still reaches the network only on that click or `--demo`.
+**Demo recording resolution** for `--demo` / the welcome's demo button: resolves the SYNTHETIC demo session (`studio/dev/make_demo.py`; fetched once at runtime, never committed) via `PACER_DEMO_MP4` → cache (one folder per pinned tag, so an older demo's copy is never found again) → the pinned demo-data pre-release's asset (`_DEMO_TAG`), kept only if its sha256 is the pinned one. The clips bundled in the `.app` have no real laps, so a first-run user would see an empty studio without this. `demo_available()` is the OFFLINE half (env/cache, no network) and picks the welcome button's LABEL — "Open the demo (synthetic session)", or "… · N MB download" (`download_mb()`, from the pinned size) when the click will download it. It was born as a gate while the asset was unpublished; once the demo was published, hiding the button left a fresh launch with no demo at all (LEFT-24). The app still reaches the network only on that click or `--demo`.
 
 ## `playback_state.py`
 
@@ -577,7 +577,7 @@ The **"G meter"** dial (pacer-free Qt): **two rings** (a `1.0 g` reference + the
 
 ## `overlays.py`
 
-Presentational overlay widgets over StudioWindow: the first-run empty state (**WelcomeView** — drop-zone + the brand mark + Open recording…, plus the demo button on every launch, whose `demo_label` the app picks — "Get demo · N MB" or, once cached, "Open demo"; `on_demo=None` still hides it, the same None-hides-this-action protocol PBToast uses) and the personal-best share toast (**PBToast**). Also owns `column_metrics` / `welcome_card_width` — the measurements the loading card is anchored to. Self-contained (DI callbacks; no reach into StudioWindow internals).
+Presentational overlay widgets over StudioWindow: the no-recording state (**WelcomeView** — drop-zone + the brand mark, in two shapes: a FIRST VISIT says what Pacer does and leads with the demo, whose `demo_label` the app picks — "Open the demo (synthetic session)" or "… · N MB download"; a RETURNING one leads with Open a recording… and lists the Library's five newest rows (`library.recent_rows`, the Library window's own words), each reopening through `_load`, with the demo as a small link; `on_demo=None` still hides it, the same None-hides-this-action protocol PBToast uses) and the personal-best share toast (**PBToast**). Also owns `WelcomeView.anchors()` — the geometry the loading card is built on. Self-contained (DI callbacks; no reach into StudioWindow internals).
 
 ## `help_dialog.py`
 

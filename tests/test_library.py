@@ -650,6 +650,42 @@ def test_trust_label_reasons_and_priority():
     assert library.trust_label(_entry("A", verified=False, dropout=True)) == "provisional"
 
 
+def test_recent_rows_are_the_newest_recordings_in_the_librarys_words():
+    """The welcome screen's list (cool/welcome-screen): newest RECORDING date first (the index has
+    no "last opened"; the first fix's clock breaks a same-day tie, undated rows last), at most
+    RECENT_LIMIT, no no-laps row (nothing to open), a missing-footage row KEPT with the Library's
+    missing sentence, and every label the Library window's (`track_text`): the trust tag on an
+    untrustworthy row, the way on a track driven both ways, the placeholder for no track."""
+    with tempfile.TemporaryDirectory() as d:
+        here = os.path.join(d, "GX010003.MP4")
+        with open(here, "wb") as f:
+            f.write(b"\0")
+        rows = [_entry("GX010001", date="2026-01-01", paths=[os.path.join(d, "GX010001.MP4")]),
+                _entry("GX010002", date=None, paths=[here]),
+                _entry("GX010003", date="2026-05-01", paths=[here], verified=False),
+                {**_entry("GX010004", date="2026-05-01", paths=[here]), "start_ms": 2},
+                {**_entry("GX010005", date="2026-05-01", paths=[here]), "start_ms": 9},
+                _entry("GX010006", date="2026-12-01", laps=0, paths=[here]),
+                {**_entry("GX010007", date="2026-04-01", paths=[here], track=None)},
+                {**_entry("GX010008", date="2026-03-01", paths=[here]), "rotation": 1},
+                {**_entry("GX010009", date="2026-02-01", paths=[here]), "rotation": -1}]
+        index = {"version": library.VERSION, "entries": rows}
+        got = library.recent_rows(index, limit=99)
+        assert len(got) == 8, [r["name"] for r in got]                      # the no-laps row is not offered
+        assert [r["date"] for r in got] == ["2026-05-01"] * 3 + [
+            "2026-04-01", "2026-03-01", "2026-02-01", "2026-01-01", None], got
+        assert got[0]["track"] == "Daytona MK" and got[1]["track"] == "Daytona MK"
+        assert got[2]["track"] == "Daytona MK  · provisional" and got[2]["trust"] == "provisional"
+        assert got[3]["track"] == library.UNKNOWN_TRACK
+        assert got[4]["track"] == "Daytona MK, anticlockwise" and got[4]["way"] == ", anticlockwise"
+        assert got[5]["track"] == "Daytona MK, clockwise"
+        gone = got[6]
+        assert gone["missing"] == library.missing_footage_text(rows[0]) and gone["trust"] is None
+        assert gone["missing"].startswith(f"{library.MISSING_FOOTAGE}: GX010001.MP4 was in")
+        assert gone["track"] == "Daytona MK  (file missing)"
+        assert len(library.recent_rows(index)) == library.RECENT_LIMIT == 5
+
+
 def test_real_v1_file_migrates_forward_all_entries_preserved():
     """THE #55 VALIDATION: a real on-disk schema-v1 file (no trust flags) round-trips to the
     CURRENT version with EVERY legacy entry preserved and back-filled to trusted-unknown — a

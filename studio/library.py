@@ -1348,6 +1348,100 @@ def trust_label(entry: dict) -> str | None:
     return None
 
 
+# WHAT A ROW SAYS, for the two surfaces that list rows: the Library window and the welcome screen's
+# recent sessions (cool/welcome-screen). One set of words, so a row reads the same in both — moved
+# here out of the dialog, which is a Qt view the welcome screen must not have to import.
+UNKNOWN_TRACK = "unknown track"
+# The first words of the missing-footage line; the welcome row says them beside the file's name.
+MISSING_FOOTAGE = "Footage not found"
+# How many rows the welcome screen lists. "Recent" is the newest RECORDING date: the index stores
+# no "last opened".
+RECENT_LIMIT = 5
+
+
+def entry_name(entry: dict) -> str:
+    """The recording's FILENAME — its first chapter's basename, i.e. what the user sees in Finder.
+    Falls back to the stored first-chapter stem when the entry recorded no paths."""
+    paths = entry.get("paths") or []
+    if paths:
+        return os.path.basename(paths[0])
+    return entry.get("stem") or "this recording"
+
+
+def entry_missing(entry: dict) -> bool:
+    """True iff none of the recording's path(s) exist on disk (any one surviving chapter is enough
+    to re-open); no recorded paths counts as missing."""
+    paths = entry.get("paths") or []
+    return not any(os.path.exists(p) for p in paths)
+
+
+def missing_footage_text(entry: dict) -> str:
+    """The one line a missing row gets (QA VIEW-6): which file, the folder Pacer last saw it in,
+    and the way back. The way back is real: File ▸ Open… loads the whole recording from wherever it
+    is now, and the same chapters are a re-measurement that replaces the row with its new paths
+    (``_keeps``, pinned by tests/test_library_truth.py)."""
+    paths = entry.get("paths") or []
+    if not paths:
+        return "No footage is on record for this recording, so there is nothing to open."
+    folder, home = os.path.dirname(paths[0]), os.path.expanduser("~")
+    if folder == home or folder.startswith(home + os.sep):
+        folder = "~" + folder[len(home):]
+    return (f"{MISSING_FOOTAGE}: {os.path.basename(paths[0])} was in {folder}. Reconnect its "
+            "drive (or find where it went) and open it with File ▸ Open… — this row then updates.")
+
+
+def tracks_both_ways(index: dict) -> set[str]:
+    """The tracks with rows stored running each way round (``both_ways``) — the only ones whose
+    rows name their way."""
+    return {t for t in {e.get("track") for e in index.get("entries", [])}
+            if t and both_ways(index, t)}
+
+
+def track_text(entry: dict, both: set[str], *, missing: bool = False,
+               junk: bool = False) -> tuple[str, str, str]:
+    """(label, way, tag) for a row's Track: "Track A, clockwise  · provisional". `way` (", <way>"
+    or "") and `tag` are returned too, so a surface that elides the label can keep both and shorten
+    the NAME instead (cool/pb-per-direction). A track driven both ways round (`both`, from
+    ``tracks_both_ways``) names the row's way; a row that does not know says nothing. A no-laps or
+    missing row says so instead of its trust tag; an untrustworthy openable one carries
+    ``trust_label`` — the mark that keeps a provisional best from reading as a plain one."""
+    trust = None if (missing or junk) else trust_label(entry)
+    tag = ("  (no laps)" if junk else "  (file missing)" if missing
+           else f"  · {trust}" if trust else "")
+    track = entry.get("track")
+    way = ROTATION_WORDS.get(rotation_of(entry), "") if track in both else ""
+    way = f", {way}" if way else ""
+    return f"{track or UNKNOWN_TRACK}{way}{tag}", way, tag
+
+
+def recent_entries(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
+    """The welcome screen's recent sessions: newest recording first (its date, then its first fix's
+    clock), undated rows last, at most `limit`. A no-laps row is left out — the Library quarantines
+    it and Open Recent skips it, so there is nothing for one click to open. A row whose footage is
+    missing is KEPT: it is still the recording, and the welcome greys it as the Library does."""
+    rows = [e for e in index.get("entries", []) if e.get("lap_count")]
+    rows.sort(key=lambda e: (e.get("date") or "", _start_ms(e) or 0), reverse=True)
+    return rows[:limit]
+
+
+def recent_rows(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
+    """What the welcome screen lists for ``recent_entries``, in the Library's own words: the
+    reopen `paths`, the Track label with its `way` and `tag` (``track_text``), the stored `date`,
+    `best` (seconds, formatted by the view as the Library formats it) and valid-lap count `laps`,
+    the `trust` tag, the file's `name`, and `missing` — the Library's missing-footage sentence, or
+    None while the footage is there. One ``os.path.exists`` per listed path, never per index row."""
+    both = tracks_both_ways(index)
+    out = []
+    for e in recent_entries(index, limit):
+        gone = entry_missing(e)
+        label, way, tag = track_text(e, both, missing=gone)
+        out.append({"paths": list(e.get("paths") or []), "track": label, "way": way, "tag": tag,
+                    "date": e.get("date"), "best": e.get("best"), "laps": e["lap_count"],
+                    "trust": None if gone else trust_label(e), "name": entry_name(e),
+                    "missing": missing_footage_text(e) if gone else None})
+    return out
+
+
 def ideal_stale(entry: dict, current: int) -> str | None:
     """None when `entry`'s ideal lap was measured by the ideal-lap maths `current` names
     (``corner_model.IDEAL_VERSION``, passed in so this module stays numpy-free); otherwise

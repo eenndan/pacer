@@ -838,6 +838,11 @@ HOSTS = {
     'QLabel[role="WelcomeError"]': (C.canvas,),
     'QLabel[role="LoadingTitle"]': (C.canvas,),
     "QPushButton#LoadingCancel": (C.canvas,),
+    # The welcome's recent sessions (cool/welcome-screen) sit in the drop zone: on the canvas, and
+    # on C.surface while a drag lights the zone up; a row's cells also on its hover fill.
+    "QLabel#WelcomeSection": (C.canvas, C.surface),
+    "QPushButton#WelcomeLink": (C.canvas, C.surface),
+    "QPushButton#WelcomeRow QLabel": (C.canvas, C.surface),
     # The Shortcuts / About cards: dialog prose and key caps, on the dialog's canvas; the same
     # roles are also used on panel surfaces (the library dialog's summary/privacy notes), so both.
     'QLabel[role="KeyCap"]': (C.canvas, C.surface),

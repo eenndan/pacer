@@ -12,14 +12,14 @@ one section per module in this order — read the one you need, not the whole fi
 ## Run
 
 ```bash
-pixi run studio                              # the welcome screen: drop or open a recording
+pixi run studio                              # the welcome screen: the demo, recent sessions, or drop one
 pixi run studio -- /path/to/GX010062.MP4     # that chapter only: the command line loads what it names
 pixi run studio -- --full /path/to/GX010062.MP4  # discover + chain ALL sibling chapters
 pixi run studio -- b.MP4 a.MP4               # explicit chapters: chained in chapter order, once each
 ```
 
 A GoPro recording is split into chapters (`GX<CC><NNNN>.MP4`). A drop, **File ▸ Open…** and the
-welcome's **Open recording…** open the whole recording (same `NNNN`, same folder, by `CC`). The
+welcome's **Open a recording…** open the whole recording (same `NNNN`, same folder, by `CC`). The
 command line loads the chapters it names, grouped by recording (several recordings: the first
 opens and the rest are counted, as on a drop); `--full` or **File ▸ Load full recording** chains the
 rest. Part of a new recording decides no PB or focus list until the whole recording is loaded.
@@ -201,7 +201,7 @@ caches + delegates.
 | [marks_panel.py](marks_panel.py) | The Marks page and mark editor; emits intents, owns no store | Qt | `test_marks` |
 | [provenance_panel.py](provenance_panel.py) | The read-only "inspect this number" panel over one `Provenance` | Qt | `test_provenance_panel` |
 | [gmeter_overlay.py](gmeter_overlay.py) | The g-meter dial, live and burned into exports (`paint_dial`) | Qt | `test_gmeter_overlay` |
-| [overlays.py](overlays.py) | The welcome state (Get demo · N MB, or Open demo once cached) and the PB toast | Qt | `test_first_run_path` |
+| [overlays.py](overlays.py) | The welcome state (what Pacer does, the demo, the five newest Library rows) and the PB toast | Qt | `test_welcome_first_touch` |
 | [help_dialog.py](help_dialog.py) | `COMMANDS`, the one command registry, and the Help-menu dialogs | Qt | `test_help_dialog` |
 | [command_palette.py](command_palette.py) | ⌘K, generated from the live menu bar and `COMMANDS` | Qt | `test_command_palette` |
 | [library_dialog.py](library_dialog.py) | File ▸ Library…: sessions, PB chart, session records; writes nothing | Qt | `test_library` |
