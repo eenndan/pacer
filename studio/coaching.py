@@ -652,7 +652,7 @@ class Theme:
     share: float                     # the winning side's share of ranked time (0..1)
     execution_s: float               # ranked seconds in REACH_REPEAT corners
     pace_s: float                    # ranked seconds in REACH_RARE / REACH_NEVER corners
-    n_ranked: int                    # rows carrying a claim
+    n_ranked: int                    # ranked rows counted (`headline_theme`: the shortlist's)
     n_abstained: int                 # rows shown but not ranked (the evidence gate)
     cause: str                       # the REASON_* holding the most ranked time (REASON_NONE if none)
     cause_share: float               # its share of ranked time (0..1)
@@ -703,6 +703,45 @@ def session_theme(rows: list[Opportunity]) -> Theme:
                  cause_share=cause_share, cause_cids=cids, lead_cid=ranked[0].cid)
 
 
+# THE THEME COUNTS THE HEADLINE'S CORNERS (owner ruling 2026-11-18, the DECISIONS §16 open item).
+# The page's headline sums the shortlist ("0.43 s across your top 3 corners"), and the theme right
+# under it was clustered over EVERY ranked row: on the demo its cause line said 78 % of the 0.46 s
+# its 4 ranked corners lose, and on a longer session it could name a corner the headline does not
+# count (synthetic seed 9 at 20 laps: "Apex speed … in C1, C7, C3", C3 fourth). One screen, one
+# base: the theme a page prints is `session_theme` over `shortlist_of(rows)`.
+#
+# THE CLASSIFICATION MOVES WITH IT, not only the numbers. A side or a cause chosen over every ranked
+# row and printed as a share of the shortlist is two bases in one sentence, and the share can then
+# fall under the THEME_SHARE that chose it: seed 9 at 20 laps holds apex at 61 % of its 4 ranked
+# corners and under 60 % of its top 3, so it now says "No single cause dominates". Measured on the
+# demo and synthetic seeds 1-14 × 6/10/14/20 laps (57 sessions with coaching, 10 ranking more
+# corners than the shortlist): the kind never differs (every synthetic corner is execution work),
+# the cause differs on that one session, the cause's corners on two, and the printed form on one
+# (seed 5 at 6 laps, whose second ranked corner is under the display floor: its one shown corner
+# now decides the side alone, so the sentence names it as the corner on the line, the form every
+# one-corner shortlist on that line already printed). On 4,000 seeded row sets of 4-8 ranked
+# corners, 60/40 execution/pace, the kind differs on 26 % and the cause on 31 %, and a side chosen
+# over every row would print under THEME_SHARE as a share of the shortlist on 4 %.
+#
+# `session_theme` itself still clusters whatever rows it is given: the THEME tables above are its
+# verdict over every ranked row of the real lap sets, and were not re-measured for this. Those that
+# rank 3 corners or fewer print the same theme by construction; a recording all on one side (0064,
+# pace 100 %) keeps its kind on any subset; 0068 (5 ranked) has not been re-measured on its top 3.
+def shortlist_of(rows: Iterable[Opportunity]) -> list[Opportunity]:
+    """The top `PANEL_TOP_N` rows of `rows` that are ranked and shown, in their order — the rows a
+    headline over these rows sums (`shortlist` is this over a summary's rows). A row without
+    evidence counts as ranked, as `ranked_shown` reads duck-typed rows."""
+    return [r for r in rows if r.time_lost >= DISPLAY_MIN_LOST_S
+            and getattr(getattr(r, "evidence", None), "ranked", True)][:PANEL_TOP_N]
+
+
+def headline_theme(rows: list[Opportunity]) -> Theme:
+    """The theme a page states under its headline: `session_theme` over the headline's shortlist
+    of `rows` (the block above), with `n_abstained` still every unranked row's count."""
+    th = session_theme(shortlist_of(rows))
+    return replace(th, n_abstained=sum(1 for r in rows if not r.evidence.ranked))
+
+
 # ------------------------------------------------- the one corner on the line (COACHING-4)
 #
 # WHY. The theme's side is decided per corner by the reach line (`reach_line`), and corners cluster
@@ -746,9 +785,11 @@ def theme_tipping_row(theme: Theme, rows: list[Opportunity]) -> Opportunity | No
     change the session's verdict, or None.
 
     Only an EXECUTION or a PACE theme has a side to lose; a SPLIT already states both halves. The
-    verdict is re-run through `session_theme` itself on the rows with that one row's evidence moved
-    (`_one_lap_over`), so a row that would abstain drops out of the ranked total and out of the lead
-    exactly as it would on the page, rather than its time being moved to the other side."""
+    verdict is re-run through `headline_theme` itself on the rows with that one row's evidence moved
+    (`_one_lap_over`), so a row that would abstain drops out of the shortlist (the next ranked row
+    taking its place) and out of the lead exactly as it would on the page, rather than its time
+    being moved to the other side. `theme` is `headline_theme(rows)`; a row off the shortlist can
+    never tip it, so the corner named is always one the headline counts."""
     if theme.kind not in (THEME_EXECUTION, THEME_PACE):
         return None
     candidates = []
@@ -757,7 +798,7 @@ def theme_tipping_row(theme: Theme, rows: list[Opportunity]) -> Opportunity | No
         if moved is None:
             continue
         flipped = [*rows[:i], replace(r, evidence=moved), *rows[i + 1:]]
-        if session_theme(flipped).kind != theme.kind:
+        if headline_theme(flipped).kind != theme.kind:
             candidates.append(r)
     return max(candidates, key=lambda r: r.time_lost, default=None)
 
@@ -771,8 +812,9 @@ class Opportunities:
     n_laps: int                              # consistency laps the summary ran over
     median_lap_id: int | None                # the median-time lap (no row reads it since COACHING-2)
     rows: list[Opportunity] = field(default_factory=list)
-    # The clustered one-line story over `rows` (THEME_NONE when nothing is ranked). Computed once
-    # by summarize() so the panel, the modal and any export state the SAME theme.
+    # The clustered one-line story over the headline's shortlist of `rows` (`headline_theme`;
+    # THEME_NONE when nothing is ranked). Computed once by summarize() so the panel, the modal and
+    # any export state the SAME theme.
     theme: Theme = _NO_THEME
 
     def ranked_rows(self) -> list[Opportunity]:
@@ -1391,7 +1433,7 @@ def summarize(
     # gate instead of the biggest number.
     rows.sort(key=lambda r: not r.evidence.ranked)
     return Opportunities(enough=True, n_laps=n_laps, median_lap_id=med_id, rows=rows,
-                         theme=session_theme(rows))
+                         theme=headline_theme(rows))
 
 
 # Names for the dominant phase in the coaching sentence (PHASE_* → human words).
@@ -1591,27 +1633,14 @@ _CAUSE_WORD = {
 }
 
 
-# THE SHARES NAME THEIR BASE. Every percentage the theme prints is a share of ALL the ranked time
-# (`session_theme`), while the headline right above it sums only the shortlist (`shortlist`, at most
-# PANEL_TOP_N rows shown at 2 dp). On the demo the page read "0.43 s across your top 3 corners" over
-# "Apex speed is the common thread — 79% of that time is in C1": 79 % is C1's 0.36 s of the 0.46 s
-# its 4 ranked corners lose; of the headline's 0.43 s it would be 84 %. Which base the theme should
-# use is the owner's call and stays as it was; the words now say which one it is whenever the two
-# counts differ. When they are equal the base IS the shortlist and the sentence is unchanged.
-def _theme_base(theme: Theme, rows: list[Opportunity] | None) -> str:
-    """"the time your 4 ranked corners lose" when the theme's shares are over more (or other)
-    corners than the shortlist the headline sums, else "" (the shortlist is the base, or the rows
-    are not known and there is no headline to disagree with)."""
-    if not rows:
-        return ""
-    n_short = min(PANEL_TOP_N, sum(1 for r in rows
-                                   if r.evidence.ranked and r.time_lost >= DISPLAY_MIN_LOST_S))
-    n = theme.n_ranked
-    if n == n_short:
-        return ""
-    return f"the time your {plural(n, 'ranked corner')} {'loses' if n == 1 else 'lose'}"
-
-
+# THE BASE IS THE HEADLINE'S. Every percentage the theme prints is a share of the time the headline
+# right above it sums, its shortlist (`headline_theme`): on the demo "0.43 s across your top 3
+# corners" over "Apex speed is the common thread — 84% of that time is in C1" (+0.36 of +0.43 s).
+# W8 (#595) named a different base when the theme counted every ranked corner ("78% of the time
+# your 4 ranked corners lose"); with one base the words need not name it, so every form is the one
+# that was already printed when the two counts were equal: "that time" in the cause line, "the time
+# on offer" — the time the headline offers — in the theme sentence.
+#
 # THE PRINTED SHARE IS A RATIO OF PRINTED CELLS. `session_theme` decides on unrounded losses, and
 # printed its shares from them: the demo's cause line said 79 % (0.3601 of 0.4579 s) above cells
 # reading +0.36 of +0.46 s, which make 78 %. The headline already sums what is printed
@@ -1637,8 +1666,9 @@ def _printed_share(part: Iterable[Opportunity], whole: Iterable[Opportunity], un
 
 def _side_rows(rows: list[Opportunity]) -> tuple[list[Opportunity], list[Opportunity],
                                                  list[Opportunity]]:
-    """(ranked, execution, pace) rows, split exactly as `session_theme` splits them."""
-    ranked = [r for r in rows if r.evidence.ranked]
+    """(counted, execution, pace) rows: the headline's shortlist of `rows`, split exactly as
+    `headline_theme` splits it."""
+    ranked = shortlist_of(rows)
     return (ranked, [r for r in ranked if r.evidence.reach == REACH_REPEAT],
             [r for r in ranked if r.evidence.reach in (REACH_RARE, REACH_NEVER)])
 
@@ -1661,7 +1691,7 @@ def _printed_exec_pct(theme: Theme, rows: list[Opportunity] | None) -> float:
 
 
 def _printed_side_share(theme: Theme, rows: list[Opportunity] | None) -> float:
-    """A "Most of …" form's percentage: the winning side's printed losses over every ranked row's;
+    """A "Most of …" form's percentage: the winning side's printed losses over the shortlist's;
     `theme.share` when no rows ride along, or when the printed ratio would fall under THEME_SHARE or
     print as 100 % beside the word "Most"."""
     if not rows:
@@ -1673,10 +1703,11 @@ def _printed_side_share(theme: Theme, rows: list[Opportunity] | None) -> float:
 
 
 def _printed_cause_share(theme: Theme, rows: list[Opportunity] | None) -> float:
-    """The cause line's percentage: its corners' printed losses over every ranked row's;
+    """The cause line's percentage: its corners' printed losses over the shortlist's;
     `theme.cause_share` when no rows ride along or when the printed ratio would fall under the
-    THEME_SHARE that let the line print at all, or print as 100 % while a ranked corner it does not
-    name lost time (one under the display floor prints +0.00), as the "Most" form guards."""
+    THEME_SHARE that let the line print at all, or print as 100 % while a counted corner it does not
+    name lost time, as the "Most" form guards. (Every counted corner is shown, so none prints +0.00
+    any more; the guard stays for rows a caller hands in unsorted.)"""
     if not rows:
         return theme.cause_share
     ranked, _, _ = _side_rows(rows)
@@ -1690,73 +1721,61 @@ def _printed_cause_share(theme: Theme, rows: list[Opportunity] | None) -> float:
 def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
     """The session's ONE line — what the twelve findings add up to. "" when nothing is ranked.
 
-    Percentages are shares of the RANKED time on offer: every ranked corner's, which is the
-    headline's total only when the headline's shortlist holds every ranked corner. When it does not,
-    the percentage forms name their base ("Most of the time your 4 ranked corners lose is …", the
-    block above `_theme_base`); without `rows` there is no shortlist to compare and nothing is named.
-    With `rows` the percentages are ratios of the printed cells (`_printed_share`); the wording is
-    still the unrounded share's.
+    Percentages are shares of the time the headline sums, its shortlist: `theme` is
+    `headline_theme(rows)` (what `summarize` stores), and with `rows` the percentages are ratios of
+    the shortlist's printed cells (`_printed_share`); the wording is still the unrounded share's.
 
     With the session's `rows`, a side that one corner on the reach line decides is not stated as a
     side: the SPLIT form prints instead, both halves, and names that corner (`theme_tipping_row`).
     `theme` itself is unchanged — only the words hedge."""
     if theme.kind == THEME_NONE:
         return ""
-    base = _theme_base(theme, rows)
     tipping = theme_tipping_row(theme, rows) if rows else None
     if tipping is not None:
-        return _split_sentence(theme, tipping, base, rows)
-    # "the time on offer", not "your time": the shares are over the RANKED rows only, and on a
-    # short session most of the measured loss can sit in abstained corners (0064's chapter 3 alone:
-    # 0.121 s ranked against 0.444 s abstained). The same words the abstain sentence uses for the
-    # same quantity, so the page has one name for it.
+        return _split_sentence(theme, tipping, rows)
+    # "the time on offer", not "your time": the shares are over the headline's ranked shortlist
+    # only, and on a short session most of the measured loss can sit in abstained corners (0064's
+    # chapter 3 alone: 0.121 s ranked against 0.444 s abstained). The time on offer is what the
+    # headline right above it offers (THE BASE IS THE HEADLINE'S, above).
     #
     # "ALL", NOT "MOST", AT 100 % (LOOK-9 / copy #2, QA 2026-09-26): "Most of the time on offer is
     # execution, not pace — 100% of it is …" contradicted itself in one sentence on MK_18_09.
-    #
-    # The "All of" forms print no share, and name no base: every ranked corner on one side puts
-    # every shortlisted one there too.
     whole = round(theme.share, 2) >= 1.0
-    most = f"Most of {base or 'the time on offer'}"
     share = _printed_side_share(theme, rows)   # as the cells add up (above `_printed_share`)
     if theme.kind == THEME_EXECUTION:
         if whole:
             return ("All of the time on offer is in corners you have already driven at this "
                     "pace: repeat it, no new speed needed.")
-        return (f"{most} is execution, not pace — {share:.0%} of it is "
+        return (f"Most of the time on offer is execution, not pace — {share:.0%} of it is "
                 "in corners you have already driven at this pace.")
     if theme.kind == THEME_PACE:
         if whole:
             return ("All of the time on offer is in corners you have rarely been quick through: "
                     "it needs new speed, not repetition.")
-        return (f"{most} is pace, not execution — {share:.0%} of it is "
+        return (f"Most of the time on offer is pace, not execution — {share:.0%} of it is "
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
     # when no side clears THEME_SHARE, and it is a real state: D24's 0060 chapter 2 landed here.
     # No lap set of the working set lands there — 0068 comes closest, at 78 % execution
-    # (the THEME table above coaching.THEME_SHARE). Its kind stays execution, yet since COACHING-4
-    # this is the form its page prints, naming C1, the corner on the reach line that decides it.
-    return _split_sentence(theme, None, base, rows)
+    # (the THEME table above coaching.THEME_SHARE, over every ranked row). Its kind stays
+    # execution, yet since COACHING-4 this was the form its page printed, naming C1, the corner on
+    # the reach line that decides it (over its top 3 alone, not re-measured: `headline_theme`).
+    return _split_sentence(theme, None, rows)
 
 
-def _split_sentence(theme: Theme, tipping: Opportunity | None = None, base: str = "",
+def _split_sentence(theme: Theme, tipping: Opportunity | None = None,
                     rows: list[Opportunity] | None = None) -> str:
-    """The SPLIT form — both halves of the ranked time — plus, when one corner on the reach line
+    """The SPLIT form — both halves of the counted time — plus, when one corner on the reach line
     decides the side, that corner. The halves are the measured ones (`theme`'s own seconds), not the
-    tipped ones: the hedge is about which side, not about the numbers. `base` is `_theme_base`'s
-    phrase, leading the halves when it is not the headline's shortlist. With `rows` the halves
+    tipped ones: the hedge is about which side, not about the numbers. With `rows` the halves
     print as their cells add up (`_printed_exec_pct`)."""
     # ONE rounding, the second half 100 minus the first: a ratio of printed cells is an exact
     # fraction like 0.17 / 0.40 = 0.425, and two `:.0%` roundings printed "42% … 57%".
     first = int(f"{_printed_exec_pct(theme, rows):.0%}"[:-1])
     second = 100 - first
-    if base:
-        out = (f"No single theme: of {base}, {first}% is in corners you have already "
-               f"driven at this pace, {second}% in corners you have rarely reached")
-    else:
-        out = (f"No single theme: {first}% of the time on offer is in corners you have "
-               f"already driven at this pace, {second}% in corners you have rarely "
-               "reached")
+    out = (f"No single theme: {first}% of the time on offer is in corners you have "
+           f"already driven at this pace, {second}% in corners you have rarely "
+           "reached")
     if tipping is None:
         return out + "."
     corner_label = f"C{tipping.cid}"
@@ -1910,11 +1929,11 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
     # and every concrete cause keeps its line under a pace theme.
     if theme.cause != REASON_NONE and theme.cause_cids:
         if not (theme.kind == THEME_PACE and theme.cause == REASON_CONSISTENCY):
+            # Every corner named is on the headline's shortlist, and "that time" is its total
+            # (`headline_theme`).
             corners_txt = ", ".join(f"C{c}" for c in theme.cause_cids)
-            # The share's base, named when it is not the headline's shortlist (`_theme_base`).
-            of = _theme_base(theme, rows) or "that time"
             out.append(f"{_CAUSE_WORD[theme.cause]} is the common thread — "
-                       f"{_printed_cause_share(theme, rows):.0%} of {of} is in {corners_txt}.")
+                       f"{_printed_cause_share(theme, rows):.0%} of that time is in {corners_txt}.")
     else:
         out.append("No single cause dominates these corners — work them one at a time.")
     lead = next((r for r in rows if r.cid == theme.lead_cid and r.evidence.ranked), None)
@@ -1999,8 +2018,8 @@ def shortlist(opps: Opportunities) -> list[Opportunity]:
     The top RANKED rows, not the top rows: an abstained corner is displayed but its number is not a
     claim, so summing it into "time available" would put back exactly the noise the evidence gate
     took out. (summarize orders ranked-first, so this is normally the first `PANEL_TOP_N` rows — the
-    filter matters when fewer than that are ranked.)"""
-    return ranked_shown(opps)[:PANEL_TOP_N]
+    filter matters when fewer than that are ranked.) One rule with the theme's (`shortlist_of`)."""
+    return shortlist_of(opps.rows)
 
 
 def shown_total(rows: Iterable[Opportunity]) -> float:

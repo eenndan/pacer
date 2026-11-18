@@ -3490,14 +3490,19 @@ def _coaching_measure(s):
     total = sum(r.time_lost for r in ranked)
     # A lap set can rank nothing at all (every row abstained): no share, no cause.
     cause = max(by_cause.items(), key=lambda kv: kv[1]) if by_cause else ("none", 0.0)
+    # The THEME table is `session_theme`'s verdict over EVERY ranked row; the page's own theme
+    # (`opps.theme`, `headline_theme`) counts only the headline's shortlist since the owner's
+    # 2026-11-18 ruling, so the table is re-derived from the rows rather than read off the page's.
+    from studio import coaching
+    every = coaching.session_theme(opps.rows)
     theme = (opps.n_laps, len(ranked), total, sum(r.time_lost for r in opps.rows if not r.evidence.ranked),
-             _pct(opps.theme.execution_s / total) if total else 0, _pct(opps.theme.pace_s / total) if total else 0,
+             _pct(every.execution_s / total) if total else 0, _pct(every.pace_s / total) if total else 0,
              cause[0], _pct(cause[1] / total) if total else 0)
     gaps = [float(best_t[k] - mat[:, k].min()) for k in range(n)]
     one_off = sum(r.evidence.abstain == "one_off" for r in opps.rows)
     # The app's own verdict and corner count, which the table's rounded shares and header must agree
     # with (a share of 0.599 prints as 60 % and is a SPLIT, not a theme).
-    return rows, theme, z, gaps, one_off, {"kind": opps.theme.kind, "corners": n}
+    return rows, theme, z, gaps, one_off, {"kind": every.kind, "corners": n}
 
 
 # The line-null table's recordings (COACHING-5): the four working-set recordings, whole.

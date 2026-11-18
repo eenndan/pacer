@@ -2076,7 +2076,7 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
     # This test is about the CAUSE axis and the two-action cap, so it keeps a clear lead.
     spread = [1.0, 0.5, 0.4, 0.3]
-    one_cause = K.session_theme(_themed([K.REACH_REPEAT] * 4, losses=spread))
+    one_cause = K.headline_theme(_themed([K.REACH_REPEAT] * 4, losses=spread))
     acts = K.theme_actions(one_cause, _themed([K.REACH_REPEAT] * 4, losses=spread))
     assert len(acts) == 2, acts
     assert acts[0].startswith("Braking is the common thread"), acts[0]
@@ -2084,7 +2084,7 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     mixed_rows = _themed([K.REACH_REPEAT] * 4,
                          kinds=[K.REASON_BRAKING, K.REASON_APEX, K.REASON_CONSISTENCY,
                                 K.REASON_COASTING])
-    mixed = K.session_theme(mixed_rows)
+    mixed = K.headline_theme(mixed_rows)
     mixed_acts = K.theme_actions(mixed, mixed_rows)
     assert mixed.cause == K.REASON_NONE and mixed.cause_cids == ()
     assert len(mixed_acts) == 2 and mixed_acts[0].startswith("No single cause dominates"), \
@@ -2122,7 +2122,7 @@ def test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone():
     DOES separate from the lead (p = 0.0042), so it must not be dragged into the sentence."""
     rows = [_ranked_row(3, 0.148, 0.158), _ranked_row(12, 0.143, 0.206),
             _ranked_row(1, 0.085, 0.109)]
-    acts = K.theme_actions(K.session_theme(rows), rows)
+    acts = K.theme_actions(K.headline_theme(rows), rows)
     start = acts[-1]
     assert start.split(":")[0] == "Start with C3 or C12", start
     assert "+0.15 s and +0.14 s" in start, start
@@ -2136,7 +2136,7 @@ def test_t4_a_lead_that_clears_the_spread_still_reads_exactly_as_before():
     0.220) — the permutation test separates them at p = 0.0046 and the rule agrees."""
     rows = [_ranked_row(12, 0.330, 0.331), _ranked_row(2, 0.204, 0.220),
             _ranked_row(9, 0.153, 0.193)]
-    acts = K.theme_actions(K.session_theme(rows), rows)
+    acts = K.theme_actions(K.headline_theme(rows), rows)
     assert acts[-1] == ("Start with C12: +0.33 s, and you have matched it on 12 of 65 laps."), \
         acts[-1]
     print(f"ok T4 clear lead: {acts[-1]!r}")
@@ -2188,7 +2188,7 @@ def test_lead_ties_widen_on_a_short_session():
     }
     for name, sentence in expect.items():
         rows = _working_set_rows(name)
-        acts = K.theme_actions(K.session_theme(rows), rows)
+        acts = K.theme_actions(K.headline_theme(rows), rows)
         assert acts[-1] == sentence, (name, acts[-1])
     # The floor shrinks with √n: MK's same three losses and spreads over 60 laps a corner separate
     # C8 again (C2 stays, inside half the smaller spread on its own).
@@ -2227,10 +2227,12 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
             "Consistency is the common thread — 100% of that time is in C5, C2, C8.",
             f"Start with C5, C2 or C8: +0.13 s down to +0.06 s {spread}, so this cannot rank "
             "them."]),
-        # 79 %, the ratio of its printed cells (`coaching._printed_share`); unrounded it is 78 %.
+        # Five ranked, three on the shortlist (C1, C5, C7): the share is of those three's printed
+        # cells, and C2, C3 — consistency rows off the shortlist — are no longer named
+        # (`coaching.headline_theme`). It read "79% of the time your 5 ranked corners lose is in
+        # C1, C7, C2, C3".
         "SD_19_09_26": (K.THEME_EXECUTION, [
-            "Consistency is the common thread — 79% of the time your 5 ranked corners lose is in "
-            "C1, C7, C2, C3.",
+            "Consistency is the common thread — 72% of that time is in C1, C7.",
             "Start with C1: +0.15 s, and you have matched it on 4 of 36 laps."]),
         "SD_30_08_26": (K.THEME_EXECUTION, [
             "Consistency is the common thread — 100% of that time is in C7, C5, C3.",
@@ -2241,7 +2243,7 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
     }
     for name, (kind, lines) in expect.items():
         rows = rows_of(name)
-        theme = K.session_theme(rows)
+        theme = K.headline_theme(rows)
         acts = K.theme_actions(theme, rows)
         assert theme.kind == kind and theme.cause == K.REASON_CONSISTENCY, (name, theme)
         assert acts == lines, (name, acts)
@@ -2256,7 +2258,7 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
     # cause keeps its line under an execution or split theme, and "most" pace drops it like "all".
     pace = [_ranked_row(c, loss, 0.01, reach=K.REACH_RARE, n_laps=40, reach_laps=2,
                         kind=K.REASON_BRAKING) for c, loss in ((1, 0.5), (2, 0.3), (3, 0.2))]
-    assert K.theme_actions(K.session_theme(pace), pace)[0].startswith("Braking is the common")
+    assert K.theme_actions(K.headline_theme(pace), pace)[0].startswith("Braking is the common")
     cons = [dataclasses.replace(r, reason=dataclasses.replace(r.reason, kind=K.REASON_CONSISTENCY))
             for r in pace]
 
@@ -2265,17 +2267,17 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
             r.evidence, reach=K.REACH_REPEAT, reach_laps=12)) if r.cid == cid else r for r in rows]
 
     most = repeat(cons, 3)                                  # 0.8 s of 1.0 s rarely reached
-    most_theme = K.session_theme(most)
+    most_theme = K.headline_theme(most)
     assert most_theme.kind == K.THEME_PACE and most_theme.share < 1.0, most_theme
     assert [a.split(":")[0] for a in K.theme_actions(most_theme, most)] == ["Start with C1"]
     split = repeat(cons, 1)                                 # 0.5 s against 0.5 s
-    split_theme = K.session_theme(split)
+    split_theme = K.headline_theme(split)
     assert split_theme.kind == K.THEME_SPLIT, split_theme
     assert K.theme_actions(split_theme, split)[0].startswith("Consistency is the common thread")
     # A wide tie names all of its corners (the page and the Stats note name the same ones).
     wide = [_ranked_row(c, 0.40 - 0.005 * i, 0.3) for i, c in enumerate((3, 1, 4, 5, 9))]
     assert K.corner_names([r.cid for r in K.lead_ties(wide, 3)]) == "C3, C1, C4, C5 or C9"
-    assert K.theme_actions(K.session_theme(wide), wide)[-1].startswith(
+    assert K.theme_actions(K.headline_theme(wide), wide)[-1].startswith(
         "Start with C3, C1, C4, C5 or C9: +0.40 s down to +0.38 s")
     assert [K.corner_names(c) for c in ([7], [7, 5], [])] == ["C7", "C7 or C5", ""]
     print(f"ok QA1-THEME-CLASH: Sandown 3h => {expect['Sandown 3h 2026'][1]!r}")
@@ -2316,9 +2318,11 @@ def test_the_page_leads_with_the_theme():
     state would sit under a headline claiming a theme."""
     _qapp()
     from studio.coaching_panel import OpportunitiesPanel
-    rows = _themed([K.REACH_RARE] * 3 + [K.REACH_REPEAT])
+    # Two rare corners and one repeat in the top three: the theme counts the headline's shortlist
+    # (`headline_theme`), so a fourth row would not reach the sentence.
+    rows = _themed([K.REACH_RARE] * 2 + [K.REACH_REPEAT])
     opp = K.Opportunities(enough=True, n_laps=20, median_lap_id=4, rows=rows,
-                          theme=K.session_theme(rows))
+                          theme=K.headline_theme(rows))
     sentence = K.theme_sentence(opp.theme, opp.rows)   # the rows, as the page reads it
     assert sentence and "pace, not execution" in sentence
 
@@ -2551,7 +2555,7 @@ def test_the_theme_names_the_one_corner_on_the_reach_line():
     fired = {}
     for rec in _SAVED_ROWS:
         rows = _saved(rec)
-        theme = K.session_theme(rows)
+        theme = K.headline_theme(rows)
         tip = K.theme_tipping_row(theme, rows)
         fired[rec] = None if tip is None else tip.cid
         # Theme itself never moves: only the words hedge.
@@ -2559,26 +2563,30 @@ def test_the_theme_names_the_one_corner_on_the_reach_line():
     assert fired == {"SD19": 1, "MK": None, "SD30": None, "SD3h": None}, fired
 
     sd19 = _saved("SD19")
-    theme = K.session_theme(sd19)
-    assert (theme.kind, round(theme.share, 2), theme.lead_cid) == (K.THEME_EXECUTION, 0.78, 1), theme
+    theme = K.headline_theme(sd19)
+    # Five ranked corners under a headline summing three (C1, C5, C7): the theme counts those three
+    # (`headline_theme`), 0.71 where every ranked row gave 0.78 — and C1 still decides the side.
+    assert (theme.kind, round(theme.share, 2), theme.lead_cid) == (K.THEME_EXECUTION, 0.71, 1), theme
+    assert round(K.session_theme(sd19).share, 2) == 0.78
     said = K.theme_sentence(theme, sd19)
-    # Five ranked corners under a headline summing three: the halves name their base (W8). They
-    # print as the cells add up (W9): 79 / 21, where the stored share above is 0.78.
-    assert said == ("No single theme: of the time your 5 ranked corners lose, 79% is in corners "
-                    "you have already driven at this pace, 21% in corners you have rarely reached "
-                    "— C1 sits on the line between the two."), said
+    # The halves print as the shortlist's cells add up (W9): +0.15 +0.08 of +0.32 s, 72 / 28. With
+    # one base the sentence no longer names it; it read "of the time your 5 ranked corners lose,
+    # 79% is in … 21% …".
+    assert said == ("No single theme: 72% of the time on offer is in corners you have already "
+                    "driven at this pace, 28% in corners you have rarely reached — C1 sits on the "
+                    "line between the two."), said
     # Without the rows the sentence is what it always was (every other caller is unchanged).
     assert K.theme_sentence(theme).startswith("Most of the time on offer is execution"), theme
     # C7 tips it too (59.9 % < THEME_SHARE): the LARGEST-loss tipping corner is the one named. C5,
     # one lap under its line (3 of 35, line 4), would only add to execution and is not named.
     c7_only = [r if r.cid != 1 else _corner(1, r.time_lost, 36, 9) for r in sd19]
-    assert K.theme_tipping_row(K.session_theme(c7_only), c7_only).cid == 7
+    assert K.theme_tipping_row(K.headline_theme(c7_only), c7_only).cid == 7
 
     for rec, start in (("MK", "All of the time on offer is in corners you have already driven"),
                        ("SD30", "All of the time on offer is in corners you have already driven"),
                        ("SD3h", "All of the time on offer is in corners you have rarely been quick")):
         rows = _saved(rec)
-        assert K.theme_sentence(K.session_theme(rows), rows).startswith(start), rec
+        assert K.theme_sentence(K.headline_theme(rows), rows).startswith(start), rec
     print(f"ok COACHING-4: fires on {[r for r, c in fired.items() if c]} — {said!r}")
 
 
@@ -2593,17 +2601,17 @@ def test_a_corner_on_the_two_lap_line_drops_out_rather_than_changing_sides():
     # 0.2 on the line, 0.5 routine, 0.3 never reached: 70 % execution. MOVING the 0.2 to pace
     # would read 50 % (a SPLIT); DROPPING it reads 0.5 / 0.8 = 62.5 % — still execution. Not hedged.
     rows = [_corner(1, 0.2, 19, 2), _corner(2, 0.5, 19, 6), _corner(3, 0.3, 19, 0)]
-    theme = K.session_theme(rows)
+    theme = K.headline_theme(rows)
     assert theme.kind == K.THEME_EXECUTION and K.theme_tipping_row(theme, rows) is None, theme
     assert K.theme_sentence(theme, rows).startswith("Most of the time on offer is execution")
     # A bigger corner on that line DOES decide it: 0.3 / 0.6 = 50 % once it drops, and the lead
     # passes to C2 — the sentence names C1 in the words that fit a drop, not "between the two".
     rows = [_corner(1, 0.4, 19, 2), _corner(2, 0.3, 19, 6), _corner(3, 0.3, 19, 0)]
-    theme = K.session_theme(rows)
+    theme = K.headline_theme(rows)
     assert K.theme_tipping_row(theme, rows).cid == 1
     import dataclasses
     flipped = [dataclasses.replace(rows[0], evidence=K._one_lap_over(rows[0].evidence)), *rows[1:]]
-    assert (K.session_theme(flipped).kind, K.session_theme(flipped).lead_cid) == (K.THEME_SPLIT, 2)
+    assert (K.headline_theme(flipped).kind, K.headline_theme(flipped).lead_cid) == (K.THEME_SPLIT, 2)
     said = K.theme_sentence(theme, rows)
     assert said.endswith("— C1 sits on the line: one lap fewer at its target and it would not "
                          "count."), said
@@ -2611,7 +2619,7 @@ def test_a_corner_on_the_two_lap_line_drops_out_rather_than_changing_sides():
     # line 4). C1 gaining that lap moves 0.10 s to execution: pace 0.55 of 1.00, a SPLIT. C2 (2 of
     # 36) is two laps short and is not a candidate.
     rows = [_corner(1, 0.10, 36, 3), _corner(2, 0.55, 36, 2), _corner(3, 0.35, 36, 9)]
-    theme = K.session_theme(rows)
+    theme = K.headline_theme(rows)
     assert (theme.kind, round(theme.share, 2)) == (K.THEME_PACE, 0.65), theme
     assert K._one_lap_over(rows[0].evidence).reach == K.REACH_REPEAT
     assert K._one_lap_over(rows[1].evidence) is None
@@ -2622,8 +2630,8 @@ def test_a_corner_on_the_two_lap_line_drops_out_rather_than_changing_sides():
                          "the line between the two."), pace_said
     # Amendment (2): only an EXECUTION or a PACE theme is hedged — a SPLIT already states both.
     split = [_corner(1, 0.5, 36, 4), _corner(2, 0.5, 36, 0)]
-    assert K.session_theme(split).kind == K.THEME_SPLIT
-    assert K.theme_tipping_row(K.session_theme(split), split) is None
+    assert K.headline_theme(split).kind == K.THEME_SPLIT
+    assert K.theme_tipping_row(K.headline_theme(split), split) is None
     print(f"ok COACHING-4 two-lap line: {said!r}")
 
 
@@ -2636,7 +2644,7 @@ def test_the_theme_block_prints_the_corner_and_fits_its_budget():
 
     def panel(rows):
         opp = K.Opportunities(enough=True, n_laps=36, median_lap_id=4, rows=rows,
-                              theme=K.session_theme(rows))
+                              theme=K.headline_theme(rows))
 
         class _S:
             def coaching_opportunities(self):
@@ -3122,10 +3130,10 @@ def test_the_level_step_leaves_the_ranking_as_it_was():
     kinds = [(r.cid, r.reason.kind) for r in demo.ranked_rows()]
     assert kinds == [(1, K.REASON_APEX), (2, K.REASON_LEVEL), (7, K.REASON_LEVEL),
                      (4, K.REASON_LEVEL)], kinds
-    # The theme is unchanged on the demo: the level rows were never its cause. (78 %: its printed
-    # cells, +0.36 of +0.46 s; `test_the_theme_share_is_the_ratio_of_the_printed_cells`.)
+    # The theme is unchanged on the demo: the level rows were never its cause. (84 %: its printed
+    # cells over the headline's, +0.36 of +0.43 s; `test_the_theme_counts_the_headlines_corners`.)
     assert K.theme_actions(demo.theme, demo.rows) == [
-        "Apex speed is the common thread — 78% of the time your 4 ranked corners lose is in C1.",
+        "Apex speed is the common thread — 84% of that time is in C1.",
         "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."]
     print(f"ok ranking unchanged: {_MAIN_RANKED}")
 
@@ -3409,19 +3417,40 @@ def test_the_how_to_find_it_tip_promises_only_what_the_cell_prints():
     print(f"ok tip: page {tip!r}; debrief {K.REASON_TIP_DEBRIEF!r}")
 
 
-def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
-    """The demo's page read "0.43 s across your top 3 corners" over "Apex speed is the common thread —
-    79% of that time is in C1": 79 % is C1's share of the 0.46 s all 4 RANKED corners lose (of the
-    headline's 0.43 s it would be 84 %). The number stays (re-basing is the owner's call, DECISIONS
-    §14); the sentence names its base whenever the ranked count is not the shortlist's length, in
-    every percentage form, and is byte-identical to before when the two are equal. (Since W9 the
-    share prints as its cells add up, 78 %: `test_the_theme_share_is_the_ratio_of_the_printed_cells`.)"""
+def test_the_theme_counts_the_headlines_corners():
+    """Owner ruling 2026-11-18 (the DECISIONS §16 open item): the theme counts the corners the
+    headline above it sums. The demo's page read "0.43 s across your top 3 corners" over "Apex speed
+    is the common thread — 78% of the time your 4 ranked corners lose is in C1" (C1's +0.36 of the
+    +0.46 s all 4 RANKED corners lose); it now reads 84 %, +0.36 of the headline's +0.43 s, and with
+    one base the line no longer names it. The CLASSIFICATION moves with the numbers
+    (`coaching.headline_theme`): a side or a cause chosen over every ranked row and printed as a
+    share of three is two bases in one sentence. Each form, main's words → these (four ranked
+    corners, three on the shortlist):
+
+      cause, one corner    "78% of the time your 4 ranked corners lose is in C1." → "84% of that time …"
+      cause, several       "80% of the time your 4 ranked corners lose is in C1, C2." → "89% of that time …"
+      Most … execution     "Most of the time your 4 ranked corners lose is execution … 73% …" →
+                           "Most of the time on offer is execution … 80% …"
+      Most … pace          the same, pace: 73 % → 80 %
+      split                "No single theme: of the time your 4 ranked corners lose, 46% … 54% …" →
+                           "No single theme: 42% of the time on offer … 58% …"
+      All of …             unchanged: it never named a base (every corner on one side puts every
+                           counted one there too)."""
     demo = _level_sessions()["demo"].coaching_opportunities()
     assert K.headline(demo).startswith("Whole session · 0.43 s across your top 3 corners"), \
         K.headline(demo)
-    assert (demo.theme.n_ranked, len(K.shortlist(demo))) == (4, 3), demo.theme
-    assert K.theme_lines(demo)[1][0] == (
-        "Apex speed is the common thread — 78% of the time your 4 ranked corners lose is in C1.")
+    assert (len(demo.ranked_rows()), demo.theme.n_ranked, len(K.shortlist(demo))) == (4, 3, 3), \
+        demo.theme
+    sentence, acts = K.theme_lines(demo)
+    assert sentence == ("All of the time on offer is in corners you have already driven at this "
+                        "pace: repeat it, no new speed needed.")
+    assert acts[0] == "Apex speed is the common thread — 84% of that time is in C1.", acts[0]
+    # The printed percentage is the shortlist's printed cells' ratio, the headline's 0.43 s.
+    c1 = [r for r in K.shortlist(demo) if r.cid == 1]
+    assert (K.shown_total(c1), round(K.shown_total(K.shortlist(demo)), 2)) == (0.36, 0.43)
+    assert f"{K.shown_total(c1) / K.shown_total(K.shortlist(demo)):.0%}" == "84%"
+    # `session_theme` itself still clusters every row it is given (the THEME tables' verdict).
+    assert round(K.session_theme(demo.rows).cause_share, 4) == 0.7864
 
     def rows(reaches, kinds, losses=(0.5, 0.3, 0.2, 0.1)):
         return [_ranked_row(i + 1, loss, 0.01, reach=reach, kind=kind, n_laps=40,
@@ -3429,71 +3458,106 @@ def test_the_theme_names_its_base_when_the_headline_sums_fewer_corners():
                 for i, (reach, kind, loss) in enumerate(zip(reaches, kinds, losses, strict=False))]
 
     R, P, B, A = K.REACH_REPEAT, K.REACH_RARE, K.REASON_BRAKING, K.REASON_APEX
-    cases = {   # name: (rows of 4 ranked, main's theme sentence, main's cause line)
+    cases = {   # name: (four ranked rows, biggest first; the sentence; the cause line)
         "execution, two cause corners": (
             rows([R, R, R, P], [A, A, B, B], (0.7, 0.1, 0.1, 0.1)),
-            "Most of the time on offer is execution, not pace — 90% of it is in corners you "
-            "have already driven at this pace.",
+            "All of the time on offer is in corners you have already driven at this pace: repeat "
+            "it, no new speed needed.",
+            "Apex speed is the common thread — 89% of that time is in C1, C2."),
+        "execution, most": (
+            rows([R, R, P, P], [A, A, B, B]),
+            "Most of the time on offer is execution, not pace — 80% of it is in corners you have "
+            "already driven at this pace.",
             "Apex speed is the common thread — 80% of that time is in C1, C2."),
-        "pace, several cause corners": (
-            rows([P, P, P, R], [B, B, B, A]),
-            "Most of the time on offer is pace, not execution — 91% of it is in corners you have "
+        "pace, most": (
+            rows([P, P, R, R], [B, B, B, A]),
+            "Most of the time on offer is pace, not execution — 80% of it is in corners you have "
             "rarely been quick through.",
-            "Braking is the common thread — 91% of that time is in C1, C2, C3."),
+            "Braking is the common thread — 100% of that time is in C1, C2, C3."),
         "split": (
-            rows([R, P, R, P], [B, B, B, B], (0.5, 0.4, 0.1, 0.3)),
-            "No single theme: 46% of the time on offer is in corners you have already driven at "
-            "this pace, 54% in corners you have rarely reached.",
-            "Braking is the common thread — 100% of that time is in C1, C2, C3, C4."),
+            rows([R, P, P, R], [B, B, B, B], (0.5, 0.4, 0.3, 0.1)),
+            "No single theme: 42% of the time on offer is in corners you have already driven at "
+            "this pace, 58% in corners you have rarely reached.",
+            "Braking is the common thread — 100% of that time is in C1, C2, C3."),
         "all of it, one cause corner": (
             rows([R, R, R, R], [A, B, B, B], (0.8, 0.1, 0.05, 0.05)),
             "All of the time on offer is in corners you have already driven at this pace: repeat "
             "it, no new speed needed.",
-            "Apex speed is the common thread — 80% of that time is in C1."),
+            "Apex speed is the common thread — 84% of that time is in C1."),
     }
-    named = {
-        "execution, two cause corners": (
-            "Most of the time your 4 ranked corners lose is execution, not pace — 90% of it is in "
-            "corners you have already driven at this pace.",
-            "Apex speed is the common thread — 80% of the time your 4 ranked corners lose is in "
-            "C1, C2."),
-        "pace, several cause corners": (
-            "Most of the time your 4 ranked corners lose is pace, not execution — 91% of it is in "
-            "corners you have rarely been quick through.",
-            "Braking is the common thread — 91% of the time your 4 ranked corners lose is in "
-            "C1, C2, C3."),
-        "split": (
-            "No single theme: of the time your 4 ranked corners lose, 46% is in corners you have "
-            "already driven at this pace, 54% in corners you have rarely reached.",
-            "Braking is the common thread — 100% of the time your 4 ranked corners lose is in "
-            "C1, C2, C3, C4."),
-        "all of it, one cause corner": (
-            "All of the time on offer is in corners you have already driven at this pace: repeat "
-            "it, no new speed needed.",
-            "Apex speed is the common thread — 80% of the time your 4 ranked corners lose is in "
-            "C1."),
-    }
-    for name, (four, sentence, _cause) in cases.items():
-        th = K.session_theme(four)
+    for name, (four, sentence, cause) in cases.items():
+        th = K.headline_theme(four)
         got = (K.theme_sentence(th, four), K.theme_actions(th, four)[0])
-        assert got == named[name], (name, got)
-        # Without the rows there is no shortlist to compare: main's words.
-        assert K.theme_sentence(th) == sentence, (name, K.theme_sentence(th))
-        # Three ranked: the shortlist IS the base, and every form is the unnamed one, byte for
-        # byte. (The theme is the three rows' own since W9: a share prints as THESE rows' cells
-        # add up, so a theme borrowed from four rows would print the three's ratio.)
-        three = [r for r in four if r.cid != 4]
-        th3 = K.session_theme(three)
-        assert th3.n_ranked == 3, th3
-        assert (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == \
-            (K.theme_sentence(th3), K.theme_actions(th3, [])[0]), name
-        assert "ranked corner" not in K.theme_sentence(th3, three) + K.theme_actions(th3, three)[0]
-    # A ranked corner under the display resolution is in the base but not in the shortlist.
+        assert got == (sentence, cause), (name, got)
+        assert "ranked corner" not in "".join(got) and "C4" not in "".join(got), (name, got)
+        # The fourth corner never reaches the theme: it is the three rows' own, byte for byte.
+        three = four[:3]
+        th3 = K.headline_theme(three)
+        assert th3 == th and (K.theme_sentence(th3, three), K.theme_actions(th3, three)[0]) == got
+    # The classification is the shortlist's too: over all four the split above is a split at 46 %
+    # and the "most" sides 73 %; seed 9 at 20 laps (below) names no cause where all four said apex.
+    assert K.session_theme(cases["split"][0]).kind == K.THEME_SPLIT
+    assert round(K.session_theme(cases["execution, most"][0]).share, 2) == 0.73
+    # A ranked corner under the display floor is shown nowhere, so the theme does not count it.
     tiny = rows([R, R], [B, B], (0.5, 0.004))
-    th = K.session_theme(tiny)
-    assert K.theme_actions(th, tiny)[0] == (
-        "Braking is the common thread — 100% of the time your 2 ranked corners lose is in C1, C2.")
-    print("ok theme base: named when ranked != shortlist, main's words when equal")
+    assert K.theme_actions(K.headline_theme(tiny), tiny)[0] == (
+        "Braking is the common thread — 100% of that time is in C1.")
+    print("ok theme base: the headline's shortlist, one base, no base named")
+
+
+_THEME_SWEEP: dict = {}
+
+
+def _theme_sweep() -> dict:
+    """name -> coaching rows: the demo, `_sweep_sessions` (8 seeds x 6/10 laps) and synthetic seeds
+    1-12 at 14 and 20 laps — 12 seeds at 2 lap counts, 8 of them at 4. Only the rows are kept."""
+    if not _THEME_SWEEP:
+        import tempfile
+
+        from studio.dev import synth_gopro as sg
+        from studio.session import Session
+        _THEME_SWEEP["demo"] = list(_level_sessions()["demo"].coaching_opportunities().rows)
+        for name, s in _sweep_sessions().items():
+            _THEME_SWEEP[name] = list(s.coaching_opportunities().rows)
+        with tempfile.TemporaryDirectory(prefix="theme_sweep_") as tmp:
+            for seed in range(1, 13):
+                for laps in (14, 20):
+                    rec = sg.generate(os.path.join(tmp, f"s{seed}_l{laps}"), seed, laps, chapters=1)
+                    _THEME_SWEEP[f"seed {seed}, {laps} laps"] = list(
+                        Session.load(rec.paths).coaching_opportunities().rows)
+    return _THEME_SWEEP
+
+
+def test_every_corner_the_theme_names_is_on_the_headlines_shortlist():
+    """The sweep behind the ruling: on every session, every corner the theme sentence and its cause
+    line name is on the headline's shortlist (the top 3 ranked rows that print, taken here by the
+    rule's own words, not through `coaching.shortlist`), and every percentage is the ratio of the
+    shortlist's printed cells or the guard's unrounded fallback (`_check_printed_shares`). On main
+    seed 8 at 14 laps named C4 and seed 9 at 20 laps C3, each a fourth ranked corner; seed 9 at 20
+    laps now names no cause (apex is 61 % of its 4 ranked corners and under 60 % of its top 3)."""
+    sweep = _theme_sweep()
+    off, fell, longer = [], 0, 0
+    for name, rows in sweep.items():
+        short = [r for r in rows if r.evidence.ranked and round(r.time_lost, 2) > 0][:3]
+        longer += sum(r.evidence.ranked for r in rows) > len(short)
+        th = K.headline_theme(rows)
+        assert {r.cid for r in short} == {r.cid for r in K.shortlist_of(rows)}, name
+        assert set(th.cause_cids) <= {r.cid for r in short}, (name, th)
+        said = K.theme_sentence(th, rows)
+        acts = K.theme_actions(th, rows)
+        cause = acts[0] if acts and "common thread" in acts[0] else ""
+        named = {int(c) for c in re.findall(r"\bC(\d+)", said + " " + cause)}
+        if not named <= {r.cid for r in short}:
+            off.append((name, said, cause))
+        fell += _check_printed_shares(rows)
+    assert not off, off
+    assert len(sweep) == 41 and longer >= 5, (len(sweep), longer)
+    s9 = _theme_sweep()["seed 9, 20 laps"]
+    assert K.theme_actions(K.headline_theme(s9), s9)[0] == (
+        "No single cause dominates these corners — work them one at a time.")
+    assert K.session_theme(s9).cause == K.REASON_APEX
+    print(f"ok theme sweep: {len(sweep)} sessions, {longer} ranking more than the shortlist, "
+          f"{fell} share(s) on the guard's fallback")
 
 
 # --------------------------------------------- a row's Compare: see the loss the row names
@@ -3771,11 +3835,12 @@ def _cells_ratio(part, whole) -> float:
 def _check_printed_shares(rows) -> int:
     """Every percentage the theme prints over `rows` is the ratio of the printed cells, except where
     that ratio crosses the line the words were chosen at (then the unrounded share prints, and the
-    words stay true). Returns how many shares fell back."""
-    theme = K.session_theme(rows)
+    words stay true). The cells are the headline's shortlist's: the top 3 ranked rows that print
+    (the theme counts the headline's corners). Returns how many shares fell back."""
+    theme = K.headline_theme(rows)
     if theme.kind == K.THEME_NONE:
         return 0
-    ranked = [r for r in rows if r.evidence.ranked]
+    ranked = [r for r in rows if r.evidence.ranked and round(r.time_lost, 2) > 0][:3]
     ex = [r for r in ranked if r.evidence.reach == K.REACH_REPEAT]
     pa = [r for r in ranked if r.evidence.reach in (K.REACH_RARE, K.REACH_NEVER)]
     fell_back = 0
@@ -3823,16 +3888,20 @@ def test_the_theme_share_is_the_ratio_of_the_printed_cells():
     Checked on the demo and the two seeded sessions through the real loader, and on 400 seeded row
     sets whose losses sit on rounding edges, in every form that prints a share (the execution and
     pace "Most", the split, the cause line). Where the printed ratio would cross the line its words
-    were chosen at — "Most" at 100 %, a split with a half at 60 % — the unrounded share prints."""
+    were chosen at — "Most" at 100 %, a split with a half at 60 % — the unrounded share prints.
+
+    Since the theme counts the headline's corners (`test_the_theme_counts_the_headlines_corners`)
+    the cells are the shortlist's: the demo's +0.36 of +0.43 s, 84 % (unrounded 0.3605 of
+    0.4307 s, also 84 %), and a ranked corner under the display floor is no longer counted, so the
+    guard's edges below are big losses beside a +0.01 s one."""
     demo = _level_sessions()["demo"].coaching_opportunities()
-    ranked = demo.ranked_rows()
-    c1 = [r for r in ranked if r.cid == 1]
-    assert (round(K.shown_total(c1), 2), round(K.shown_total(ranked), 2)) == (0.36, 0.46), \
-        [r.time_lost for r in ranked]
-    assert round(demo.theme.cause_share, 4) == 0.7864, demo.theme   # stored: unchanged
+    short = K.shortlist(demo)
+    c1 = [r for r in short if r.cid == 1]
+    assert (round(K.shown_total(c1), 2), round(K.shown_total(short), 2)) == (0.36, 0.43), \
+        [r.time_lost for r in short]
+    assert round(demo.theme.cause_share, 4) == 0.8370, demo.theme
     line = K.theme_actions(demo.theme, demo.rows)[0]
-    assert line == ("Apex speed is the common thread — 78% of the time your 4 ranked corners lose "
-                    "is in C1."), line
+    assert line == "Apex speed is the common thread — 84% of that time is in C1.", line
     for name, s in _level_sessions().items():
         if not name.startswith("_"):
             assert _check_printed_shares(s.coaching_opportunities().rows) == 0, name
@@ -3849,47 +3918,52 @@ def test_the_theme_share_is_the_ratio_of_the_printed_cells():
                 for i, (loss, reach, kind) in enumerate(zip(losses, reaches, kinds, strict=True))]
         rows.sort(key=lambda r: -r.time_lost)
         fell += _check_printed_shares(rows)
-    # The guard, at its edges. "Most" never prints 100 %: a pace corner at +0.004 s prints +0.00.
-    most = [_ranked_row(1, 0.5, 0.01, n_laps=40),
-            _ranked_row(2, 0.004, 0.01, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
-    th = K.session_theme(most)
+    # The guard, at its edges. "Most" never prints 100 %: cells of +1.99 and +0.01 s make 99.5 %.
+    most = [_ranked_row(1, 1.994, 0.01, n_laps=40),
+            _ranked_row(2, 0.0149, 0.01, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    th = K.headline_theme(most)
     assert K.theme_sentence(th, most) == (
-        "Most of the time your 2 ranked corners lose is execution, not pace — 99% of it is in "
+        "Most of the time on offer is execution, not pace — 99% of it is in "
         "corners you have already driven at this pace."), K.theme_sentence(th, most)
+    # A pace corner under the display floor is not counted at all: every counted corner is
+    # execution work, and the sentence says "All of" with no share.
+    floor = [_ranked_row(1, 0.5, 0.01, n_laps=40),
+             _ranked_row(2, 0.004, 0.01, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
+    assert K.theme_sentence(K.headline_theme(floor), floor).startswith("All of the time on offer")
     # A split stays a split in its numbers: cells of +0.06 / +0.04 would read 60 % beside "No single
     # theme"; the unrounded 59 % prints.
     split = [_ranked_row(1, 0.0594, 0.001, n_laps=40),
              _ranked_row(2, 0.0406, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
-    th = K.session_theme(split)
+    th = K.headline_theme(split)
     assert th.kind == K.THEME_SPLIT and K.theme_sentence(th, split).startswith(
         "No single theme: 59% of the time on offer"), K.theme_sentence(th, split)
     # One cell off the edge, the split prints its cells: +0.06 / +0.05 → 55 % / 45 %.
     split2 = [_ranked_row(1, 0.0596, 0.001, n_laps=40),
               _ranked_row(2, 0.0454, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
-    th = K.session_theme(split2)
+    th = K.headline_theme(split2)
     assert K.theme_sentence(th, split2).startswith(
         "No single theme: 55% of the time on offer"), K.theme_sentence(th, split2)
     # Review of #600: cells of +0.17 / +0.23 are 0.425 / 0.575, and two separate roundings printed
     # "42% … 57%" — 99. One rounding, the second half 100 minus the first.
     halves = [_ranked_row(1, 0.1726, 0.001, n_laps=40),
               _ranked_row(2, 0.2284, 0.001, reach=K.REACH_RARE, n_laps=40, reach_laps=2)]
-    said = K.theme_sentence(K.session_theme(halves), halves)
+    said = K.theme_sentence(K.headline_theme(halves), halves)
     assert said.startswith("No single theme: 42% of the time on offer") and "58% in corners" in \
         said, said
     _check_printed_shares(halves)
-    # The cause line never prints 100 % beside a ranked corner it does not name: C2's +0.004 s
-    # prints +0.00, the cells would make 100 %, and the unrounded 99 % prints, as "Most" does.
-    cause = [_ranked_row(1, 0.5, 0.01, kind=K.REASON_APEX, n_laps=40),
-             _ranked_row(2, 0.004, 0.01, kind=K.REASON_BRAKING, n_laps=40)]
-    th = K.session_theme(cause)
+    # The cause line never prints 100 % beside a counted corner it does not name: C2's +0.01 s
+    # against +1.99 s, the cells would make 100 %, and the unrounded 99 % prints, as "Most" does.
+    cause = [_ranked_row(1, 1.994, 0.01, kind=K.REASON_APEX, n_laps=40),
+             _ranked_row(2, 0.0149, 0.01, kind=K.REASON_BRAKING, n_laps=40)]
+    th = K.headline_theme(cause)
     assert th.cause == K.REASON_APEX and th.cause_cids == (1,), th
     assert K.theme_actions(th, cause)[0] == (
-        "Apex speed is the common thread — 99% of the time your 2 ranked corners lose is in C1."), \
+        "Apex speed is the common thread — 99% of that time is in C1."), \
         K.theme_actions(th, cause)[0]
-    # Every ranked corner named: 100 % is the cells' own ratio and prints.
+    # Every counted corner named: 100 % is the cells' own ratio and prints.
     both = [_ranked_row(1, 0.5, 0.01, kind=K.REASON_APEX, n_laps=40),
             _ranked_row(2, 0.004, 0.01, kind=K.REASON_APEX, n_laps=40)]
-    assert "— 100% of" in K.theme_actions(K.session_theme(both), both)[0]
+    assert "— 100% of" in K.theme_actions(K.headline_theme(both), both)[0]
     print(f"ok printed shares: demo {line!r}; 400 row sets, {fell} share(s) kept unrounded")
 
 
