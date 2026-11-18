@@ -16,13 +16,12 @@ It is a real, working app — and it is a **portfolio piece**, so this page is w
 study: what it claims, how each claim was measured, and the gates that keep it true. **Source is
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
 
-<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on Sandown 3h, pictured at v0.7: synced GoPro video, the speed-coloured track map with brake points and seven named corners, the speed and Δ-to-ideal charts reading Δideal +0.26 s, and the Laps · Corners · Stats · Coaching · Marks panel with lap 31 starred as the best at 0:47.076">
+<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on the synthetic demo: the demo's generated picture in the video pane, the speed-coloured track map with violet brake points, seven named corners and a Lap race button, the speed and Δ-to-ideal charts reading Δideal +0.05 s at 93 km/h, and the Laps · Corners · Stats · Coaching · Marks panel with lap 13 starred as the best at 0:44.950">
 
-*Every screenshot here is Pacer on Sandown 3h — three hours at Sandown Park — but the
-debrief, the Stats moments and the lap-strip card, which are the synthetic demo's; all are
-captured by one command, [`studio/dev/media_capture.py`](studio/dev/media_capture.py). The window
-and map shots are v0.7's, before 0.8's wider lap line, violet brake points and chart corner
-labels. In motion:
+*The window, the map, the debrief, the Stats moments, the lap-strip card and the report are the
+synthetic demo's, the session anyone can open; the ideal-lap, data-trust and overlay pictures
+are Pacer on Sandown 3h, three hours at Sandown Park. All are captured by one command,
+[`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
 [20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4).*
 
 **Try it** on an Apple Silicon Mac with [pixi](https://pixi.sh) — the demo needs no GoPro:
@@ -89,7 +88,7 @@ official timing measures the noise floor.
   start line together on the map, each on its own lap clock, in packs the timing cannot split.
   ⇧R follows the pack.
 
-<img src="docs/media/map.png" width="620" alt="The map panel maximised on Sandown 3h, pictured at v0.7: the racing line coloured by speed from 35 to 84 km/h over every lap's trace, seven named corner apexes, brake-point markers, the start/finish line, and the map key naming every glyph">
+<img src="docs/media/map.png" width="620" alt="The map panel maximised on the synthetic demo: the racing line coloured by speed from 48 to 98 km/h over every lap's trace, seven named corner apexes, violet brake-point markers, the chequered start/finish line, the Lap race button, and the map key naming every glyph">
 
 - **Coaching, and the loop it is built around.** A ranked shortlist of the corners where your laps
   *typically* give away the most to your *best* one, each with a dominant measured reason; a
@@ -114,6 +113,8 @@ official timing measures the noise floor.
   card as an image, and the telemetry burned onto the footage (via ffmpeg). A lap-strip card puts
   every lap of the session on one image, and the overlay comes in two styles, Classic or
   Broadcast, with a ghost of your best lap and corner cards as extras you tick.
+
+<img src="docs/media/report.png" width="660" alt="The first screen of the synthetic demo's session report, as File ▸ Export ▸ Session report (HTML)… writes it: the recording, track, date, 14 laps, best lap 0:44.950 (lap 13) and verified timing; the lap card with its +0.32 s to the ideal lap and C1 +0.36 s as the biggest opportunity; and COACHING: 0.43 s across your top 3 corners, apex speed the common thread with 84% of that time in C1, and the ranked corners with their reasons">
 
 <img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 

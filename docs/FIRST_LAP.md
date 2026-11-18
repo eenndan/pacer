@@ -3,7 +3,7 @@
 A 30-second path from a GoPro recording to *"where am I losing time, and what do I do about it?"* —
 the reason Pacer exists.
 
-![Pacer, pictured at v0.7 — one window on a GoPro recording: synced video, a speed-coloured track map with brake points and corner apexes, the live Δ-to-ideal readout over distance-aligned speed and Δ charts, and the lap table with the session best starred](media/hero.png)
+![Pacer on the synthetic demo — one window on a GoPro-format recording: synced video, a speed-coloured track map with brake points and corner apexes, the live Δ-to-ideal readout over distance-aligned speed and Δ charts, and the lap table with the session best starred](media/hero.png)
 
 ## 1 · Open a recording
 
