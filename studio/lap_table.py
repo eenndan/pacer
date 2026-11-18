@@ -3188,7 +3188,7 @@ QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap to
 QUICKEST_COL_TIPS = [
     "Detected corner in track order, with an arrow for its direction.",
     "Your quickest time through the corner (seconds), over the passes matched on track at both "
-    "edges: the same figure as Stats ▸ CORNERS Best.",
+    "edges: the same figure as Best on the Stats page's CORNERS table.",
     "The lap that quickest pass was on.",
     "How many other laps took the corner level with it (within the timing step). Hover a cell "
     "for the laps.",
@@ -3385,7 +3385,7 @@ class QuickestPassTable(QWidget):
             self.not_counted.setToolTip(
                 f"Not counted at one corner or more: {'lap' if len(left) == 1 else 'laps'} {laps} "
                 "(⊘ excluded, ⚠ GPS dropout, or a corner edge not matched on track), as in "
-                "Stats ▸ CORNERS BY LAP.")
+                "the Stats page's CORNERS BY LAP.")
             self.not_counted.setVisible(True)
         verified = getattr(self.session, "timing_verified", True)
         direction = {c.cid: c.direction for c in corner_list}
@@ -3430,7 +3430,7 @@ class QuickestPassTable(QWidget):
         if not self.session.corners.corner_list():
             return "Corner analysis needs a few clean laps of track shape for this session."
         counted = len(self.session.consistency_lap_ids())
-        return (f"Quickest passes are read off Stats ▸ CORNERS BY LAP, which needs "
+        return (f"Quickest passes are read off the Stats page's CORNERS BY LAP, which needs "
                 f"{stats_service.MATRIX_MIN_LAPS} clean laps; this session has {counted}. The "
                 "Lap view still shows each lap's corners.")
 
@@ -3447,12 +3447,14 @@ class CornersPage(QWidget):
         self.session = session
         self.lap_view = CornerTable(session)
         self.quickest = QuickestPassTable(session)
+        # Two chips, one exclusive pair: the same pill as the charts' "vs ideal" chip, amber on.
         self.lap_btn = ToggleButton("Lap", tooltip=LAP_VIEW_TIP)
+        self.lap_btn.setProperty("role", "Chip")
         self.quickest_btn = ToggleButton(QUICKEST_BTN, tooltip=QUICKEST_BTN_TIP)
+        self.quickest_btn.setProperty("role", "Chip")
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         for btn in (self.lap_btn, self.quickest_btn):
-            btn.setProperty("role", "Chip")
             btn.setAutoDefault(False)
             self._group.addButton(btn)
         self.level_label = QLabel(level_note(PB_PRECISION_S))
