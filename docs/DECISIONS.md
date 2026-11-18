@@ -789,3 +789,102 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   tables cannot be re-verified offline.
 - **The campaign ends with this release** unless the owner's next race day says otherwise: the
   question left is whether the focus loop holds on a second real session of one track.
+
+## 17. Recorded at the 0.15.0 release, 2026-11-18
+
+- **v0.15.0 is a minor release**: 7 pull requests from #606 to #612, Wave 10 of the campaign
+  section 8 records, built to three designs the owner approved and two of his rulings.
+  - #606: a track driven the other way round is "can't say" for every stored corner, and
+    `synth_gopro --reverse` drives the demo's circuit backwards for the tests.
+  - #607: Coaching's theme counts the corners its headline sums (the demo: 84 % of that time in
+    its first corner).
+  - #608: a personal best per direction; the Library names each row's way round.
+  - #609: a Jump and a Compare, named for their corner, on the docked Coaching tab's focus-list
+    line.
+  - #610: the welcome screen says what Pacer does, leads with the demo, and lists five recent
+    sessions.
+  - #611: Classic and compare exports draw a Δ under 0.07 s white; the compare Δ loses its arrow.
+  - #612: tests only; six slow test files trimmed, and refusal section 35 (CI tiering).
+- **Owner rulings of 2026-11-18.** He approved design 1A with its question answered (a) (Jump and Compare share the
+  focus-list line; at 1440×900 the focus paragraph folds to its chip while they are shown), 2A with
+  (a) (one centred welcome column; for a returning user the demo is a small link) and 3A with
+  (a) (the neutral colour for a gap under 0.07 s in Classic and in the compare export, with no
+  hold). He approved personal bests per direction, the theme's share over the shortlist, re-shooting
+  the README and landing screenshots from the demo, and a report picture. He asked for faster
+  delivery: CI is the per-pull-request gate, one combined local gate runs per wave, and the full
+  gate and the soak run at the release. No check was removed.
+- **Defaults applied on the owner's instruction not to be asked**, each open to his overrule:
+  - **A row's direction is measured, never guessed** (#608): `rotation` is stored only from a
+    session's own corners; a row or focus item without it is compared as before and is never named
+    by a way round.
+  - **The pair aims at the selected row, else the top ranked one** (#609), selects nothing itself,
+    and hides wherever the rows carry their own Jump; a list with verdicts keeps its block when the
+    page has room, else the chip says how many were re-measured.
+  - **"Recent" means the newest recording date** (#610): the Library stores no last-opened time.
+  - **The level rule is Broadcast's own** (#611): decided on the printed value, so "+0.07" is
+    always coloured.
+- **#612's record.** The six files run 25 % faster locally (351.6 → 262.8 s, each alone under
+  ctest). 84 planted defects were run one at a time against each file before and after the trim:
+  71 were killed before and 71 after, none lost. Section 35 of `studio/docs/refused-2026-09.md`
+  refuses running the export tests on a pull request only when export code changes (built in #605,
+  closed): the export tests import 91 of the app's 93 modules, so a sound path list skips the tier
+  on 25 of the last 200 merged pull requests and on none of the last 60.
+- **The media.** Re-captured on the synthetic demo at 0.15.0: `hero.png` and `map.png`, which had
+  been labelled v0.7 pictures of Sandown 3h; `og.png`, composed from the new hero; `debrief.png`,
+  for its theme line (the docked page's Jump and Compare are not on the debrief, by design); and
+  `accuracy.png`, `moments.png` and `lapstrip.png` (its own run), whose bytes are unchanged. New:
+  `report.png`, the demo report's first screen at 2x, beside the pages' report text. The waivers of
+  `data-trust.png` and `ideal-lap.png` are renewed (a demo render from v0.14.0's `studio/` and from
+  0.15.0 is byte-identical), as are those of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4`: a
+  painter-level A/B of 90 configurations on the demo is byte-identical on the best lap and on
+  Broadcast, and differs on Classic laps 6 and 7 only, as #611 intends. `overlay.jpg` still shows a
+  red "Δ +0.05" that a current export draws white; re-shooting it needs real footage that is not
+  on this machine.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name, the two focus checks among them (they need a second recording of one
+  track). The transport keys could not be confirmed offscreen. The manual half of the golden gate
+  did not run as a release gate; the core is unchanged.
+- **Resolved from section 16**: the docked Coaching tab's missing Jump and Compare (#609);
+  re-shooting the window and map pictures (now the demo's); the layout check on a track driven in
+  reverse (#606, on synthetic sessions); Classic's Δ colour inside 0.07 s (#611); the welcome
+  screen (#610); a report screenshot; the theme's share counted over every ranked corner (#607).
+- **Open for the owner** (new).
+  - With verdicts on the list, the docked chip says "3 of 3 re-measured" and the verdict lines are
+    one click away at 1280 and 1440; the alternative is to hide the pair there or shrink the theme.
+  - A session with no laps is left out of the welcome's list, and an unreadable library shows the
+    first-visit screen.
+  - The overlays use the 0.07 s step even on an estimated clock, where the Lap race and the story
+    use 0.15 s.
+  - A re-profiled corner that keeps its direction is still compared.
+  - Focus items and Library rows stored before 0.15.0 carry no direction until their recording is
+    opened again.
+  - A one-corner shortlist's theme reads oddly: on a synthetic session (seed 1, 6 laps, a planted
+    habit) it is "No single theme: 100% of the time on offer is in corners you have already
+    driven at this pace, 0% in corners you have rarely reached", followed by that corner's name
+    and "sits on the line: one lap fewer at its target and it would not count.", and one corner
+    can read "No single cause dominates these corners".
+  - After the docked pair's Jump the lap panel shows Corners, as every Jump does, so its Compare is
+    one tab away.
+  - A missing file's name in the welcome is cut to "GX01….MP4", losing its number.
+  - `overlay.jpg` needs real footage to re-shoot; `og.png` changed, and it is also the repository's
+    social preview on GitHub, which is uploaded by hand.
+  - 13 planted defects no test catches (#612): the Export action enabled with no clip, the report's
+    map, the lap card one pixel low, a hovered label, and gaps in the Broadcast, ghost and gate
+    tests.
+  - Two slow product paths noticed in #612: the export painter walks every frame twice, and
+    windows are kept alive in `test_central_view_realqt`.
+- **Open for the owner** (carried from section 16): a marginal corner near the 30° detection limit
+  could read "there's no corner there today"; the mixed headline's "N without enough evidence"
+  counts layout refusals with the rest; a Compare started from the maximised page returns to the
+  grid and stays there; the focus verdict's spread-based line prints medians to two decimals;
+  FIRST_LAP's loop paragraph does not name the two newer verdicts, and its step 8 names Jump, not
+  Compare or the Lap race button; the report's Laps card scroll
+  with sector lines; `fmt_time` negatives; Broadcast as the default Style; a ranked corner under the
+  display floor counted in "your N ranked corners"; one lap drawn in two colours in a race over a
+  pick; a session reload stranding widgets; the capture tool's `lapstrip.png` bytes depending on
+  what else the run captures; ranking corners that lose under 0.07 s at all; weighing consistency
+  on the middle half rather than σ; the apex and braking reasons have no noise floor; the demo
+  habit is ranked only on its own seed; the overlay's ★/Δ under provisional timing; Extras on in
+  Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
+  real display; pull request #582's commit list comment; the published real-footage Coaching
+  tables cannot be re-verified offline.

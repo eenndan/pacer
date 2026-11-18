@@ -27,7 +27,7 @@ Every file written is recorded in `<out>/CAPTURED.json` — shot, app version, c
 and a source LABEL — and `tests/test_version.py` holds docs/media to that record. At each minor
 release a shot is re-captured or waived in writing there. Without a recording, `accuracy`, `og`
 (from hero.png), `debrief`, `lapstrip` and `moments` (all three the demo) can always be
-re-captured; the rest need footage.
+re-captured, and so can `report` (the demo too); the rest need footage.
 
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
@@ -56,6 +56,9 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
   moments.png     Stats > PACE to MOMENTS      "the session's story, ties named": the σ tile's
                                                middle half and three moments, each a Jump, on
                                                the synthetic demo
+  report.png      the demo's session report    "the session leaves the app as a document": the
+                                               HTML report's first screen, exported with the
+                                               debrief up, drawn by QtWebEngine at 2x
 
 TWO THINGS THE OFFSCREEN RENDER CANNOT DO BY ITSELF, AND WHAT THIS DOES ABOUT THEM
 
@@ -1054,6 +1057,62 @@ def shot_moments(app: QApplication, out_dir: str) -> str:
     return save(matte(img), os.path.join(out_dir, "moments.png"))
 
 
+# ====================================================================== 11 — the report (the demo)
+# The report's first screen as a reader's browser shows it: 1100x800 CSS px at 2x. The page is the
+# file File ▸ Export ▸ Session report (HTML)… writes, exported from the demo's first open with the
+# debrief up (the state the 0.12.0 bug once emptied its pictures from), and drawn by QtWebEngine in
+# a CHILD process: Chromium's sandbox and GPU process want a process of their own, and
+# QT_SCALE_FACTOR (the 2x) is read only at a QApplication's start. Owner-approved 2026-11-18.
+REPORT_VIEW = (1100, 800)
+_REPORT_RENDER_S = 2.5        # real seconds after loadFinished: the page's images decode late
+_REPORT_RENDER = r"""
+import os, sys
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWidgets import QApplication
+html, png, w, h, wait = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])
+app = QApplication(sys.argv[:1])
+view = QWebEngineView()
+view.resize(w, h)
+view.show()
+state = {"ok": False}
+def grab():
+    state["ok"] = view.grab().save(png)
+    app.quit()
+view.loadFinished.connect(lambda ok: QTimer.singleShot(int(wait * 1000), grab) if ok else app.quit())
+view.load(QUrl.fromLocalFile(os.path.abspath(html)))
+QTimer.singleShot(60000, app.quit)
+app.exec()
+sys.exit(0 if state["ok"] else 1)
+"""
+
+
+def shot_report(app: QApplication, out_dir: str, work_dir: str) -> str:
+    """File ▸ Export ▸ Session report (HTML)… on the synthetic demo with its debrief up, the file's
+    first screen rendered by QtWebEngine at 2x. The save prompt is answered with a path in
+    `work_dir`; nothing is written beside the recording."""
+    w = _open_demo(app, "report")
+    w.resize(*WINDOW)
+    w.show()
+    settle(app)
+    if not w.view.is_debrief():
+        raise RuntimeError("the demo did not land on its debrief")
+    html = os.path.join(work_dir, "pacer-demo_report.html")
+    w.exports._export_save_path = lambda *_a, **_k: html
+    w.exports.export_report()
+    w.close()
+    if not os.path.exists(html):
+        raise RuntimeError("the report export wrote nothing")
+    png = os.path.join(out_dir, "report.png")
+    env = dict(os.environ, QT_SCALE_FACTOR=str(DPR), QT_QPA_PLATFORM="offscreen")
+    subprocess.run([sys.executable, "-c", _REPORT_RENDER, html, png, str(REPORT_VIEW[0]),
+                    str(REPORT_VIEW[1]), str(_REPORT_RENDER_S)], check=True, env=env)
+    img = QImage(png)
+    print(f"wrote {png}  {img.width()}x{img.height()}  from {os.path.basename(html)}")
+    return png
+
+
 # ====================================================================== the capture record
 # Every published file gets an entry in `<out>/CAPTURED.json`: which shot made it, from which app
 # version and commit, on which day, from what, and its sha256. The v0.5.0 media went stale with
@@ -1144,9 +1203,9 @@ def _record(out_dir: str, filename: str, shot: str, source: str,
 
 # ====================================================================== driver
 SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief",
-         "lapstrip", "moments")
+         "lapstrip", "moments", "report")
 # The shots that need the recording named on the command line: `accuracy` is drawn from numbers
-# and `og` from hero.png, and `debrief`, `lapstrip` and `moments` open the synthetic demo instead.
+# and `og` from hero.png, and `debrief`, `lapstrip`, `moments` and `report` open the synthetic demo.
 _RECORDING_SHOTS = {"hero", "ideal", "trust", "map", "overlay", "clip"}
 
 
@@ -1205,13 +1264,15 @@ def capture(recording: str | None, out_dir: str, only: set[str], work_dir: str,
         record(shot_lapstrip(app, out_dir), "lapstrip", "synthetic demo")
     if "moments" in only:
         record(shot_moments(app, out_dir), "moments", "synthetic demo")
+    if "report" in only:
+        record(shot_report(app, out_dir, work_dir), "report", "synthetic demo")
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("recording", nargs="?", default=None,
                     help="INPUT recording (chapter 1; siblings auto-discovered); not needed for "
-                         "accuracy, og, debrief, lapstrip or moments alone")
+                         "accuracy, og, debrief, lapstrip, moments or report alone")
     ap.add_argument("--out", default=os.path.join("docs", "media"),
                     help="OUTPUT directory for the PNGs (default: docs/media)")
     ap.add_argument("--work", default=None,
