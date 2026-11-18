@@ -3725,6 +3725,46 @@ def test_a_rows_compare_says_the_rows_own_time_lost():
     print(f"ok status = row Time lost on all {checked} enabled Compares of {len(sessions)} sessions")
 
 
+def _land_compare_at_c1(v, s, button) -> float:
+    """Click `button` on the demo's window; the compare it lands must be the one C1's row
+    names (lap 4's typical pass vs lap 13's, both panes at their own C1 entry, the charts on
+    C1, C1 ringed, the status naming both passes). Returns the click's cost in ms."""
+    import time
+
+    from test_debrief_landing import _settle
+    c, best = v.compare, s.best_lap_id()
+    seeks, notices = [], []
+    real_seek = v.video.seek_pane
+    v.video.seek_pane = lambda side, sec: (seeks.append((side, sec)),
+                                           real_seek(side, sec))
+    v.statusNotice.connect(notices.append)
+    try:
+        t0 = time.perf_counter()
+        button.click()
+        took = 1000 * (time.perf_counter() - t0)
+        _settle(0.2)
+    finally:
+        v.video.seek_pane = real_seek
+        v.statusNotice.disconnect(notices.append)
+    assert c.active and not c.cross and (c.lap_a, c.lap_b) == (3, best), (
+        c.lap_a, c.lap_b)
+    assert getattr(v, "_maximized_panel", None) is None, "the grid is back"
+    entry = {side: s.corners.corner_entry_media_time(lap, 1)
+             for side, lap in ((0, 3), (1, best))}
+    assert {side: sec for side, sec in seeks} == entry, (seeks, entry)
+    x0, x1 = s.corner_plot_window(1, v.plots.axis_mode())
+    lo, hi = v.plots.p_speed.getViewBox().viewRange()[0]
+    pad = x1 - x0
+    assert lo <= x0 and hi >= x1 and lo >= x0 - pad - 1e-6 and hi <= x1 + pad + 1e-6, (
+        lo, hi, x0, x1)
+    assert v.map.pinned_corner() == "C1"
+    assert notices[-1] == (
+        "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
+        "here (median of 14: 3.38 s); typical loss through C1: +0.36 s"), notices
+    assert "median lap" not in notices[-1]
+    return took
+
+
 def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corner():
     """The published demo in the real window, offscreen: the debrief has no Compare (RUL-7); the C
     key's pair is unchanged; a ranked row's Compare pins (lap 4, the typical C1 pass; lap 13, the
@@ -3732,7 +3772,6 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
     rings C1 and names both passes; its figures reconcile with the row; it ends a race; a lap pick
     leaves it; and 20 activations leave no widget behind."""
     import tempfile
-    import time
 
     from test_debrief_landing import _fresh_app_support, _open, _settle
 
@@ -3806,37 +3845,7 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             assert S.printed_gap_s(tp.pass_s, tp.best_pass_s) == 0.37
 
             def activate_and_check(button) -> float:
-                """Click `button`; the compare it lands must be the one the row names."""
-                seeks, notices = [], []
-                real_seek = v.video.seek_pane
-                v.video.seek_pane = lambda side, sec: (seeks.append((side, sec)),
-                                                       real_seek(side, sec))
-                v.statusNotice.connect(notices.append)
-                try:
-                    t0 = time.perf_counter()
-                    button.click()
-                    took = 1000 * (time.perf_counter() - t0)
-                    _settle(0.2)
-                finally:
-                    v.video.seek_pane = real_seek
-                    v.statusNotice.disconnect(notices.append)
-                assert c.active and not c.cross and (c.lap_a, c.lap_b) == (3, best), (
-                    c.lap_a, c.lap_b)
-                assert getattr(v, "_maximized_panel", None) is None, "the grid is back"
-                entry = {side: s.corners.corner_entry_media_time(lap, 1)
-                         for side, lap in ((0, 3), (1, best))}
-                assert {side: sec for side, sec in seeks} == entry, (seeks, entry)
-                x0, x1 = s.corner_plot_window(1, v.plots.axis_mode())
-                lo, hi = v.plots.p_speed.getViewBox().viewRange()[0]
-                pad = x1 - x0
-                assert lo <= x0 and hi >= x1 and lo >= x0 - pad - 1e-6 and hi <= x1 + pad + 1e-6, (
-                    lo, hi, x0, x1)
-                assert v.map.pinned_corner() == "C1"
-                assert notices[-1] == (
-                    "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
-                    "here (median of 14: 3.38 s); typical loss through C1: +0.36 s"), notices
-                assert "median lap" not in notices[-1]
-                return took
+                return _land_compare_at_c1(v, s, button)
 
             took_ms = activate_and_check(btn)
             win.toggle_compare()
@@ -3885,6 +3894,181 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             win.toggle_compare()
             print(f"ok row compare: lap 4 3.39 vs lap 13 3.02 at C1, typical 3.38, +0.36 s; "
                   f"{took_ms:.0f} ms from the full-window page, {before} widgets after 20")
+        finally:
+            sidecar.save = saved
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+
+
+def test_the_docked_page_jumps_and_compares_without_widening():
+    """Wave 10, design 1A (owner-approved 2026-11-18, Q1 (a)), on the published demo in the real
+    window, offscreen. At 1280x800 the docked Coaching tab (498 px) gives no row its Jump or
+    Compare; on main the page offered neither without a widen or a maximize. Now the focus list's
+    line carries "Jump to C1" (the one primary) and "Compare C1", nothing selected for the driver:
+    each lands exactly what C1's own row button lands; picking the C2 row re-aims both; Return in
+    the table is the Jump; the debrief has no pair; at 1440x900 the list keeps to its chip and one
+    click shows it whole; a pixel sweep of the tab's width never shows the pair beside a row's
+    Jump, nor neither; and 30 activations leave no widget behind."""
+    import tempfile
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from test_debrief_landing import _fresh_app_support, _open, _settle
+
+    from studio import coaching_panel as cp
+    from studio import sidecar
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    saved = sidecar.save
+    sidecar.save = lambda *a, **k: None
+    with tempfile.TemporaryDirectory(prefix="coach_pair_") as folder, _fresh_app_support():
+        path = os.path.join(folder, "demo", "GX019001.MP4")
+        md.make(path, render=False)
+        win = StudioWindow([])
+        win.resize(1280, 800)
+        win.show()
+        try:
+            _open(win, path)
+            v, s = win.view, win.session
+            page, t = v.opportunities, v.opportunities.table
+            jump, cmp_ = page.jump_button, page.compare_button
+            # THE DEBRIEF IS UNCHANGED: its rows carry their Jumps; the line carries no pair.
+            assert page.is_debrief() and not t.isColumnHidden(cp._PANEL_COL_GO)
+            assert not jump.isVisibleTo(page) and not cmp_.isVisibleTo(page)
+            win._escape_out()
+            _settle(0.3)
+            v.select_lap_tab(3)
+            _settle(0.4)
+            best = s.best_lap_id()
+
+            def whole_rows() -> int:
+                vp = t.viewport().height()
+                return sum(1 for r in range(min(cp.PANEL_TOP_N, t.rowCount()))
+                           if 0 <= t.rowViewportPosition(r)
+                           and t.rowViewportPosition(r) + t.rowHeight(r) <= vp)
+
+            def back_to_page():
+                if c.active:
+                    win.toggle_compare()
+                v.select_lap_tab(3)
+                _settle(0.3)
+
+            # DOCKED, 1280x800: no row action, the pair on the chip's line, aimed at C1.
+            c = v.compare
+            assert page.width() == 498 and t.isColumnHidden(cp._PANEL_COL_GO), page.width()
+            assert jump.isVisible() and cmp_.isVisible() and jump.isEnabled() and cmp_.isEnabled()
+            assert (jump.text(), cmp_.text()) == ("Jump to C1", "Compare C1")
+            assert (jump.accessibleName(), cmp_.accessibleName()) == ("Jump to C1", "Compare at C1")
+            assert jump.property("variant") == "primary"
+            assert page.focus_line.isVisible() and page.focus_line.text() == (
+                "Focus list: C1 · C2 · C7")
+            assert page.focus_line.geometry().right() < jump.geometry().left()
+            assert not t.selectionModel().selectedRows() and v.map.pinned_corner() is None, (
+                "nothing is selected, and nothing ringed, on the driver's behalf")
+            assert whole_rows() == cp.PANEL_TOP_N, whole_rows()
+            assert cmp_.toolTip() == t.cellWidget(0, cp._PANEL_COL_CMP).toolTip()
+
+            # JUMP lands what C1's own Jump lands: the same emission, the best lap at C1's entry,
+            # C1 ringed, the Corners page.
+            jumps = []
+            page.jump_requested.connect(lambda cid, d: jumps.append((cid, d)))
+            seeks = []
+            real_seek = v.video.seek
+            v.video.seek = lambda sec: (seeks.append(sec), real_seek(sec))
+            try:
+                for button in (jump, t.cellWidget(0, cp._PANEL_COL_GO).jump):
+                    v.map.highlight_corner(None)
+                    button.click()
+                    _settle(0.2)
+                    assert v.map.pinned_corner() == "C1" and v.tab_bar.currentIndex() == 1
+                    assert seeks[-1] == s.corners.corner_entry_media_time(best, 1), seeks
+                    back_to_page()
+            finally:
+                v.video.seek = real_seek
+            assert jumps[0] == jumps[1] and jumps[0][0] == 1, jumps
+
+            # COMPARE lands what C1's own Compare lands (the v0.14.0 assertions, reused).
+            compares = []
+            page.compare_requested.connect(lambda tp, lost: compares.append((tp, lost)))
+            took_ms = _land_compare_at_c1(v, s, cmp_)
+            back_to_page()
+            _land_compare_at_c1(v, s, t.cellWidget(0, cp._PANEL_COL_CMP))
+            back_to_page()
+            assert compares[0] == compares[1], compares
+
+            # PICKING THE C2 ROW re-aims both, and Return in the table is its Jump.
+            t.selectRow(1)
+            _settle(0.1)
+            assert (jump.text(), cmp_.text()) == ("Jump to C2", "Compare C2")
+            assert cmp_.accessibleName() == "Compare at C2"
+            assert cmp_.toolTip() == t.cellWidget(1, cp._PANEL_COL_CMP).toolTip()
+            jumps.clear()
+            compares.clear()
+            jump.click()
+            back_to_page()
+            t.cellWidget(1, cp._PANEL_COL_GO).jump.click()
+            back_to_page()
+            t.setFocus()
+            QTest.keyClick(t, Qt.Key_Return)
+            back_to_page()
+            assert len(jumps) == 3 and len(set(jumps)) == 1 and jumps[0][0] == 2, jumps
+            cmp_.click()
+            back_to_page()
+            t.cellWidget(1, cp._PANEL_COL_CMP).click()
+            back_to_page()
+            assert len(compares) == 2 and compares[0] == compares[1], compares
+            assert compares[0][0].cid == 2, compares
+            t.clearSelection()
+            _settle(0.1)
+            assert jump.text() == "Jump to C1", "an empty selection aims the pair back at the top"
+
+            # 1440x900 (Q1 (a)): the list keeps to its chip while the pair is up; one click on
+            # the chip shows it whole, full-window, where the rows carry their own and the pair
+            # is gone.
+            win.resize(1440, 900)     # a resize keeps the grid's proportions: put the 1440x900
+            _settle(0.3)              # default's 515 px tab back (as a fresh window lays it out)
+            total = sum(v._main_splitter.sizes())
+            v._main_splitter.setSizes([515, total - 515])
+            _settle(0.5)
+            assert page.width() == 515 and jump.isVisible(), page.width()
+            assert page.focus_block.isHidden() and page.focus_line.isVisible()
+            assert whole_rows() == cp.PANEL_TOP_N, whole_rows()
+            page.focus_line.click()
+            _settle(0.4)
+            assert not page.focus_block.isHidden() and not jump.isVisible()
+            assert not t.isColumnHidden(cp._PANEL_COL_CMP)
+            v._toggle_panel_maximized(v._table_panel)
+            _settle(0.4)
+            assert jump.isVisible()
+
+            # THE SWITCH, pixel by pixel across the threshold: never both, never neither.
+            seen = {True: 0, False: 0}
+            for w in range(500, 640):
+                v._main_splitter.setSizes([w, total - w])
+                for _ in range(6):
+                    _APP.processEvents()
+                pair, go = jump.isVisibleTo(page), not t.isColumnHidden(cp._PANEL_COL_GO)
+                assert pair != go and cmp_.isVisibleTo(page) == pair, (page.width(), pair, go)
+                seen[pair] += 1
+            assert seen[True] and seen[False], seen
+            v._main_splitter.setSizes([515, total - 515])
+            _settle(0.3)
+
+            # 30 activations of the pair add no widget (each compare tears the last one down).
+            jump.click()
+            cmp_.click()
+            _settle(0.2)
+            before = _widget_count()
+            for i in range(30):
+                (cmp_ if i % 2 else jump).click()   # ends on a Compare, as `before` did
+                _settle(0.02)
+            _settle(0.2)
+            assert c.active and _widget_count() == before, (_widget_count(), before)
+            win.toggle_compare()
+            print(f"ok docked pair: Jump to C1 / Compare C1 at 498 and 515 px, C2 on a pick, "
+                  f"Return jumps; compare {took_ms:.0f} ms; switch at "
+                  f"{seen[True]}/{seen[False]} widths; {before} widgets after 30")
         finally:
             sidecar.save = saved
             win.close()

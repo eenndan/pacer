@@ -268,7 +268,7 @@ FOCUS_REFUSED_TIP = ("A focus corner is checked against the session it was set o
 # The glyph is the panel maximize button's own (central_view._MAXIMIZE_GLYPH), because the click
 # does what that button does, on the Coaching page.
 FOCUS_LINE_GLYPH = "ph.corners-out"
-FOCUS_LINE_TIP = ("Your focus list at this track. The page has no room for it at this size: click "
+FOCUS_LINE_TIP = ("Your focus list at this track. The page keeps it to this line at this size: click "
                   "to see it whole, full-window, with its verdicts and its buttons (Coaching ▸ "
                   "Show focus list). Esc brings the grid back.")
 
@@ -1482,7 +1482,8 @@ REASON_MIN_PX = 180
 # The bars are a detail of the row (the reason sentence already names the dominant phase), Jump an
 # action a row click half-does (it rings the corner), "Done it?" a count the sentence also states —
 # see _apply_column_budget. The default docked page (515 px at 1440x900, 498 px at 1280x800)
-# affords none of the actions, as before; from ~540 px Jump and the stacked Compare show.
+# affords none of the rows' actions, so the line under the header carries one Jump + Compare for
+# the selected row (PAIR_JUMP_KEY); from ~540 px each row's Jump and stacked Compare replace it.
 _OPTIONAL_COLS = (_PANEL_COL_CMP, _PANEL_COL_PHASES, _PANEL_COL_GO, _PANEL_COL_REACH)
 JUMP_MIN_PX = 88     # the Jump button's floor: its arrow + label at the app's button padding
 
@@ -1584,6 +1585,25 @@ def compare_tooltip(cid: int, tp: stats_service.TypicalPass | None) -> str:
             f"Lap {a} is the lap whose pass here is nearest the median of {tp.n} "
             f"({tp.typical_s:.{d}f} s) — not your median lap.\n"
             "Like C, it ends a Lap race; C again, or picking a lap, ends the compare.")
+
+
+def _jump_tip(cid: int) -> str:
+    """A Jump's hover, a row's or the action line's."""
+    return f"Select C{cid} on the map and jump the video to your best lap's entry to this corner"
+
+
+# THE DOCKED PAGE'S ACTIONS (wave 10, design 1A, owner-approved 2026-11-18). At the default docked
+# widths (498 px at 1280x800, 515 px at 1440x900) the column budget gives no row its Jump or Compare
+# — those columns cost more than the reason prose can give up — so the page's two actions were a
+# maximize away. One Jump and one Compare now sit on the focus list's line under the header,
+# aimed at the selected row or, with none selected, the top-ranked one, and named for it ("Jump to
+# C1"). They are on screen exactly while the rows' own are not (`_pair_on`): the switch is the Jump
+# column's, so no width shows both or neither. The header sentence itself is ~481 px of the 498,
+# which is why they share the chip's line rather than the header's. While they are up the focus
+# block keeps to its one-line chip (Q1 (a)): at 1440x900 that is 114 px of block down to the line,
+# and the chip's click still shows the list whole. With no chip to share (no focus list on this
+# track, or an empty one) the pair takes a line of its own.
+PAIR_JUMP_KEY = "\nReturn in the table does the same."
 
 # What the headline strip's hover says about the page itself. Lives beside PANEL_TOP_N because it
 # quotes it; the live theme + actions are prepended to it (see _refresh_summary_label).
@@ -1835,10 +1855,30 @@ class OpportunitiesPanel(QWidget):
         self.focus_line.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         self.focus_line.setToolTip(FOCUS_LINE_TIP)
         self.focus_line.clicked.connect(self.focus_show_requested)
+        # The chip elides into what the pair leaves it rather than widening the page (`_fit_chip`).
+        self.focus_line.setMinimumWidth(theme.HIT_MIN)
+        self._chip_text = ""
+        # The docked page's Jump and Compare (see PAIR_JUMP_KEY's note), right-aligned on the same
+        # line: Jump is the page's one primary while the rows carry none (their top Jump is it
+        # wherever they do), Compare the app's ordinary button with the rows' Compare glyph.
+        self.jump_button = QPushButton(theme.icon("ph.arrow-right", color=C.on_accent), "")
+        self.jump_button.setProperty("variant", "primary")
+        self.compare_button = QPushButton(theme.icon("ph.columns", color=C.text), "")
+        for btn in (self.jump_button, self.compare_button):
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            btn.setVisible(False)
+        self.jump_button.clicked.connect(self._jump_pair)
+        self.compare_button.clicked.connect(self._compare_pair)
+        self._pair_key: tuple | None = None   # (cid, Compare's hover) the pair is aimed at
+        self._pair_shown = False   # what the last height budget laid out (`_relayout`)
         line_row = QHBoxLayout()
         line_row.setContentsMargins(theme.SPACE_M, theme.SPACE_XXS, theme.SPACE_M, theme.SPACE_XXS)
+        line_row.setSpacing(theme.SPACE_S)
         line_row.addWidget(self.focus_line)
         line_row.addStretch(1)
+        line_row.addWidget(self.jump_button)
+        line_row.addWidget(self.compare_button)
         self._focus_line_row = QWidget()
         self._focus_line_row.setLayout(line_row)
         self._focus_line_row.setVisible(False)
@@ -1873,6 +1913,13 @@ class OpportunitiesPanel(QWidget):
         self.more_hint.setContentsMargins(theme.SPACE_S, 2, theme.SPACE_S, 2)
         self.more_hint.setVisible(False)
         lay.addWidget(self.more_hint)
+        # Tab order follows the page down: the chip, the pair, then the table they act on (the
+        # table was built first, so creation order alone would visit it before them).
+        QWidget.setTabOrder(self.focus_line, self.jump_button)
+        QWidget.setTabOrder(self.jump_button, self.compare_button)
+        QWidget.setTabOrder(self.compare_button, self.table)
+        # Return in the table is the pair's Jump (`eventFilter`); C already toggles compare.
+        self.table.installEventFilter(self)
         self.refresh()
 
     def set_focus_report(self, report: focus.Report | None) -> None:
@@ -2037,6 +2084,7 @@ class OpportunitiesPanel(QWidget):
         # stretch column, so its width — and thus the wrap — depends on the panel's live size).
         _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self.body.setCurrentIndex(0)
+        self._sync_pair()   # a refresh or a shrunk table can change the row the pair aims at
         if held is not None and held not in self._cids:
             self.corner_clicked.emit(None)
 
@@ -2149,8 +2197,7 @@ class OpportunitiesPanel(QWidget):
         btn.setAutoDefault(False)
         btn.setDefault(False)
         if opp is not None:
-            btn.setToolTip(f"Select C{opp.cid} on the map and jump the video to your best lap's "
-                           "entry to this corner")
+            btn.setToolTip(_jump_tip(opp.cid))
             cid, entry = opp.cid, float(opp.entry_dist)
             btn.clicked.connect(lambda _checked=False, c=cid, d=entry:
                                 self.jump_requested.emit(c, d))
@@ -2215,18 +2262,76 @@ class OpportunitiesPanel(QWidget):
         btn.setAutoDefault(False)
         btn.setDefault(False)
         if opp is not None:
-            # Only a RANKED row names a loss to show; an abstained one says why it does not.
-            tp = self._typical.get(opp.cid) if opp.evidence.ranked else None
+            tp, tip = self._compare_offer(opp)
             btn.setAccessibleName(f"Compare at C{opp.cid}")
-            btn.setToolTip(compare_tooltip(opp.cid, tp) if opp.evidence.ranked else
-                           f"C{opp.cid} is not ranked, so there is no loss here to compare — "
-                           "the row says why.")
+            btn.setToolTip(tip)
             btn.setEnabled(tp is not None)
             if tp is not None:
                 lost = coaching.lost_text(opp)     # the row's own Time lost, as its cell prints it
                 btn.clicked.connect(lambda _checked=False, t=tp, x=lost:
                                     self.compare_requested.emit(t, x))
         return btn
+
+    def _compare_offer(self, opp: coaching.Opportunity):
+        """`opp`'s Compare: the corner's typical pass (None: nothing to compare) and the hover that
+        says what the click shows or why it is off. One author for a row's Compare and the line's
+        (`compare_button`), so the two can never word the same corner differently."""
+        # Only a RANKED row names a loss to show; an abstained one says why it does not.
+        tp = self._typical.get(opp.cid) if opp.evidence.ranked else None
+        tip = (compare_tooltip(opp.cid, tp) if opp.evidence.ranked else
+               f"C{opp.cid} is not ranked, so there is no loss here to compare — the row says why.")
+        return tp, tip
+
+    # ------------------------------------------------------------- the action line's pair
+    def _pair_opp(self) -> coaching.Opportunity | None:
+        """The row the action line's Jump and Compare act on: the selected one, else the top-ranked
+        one (the first row: ranked rows lead the order). Never selects anything itself — a ring on
+        the map the driver did not ask for would be a claim the page made on their behalf."""
+        cid = self._selected_cid()
+        for opp in self._all_rows:
+            if opp.cid == cid:
+                return opp
+        return self._all_rows[0] if self._all_rows else None
+
+    def _pair_on(self) -> bool:
+        """Whether the pair is on screen: on the ordinary page with rows, exactly while the rows
+        carry no Jump of their own (the Jump column hidden) — never two ways to one action on one
+        screen, and never on the debrief, whose rows keep theirs."""
+        return (not self._debrief and self.body.currentIndex() == 0 and bool(self._all_rows)
+                and self.table.isColumnHidden(_PANEL_COL_GO))
+
+    def _sync_pair(self) -> None:
+        """Re-aim the pair at `_pair_opp`: its labels name the corner, and Compare says exactly
+        what the row's own Compare says (`_compare_offer`). Touches a widget only on a change."""
+        opp = self._pair_opp()
+        if opp is None:
+            return
+        tp, tip = self._compare_offer(opp)
+        key = (opp.cid, tip)
+        if key == self._pair_key:
+            return
+        self._pair_key = key
+        jump, cmp_ = self.jump_button, self.compare_button
+        jump.setText(f"Jump to C{opp.cid}")
+        jump.setAccessibleName(f"Jump to C{opp.cid}")
+        jump.setToolTip(_jump_tip(opp.cid) + PAIR_JUMP_KEY)
+        cmp_.setText(f"Compare C{opp.cid}")
+        cmp_.setAccessibleName(f"Compare at C{opp.cid}")
+        cmp_.setToolTip(tip)
+        cmp_.setEnabled(tp is not None)
+
+    def _jump_pair(self) -> None:
+        """The line's Jump (and Return in the table): what the target row's Jump emits."""
+        opp = self._pair_opp()
+        if opp is not None:
+            self.jump_requested.emit(opp.cid, float(opp.entry_dist))
+
+    def _compare_pair(self) -> None:
+        """The line's Compare: what the target row's Compare emits, or nothing where it is off."""
+        opp = self._pair_opp()
+        tp = self._compare_offer(opp)[0] if opp is not None else None
+        if tp is not None:
+            self.compare_requested.emit(tp, coaching.lost_text(opp))
 
     def _tune_rows(self):
         """Show as many of the ranking as the viewport can actually hold (L5-08).
@@ -2327,6 +2432,12 @@ class OpportunitiesPanel(QWidget):
         their real numbers (see the installEventFilter note in __init__)."""
         if obj is self.table.viewport() and event.type() == QEvent.Resize:
             self._relayout()
+        elif (obj is self.table and event.type() == QEvent.KeyPress and not self._debrief
+              and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+              and (event.modifiers() & ~Qt.KeypadModifier) == Qt.NoModifier
+              and self.body.currentIndex() == 0 and self._all_rows):
+            self._jump_pair()      # the selected row's Jump, else the top row's: the pair's target
+            return True
         return super().eventFilter(obj, event)
 
     def _relayout(self):
@@ -2336,6 +2447,10 @@ class OpportunitiesPanel(QWidget):
         decide how many rows fit."""
         self._apply_theme_budget()
         self._apply_column_budget()
+        if self._pair_on() != self._pair_shown:
+            # The Jump column just came or went under the height budget's feet: the pair's line
+            # (and the focus block it collapses) follow it in this same pass, never a pass late.
+            self._apply_theme_budget()
         _fit_reason_rows(self.table, _PANEL_COL_REASON)
         self._tune_rows()
         self._apply_hero_budget()
@@ -2423,10 +2538,23 @@ class OpportunitiesPanel(QWidget):
             # The debrief's lead first (0 px and hidden on the ordinary page), then the focus block.
             used = self.debrief_block.fit_into(self.width(),
                                                min(int(height * DEBRIEF_MAX_FRACTION), room))
-            shown = self.focus_block.fit_into(self.width(),
-                                              min(int(height * FOCUS_MAX_FRACTION),
-                                                  max(room - used, 0)))
-            used += shown + self._sync_focus_line("" if shown else self.focus_block.line_text())
+            # The docked page's Jump + Compare (PAIR_JUMP_KEY's note) ride the chip's line, so a
+            # list with a chip keeps to it while they are up (Q1 (a)); with no chip to share, the
+            # pair's own line is paid for first, ahead of the block, as the chip's line is.
+            pair, chip = self._pair_on(), self.focus_block.line_text()
+            self._pair_shown = pair
+            if pair:
+                used += self._sync_action_line(chip, True)
+                if chip:
+                    self.focus_block.fit_into(self.width(), 0)
+                else:
+                    used += self.focus_block.fit_into(
+                        self.width(), min(int(height * FOCUS_MAX_FRACTION), max(room - used, 0)))
+            else:
+                shown = self.focus_block.fit_into(self.width(),
+                                                  min(int(height * FOCUS_MAX_FRACTION),
+                                                      max(room - used, 0)))
+                used += shown + self._sync_action_line("" if shown else chip, False)
             self.theme_block.fit_into(
                 self.width(),
                 min(int(height * THEME_MAX_FRACTION),
@@ -2436,15 +2564,40 @@ class OpportunitiesPanel(QWidget):
         finally:
             self._theme_budgeting = False
 
-    def _sync_focus_line(self, text: str) -> int:
-        """Show the focus list's one line with `text` ("" hides it); returns the height it takes.
+    def _sync_action_line(self, text: str, pair: bool) -> int:
+        """Show the line under the header: the focus list's chip with `text` ("" hides it) and,
+        with `pair`, the Jump + Compare at its right. Returns the height it takes (0 hidden).
         Touches a widget only when it changes, for FocusBlock._apply's reason."""
-        if text and self.focus_line.text() != text:
-            self.focus_line.setText(text)
-        row = self._focus_line_row
-        if row.isHidden() == bool(text):
-            row.setVisible(bool(text))
-        return row.sizeHint().height() if text else 0
+        if pair:
+            self._sync_pair()
+        for widget, want in ((self.focus_line, bool(text)), (self.jump_button, pair),
+                             (self.compare_button, pair)):
+            if widget.isHidden() == want:
+                widget.setVisible(want)
+        if text:
+            self._fit_chip(text, pair)
+        row, want = self._focus_line_row, bool(text) or pair
+        if row.isHidden() == want:
+            row.setVisible(want)
+        return row.sizeHint().height() if want else 0
+
+    def _fit_chip(self, text: str, pair: bool) -> None:
+        """Elide the chip into what the line leaves it beside the pair, so the line never asks the
+        page for more width than it has; elided, its hover carries the whole list."""
+        chip, lay = self.focus_line, self._focus_line_row.layout()
+        m = lay.contentsMargins()
+        avail = self.width() - m.left() - m.right()
+        if pair:
+            avail -= (self.jump_button.sizeHint().width() + self.compare_button.sizeHint().width()
+                      + 2 * lay.spacing())
+        fm = chip.fontMetrics()
+        chrome = chip.sizeHint().width() - fm.horizontalAdvance(chip.text())
+        shown = (text if fm.horizontalAdvance(text) + chrome <= avail
+                 else fm.elidedText(text, Qt.ElideRight, max(avail - chrome, 0)))
+        if (self._chip_text, chip.text()) != (text, shown):
+            self._chip_text = text
+            chip.setText(shown)
+            chip.setToolTip(FOCUS_LINE_TIP if shown == text else f"{text}\n\n{FOCUS_LINE_TIP}")
 
     def _shortlist_px(self) -> int:
         """The height the table needs to show its first ``PANEL_TOP_N`` rows whole: its frame, its
@@ -2481,6 +2634,7 @@ class OpportunitiesPanel(QWidget):
         Add button names the corner it would promote."""
         cid = self._selected_cid()
         self.focus_block.set_selected_corner(cid)
+        self._sync_pair()       # the line's Jump + Compare follow the row
         self.corner_clicked.emit(cid)
 
     def _refresh_summary_label(self):
