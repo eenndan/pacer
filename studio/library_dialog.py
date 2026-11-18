@@ -77,6 +77,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -86,6 +87,8 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -245,6 +248,7 @@ FP_ROLE = Qt.UserRole + 4       # the entry's fingerprint key (on the Date cell)
 FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the search box (on Date)
 COND_ROLE = Qt.UserRole + 6     # the row's session-record conditions tag, "" if untagged (on Date)
 HAS_RECORD_ROLE = Qt.UserRole + 7  # True when the row HAS a session record at all (on Date)
+KEEP_ROLE = Qt.UserRole + 8     # (", <way>", trust tag): what survives eliding (on Track)
 
 # The track-filter combo's two sentinels (a real track name never equals either): "all tracks" at
 # index 0, and an UNKNOWN-TRACK bucket appended when some recording's circuit isn't in the track
@@ -396,6 +400,40 @@ def _backup_when(mtime: float | None) -> str:
         return " taken " + datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
     except (ValueError, OSError, OverflowError):
         return ""
+
+
+class _KeepTailDelegate(QStyledItemDelegate):
+    """The Track column's delegate: a cell carrying a ``KEEP_ROLE`` way elides its NAME, never the
+    way. On a track driven both ways round the two rows differ only in that word — at the dialog's
+    default 740 px a right-elided "Synthetic demo …" hid exactly it — so the cell reads
+    "Synth…, anticlockwise" instead (cool/pb-per-direction). When even that does not fit, the name
+    keeps its first few letters and the trust tag after the way is what gives (it is also said by
+    the cell's italic). A cell without a way, or one that fits, is drawn exactly as Qt draws it;
+    the tooltip leads with the full label in every case (see ``_fill_rows``)."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        way, suffix = index.data(KEEP_ROLE) or ("", "")
+        text = option.text
+        if not way or not text.endswith(way + suffix):
+            return
+        style = option.widget.style() if option.widget else QApplication.style()
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, option, option.widget)
+        # The style's own text margin on each side (QCommonStyle's item-view text layout).
+        avail = rect.width() - 2 * (style.pixelMetric(QStyle.PM_FocusFrameHMargin, None,
+                                                      option.widget) + 1)
+        fm = option.fontMetrics
+        if fm.horizontalAdvance(text) <= avail:
+            return
+        name = text[:len(text) - len(way + suffix)]
+        least = fm.horizontalAdvance(name[:5] + "…")
+        room = avail - fm.horizontalAdvance(way + suffix)
+        if room >= least:
+            option.text = fm.elidedText(name, Qt.ElideRight, room) + way + suffix
+            return
+        shown = fm.elidedText(name, Qt.ElideRight, least)
+        option.text = shown + fm.elidedText(way + suffix, Qt.ElideRight,
+                                            max(0, avail - fm.horizontalAdvance(shown)))
 
 
 class _LapTimeAxis(pg.AxisItem):
@@ -703,6 +741,8 @@ class LibraryDialog(QDialog):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
+        self._track_delegate = _KeepTailDelegate(self.table)
+        self.table.setItemDelegateForColumn(_COL_TRACK, self._track_delegate)
         for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO, _COL_COND, _COL_TYRES):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The sample's mechanism, on the columns it is about (see the header-tip constants).
@@ -1172,6 +1212,8 @@ class LibraryDialog(QDialog):
         selectable but never openable, and a no-laps row is greyed and disabled. Sorting is OFF
         here (re-enabled by the caller) so insertion order is preserved while filling."""
         dim = QBrush(QColor(C.text_muted))
+        both = {t for t in {e.get("track") for e in self._entries}
+                if t and _library.both_ways(self._index, t)}
         for r, e in enumerate(self._entries):
             missing = _entry_missing(e)
             junk = _entry_junk(e)
@@ -1219,9 +1261,16 @@ class LibraryDialog(QDialog):
             trust = None if disabled else _library.trust_label(e)
             suffix = ("  (no laps)" if junk else "  (file missing)" if missing
                       else f"  · {trust}" if trust else "")
-            track_text = f"{track or _UNKNOWN_LABEL}{suffix}"
+            # A track driven both ways round names each row's way, the one thing that tells its
+            # two PB lines apart (cool/pb-per-direction); a row that does not know says nothing.
+            way = _library.ROTATION_WORDS.get(_library.rotation_of(e), "") \
+                if track in both else ""
+            track_text = f"{track or _UNKNOWN_LABEL}{f', {way}' if way else ''}{suffix}"
 
             track_item = QTableWidgetItem(track_text)
+            if way:
+                # The way (and the tag after it) survives eliding; the name gives way instead.
+                track_item.setData(KEEP_ROLE, (f", {way}", suffix))
 
             # The SAMPLE both time cells beside it are a minimum over (see _COL_LAPS). Numeric
             # like them, so "sort by Laps" answers "is this ranking pace or session length?" in
@@ -1314,9 +1363,26 @@ class LibraryDialog(QDialog):
         self._show_missing(entry if missing else None)
         self._sync_record_btn(entry)
         track = item.data(TRACK_ROLE)
-        self._show_pb(track)
-        self._show_summary(track)
+        rotation = _library.rotation_of(entry or {})
+        self._show_pb(track, rotation)
+        self._show_summary(track, rotation)
         self._show_record(entry)
+
+    def _one_way(self, track: str | None, rotation: int) -> tuple[dict, str]:
+        """(the index the selected row's track is read from, the name it goes by): only the rows
+        that ran the way the selected row did, or do not know, and "<track>, clockwise" — when the
+        track has rows stored each way round (``library.both_ways``). Otherwise the whole index and
+        the plain name, exactly as before (cool/pb-per-direction). The name says the way only when
+        EVERY row read under it is known to have run it: a row written before the field is still
+        read (it may be either way), and its best beside "anticlockwise" would name a direction it
+        does not have — so then the rows are the same, and the name is the plain one."""
+        if not track or not rotation or not _library.both_ways(self._index, track):
+            return self._index, track or ""
+        index = _library.one_way(self._index, rotation)
+        if all(_library.rotation_of(e) == rotation for e in index["entries"]
+               if e.get("track") == track):
+            return index, f"{track}, {_library.ROTATION_WORDS[rotation]}"
+        return index, track
 
     def _show_missing(self, entry: dict | None) -> None:
         """Say where a selected missing row's footage was, and why Open is off; clear both for any
@@ -1386,7 +1452,8 @@ class LibraryDialog(QDialog):
         track = entry.get("track")
         if not track or record is None:
             return ""
-        best = _library.best_entry(self._index, track)
+        # The best here THIS way round: a lap the other way round is not the one to be like.
+        best = _library.best_entry(self._one_way(track, _library.rotation_of(entry))[0], track)
         if not best or best.get("fingerprint") == entry.get("fingerprint"):
             return ""
         other = self._record_for(best)
@@ -1425,16 +1492,18 @@ class LibraryDialog(QDialog):
             self._reload_records_guarded()
         self._rerender()
 
-    def _show_summary(self, track: str | None):
+    def _show_summary(self, track: str | None, rotation: int = 0):
         """Set the light cross-session progress line for `track` from ``library.track_summary``
         (trustworthy subset). Blank when there's no track selected; otherwise a compact honest read:
         ``"<track> · 12 sessions · best 68.42 (2026-06-14) · 3 PBs · improving"``. A track with no
-        trustworthy dated best just reports its session count (nothing to boast yet)."""
-        summary = _library.track_summary(self._index, track) if track else None
+        trustworthy dated best just reports its session count (nothing to boast yet). On a track
+        driven both ways round, it reads the selected row's way only (``_one_way``)."""
+        index, name = self._one_way(track, rotation)
+        summary = _library.track_summary(index, track) if track else None
         if not summary:
             self._summary.setText("")
             return
-        parts = [summary["track"], _plural(summary["sessions"], "session")]
+        parts = [name, _plural(summary["sessions"], "session")]
         if summary["best"] is not None:
             best = fmt_time(summary["best"])
             date = f" ({summary['best_date']})" if summary["best_date"] else ""
@@ -1448,7 +1517,7 @@ class LibraryDialog(QDialog):
                 parts.append(trend)
         self._summary.setText("  ·  ".join(parts))
 
-    def _show_pb(self, track: str | None):
+    def _show_pb(self, track: str | None, rotation: int = 0):
         """Plot best-lap-vs-date for `track`: line for >=2 dated bests, a framed single marker for
         1, empty-state for 0. No track means one of THREE different states — an empty library,
         nothing selected, or a selected recording whose circuit the track database doesn't know
@@ -1469,7 +1538,10 @@ class LibraryDialog(QDialog):
                 message = "Select a recording to see its track's PB progression"
             self._set_pb_empty(message)
             return
-        series = _library.pb_series(self._index, track)
+        # A track driven both ways round charts the selected row's way only: two layouts' laps on
+        # one line would draw the other way's best as a PB of this one (cool/pb-per-direction).
+        index, name = self._one_way(track, rotation)
+        series = _library.pb_series(index, track)
         xs, ys = [], []
         for date, best in series:
             x = _epoch_seconds(date)
@@ -1481,13 +1553,13 @@ class LibraryDialog(QDialog):
         # U2: the summary line above counts EVERY row of the track ("3 sessions") while this title
         # counted only the charted ones ("best over 2 sessions") — two totals for one track on one
         # screen. When rows are left off, the title states both numbers.
-        why = _library.pb_left_out(self._index, track)
+        why = _library.pb_left_out(index, track)
         total = why["sessions"]
         over = (f"{len(ys)} of {_plural(total, 'session')}" if total > len(ys)
                 else _plural(len(ys), "session"))
         if len(ys) >= 2:
             self._pb_title.setText(
-                f"PB progression — {track}  ({fmt_time(min(ys))} best over {over})")
+                f"PB progression — {name}  ({fmt_time(min(ys))} best over {over})")
             self._set_pb_empty(None)
             self.pb_plot.enableAutoRange()
             self.pb_plot.autoRange()
@@ -1499,19 +1571,19 @@ class LibraryDialog(QDialog):
             # count and the time — "PB progression — <track>  (1 session: 1:08.201)" — which is the
             # same fact stated where it does not overlap the mark. Empty state and data layer are
             # mutually exclusive now, in both directions.
-            self._pb_title.setText(f"PB progression — {track}  ({over}: {fmt_time(ys[0])})")
+            self._pb_title.setText(f"PB progression — {name}  ({over}: {fmt_time(ys[0])})")
             self._frame_single_point(xs[0], ys[0])
             self._set_pb_empty(None)
         else:
             left_out = [f"{why[r]} {r}" for r in _library.PB_LEFT_OUT_REASONS if why[r]]
             if left_out:
                 # The rows exist; say what kept each one off, in the tags the table rows print.
-                self._pb_title.setText(f"PB progression — {track}  (0 of {_plural(total, 'session')}"
+                self._pb_title.setText(f"PB progression — {name}  (0 of {_plural(total, 'session')}"
                                        " charted)")
                 self._set_pb_empty(f"{_plural(total, 'session')} on this track, but no dated best "
                                    f"lap that counts as a PB: {', '.join(left_out)}")
             else:
-                self._pb_title.setText(f"PB progression — {track}  (no dated best laps)")
+                self._pb_title.setText(f"PB progression — {name}  (no dated best laps)")
                 self._set_pb_empty("Not enough sessions on this track yet to chart progression")
 
     def _set_pb_axes(self, plotted: bool):

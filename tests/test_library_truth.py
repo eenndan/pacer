@@ -150,6 +150,7 @@ def test_the_row_carries_the_ideal_version_that_measured_it():
     s.laps = SimpleNamespace(lap_time=lambda i: 46.808)
     s.session_date = lambda: "2026-09-19"
     s.theoretical_best = lambda: 46.196
+    s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
     s.dropout_lap_ids = lambda: set()
     with tempfile.TemporaryDirectory() as d:
         clip = os.path.join(d, "GX010068.MP4")
@@ -304,6 +305,7 @@ def test_reopening_the_recording_from_its_new_folder_repoints_the_row():
         s.laps = SimpleNamespace(lap_time=lambda i: 68.228)
         s.session_date = lambda: "2026-05-23"
         s.theoretical_best = lambda: 66.95
+        s._lap_rotation = lambda: 0          # no corners on a bare session: way round unknown
         s.dropout_lap_ids = lambda: set()
         win = studio_app.StudioWindow.__new__(studio_app.StudioWindow)
         win.session = SimpleNamespace(

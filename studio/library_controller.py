@@ -367,7 +367,10 @@ class LibraryController:
         key = entry.get("fingerprint")
         # The day AND the first-fix clock: two sessions of one day are ordered by the clock, the
         # rule the focus list uses (`library.recorded_after`, QA W4 REG-1).
-        when = {"date": entry.get("date"), "start_ms": entry.get("start_ms")}
+        # ...and which way round the laps ran: a row run the other way round is another lap
+        # (`library.other_way`, cool/pb-per-direction).
+        when = {"date": entry.get("date"), "start_ms": entry.get("start_ms"),
+                "rotation": entry.get("rotation")}
         trust = (self.win.session.timing_verified, index, entry.get("track"), entry.get("best"))
         degraded = self.win.session.timing_quality.degraded
         moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key, **when)
