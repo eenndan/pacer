@@ -13,6 +13,12 @@ footage checks and the 6 VideoToolbox checks running (2026-09-25, 165 registrati
 92.0–100.3 s (2026-09-27, the two release gates; 116.6 s at load ~10 on 2026-09-30), `golden`
 8–14 s (2026-09-27, README.md's figure; 11.9 s at load ~11 on 2026-09-30) and `typecheck`
 6.7–9.2 s (2026-09-29, 40 modules, load ~6; 12.5 s for 43 at load ~11 on 2026-09-30).
+The six slowest plain suites were trimmed on 2026-11-18 to do the same checking in less time,
+each held to the same kills of 84 planted defects (the pull request has the matrices). Each run
+alone, as CTest runs it, mean of two rounds at load 5–13 (195 registrations), before → after:
+`test_export_broadcast` 90.6 → 63.1 s, `test_central_view_realqt` 78.8 → 54.4 s,
+`test_race_controller` 71.5 → 59.5 s, `test_export_gates` 47.5 → 35.0 s, `test_export_ghost`
+36.1 → 32.9 s and `test_export_corner_cards` 27.1 → 17.9 s: 351.6 → 262.8 s in all.
 
 **Inner loops, not gates.** `pixi run test-core`, between edits to the core math, runs the 11
 registrations that kill every one of the 34 core defects the 2026-09-28 review planted (re-run
