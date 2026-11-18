@@ -1,0 +1,38 @@
+# THE EXPORT TIER'S TRIGGER: a pull request that changes a path matching any line below runs the
+# export-video tests (CTest LABELS export, tests/CMakeLists.txt); one that changes none leaves them
+# out, and the run's summary says so by name. Pushes to main, tags, manual and weekly runs always
+# run them. Owner ruling 2026-11-18: "run the slow export tests only when export code changes,
+# always on main".
+#
+# A false "run" costs minutes; a false "skip" lets a broken export reach main. So the list is
+# CONSERVATIVE and checked: tests/test_ci_tiers.py walks every import of every export-labelled test,
+# transitively, and fails when a file in that closure matches no line here. On 2026-11-18 the
+# closure held 91 of the 93 app modules (all but studio/__main__.py and studio/gearing.py:
+# studio/session.py alone imports coaching, stats and focus, and five of the suites import
+# studio/app.py), so the app is one line rather than a module list that would rot.
+#
+# Syntax: one glob per line, `*` is the only wildcard and it matches across `/` (bash `[[ == ]]`,
+# Python fnmatch: .github/export-tier.sh and the test read it the same way). `#` starts a comment.
+
+# What every test runs on: the build, the C++ core and its bindings, the environment, CI itself.
+.github/*
+CMakeLists.txt
+pyproject.toml
+pixi.lock
+pacer/*
+bindings/*
+3rdparty/*
+
+# The app: every module (the dev tools included: the tests build their fixtures with them), and
+# the fonts and data files the painter and the loader read.
+studio/*.py
+studio/*.json
+studio/assets/*
+
+# The export tests themselves, the shared helpers they import, and how CTest and pytest run them.
+tests/test_export_*.py
+tests/_*.py
+tests/conftest.py
+tests/pytest.ini
+tests/CMakeLists.txt
+tests/test_ci_tiers.py

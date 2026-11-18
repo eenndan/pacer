@@ -37,8 +37,8 @@ To iterate on one test, `pixi run python -m pytest tests/test_<name>.py -k <part
 runner runs. Why pytest is not the gate: `studio/docs/refused-2026-09.md` §18. CMake registers every
 `tests/test_*.py` by itself, as `python tests/<file>.py` with `QT_QPA_PLATFORM=offscreen` and the
 bindings on `PYTHONPATH`. Edit [CMakeLists.txt](CMakeLists.txt) only to name the test in its
-exceptions table (another environment, or a `COST` so a slow suite starts first), or to add a
-footage or soak registration. The per-test notes that file carried until 2026-09-24 are history,
+exceptions table (another environment, a `COST` so a slow suite starts first, or the `export`
+label: [The export tier](#the-export-tier)), or to add a footage or soak registration. The per-test notes that file carried until 2026-09-24 are history,
 kept verbatim in [registration-notes.md](registration-notes.md).
 
 **Two runs on one machine share no temp or app-support files** (they do share `build/Release`
@@ -236,3 +236,31 @@ them out of its ordinary run, and a check with a software half keeps that half t
 [_videotoolbox.py](_videotoolbox.py) is the mechanism; `test_videotoolbox_checks` holds the
 declarations and registrations one to one. To see CI's H.264 shape here, point `PACER_FFMPEG` at
 an ffmpeg wrapper that hides VideoToolbox (it hides the ProRes encoder too, which CI has).
+
+## The export tier
+
+The video-export tests carry the CTest label `export`: the 18 suites in
+[CMakeLists.txt](CMakeLists.txt)'s `_export` list (`studio/export_video.py`, `studio/overlay/`, the
+compare export, the export controller's video path) and the 6 `videotoolbox.*` checks. Every local
+task runs them as before (`pixi run test-export` runs only them). CI, on a pull request, runs them
+only when it changes a path in [.github/export-tier-paths.txt](../.github/export-tier-paths.txt);
+otherwise the test step runs with `-LE export`, and the run's summary names the tests NOT run —
+they run on the push to main that merges it (owner ruling 2026-11-18). Pushes to main, tags,
+manual and weekly runs run everything.
+
+In CI they were 796 of 2,904 test-seconds (the 2026-11-17 release pull request, run 44182906534:
+195 registrations, 736 s wall at -j4): `test_export_broadcast` 242 s, `test_export_gates` 101,
+`test_export_ghost` 87, `test_export_corner_cards` 75, `test_export_e2e` 59, `test_export_video`
+53, `test_export_pipeline` 49, `test_export_pill_budget` 41, the rest 89 together. The path list
+is wide on purpose: the suites import 91 of the 93 app modules (`studio/session.py` alone imports
+coaching, stats and focus), so any app, core, build or export-test change runs them. What skips
+them is a pull request of docs, `changes/` fragments or non-export tests — 25 of the 200 merged
+pull requests #405-#604 were.
+
+[test_ci_tiers.py](test_ci_tiers.py) keeps the skip side shut. It fails when a
+`tests/test_export_*.py` is neither labelled nor in its `EXEMPT` with a reason (today
+`test_export_data` and `test_export_disclosures`: text, a few seconds), when a file the labelled
+tests import — transitively, function-local imports included — matches no line of the path list,
+and when [.github/export-tier.sh](../.github/export-tier.sh), the script CI runs, decides a
+synthetic diff differently from the list. **A new export suite** goes in `_export`; **a new import
+from outside the list** gets a line there in the same pull request.

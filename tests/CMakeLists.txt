@@ -41,7 +41,7 @@ find_package(Python REQUIRED COMPONENTS Interpreter)
 #
 # No offscreen platform (the test imports no Qt):
 set(_no_qt
-    test_app_support_jail test_camera_support test_chapter_timeline test_chapters
+    test_app_support_jail test_camera_support test_chapter_timeline test_chapters test_ci_tiers
     test_data_quality test_demo test_export_data test_export_disclosures test_fit_start_line
     test_gapfill test_gearing test_geometry_bindings test_gmeter test_gps_source_bindings
     test_imu_orientation test_ingest_equivalence test_landing_page test_lap_time_axis
@@ -51,7 +51,7 @@ set(_no_qt
     test_track_db test_track_match test_version)
 # No PYTHONPATH (the test imports no pacer):
 set(_no_bindings
-    test_app_support_jail test_camera_support test_chart_instruments test_contrast
+    test_app_support_jail test_camera_support test_chart_instruments test_ci_tiers test_contrast
     test_data_quality test_demo test_export_pill_budget test_gearing test_glyph_vocabulary
     test_landing_page test_layering test_map_fit test_parallel_suite test_prefs
     test_temp_isolation test_timeline test_track_match test_version)
@@ -61,7 +61,22 @@ set(_no_media
     test_media_clock test_playback_rate test_provenance_panel test_quality_chip_trust
     test_quality_strip test_session_log test_synth_gopro test_welcome_first_touch)
 # + PACER_CTEST_COMMAND / PACER_CTEST_DIR, for a test that lists this build's own registrations:
-set(_ctest test_app_support_jail test_footage_checks)
+set(_ctest test_app_support_jail test_ci_tiers test_footage_checks)
+#
+# LABELS export: the VIDEO-EXPORT suites — studio/export_video.py, studio/overlay/, the compare
+# export and the export controller's video path — plus every `videotoolbox.*` check (below). Every
+# local task runs them as before; CI on a pull request runs them only when it changes a path in
+# .github/export-tier-paths.txt (owner ruling 2026-11-18), and on every push to main, tag, manual
+# run and weekly run. `pixi run test-export` runs just these. A new tests/test_export_*.py goes here
+# or into test_ci_tiers.py's EXEMPT with a reason, and that test fails until it does; it also fails
+# when a module these import is not on the CI path list. The CSV/report/disclosure tests are not
+# here: they are fast and guard text.
+set(_export
+    test_export_broadcast test_export_compare test_export_corner_cards test_export_e2e
+    test_export_ends_on_finish test_export_gates test_export_ghost test_export_map_sync
+    test_export_padding test_export_pickers test_export_pill_budget test_export_pipeline
+    test_export_polish test_export_probe test_export_seam test_export_thread_safety
+    test_export_typography test_export_video)
 #
 # COST. ctest starts the highest COST first, but a FRESH build dir — every CI run, every new
 # worktree — has no measured costs, so it ran in registration order and the slowest suites started
@@ -91,7 +106,7 @@ set(_cost
 # ==========================================================================================
 
 # A name in the table that is not a tests/test_*.py would silently configure nothing: fail instead.
-foreach(_name IN LISTS _no_qt _no_bindings _no_media _ctest)
+foreach(_name IN LISTS _no_qt _no_bindings _no_media _ctest _export)
     if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${_name}.py)
         message(FATAL_ERROR "tests/CMakeLists.txt names ${_name} in its exceptions table, but "
                             "there is no tests/${_name}.py — remove or rename the entry")
@@ -118,6 +133,9 @@ foreach(_path IN LISTS _pytests)
     endif()
     if(_env)
         set_tests_properties(${_name} PROPERTIES ENVIRONMENT "${_env}")
+    endif()
+    if("${_name}" IN_LIST _export)
+        set_tests_properties(${_name} PROPERTIES LABELS export)
     endif()
 endforeach()
 while(_cost)
@@ -190,13 +208,13 @@ add_soak_test(test_compare_lifecycle test_toggle_compare_repeatedly_does_not_cra
 # session it needs it exits 77 and CTest reports it SKIPPED by name (tests/_videotoolbox.py), where
 # it used to return early and report PASSED. On the dev Mac all six run, in `test-fast` as well as
 # `test`. A file's VIDEOTOOLBOX_CHECKS and these lines are held one to one by
-# test_videotoolbox_checks.
+# test_videotoolbox_checks. LABELS export too: they are export paths (the `_export` note above).
 function(add_videotoolbox_test file check)
     add_test(NAME videotoolbox.${check}
              COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/${file}.py --videotoolbox ${check})
     set_tests_properties(videotoolbox.${check} PROPERTIES
                          SKIP_RETURN_CODE 77
-                         LABELS videotoolbox
+                         LABELS "videotoolbox;export"
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endfunction()
 

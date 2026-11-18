@@ -170,7 +170,9 @@ def test_the_task_the_pin_and_the_ci_step():
     pin = pixi["dependencies"]["pyright"]
     assert re.fullmatch(r"==\d+\.\d+\.\d+", pin), f"pyright must be pinned exactly, not {pin!r}"
     ci = _read(".github", "workflows", "ci.yml")
-    check, tests = ci.find("run: pixi run typecheck\n"), ci.find("run: pixi run test\n")
+    # The test step may append ctest arguments (`$TIER_ARGS`, the export tier); `test-…` is another task.
+    m = re.search(r"run: pixi run test[ \n]", ci)
+    check, tests = ci.find("run: pixi run typecheck\n"), (m.start() if m else -1)
     assert 0 <= check < tests, "CI must run `pixi run typecheck` in a step before the tests"
     print(f"test_the_task_the_pin_and_the_ci_step OK: pyright {pin[2:]}, before the tests in CI")
 

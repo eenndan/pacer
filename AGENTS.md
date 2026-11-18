@@ -46,6 +46,7 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 16 real-footage checks and the 6 `videotoolbox.*` export checks run (CI reports the footage Skipped, and runs 5 of the 6: the hardware-relay check needs a real Mac); the crash soak is reported Skipped (see `test-soak`) |
 | `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (5 of the 6 in CI) |
 | `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) |
+| `pixi run test-export` | only the 24 video-export tests (`ctest -L export`: the export suites + `videotoolbox.*`), which `test` runs too (`test-fast` all but `test_export_video`); CI skips them on a pull request that touches no export path (CI sequence, step 6) |
 | `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak. CI runs it on pushes to main, tags, manual runs and the weekly schedule |
 | `pixi run test-core` | optional, not a gate: between core-math edits, the 11 registrations that kill all 34 planted core defects (the mutant cover; why: `pyproject.toml`) |
 | `pixi run test-ciworld` | optional, not a gate: before pushing a player or compare change, the registrations that build a real `QMediaPlayer`, in CI's software-decode world |
@@ -103,7 +104,10 @@ locally first:
 4. `pixi run fmt-check` (`pixi run fmt` fixes it).
 5. `pixi run typecheck`.
 6. `pixi run test` — green (on a push to main, a tag, a manual run or the weekly schedule it
-   includes the soak).
+   includes the soak). On a pull request that changes no path in `.github/export-tier-paths.txt`
+   (docs, `changes/`, non-export tests) it runs with `-LE export`: the 24 export-video tests are
+   left out, named in the run's summary as NOT run, and run on main after the merge. Any app,
+   core, build or export-test change runs them; `tests/test_ci_tiers.py` keeps the list honest.
 7. `pixi run smoke`.
 
 - **One focused change per PR.** Match the surrounding comment density, naming and idiom; favour

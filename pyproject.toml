@@ -166,6 +166,13 @@ test-footage = { cmd = "caffeinate -si ctest --test-dir build/Release --output-o
 # without it (`test`, `test-fast`, CI on a pull request) each is reported Skipped by name. CI sets
 # it on pushes to main and on tags (.github/workflows/ci.yml). No --timeout: each has a TIMEOUT.
 test-soak = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure -L soak", depends-on = ["build"], env = { PACER_SOAK = "1" } }
+# Just the video-export tests (`LABELS export`, tests/CMakeLists.txt): the export suites and the
+# `videotoolbox.*` checks, which `test` runs too (`test-fast` all but test_export_video). It exists
+# because CI runs them on a pull request only when it changes an export path
+# (.github/export-tier-paths.txt, owner ruling 2026-11-18), so this is the loop for export work and
+# how to run what such a pull request skipped. In CI they were 796 of 2,904 test-seconds on the
+# 2026-11-17 release pull request (run 44182906534, 195 registrations, 736 s wall).
+test-export = { cmd = "caffeinate -si ctest --test-dir build/Release --output-on-failure --timeout 480 -L export", depends-on = ["build"], env = { CTEST_PARALLEL_LEVEL = "4" } }
 # TWO OPTIONAL INNER LOOPS, NEITHER A GATE: `test` stays the pre-PR gate and `test-fast` the loop.
 # Each is an anchored list of registrations; tests/test_parallel_suite.py fails a name that is not a
 # tests/<name>.py (a misspelt or renamed one would otherwise select nothing and still exit 0), and

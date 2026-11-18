@@ -167,6 +167,9 @@ Packages go out in waves: dispatched together, merged, then checked by QA. These
   soak, and one day's pull-request runs differed by minutes. The target, a median of at most
   300 s once the truth matrix lands, is paid for by building the Stats view once in
   `test_stats_ideal` (package GATES-3). A pull request adding over 20 s of CI names what it buys.
+  A pull request that changes no path in `.github/export-tier-paths.txt` (docs, fragments,
+  non-export tests) runs without the 24 export-video tests, and its run's summary says they were
+  not run; compare such runs only with each other ([tests/README.md](../tests/README.md)).
 - **Measures** are set on outcomes, not on counts that drift with the data, and compared only
   across waves of the same type. Pre-register a measure the app cannot satisfy by itself.
 - **Decisions** (owner rulings, the defaults applied for him, the freeze window) live in a tracked

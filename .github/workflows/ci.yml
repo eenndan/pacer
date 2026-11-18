@@ -46,8 +46,9 @@ jobs:
         with:
           # gpmf-parser and nanobind are git submodules the C++ build needs.
           submodules: recursive
-          # 2, not 1: a pull request checks out its merge commit, and the changelog rule below
-          # diffs that against its first parent (the base branch it merges into).
+          # 2, not 1: a pull request checks out its merge commit, and the changelog rule and the
+          # export tier below diff that against its first parent (the base branch it merges into):
+          # exactly what the pull request changes.
           fetch-depth: 2
 
       - name: "Changelog: a PR adds a changes/ fragment; only a release PR edits CHANGELOG.md (title starts with 'release', or it deletes the changes/ fragments it folds)"
@@ -106,6 +107,44 @@ jobs:
         # the drift gate above has just matched to the headers.
         run: pixi run typecheck
 
+      - name: "Export tier: a pull request runs the export-video tests only when it changes a path in .github/export-tier-paths.txt"
+        # Owner ruling 2026-11-18: "run the slow export tests only when export code changes, always
+        # on main". The video-export suites (LABELS export, tests/CMakeLists.txt) were about a
+        # quarter of this job's test seconds on every PR. A PR that changes none of the listed
+        # paths leaves them out of the test step below, and this step says so in the run's
+        # summary, by name and count: they were NOT run, which is not a pass. They run on the push
+        # to main that merges it. The list is conservative and checked: tests/test_ci_tiers.py
+        # fails when a file the export tests import is not on it, and runs this script on
+        # synthetic diffs. Pushes to main, tags, manual and weekly runs skip this step and run all.
+        id: tier
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt" || : > "$RUNNER_TEMP/changed.txt"
+          verdict=$(bash .github/export-tier.sh < "$RUNNER_TEMP/changed.txt")
+          echo "$verdict"
+          case "$verdict" in
+            skip:*)
+              pixi run ctest --test-dir build/Release -N -L export > "$RUNNER_TEMP/export-tests.txt"
+              count=$(sed -n 's/^Total Tests: *//p' "$RUNNER_TEMP/export-tests.txt")
+              echo "ctest_args=-LE export" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Export-video tests NOT RUN on this pull request: $count"
+                echo
+                echo "It changes no path in \`.github/export-tier-paths.txt\` (${verdict#skip: }), so"
+                echo "the $count registrations labelled \`export\` were left out of the test step."
+                echo "Not run is not passed: they run on the push to main that merges it."
+                echo
+                echo '```'
+                sed -n 's/^ *Test *#[0-9]*: *//p' "$RUNNER_TEMP/export-tests.txt"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice title=Export-video tests NOT RUN::$count tests labelled export were not run: this PR changes no path in .github/export-tier-paths.txt. They run on main after merge."
+              ;;
+            *)
+              echo "### Export-video tests run on this pull request (${verdict#run: })" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
+
       - name: Test (ctest via pixi)
         env:
           # The compare-toggle crash soak (`soak.*`, LABELS soak) runs on pushes to main, tags,
@@ -114,7 +153,9 @@ jobs:
           # by name, and the deterministic guard for its root cause runs instead
           # (tests/test_compare_lifecycle.py).
           PACER_SOAK: ${{ github.event_name != 'pull_request' && '1' || '' }}
-        run: pixi run test
+          # `-LE export` when the export tier above was skipped; empty everywhere else.
+          TIER_ARGS: ${{ steps.tier.outputs.ctest_args }}
+        run: pixi run test $TIER_ARGS
 
       - name: E2E smoke (full StudioWindow offscreen on the bundled GoPro sample)
         # Builds the whole app against 3rdparty/gpmf-parser/samples/hero6.mp4 (checked out with
