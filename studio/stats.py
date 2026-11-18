@@ -2016,9 +2016,9 @@ def quickest_passes(matrix: CornerMatrix | None, *, clock_estimated: bool = Fals
     partial |= set(lap_ids) - set(rows)
     out: list[QuickestPass] = []
     for col, cid in enumerate(matrix.cids):
-        counted = sorted((float(row[col]), int(lap))
+        counted = sorted((val, int(lap))
                          for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
-                         if row[col] is not None and res[col])
+                         if (val := row[col]) is not None and res[col])
         if not counted:
             out.append(QuickestPass(cid, None, None, (), None, 0))
             continue
