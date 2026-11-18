@@ -116,6 +116,8 @@ def printed_delta(d: float) -> float:
 
 
 def is_level(d: float | None) -> bool:
+    """Whether a burned Δ reads level (the neutral white): THE burned overlays' one rule, also
+    called by the Classic strip and the compare pill (`export_video.burned_delta_colour`)."""
     return d is not None and library.within_timing_precision(printed_delta(d))
 
 

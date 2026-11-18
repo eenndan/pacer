@@ -111,8 +111,8 @@ from .export_video import (
     _telemetry_time,
     _text_at,
     build_decode_cmd,
+    burned_delta_colour,
     estimate_render_seconds,
-    export_delta_colour,
     fits_one_frame,
     footage_duration,
     guard_validate_window,
@@ -819,8 +819,11 @@ class ComparePainter:
         _draw_text(p, QPointF(inner.x(), base - (fm_big.ascent() - fm_small.ascent()) * 0.5),
                    self._prefix, self._prefix_font, EXPORT.text_dim, halo=1.8 * k)
         x = inner.x() + fm_small.horizontalAdvance(self._prefix) + _DELTA_GAP_K * k
+        # The single-lap strip's colour rule (`burned_delta_colour`): white while the printed gap
+        # is inside the timing step, so two laps the timing cannot separate never read as one
+        # behind. The number, its sign and its arrow still print; only the colour is level.
         _draw_text(p, QPointF(x, base), frame.delta_run, self._delta_font,
-                   export_delta_colour(frame.delta, self._cfg.palette), halo=2.6 * k)
+                   burned_delta_colour(frame.delta, self._cfg.palette), halo=2.6 * k)
 
     def _paint_progress(self, p: QPainter, fraction: float) -> None:
         """The track-position bar: how far round the lap BOTH panes are. It is the lock made

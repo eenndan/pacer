@@ -9,8 +9,9 @@ an element here instead, so the 4,800-line exporter does not grow with every ide
     = it has something to draw in THIS export, False = it sits this one out, silently) and
     `paint(painter, vals)` (once per frame, `vals` = that frame's `export_video.OverlayValues`);
   * `OverlayConfig.elements` names the ones a render asks for — EMPTY BY DEFAULT, and with it empty
-    the painter never reaches this package, so the Classic export is byte-identical to a build
-    without it (tests/test_export_ghost.py);
+    the painter never paints through this package (its one read here is Broadcast's `is_level`,
+    the level-gap rule the Classic strip shares), so no element can change a Classic frame
+    (tests/test_export_ghost.py);
   * `layer` says where in the frame's paint order it lands: `LAYER_MAP` on the minimap UNDER the
     kart dot and its tail (the dot is the driver; nothing may cover it), `LAYER_TOP` over everything.
     A `LAYER_MAP` element may define `paint_map(painter, vals, dot, over)` instead of using `paint`:

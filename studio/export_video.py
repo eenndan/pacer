@@ -411,9 +411,9 @@ class OverlayConfig:
     # global theme.active_palette() live; export_semantic_pair resolves the vivid EXPORT pair from it).
     palette: str = theme.PALETTE_STANDARD
     # Opt-in overlay ELEMENTS by registry name (`studio/overlay/`: "ghost", ...), painted on top of
-    # the Classic overlay above. EMPTY by default, and then the painter never reaches the package:
-    # the Classic export stays byte-identical (tests/test_export_ghost.py). The Broadcast style is
-    # elements too (`overlay.broadcast.styled`), with a bigger `map_h_frac`.
+    # the Classic overlay above. EMPTY by default, and then the painter never paints through the
+    # package: no element can change a Classic frame (tests/test_export_ghost.py). The Broadcast
+    # style is elements too (`overlay.broadcast.styled`), with a bigger `map_h_frac`.
     elements: tuple[str, ...] = ()
 
 
@@ -2980,7 +2980,8 @@ def strip_tail(delta_s: float | None, is_best: bool = False,
     against… Pick another lap for a number that moves") — but a video has no tooltip to hover, so
     the mark has to BE the explanation.
 
-    Any other lap -> the shared tight Δ run in the vivid ahead/behind colour for `palette`.
+    Any other lap -> the shared tight Δ run in the vivid ahead/behind colour for `palette`, or
+    the neutral white while the PRINTED Δ is inside the timing step (`burned_delta_colour`).
     `theme.format_delta_run(units=False, arrow=False)` and `export_delta_colour` stay the
     formatter and the colour decision, shared with the live readout so the two cannot drift (that
     includes theme's `-0.00` dead band, which the export must never burn into a delivered file).
@@ -2988,7 +2989,25 @@ def strip_tail(delta_s: float | None, is_best: bool = False,
     if is_best:
         return _BEST_MARK, EXPORT.accent
     return (theme.format_delta_run(delta_s, units=False, arrow=False),
-            export_delta_colour(delta_s, palette))
+            burned_delta_colour(delta_s, palette))
+
+
+def burned_delta_colour(d: float | None, palette: str | None = None) -> str:
+    """The colour a burned-in Δ NUMBER is drawn in: `EXPORT.neutral` (the clock's white) while the
+    printed value is level as far as the timing can tell, else `export_delta_colour`.
+
+    A GAP THE TIMING CANNOT TELL FROM ZERO IS NOT A COLOUR (owner-approved 2026-11-18, design 3A):
+    "Δ +0.03" in red said "you are behind" where the honest answer is "no measurable difference".
+    The rule is Broadcast's own `overlay.broadcast.is_level`, called, never re-typed — decided on
+    the PRINTED value against `library.within_timing_precision` (0.07 s), so "+0.07" is always
+    coloured and two equal strings never look different. No hold: the demo's laps each change
+    colour once. The number still prints with its sign; only its colour changes. The Classic lap
+    strip and the compare export's Δ pill call this; Broadcast, the corner cards and the LAST line
+    apply the same `is_level` / `within_timing_precision` themselves."""
+    from .overlay import broadcast  # deferred: the overlay package's modules import this one
+    if broadcast.is_level(d):
+        return EXPORT.neutral
+    return export_delta_colour(d, palette)
 
 
 # ------------------------------------------------------------------ what each frame actually says
