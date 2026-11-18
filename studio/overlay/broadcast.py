@@ -116,6 +116,8 @@ def printed_delta(d: float) -> float:
 
 
 def is_level(d: float | None) -> bool:
+    """Whether a burned Δ reads level (the neutral white): THE burned overlays' one rule, also
+    called by the Classic strip and the compare pill (`export_video.burned_delta_colour`)."""
     return d is not None and library.within_timing_precision(printed_delta(d))
 
 
@@ -135,7 +137,7 @@ def delta_scale(max_abs: float) -> float:
 def last_lap_rows(session, palette) -> dict[int, tuple[str, str, str]]:
     """{lap id: (time, Δ text, Δ colour)} for every lap the Laps table has a row for: its Time
     cell, and its Δbest cell by the table's own rule (`delta_best_gaps`) — `★` on the best lap, ""
-    with no best (provisional timing), neutral inside the printed 0.07 s."""
+    with no best (provisional timing), neutral while the printed 3-decimal gap is under 0.07 s."""
     from studio import export_video as ev
     from studio import lap_table
     rows = {int(r["idx"]): float(r["time"]) for r in session.lap_rows()}
@@ -152,7 +154,10 @@ def last_lap_rows(session, palette) -> dict[int, tuple[str, str, str]]:
         else:
             g = gaps[lap]
             delta = fmt_signed(g, 3)
-            colour = (EXPORT.neutral if library.within_timing_precision(g)
+            # Decided on the PRINTED value, at this line's own 3 decimals, as every other burned
+            # Δ is: a raw 0.0698 prints "+0.070" and must not read level beside a coloured 0.0700.
+            colour = (EXPORT.neutral
+                      if library.within_timing_precision(float(delta.replace("−", "-")))
                       else ev.export_delta_colour(g, palette))
         out[lap] = (fmt_time(t), delta, colour)
     return out
