@@ -28,6 +28,9 @@ Pinned here:
      open's debrief with its pre-fill marked "Pacer's default", a focus edit and a Mark-dry click
      marked "by hand", and none on a re-open. The pre-fill writes focus.json with no click, so
      without these lines a race-day read could not tell a list he touched from one he left.
+  5. THE OTHER WAY ROUND on the real window (cool/pb-per-direction): the demo, then its circuit
+     forward, in reverse and faster in reverse: the reverse is a first "this way round" (no PB line
+     against the forward lap, no Compare, no card mark) and the faster reverse a PB over it.
 
 Run: python tests/test_debrief_landing.py   (~10 s; the pixi env's ffmpeg writes the video trak)
 """
@@ -138,6 +141,57 @@ def test_a_same_day_morning_opened_after_the_afternoon_is_not_a_new_pb():
         "fingerprint": "GX9302", "date": day, "lap_total": 737.0, "verified": True,
         "degraded": False, "n_of": 36, "method": focus.METHOD_MATCHED, "start_ms": pm_ms})
     assert focus.recorded_before({"fingerprint": "GX9301", "date": day, "start_ms": am_ms}, item)
+
+
+def test_the_default_never_tops_up_a_list_that_ran_the_other_way_round():
+    """cool/layout-reversed-synth: the debrief's pre-fill puts today's corners into the list's FREE
+    slots. A list set on the track driven one way round, topped up on a day driven the other way,
+    holds both rotations — and the check refuses one half of it as LAYOUT_REVERSED on either
+    layout, for good. So a reversed day's list is not topped up on a forward day (nor the other
+    way); the same rotation, or an item stored before rotations were (0), is filled as before."""
+    from types import SimpleNamespace
+
+    from studio import focus
+    from studio.library_controller import LibraryController
+
+    def item(cid, rotation):
+        return focus.FocusItem(cid=cid, direction=-1, enter_frac=0.1 * cid,
+                               exit_frac=0.1 * cid + 0.05, median_s=3.0, iqr_s=0.1, n_laps=14,
+                               time_lost=0.2, reason="", reach="", fingerprint=f"GX{rotation}",
+                               date="2026-09-01", lap_total=961.0, verified=True,
+                               degraded=False, rotation=rotation)
+
+    def day(rotation, stored):
+        """A controller on a session whose laps run `rotation`, over the list `stored`."""
+        session = SimpleNamespace(
+            focus_context=lambda _entry, _track: {"rotation": rotation},
+            focus_items=lambda cids, _entry: [item(c, rotation) for c in cids])
+        ctl = LibraryController(SimpleNamespace(session=session), 0)
+        kept: list = []
+        ctl._focus_entry = lambda: {"fingerprint": "GX0002", "track": "Demo"}
+        ctl._focus_items = lambda _track: list(stored)
+        ctl._save_focus = lambda _track, items: kept.extend(items)
+        ctl._baseline_refusal = lambda *_a: ""
+        ctl.update_focus_list = lambda: None
+        return ctl, kept
+
+    # A reversed (clockwise) day first: its debrief puts its one corner on the empty list.
+    ctl, kept = day(-1, [])
+    assert ctl.pre_promote_focus([7]) == [7] and [i.rotation for i in kept] == [-1], kept
+    reversed_list = list(kept)
+    # …then a forward (anticlockwise) day: two free slots, and none is filled.
+    ctl, kept = day(1, reversed_list)
+    assert ctl.pre_promote_focus([5, 3]) == [] and kept == [], \
+        ("a forward day topped up a reversed day's list", kept)
+    # The same rotation, or an item that stored none, is topped up as before.
+    for stored in (reversed_list, [item(7, 0)]):
+        ctl, kept = day(-1, stored)
+        assert ctl.pre_promote_focus([5, 3]) == [5, 3], stored
+        assert [i.cid for i in kept] == [7, 5, 3], kept
+    # A day that tells no rotation (no loop in its corners) is not stopped either.
+    ctl, kept = day(0, reversed_list)
+    assert ctl.pre_promote_focus([5]) == [5], kept
+    print("ok default: a list is never topped up from a day run the other way round")
 
 
 def test_the_lead_says_it_is_a_default_and_how_to_undo_it():
@@ -485,6 +539,177 @@ def test_the_journey_on_the_real_window():
                 setattr(QMessageBox, k, fn)
     print(f"ok journey: {short} promoted, C{gone} dropped in one click, Esc to Corners, the "
           f"second open filled the slot with C{gone} and reached a verdict in one click")
+
+
+def _way_recordings(folder: str) -> list[str]:
+    """The demo's circuit forward (seed 1), then in reverse twice (seeds 4 and 6, 0:45.142 then
+    0:45.044), each under its own recording number: every synthetic recording is GX019001, and the
+    Library would see three as one."""
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    out = []
+    for n, (off, rev) in zip(("9301", "9302", "9303"), ((1, False), (4, True), (6, True)),
+                             strict=True):
+        key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev)
+        if key not in _GEN:
+            gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
+            rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
+                              origin=key[3], reverse=rev)
+            _GEN[key] = (gen, rec.paths[0])
+        os.makedirs(os.path.join(folder, n))
+        out.append(os.path.join(folder, n, f"GX01{n}.MP4"))
+        shutil.copyfile(_GEN[key][1], out[-1])
+    return out
+
+
+def test_a_personal_best_is_never_compared_with_the_other_way_round():
+    """cool/pb-per-direction, on the real window, jailed: the shipped demo (lands, keeps nothing,
+    as before), then the demo's circuit forward, then in reverse, then a faster reverse. Before, the
+    first reverse read "0.18 s off your personal best there" against the forward lap (and the other
+    order "New personal best … 0.16 s faster"). Now: a first this way round, no Compare, no mark on
+    its lap card; and the faster reverse IS a personal best, over the reverse lap."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio import share_card
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    from studio.library_controller import DEMO_DEBRIEF_LINE
+
+    boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information", "question")}
+    for k in boxes:
+        setattr(QMessageBox, k, staticmethod(lambda *a, **_kw: (_ for _ in ()).throw(
+            AssertionError(f"a modal opened: {a[1:3]}"))))
+    saved_env = os.environ.get("PACER_DEMO_MP4")
+    with tempfile.TemporaryDirectory(prefix="debrief_rec_") as folder, _fresh_app_support():
+        demo = os.path.join(folder, "demo", "GX019000.MP4")
+        os.makedirs(os.path.dirname(demo))
+        md.make(demo, render=False)
+        os.environ["PACER_DEMO_MP4"] = demo
+        fwd, rev, faster = _way_recordings(folder)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+
+        def said():
+            ctl = win.library_ctl
+            card = share_card.card_data(win.session, pb_standing=ctl.pb_standing,
+                                        prior_date=(ctl.previous_pb or {}).get("date"))
+            return (ctl.debrief_pb_line(), card.pb, (ctl.previous_pb or {}).get("fingerprint"),
+                    ctl.offers_pb_compare(ctl.pb_standing))
+
+        try:
+            _open(win, demo)
+            assert win.library_ctl.debrief_pb_line() == DEMO_DEBRIEF_LINE
+            assert library.load()["entries"] == [], "the demo kept a row"
+            _open(win, fwd)
+            track, t = win.session.track_name, fmt_time(win.session.lap_time(
+                win.session.best_lap_id()))
+            assert said() == (f"First session logged at {track}: best lap {t}, the time to beat "
+                              "next time.", "", None, False), said()
+            _open(win, rev)
+            slow = fmt_time(win.session.lap_time(win.session.best_lap_id()))
+            assert win.view.is_debrief()
+            assert said() == (f"First session logged at {track} this way round: best lap {slow}, "
+                              "the time to beat next time.", "", None, False), said()
+            assert "personal best" not in win.view.opportunities.debrief_block.full_text()
+            _open(win, faster)
+            fast = win.session.lap_time(win.session.best_lap_id())
+            line, mark, prev, compare = said()
+            assert line == (f"New personal best at {track} this way round: {fmt_time(fast)}, "
+                            f"0.10 s faster than your previous best ({slow})."), line
+            assert mark == "NEW PB · −0.10 s vs 1 Jun" and prev == "GX9302" and compare, said()
+            rows = {e["fingerprint"]: e.get("rotation") for e in library.load()["entries"]}
+            assert rows == {"GX9301": -1, "GX9302": 1, "GX9303": 1}, rows
+        finally:
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+            for k, fn in boxes.items():
+                setattr(QMessageBox, k, fn)
+            if saved_env is None:
+                os.environ.pop("PACER_DEMO_MP4", None)
+            else:
+                os.environ["PACER_DEMO_MP4"] = saved_env
+    print(f"ok other way round: a first this way round at {slow}, then a PB at {fmt_time(fast)}")
+
+
+def test_a_mixed_library_never_names_a_way_its_figures_do_not_have():
+    """cool/pb-per-direction's review, on the real window, jailed: two forward rows written WITHOUT
+    a direction (as the build before writes them: seeds 1 and 2), a forward row that knows it
+    (seed 3, clockwise), then the circuit in reverse (seed 1). The reverse is still compared with
+    the two old rows — they may be either way, and are compared as before — so its line and the
+    Library must not say "this way round" or "anticlockwise" beside a figure, 0:44.929, that is the
+    forward seed-1 lap. Before the fix: "Best lap 0:45.094 at Synthetic demo circuit this way
+    round, 0.16 s off your personal best there (0:44.929)." and "…, anticlockwise · 4 sessions"."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio import session as studio_session
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    from studio.library_dialog import _COL_DATE, FP_ROLE, LibraryDialog
+
+    boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information", "question")}
+    for k in boxes:
+        setattr(QMessageBox, k, staticmethod(lambda *a, **_kw: (_ for _ in ()).throw(
+            AssertionError(f"a modal opened: {a[1:3]}"))))
+    rotation = studio_session.Session._lap_rotation
+    with tempfile.TemporaryDirectory(prefix="debrief_rec_") as folder, _fresh_app_support():
+        paths = []
+        for n, (off, rev) in zip(("9311", "9312", "9313", "9314"),
+                                 ((1, False), (2, False), (3, False), (1, True)), strict=True):
+            key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev)
+            if key not in _GEN:
+                gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
+                rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
+                                  origin=key[3], reverse=rev)
+                _GEN[key] = (gen, rec.paths[0])
+            os.makedirs(os.path.join(folder, n))
+            paths.append(os.path.join(folder, n, f"GX01{n}.MP4"))
+            shutil.copyfile(_GEN[key][1], paths[-1])
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        dlg = None
+        try:
+            # The build before this one stores no direction: a Session that cannot tell writes none.
+            studio_session.Session._lap_rotation = lambda self: 0
+            _open(win, paths[0])
+            track = win.session.track_name
+            pb = fmt_time(win.session.lap_time(win.session.best_lap_id()))
+            _open(win, paths[1])
+            studio_session.Session._lap_rotation = rotation
+            _open(win, paths[2])
+            _open(win, paths[3])
+            ctl = win.library_ctl
+            t = win.session.lap_time(win.session.best_lap_id())
+            rows = {e["fingerprint"]: e.get("rotation") for e in library.load()["entries"]}
+            assert rows == {"GX9311": None, "GX9312": None, "GX9313": -1, "GX9314": 1}, rows
+            line = ctl.debrief_pb_line()
+            mine = next(e for e in library.load()["entries"] if e["fingerprint"] == "GX9314")
+            prev = (library.previous_pb(library.load(), track, "GX9314", mine.get("date"),
+                                        mine.get("start_ms"), rotation=1) or {}).get("fingerprint")
+            assert line == (f"Best lap {fmt_time(t)} at {track}, 0.16 s off your personal best "
+                            f"there ({pb})."), line
+            assert prev == "GX9311", prev            # the comparison itself is unchanged
+            dlg = LibraryDialog(library.load(), lambda _p: None)
+            dlg.resize(740, 740)
+            for r in range(dlg.table.rowCount()):
+                if dlg.table.item(r, _COL_DATE).data(FP_ROLE) in ("GX9313", "GX9314"):
+                    dlg.table.selectRow(r)
+                    said = (dlg._summary.text(), dlg._pb_title.text())
+                    assert not any("clockwise" in s for s in said), said
+                    assert said[0].startswith(f"{track}  ·  "), said
+        finally:
+            studio_session.Session._lap_rotation = rotation
+            if dlg is not None:
+                dlg.deleteLater()
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+            for k, fn in boxes.items():
+                setattr(QMessageBox, k, fn)
+    print(f"ok mixed library: {line!r}")
 
 
 def test_esc_returns_a_driver_who_never_dragged_a_splitter_to_the_default_grid():

@@ -367,7 +367,10 @@ class LibraryController:
         key = entry.get("fingerprint")
         # The day AND the first-fix clock: two sessions of one day are ordered by the clock, the
         # rule the focus list uses (`library.recorded_after`, QA W4 REG-1).
-        when = {"date": entry.get("date"), "start_ms": entry.get("start_ms")}
+        # ...and which way round the laps ran: a row run the other way round is another lap
+        # (`library.other_way`, cool/pb-per-direction).
+        when = {"date": entry.get("date"), "start_ms": entry.get("start_ms"),
+                "rotation": entry.get("rotation")}
         trust = (self.win.session.timing_verified, index, entry.get("track"), entry.get("best"))
         degraded = self.win.session.timing_quality.degraded
         moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key, **when)
@@ -1311,7 +1314,12 @@ class LibraryController:
         where the verdict could never speak — no track (nowhere to keep a list), a provisional
         start line or ESTIMATED timing (`focus._blocker` refuses every comparison with such a
         baseline, so an auto-made list would refuse forever). Nor onto a list with a baseline
-        recorded after this session (QA REG-1): an older session's corners are not today's plan."""
+        recorded after this session (QA REG-1): an older session's corners are not today's plan.
+
+        Nor onto a list whose items ran the other way round from today (`focus.lap_rotation`): the
+        check refuses every one of them today as LAYOUT_REVERSED, and today's corners beside them
+        would make a list part of which is refused on either layout, for good. An item that stored
+        no rotation (before it was kept) does not stop it, as the check does not."""
         entry = self._focus_entry()
         track = entry.get("track")
         if not track:
@@ -1320,6 +1328,9 @@ class LibraryController:
             items = self._focus_items(track)
             if self._baseline_refusal(entry, track, items):
                 return []           # a default says nothing: the page's own line says why
+            today = int(self.win.session.focus_context(entry, track).get("rotation") or 0)
+            if today and any(i.rotation and i.rotation != today for i in items):
+                return []           # the other way round: the page's verdict line says so
             taken = {i.cid for i in items}
             free = focus.MAX_ITEMS - len(items)
             wanted = [int(c) for c in cids if int(c) not in taken][:max(free, 0)]

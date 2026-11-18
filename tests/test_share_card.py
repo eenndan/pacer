@@ -373,7 +373,7 @@ def test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card():
             (name, share_card.opp_heading(top), share_card.opp_loss(top))
         # The card names the page's "Start with" corners: a prefix of them, and a count of the rest.
         opps = session.coaching_opportunities()
-        page = coaching.theme_actions(coaching.session_theme(opps.rows), opps.rows)[-1]
+        page = coaching.theme_actions(coaching.headline_theme(opps.rows), opps.rows)[-1]
         assert page.startswith("Start with "), page
         (page_names, page_more), (card_names, card_more) = (
             _named(page.split(":")[0]), _named(top.corner_label))
