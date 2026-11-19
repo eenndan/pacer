@@ -1505,13 +1505,22 @@ def pb_series(index: dict, track: str) -> list[tuple[str, float]]:
     entries (provisional / degraded / dropout — see ``is_trustworthy``) are dropped too, so a
     meaningless "best" never appears in the progression or sets its floor. Legacy trusted-unknown
     entries stay in (back-compat)."""
+    return sorted(((d, best) for d, _start, best in pb_points(index, track)),
+                  key=lambda p: (p[0], p[1]))
+
+
+def pb_points(index: dict, track: str) -> list[tuple[str, int | None, float]]:
+    """``pb_series``'s rows with each row's first-fix clock: ``[(date, start_ms, best), ...]``,
+    in the order the sessions were driven — by date, then by ``start_ms`` within a date (a race
+    day is several heats on one date), rows with no stored start after those with one, by best.
+    The PB chart places a day's sessions in this order (``library_dialog``)."""
     pts = [
-        (e["date"], float(e["best"]))
+        (e["date"], _start_ms(e), float(e["best"]))
         for e in index.get("entries", [])
         if e.get("track") == track and e.get("date") and e.get("best") is not None
         and is_trustworthy(e)
     ]
-    pts.sort(key=lambda p: (p[0], p[1]))
+    pts.sort(key=lambda p: (p[0], p[1] is None, p[1] or 0, p[2]))
     return pts
 
 

@@ -1578,6 +1578,111 @@ def test_dialog_pb_chart_plots_best_vs_date():
     dlg.deleteLater()
 
 
+def _utc_ms(date, hour):
+    import datetime
+    y, m, d = (int(x) for x in date.split("-"))
+    return int(datetime.datetime(y, m, d, hour, tzinfo=datetime.UTC).timestamp() * 1000)
+
+
+def _pb_chart(rows):
+    """The dialog's PB chart over `rows` ((stem, date, best, start hour or None[, rotation])):
+    (x positions in days from the range's start, range in days, [(spacing, labels)] the bottom
+    axis prints). Laid out at the dialog's opening size."""
+    idx = library.empty_index()
+    for stem, date, best, hour, *rot in rows:
+        e = _entry(stem, track="MK", date=date, best=best, paths=[])
+        if hour is not None:
+            e["start_ms"] = _utc_ms(date, hour)
+        if rot:
+            e["rotation"] = rot[0]
+        library.upsert(idx, e)
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg.resize(880, 740)
+    dlg.show()
+    _APP.processEvents()
+    dlg._show_pb("MK", rows[0][4] if len(rows[0]) > 4 else 0)
+    _APP.processEvents()
+    axis = dlg.pb_plot.getPlotItem().getAxis("bottom")
+    (lo, hi), _ = dlg.pb_plot.getPlotItem().getViewBox().viewRange()
+    levels = axis.tickValues(lo, hi, axis.width())
+    labels = [(sp, axis.tickStrings(v, axis.scale, sp)) for sp, v in levels]
+    xs, ys = dlg._pb_curve.getData()
+    out = ([(x - lo) / 86400.0 for x in xs], list(ys), (hi - lo) / 86400.0, labels)
+    dlg.close()
+    dlg.deleteLater()
+    return out
+
+
+def test_the_pb_chart_reads_sessions_on_one_day():
+    """cool/library-same-day (discovery6 B-workflow P2). A race day is several heats — several
+    recordings — on one date, and each sat at its date's midnight: two stacked on ONE vertical
+    line and the axis zoomed into that zero-width span, ticking "59.600 … 01:00:00". A lone session
+    had a 48-hour window ticked in hours ("06:00 … Mon 01 … 18:00"). Now a date's sessions spread
+    across their day in the order they were driven, the window is whole days, and the axis never
+    ticks finer than a day: ISO dates up to two weeks, pyqtgraph's month/day levels beyond."""
+    day = 86400.0
+
+    def check(rows, n_days_min, ticks=None):
+        xs, ys, span, labels = _pb_chart(rows)
+        assert span >= n_days_min, (rows, span)
+        assert len(set(round(x, 6) for x in xs)) == len(xs), ("two points on one line", xs)
+        assert all(sp >= day for sp, _l in labels), ("a tick finer than a day", labels)
+        printed = [t for _sp, lab in labels for t in lab]
+        assert not any(":" in t or t[:2].isdigit() and "." in t for t in printed), printed
+        if ticks is not None:
+            assert printed == ticks, printed
+        return xs, ys
+
+    # One session: its day in the middle of a ~2-day window, ticked once, with its date.
+    xs, _ = check([("A", "2026-06-01", 44.95, 10)], 1.5, ["2026-06-01"])
+    assert 0.8 < xs[0] < 1.1, xs
+    # Two and three heats on one day: apart, in driven order (the earlier start first, whatever
+    # its time), inside that day, the axis a single date.
+    xs, ys = check([("A", "2026-06-01", 44.95, 14), ("B", "2026-06-01", 45.30, 10)], 1.5,
+                   ["2026-06-01"])
+    assert ys == [45.30, 44.95] and xs[0] < xs[1] and xs[1] - xs[0] > 0.25, (xs, ys)
+    xs, _ = check([("A", "2026-06-01", 45.1, 9), ("B", "2026-06-01", 44.9, 11),
+                   ("C", "2026-06-01", 44.8, 15)], 1.5, ["2026-06-01"])
+    assert xs == sorted(xs) and xs[-1] - xs[0] > 0.4, xs
+    # Two days apart, and a race day plus another day: each day labelled once, by its date.
+    check([("A", "2026-06-01", 45.1, 10), ("B", "2026-06-03", 44.9, 10)], 3,
+          ["2026-06-01", "2026-06-02", "2026-06-03"])
+    xs, _ = check([("A", "2026-06-01", 45.1, 9), ("B", "2026-06-01", 44.9, 13),
+                   ("C", "2026-06-08", 44.7, 10)], 8)
+    assert xs[1] - xs[0] < 1 and xs[2] - xs[1] > 6, xs
+    # A year apart: pyqtgraph's own levels (months), still nothing under a day.
+    check([("A", "2025-06-01", 46.1, 10), ("B", "2026-06-01", 44.9, 10)], 365)
+    # A row with no stored start (written before start_ms) still gets its own place on its day.
+    xs, _ = check([("A", "2026-06-01", 44.95, None), ("B", "2026-06-01", 45.3, None)], 1.5)
+    print("ok PB chart: 1 / 2 / 3 same-day / 2 days / same day + another / a year — "
+          "every point apart, whole days, no tick under a day")
+
+
+def test_the_pb_chart_same_day_keeps_one_direction():
+    """#608 (cool/pb-per-direction) with a race day: two heats each way round on one date chart
+    only the selected way's two, spread across the day."""
+    xs, ys, _span, _labels = _pb_chart([("A", "2026-06-01", 44.95, 9, 1),
+                                        ("B", "2026-06-01", 46.10, 10, -1),
+                                        ("C", "2026-06-01", 44.80, 13, 1),
+                                        ("D", "2026-06-01", 46.00, 15, -1)])
+    assert ys == [44.95, 44.80] and xs[0] < xs[1], (xs, ys)
+    print("ok PB chart: one way round on a race day")
+
+
+def test_pb_points_are_in_driven_order():
+    """`library.pb_points`: by date, then by the first fix's clock within a date (rows with none
+    after, by best); `pb_series` keeps its own (date, best) order for the summary's PB count."""
+    idx = library.empty_index()
+    for stem, best, hour in (("A", 44.8, 15), ("B", 45.3, 9), ("C", 45.0, None)):
+        e = _entry(stem, track="MK", date="2026-06-01", best=best, paths=[])
+        if hour is not None:
+            e["start_ms"] = _utc_ms("2026-06-01", hour)
+        library.upsert(idx, e)
+    assert [p[2] for p in library.pb_points(idx, "MK")] == [45.3, 44.8, 45.0]
+    assert library.pb_series(idx, "MK") == [("2026-06-01", 44.8), ("2026-06-01", 45.0),
+                                            ("2026-06-01", 45.3)]
+
+
 def test_dialog_empty_index_shows_empty_library():
     """A missing/empty index → an empty dialog (no rows, Open disabled, PB chart empty) — the
     dormant/safe default. The PB chart shows its empty-state message rather than bare axes."""
