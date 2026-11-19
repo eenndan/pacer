@@ -293,13 +293,18 @@ def test_a_row_leaves_compare_first():
         view.video.compare_btn.click()
         _settle()
         assert view._comparing()
-        # C3's quickest is lap 13, the session best, which IS one of the compared pair: a lap
-        # pick of a compared lap does not leave compare, so only the row's own exit can
+        # C3's quickest is lap 13, one of the compared pair. Measured: a one-lap pick of either
+        # lap still leaves compare through `_pick_leaves_compare` (only the pair's own two laps, or
+        # a cross pair's lap A, keep it), so the row's own exit is what makes the click say ONE
+        # thing: the pass it plays, never a "compare ended — showing lap 13" line flashed first.
         pair = (view.compare.lap_a, view.compare.lap_b)
         assert 12 in pair, pair
+        said = []
+        view.statusNotice.connect(said.append)
         view.corners_page.quickest.activate(2)
         _settle()
         assert not view._comparing() and plays == [win.session.corners.pass_clip(12, 3)]
+        assert len(said) == 1 and said[0].startswith("Playing lap 13 (2.32) through C3"), said
     finally:
         _close(win)
         prefs.set_corners_view("lap")
