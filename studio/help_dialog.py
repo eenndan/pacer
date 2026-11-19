@@ -182,6 +182,11 @@ COMMANDS: list[Command] = [
     Command("Analysis", "Return",
             "Corners, Quickest passes: play the selected corner's quickest pass, charts and map "
             "zoomed on it (again: the next level lap; Esc: the whole lap)"),
+    # View ▸ Previous / Next corner pass, harvested by the palette from the menu. One cell, both
+    # keys in Qt's own NativeText (⌥← · ⌥→ on a Mac), so the live-binding guard finds each.
+    Command("Analysis", "  ·  ".join(QKeySequence(k).toString(QKeySequence.NativeText)
+                                     for k in ("Alt+Left", "Alt+Right")),
+            "Corner walk: play the previous / next corner's pass, one per press"),
     # View ▸ Lap race. `run` stays None for the ⌘⇧S row's reason: the palette harvests the menu
     # action itself (with its gate reason when the session cannot field two laps).
     Command("Analysis", "R",

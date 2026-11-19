@@ -487,6 +487,8 @@ def heat_share(f: float) -> str:
     return _SHARE_WORDS.get(f, f"{f:g}")
 
 
+# What a playable CORNERS BY LAP cell's hover adds: the click is the cell's pass, played.
+GRID_PLAY_CLAUSE = "\nClick to play this lap's pass through the corner."
 CORNER_GRID_TOOLTIP = (
     "Every clean lap down the page, every corner across it. A cell is that lap's time through that "
     "corner — the same number the Corners page shows for the lap. The ▼ and the deepest shade mark a lap "
@@ -1108,6 +1110,9 @@ class StatsView(QWidget):
     corner_clicked = Signal(object)
     # A MOMENTS row's Jump: (lap id, cid or None) -> CentralView selects the lap and rings the cid.
     moment_jump = Signal(int, object)
+    # A CORNERS BY LAP cell: (lap id, cid) -> CentralView plays that lap's pass through the corner
+    # (or says on the status line why that cell's pass is not played).
+    pass_requested = Signal(int, int)
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1633,6 +1638,10 @@ class StatsView(QWidget):
         self.corner_grid_table = ReportTable(CORNER_GRID_LEAD_COLUMNS, ROW_HEIGHT,
                                              frozen=len(CORNER_GRID_LEAD_COLUMNS))
         self.corner_grid_table.setToolTip(CORNER_GRID_TOOLTIP)
+        # Every cell names one pass, and a click plays it (the hand says so before the click).
+        self._corner_matrix = None
+        self.corner_grid_table.viewport().setCursor(Qt.PointingHandCursor)
+        self.corner_grid_table.cellClicked.connect(self._on_corner_grid_clicked)
         band.addWidget(self.corner_grid_table)
         self.corner_grid_note = WrapLabel()
         self.corner_grid_note.setProperty("role", "TableNote")
@@ -2863,10 +2872,25 @@ class StatsView(QWidget):
             n=len(matrix.lap_ids), c=n_cols,
             scale=f"{lo:.2f} s" if lo == hi else f"{lo:.2f}–{hi:.2f} s"))
 
+    def grid_pass_at(self, row: int, col: int) -> tuple[int, int] | None:
+        """(lap id, cid) a CORNERS BY LAP cell names, or None for the lead columns / no grid."""
+        matrix, lead = self._corner_matrix, len(CORNER_GRID_LEAD_COLUMNS)
+        if matrix is None or not 0 <= row < len(matrix.lap_ids):
+            return None
+        if not lead <= col < lead + len(matrix.cids):
+            return None
+        return matrix.lap_ids[row], matrix.cids[col - lead]
+
+    def _on_corner_grid_clicked(self, row: int, col: int):
+        got = self.grid_pass_at(row, col)
+        if got is not None:
+            self.pass_requested.emit(*got)
+
     def _refresh_corner_grid(self, session):
         """The laps × corners grid. The matrix is Session's (`corner_matrix`), None without corners
         or under stats.MATRIX_MIN_LAPS clean laps — the same decorative floor SPLITS holds."""
         matrix = getattr(session, "corner_matrix", lambda: None)()
+        self._corner_matrix = matrix
         has = matrix is not None
         self._corner_grid_band.setVisible(has)
         self._corner_grid_section.setVisible(has)
@@ -2921,7 +2945,8 @@ class StatsView(QWidget):
                             f"matched to your best lap's line within "
                             f"{corners.SPATIAL_MATCH_MAX_M:g} m, even with the GPS receiver's "
                             "drift taken out, so its edge is interpolated and this time is not "
-                            "precise enough to compare with the other laps.")
+                            "precise enough to compare with the other laps — nor to play as a "
+                            "pass.")
                     elif med is None:
                         item.setToolTip(
                             f"Not marked: only {plural(matrix.n_resolved[c], 'lap')} matched C{cid} "
@@ -2946,6 +2971,8 @@ class StatsView(QWidget):
                             f"C{cid} ({med:.{d}f} s, the "
                             f"median of the {matrix.n_resolved[c]} laps matched on track through "
                             "it)." + heat_clause(level, matrix.scales[c]))
+                    if matrix.resolved[r][c]:
+                        item.setToolTip(item.toolTip() + GRID_PLAY_CLAUSE)
                 t.setItem(r, c + lead, item)
             lt = lap_time(lap_id) if (complete and lap_time is not None) else None
             tail = num_item(fmt_time(lt) if lt is not None else DASH)

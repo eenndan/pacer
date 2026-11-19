@@ -1272,6 +1272,9 @@ class LapTable(QWidget):
     # A click on a slow lap's Lap cell, which wears its culprit cue ("▼ C5"): that corner's cid,
     # for the map's ring. The click selects the lap as any click does; this only adds the corner.
     slow_corner_clicked = Signal(int)
+    # ...and the same click as (lap id, cid): CentralView PLAYS that lap's pass through the corner
+    # the cue names (a plain row click still goes to the lap's start).
+    slow_pass_requested = Signal(int, int)
     # U2: emitted with `cap_notice` when a selection was TRIMMED. Deselecting the excess rows was
     # the only sign, and measured on both D24 recordings a Select All over 38 / 65 laps kept 6 with
     # nothing said anywhere; CentralView forwards it to the window's status bar.
@@ -2438,13 +2441,15 @@ class LapTable(QWidget):
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
         """A click on a Lap cell wearing a culprit cue also rings that corner on the map (the
-        worst one first); every other click is only the row selection it always was."""
+        worst one first) and plays the lap's pass through it; every other click is only the row
+        selection it always was."""
         note = self._slow_notes.get(self._lap_id(row)) if col == 0 else None
         # Only when the click left the row SELECTED: a ⌘-click that deselects the lap is not a
         # request to look at its corner.
         if note is not None and story.culprit_cue(note) and \
                 self.table.selectionModel().isRowSelected(row):
             self.slow_corner_clicked.emit(note.corners[0].cid)
+            self.slow_pass_requested.emit(self._lap_id(row), note.corners[0].cid)
 
     def _set_row_current(self, r: int, on: bool):
         """Apply/clear the ▶ prefix + bold on ONE row's Lap cell (the only per-lap-change cue)."""
@@ -2652,7 +2657,8 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
         apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster)"
     return [
         "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
-        "left-hander, clockwise a right. Click a row to ring that corner on the map.",
+        "left-hander, clockwise a right. Click a row to play this lap's pass through that corner "
+        "(and ring it on the map).",
         f"Time spent in the corner (seconds). {BEST_CORNER_TIP} Muted italic, in any column: that "
         "value was read off a corner edge not matched on track, so it is interpolated (hover it).",
         delta_tip,
@@ -2853,6 +2859,10 @@ class CornerTable(QWidget):
         Stats CORNERS and Coaching rows use, so all three surfaces behave identically."""
         if 0 <= row < len(self._cids):
             self.corner_clicked.emit(self._cids[row])
+
+    def cid_at(self, row: int) -> int | None:
+        """Corner id of row `row` (track order), or None."""
+        return self._cids[row] if 0 <= row < len(self._cids) else None
 
     def _column_budget(self) -> tuple[list[int], list[int], list[int]]:
         """(natural, floors, caps) for the corner columns — see LapTable._column_budget. Column 0

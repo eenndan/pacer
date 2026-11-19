@@ -875,19 +875,20 @@ class ExportController:
         return (win[3] - win[0]) if win is not None else float("nan")
 
     def pass_subject(self) -> tuple[int, int, str] | None:
-        """(lap, cid, label) of the corner pass Corners ▸ Quickest passes last played and still
-        names (`QuickestPassTable.playing`: a lap picked elsewhere forgets it), or None. The
-        overlay picker offers its "This pass" scope only then."""
+        """(lap, cid, label) of the pass being studied (`CentralView.pass_subject`: the pass last
+        played from a Quickest row, a Corners lap row, a CORNERS BY LAP cell, the slow-lap cue or
+        the corner walk; a lap picked elsewhere forgets it), or None. The overlay picker offers its
+        "This pass" scope only then."""
         view = getattr(self.win, "view", None)
-        page = getattr(view, "corners_page", None) if view is not None else None
+        read = getattr(view, "pass_subject", None) if view is not None else None
         try:
-            got = page.quickest.playing() if page is not None else None
+            got = read() if callable(read) else None
         except Exception:  # noqa: BLE001 — an offer never blocks the export it adds to
             return None
         if got is None:
             return None
-        cid, lap = got
-        return int(lap), int(cid), page.quickest.corner_label(cid)
+        lap, cid, label = got
+        return int(lap), int(cid), label
 
     def _scope_plan(self, scope: str, lap: int, lead: float,
                     pass_: tuple[int, str] | None = None) -> tuple[float, int, str]:

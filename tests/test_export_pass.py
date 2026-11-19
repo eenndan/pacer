@@ -339,9 +339,10 @@ def test_a_repeat_click_exports_the_level_lap_the_row_names():
 
 
 def test_the_palette_exports_the_pass_the_quickest_row_names_whatever_the_route():
-    """⌘K's export subject is ALWAYS the pass the Quickest row names (its "Level with" cell), and
-    there is no export row when the row names none — after a Laps-table pick, a lap selected
-    another way, or nothing at all."""
+    """⌘K's export subject is the pass being studied (`CentralView.pass_subject`, cool/play-every-
+    pass); played from a Quickest row it is ALWAYS the pass that row names (its "Level with" cell),
+    and there is no export row when nothing is being studied — after the view forgets it (a lap
+    pick, a Jump), or before anything played."""
     win = _window()
     q = win.view.corners_page.quickest
     win.view.corners_page.set_view("quickest", remember=False)
@@ -357,7 +358,7 @@ def test_the_palette_exports_the_pass_the_quickest_row_names_whatever_the_route(
         assert subject is not None and subject[:2] == (lap, cid), (route, subject, playing)
         assert f"lap {lap + 1} (" in _level_cell(win, cid), (route, _level_cell(win, cid))
         assert rows == [f"Export the C{cid} pass — lap {lap + 1}…"], (route, rows)
-    q.forget_cycle()
+    win.view._forget_quickest_cycle()                 # what a lap pick / a Jump does
     check("nothing played")
     q.activate(q.row_of(3))
     q.activate(q.row_of(3))
@@ -493,7 +494,7 @@ def test_file_export_offers_the_named_pass_and_the_palette_lists_it():
         win.exports.export_pass_video = orig
     assert called == [(lap, 3, "C3")], called
     # another lap picked: the view forgets the pass, and so do the dialog and the palette
-    win.view.corners_page.quickest.forget_cycle()
+    win.view._forget_quickest_cycle()                 # what a lap pick does (cool/play-every-pass)
     assert win.exports.pass_subject() is None
     assert not any(t.startswith("Export the") for t, _c in win.quickest_pass_commands())
     _export(win, win.exports.export_overlay_video, act)
