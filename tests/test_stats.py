@@ -6393,6 +6393,58 @@ def test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap():
     print("test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap OK")
 
 
+def _heading_gaps(v) -> dict:
+    """{heading text: px from the bottom of the nearest visible widget above it (overlapping it
+    horizontally, not its ancestor) to the heading's TEXT}, for every visible section heading."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel, QWidget
+    content = v._scroll.widget()
+    heads = [lab for lab in content.findChildren(QLabel)
+             if lab.property("role") == "BarLabel" and lab.isVisibleTo(content)]
+    others = [w for w in content.findChildren(QWidget)
+              if w.isVisibleTo(content) and w.height() > 0 and w.property("role") != "BarLabel"]
+    out = {}
+    for h in heads:
+        top = h.mapTo(content, QPoint(0, 0))
+        text_top = top.y() + h.contentsMargins().top()
+        above = [p.y() + w.height() for w in others if not w.isAncestorOf(h)
+                 for p in (w.mapTo(content, QPoint(0, 0)),)
+                 if p.y() + w.height() <= top.y() + 1
+                 and p.x() < top.x() + max(h.width(), 40) and p.x() + w.width() > top.x()]
+        if above:
+            out[h.text()] = text_top - max(above)
+    return out
+
+
+def test_every_section_heading_sits_the_same_gap_under_the_block_above():
+    """Discovery 6 (craft, P3): SPEED · G, DRIVING and the sections after a table sat 4 px under the
+    block above (the column's SPACE_XS alone), while a heading after a tile grid or MOMENTS sat
+    12 px under it — the grid's and MOMENTS' bottom margin was the group separator, so the gap
+    depended on what the section above happened to end with. The separator is now the heading's
+    own: every heading after the first sits SPACE_XS + SPACE_S under the block above, on the
+    one-column quadrant (where SPEED · G stacks under IDEAL LAP) and on the dashboard."""
+    _app()
+    from studio import theme
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    v.show()
+    want = theme.SPACE_XS + theme.SPACE_S
+    try:
+        for width in (503, 1900):
+            v.resize(width, 900)
+            _settle(10)
+            gaps = _heading_gaps(v)
+            for name in ("PACE", "SPEED · G", "DRIVING"):
+                assert name in gaps or width == 1900, (width, name, gaps)
+            assert len(gaps) >= 6, (width, gaps)
+            off = {k: g for k, g in gaps.items() if g != want}
+            assert not off, f"at {width} px these headings are not {want} px under the block " \
+                            f"above: {off} (all: {gaps})"
+    finally:
+        v.close()
+    print("test_every_section_heading_sits_the_same_gap_under_the_block_above OK")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it

@@ -33,7 +33,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["PACER_NO_MEDIA"] = "1"
 
 # test_export_gates diverts every store into a temp tree on import, before any window exists.
-from PySide6.QtWidgets import QDialog, QLabel  # noqa: E402
+from PySide6.QtWidgets import QComboBox, QDialog, QLabel  # noqa: E402
 from test_export_gates import (  # noqa: E402
     _APP,
     _E5_FRAME,
@@ -260,10 +260,13 @@ def test_the_lap_picker_quotes_the_frames_the_render_writes():
     print(f"ok REG-4: the lap picker quotes the frames the render writes ({quoted})")
 
 
-def _late_probe(open_dialog, stored: dict) -> list[str]:
+def _late_probe(open_dialog, stored: dict, landed=("3840x", "2714x"),
+                geometry: list | None = None) -> list[str]:
     """Open a picker at "Source" on a recording whose footage probe answers only when released,
     with the dialog's clock already past the 10 s it used to wait. Returns the hint as it read
-    when the dialog opened, after that clock jump, and once the probe landed."""
+    when the dialog opened, after that clock jump, and once the probe landed (its Output line
+    names one of `landed`). With `geometry`, the dialog is SHOWN and each of the three moments
+    appends (the hint's height, the y of every combo) to it."""
     _reset_prefs(**stored)
     gate = threading.Event()
     real_probe, real_time = ev.probe_video_size, export_controller.time
@@ -281,13 +284,24 @@ def _late_probe(open_dialog, stored: dict) -> list[str]:
 
             def on_dialog(dlg):
                 hint = _hint(dlg)
-                texts.append(hint.text())
+
+                def note():
+                    texts.append(hint.text())
+                    if geometry is not None:
+                        _pump_until(lambda: False, 0.1)
+                        geometry.append((hint.height(), [c.mapTo(dlg, c.rect().topLeft()).y()
+                                                         for c in dlg.findChildren(QComboBox)],
+                                         dlg.size().toTuple()))
+                if geometry is not None:
+                    dlg.show()
+                note()
                 skew["s"] = 11.0             # REG-4's probe answered 13.7 s after the dialog opened
                 _pump_until(lambda: False, 0.4)
-                texts.append(hint.text())
+                note()
                 gate.set()
-                _pump_until(lambda: "3840x" in hint.text() or "2714x" in hint.text(), 20.0)
-                texts.append(hint.text())
+                _pump_until(lambda: any(x in hint.text() for x in landed), 20.0)
+                note()
+                dlg.hide()
                 return QDialog.Rejected
             open_dialog(win, on_dialog)
             win.hide()
@@ -326,13 +340,53 @@ def test_the_compare_dialog_waits_for_a_slow_probe_too():
     print("ok REG-4: the comparison dialog states the size once the probe lands")
 
 
+def test_a_fixed_resolution_quotes_no_guessed_size_before_the_footage_is_measured():
+    """Discovery 6 (craft, P3): at a fixed row (1080p, the default) the overlay picker opened on a
+    size priced from a 16:9 guess — on the demo "About 26 MB — 1350 frames … at 30 fps", stated
+    as if final — and 0.4-3 s later silently became the measured "320x180 … About 9 MB … 29.97
+    fps". Until the footage is measured the line now says it is measuring, at every row; the
+    number arrives once. And the rows do not move when the hint is re-written."""
+    geometry: list = []
+    texts = _late_probe(lambda win, on: _run_options_dialog(win, on),
+                        {ExportController._PREF_EXPORT_RES: 1}, landed=("1920x1080",),
+                        geometry=geometry)
+    opened, waited, landed = texts
+    for text in (opened, waited):
+        assert "Measuring the footage for the size and the time to render" in text, text
+        assert "About " not in text and "frames to render" not in text, text
+    assert "Output: 1920x1080" in landed and "About " in landed and "to render" in landed, landed
+    assert "Measuring the footage" not in landed, landed
+    (h0, ys0, d0), _mid, (h1, ys1, d1) = geometry
+    assert ys1 == ys0, f"the rows moved when the measured hint landed: {geometry}"
+    assert h1 >= h0, (h0, h1)
+
+    print("ok craft P3: no guessed size before the footage is measured; the rows hold still")
+
+
+def test_the_hint_never_gets_shorter_while_its_dialog_is_open():
+    """`SteadyHint`: a wrapped hint that loses a line keeps its height at that width, so the form
+    above it does not shift; a wider dialog gets its own floor."""
+    hint = export_controller.SteadyHint("")
+    long = "a few words that wrap " * 12
+    hint.setText(long)
+    tall = hint.heightForWidth(300)
+    hint.setText("short")
+    assert hint.heightForWidth(300) == tall, (hint.heightForWidth(300), tall)
+    assert QLabel("short").heightForWidth(300) < tall
+    assert hint.heightForWidth(2000) < tall           # its own floor at another width
+    assert hint.property("role") == "Hint" and hint.wordWrap()
+    print("ok craft P3: the hint keeps its height while the dialog is open")
+
+
 def _run_all():
     tests = (test_the_compare_opens_on_its_own_1080p_whatever_the_overlay_remembers,
              test_the_compare_source_row_is_capped_at_one_4k_frame_and_says_so,
              test_the_single_lap_source_row_names_the_4k_cap_exactly_when_it_applies,
              test_the_lap_picker_quotes_the_frames_the_render_writes,
              test_the_first_dialog_states_the_size_once_a_slow_probe_lands,
-             test_the_compare_dialog_waits_for_a_slow_probe_too)
+             test_the_compare_dialog_waits_for_a_slow_probe_too,
+             test_a_fixed_resolution_quotes_no_guessed_size_before_the_footage_is_measured,
+             test_the_hint_never_gets_shorter_while_its_dialog_is_open)
     failed = []
     for test in tests:
         try:

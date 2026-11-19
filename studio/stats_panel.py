@@ -1146,8 +1146,9 @@ class StatsView(QWidget):
         # On the scale, and on it deliberately: SPACE_M of gutter, SPACE_S under the panel chrome,
         # and SPACE_XS between blocks — the 6 px that used to sit here was the page's only
         # off-scale gap, and it is the rhythm every section heading and tile row is measured from.
-        # The GROUP separation is paid for by the tile grids' own bottom margin (see _grid), so a
-        # tighter step here tightens the rows without letting the sections run together.
+        # The GROUP separation is paid for by each section heading's own top margin
+        # (`stats_common.section_heading`), so a tighter step here tightens the rows without
+        # letting the sections run together.
         page.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
         page.setSpacing(theme.SPACE_XS)
 
@@ -1671,10 +1672,12 @@ class StatsView(QWidget):
     def _grid(self, *tiles: Tile) -> QGridLayout:
         g = QGridLayout()
         # The tile grid, on the scale. It was `0,0,0,4` / 18 / 8 — one step, one nudge and one
-        # step. The bottom margin is now the GROUP separator (SPACE_S under a block of tiles, on
-        # top of the column's own SPACE_XS), the columns are SPACE_L apart — the widest gap that
-        # still reads as one row at the 148 px tile floor — and the rows keep SPACE_S.
-        g.setContentsMargins(0, 0, 0, theme.SPACE_S)
+        # step. No bottom margin: the GROUP separator is the next heading's (SPACE_S above every
+        # `section_heading`, on top of the column's own SPACE_XS), so a section reads the same
+        # gap whether tiles, a note or a table end the one above. The columns are SPACE_L apart —
+        # the widest gap that still reads as one row at the 148 px tile floor — and the rows
+        # keep SPACE_S.
+        g.setContentsMargins(0, 0, 0, 0)
         g.setHorizontalSpacing(theme.SPACE_L)
         g.setVerticalSpacing(theme.SPACE_S)
         self._place_tiles(g, list(tiles), self._tile_cols)

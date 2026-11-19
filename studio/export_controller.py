@@ -115,6 +115,48 @@ class ExportChoice(NamedTuple):
     cid: int | None = None        # SCOPE_PASS: the corner whose pass is rendered
 
 
+class SteadyHint(QLabel):
+    """An export picker's hint line: word-wrapped, `role="Hint"`, and NEVER SHORTER than it has
+    been at this width while its dialog is open.
+
+    The hint is re-written as the footage probe answers and as rows change, and a wrapped label
+    that loses a line handed its height to the form above: every row moved 2-5 px down under the
+    reader's eye (the demo: 3 lines at open, 2 once measured, in a dialog of fixed height). Kept
+    at its tallest, the rows hold still and a shorter text leaves room under it instead. Keyed by
+    width, so a dialog the user widens gets its own, smaller, floor.
+
+    `show(text, reserve)`: while a line is still being measured the hint also keeps room for
+    `reserve`, the text it expects to show once it lands, so a measured line LONGER than the
+    "measuring…" one does not push the rows up either."""
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self.setWordWrap(True)
+        # [role="Hint"] ranks BELOW the description above it by SIZE, not by a dimmer colour.
+        self.setProperty("role", "Hint")
+        self._floor: dict[int, int] = {}
+        self._reserve = ""
+
+    def show_text(self, text: str, reserve: str = "") -> None:
+        self._reserve = reserve
+        self.setText(text)
+        self.updateGeometry()
+
+    def _reserved_height(self, width: int) -> int:
+        if not self._reserve:
+            return 0
+        m = self.contentsMargins()
+        inner = max(1, width - m.left() - m.right() - 2 * self.margin())
+        rect = self.fontMetrics().boundingRect(0, 0, inner, 0, Qt.TextWordWrap, self._reserve)
+        return rect.height() + m.top() + m.bottom() + 2 * self.margin()
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 — Qt's virtual
+        h = max(super().heightForWidth(width), self._floor.get(width, 0),
+                self._reserved_height(width))
+        self._floor[width] = h
+        return h
+
+
 class ExportController:
     """Owns the export cluster for ONE `StudioWindow`. Built once, in the window's constructor."""
 
@@ -1163,10 +1205,7 @@ class ExportController:
 
         # States the target short side + never-upscale rule (no ffprobe here; matches
         # frame_geometry()), THEN what the choices actually cost.
-        hint = QLabel("")
-        hint.setWordWrap(True)
-        # [role="Hint"] ranks BELOW the description above it by SIZE, not by a dimmer colour.
-        hint.setProperty("role", "Hint")
+        hint = SteadyHint()
         col.addWidget(hint)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
@@ -1272,14 +1311,24 @@ class ExportController:
                              f"Premiere{player}.")
             size = self._export_size_hint(clip, h, quality, aspect, content, files, source, fit,
                                           on_line=not (session_scope or pass_scope or lead))
-            if size:
+            # Until the footage's FRAME is measured the size is a 16:9 guess at the row's
+            # resolution (on the demo "About 26 MB … 30 fps" for a clip that lands at 9 MB, 29.97
+            # fps), stated as if final: the line says it is measuring instead, and the number
+            # arrives once. (A known frame with the ProRes probe still out keeps its size and
+            # says the time is being measured.)
+            measuring = self._measuring_line(src)
+            # Only while there IS a frame to wait for: a file the probe cannot read keeps the
+            # guess, the one size there will ever be.
+            guessed = bool(measuring) and source is None and os.path.isfile(src)
+            reserve = "  ".join([*lines, size]) if guessed and size else ""
+            if size and not guessed:
                 lines.append(size)
-            if "to render" not in size and self._measuring_line(src):
-                lines.append(self._measuring_line(src))
+            if measuring and (guessed or "to render" not in size):
+                lines.append(measuring)
             if (content == export_video.ALPHA_PRORES
                     and export_video.prores_videotoolbox_state() == "missed"):
                 lines.append(self._PRORES_MISSED_LINE)
-            hint.setText("  ".join(lines))
+            hint.show_text("  ".join(lines), reserve)
             # A scope with nothing to render cannot be confirmed. `_scope_plan` already says why.
             ok_button.setEnabled(math.isfinite(clip) and clip > 0)
         # EVERY combo: each one moves at least one number in the lines above.
@@ -1552,9 +1601,7 @@ class ExportController:
         form.addRow("Resolution (each pane)", res_combo)
         form.addRow("Quality", q_combo)
         col.addLayout(form)
-        hint = QLabel("")
-        hint.setWordWrap(True)
-        hint.setProperty("role", "Hint")
+        hint = SteadyHint()
         col.addWidget(hint)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
         buttons.button(QDialogButtonBox.Ok).setText("Export")

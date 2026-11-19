@@ -125,7 +125,9 @@ def _card_rows(dialog) -> list[tuple[str, str, int]]:
             caps = [lb for lb in [key_item.widget(), *key_item.widget().findChildren(QLabel)]
                     if isinstance(lb, QLabel) and lb.property("role") == "KeyCap"]
             desc = desc_item.widget()
-            rows.append((caps[0].text(), desc.text(), desc.mapTo(dialog, QPoint(0, 0)).x()))
+            # A named cap ("Comma") carries the key it documents (",") as its "key" property.
+            rows.append((caps[0].property("key") or caps[0].text(), desc.text(),
+                         desc.mapTo(dialog, QPoint(0, 0)).x()))
     return rows
 
 
@@ -546,6 +548,78 @@ def test_privacy_card_names_every_store_it_writes():
     assert "no network," not in opening and "no network." not in opening, opening
     assert "no network unless you ask for the demo" in opening, opening
     print("test_privacy_card_names_every_store_it_writes OK")
+
+
+def _row_cells(dialog):
+    """(key cell, description) widgets of every row on the shortcuts card, group by group."""
+    for g in dialog._grids:
+        for r in range(g.rowCount()):
+            key_item, desc_item = g.itemAtPosition(r, 0), g.itemAtPosition(r, 1)
+            if key_item is not None and desc_item is not None:
+                yield g, key_item.widget(), desc_item.widget()
+
+
+def test_every_key_cap_sits_on_its_descriptions_baseline():
+    """Discovery 6 (craft, P3): both cells are top-aligned, and the KeyCap mono face has a shorter
+    ascent than the description's, so every cap stood 3 px above the text it labels. Each cap's
+    baseline (its text top + ascent) is now its description's, to the pixel, glyph rows included."""
+    from PySide6.QtCore import QPoint
+    d = _shown(ShortcutsDialog())
+    off = []
+    for _g, kw, desc in _row_cells(d):
+        db = desc.mapTo(d, QPoint(0, desc.contentsRect().top())).y() + desc.fontMetrics().ascent()
+        for cap in [kw, *kw.findChildren(QLabel)]:
+            if isinstance(cap, QLabel) and cap.property("role") == "KeyCap":
+                cb = cap.mapTo(d, QPoint(0, cap.contentsRect().top())).y() \
+                    + cap.fontMetrics().ascent()
+                if cb != db:
+                    off.append((cap.text(), cb - db))
+    d.close()
+    assert not off, f"caps off their description's baseline (cap - text, px): {off}"
+    print("test_every_key_cap_sits_on_its_descriptions_baseline OK")
+
+
+def test_comma_and_period_caps_are_named_keys():
+    """"," and "." painted 1.5 x 2 px of ink in the KeyCap face: specks beside "Jump to the
+    previous / next mark". They read "Comma" and "Period", the way Space and Return are named; the
+    key they document (Qt's own text, which the palette and the binding guards read) stays theirs."""
+    d = _shown(ShortcutsDialog())
+    caps = {desc.text(): kw for _g, kw, desc in _row_cells(d)}
+    for desc, name, key in (("Jump to the previous mark", "Comma", ","),
+                            ("Jump to the next mark", "Period", ".")):
+        cap = caps[desc]
+        assert cap.text() == name and cap.property("key") == key, (cap.text(), cap.property("key"))
+        assert cap.fontMetrics().horizontalAdvance(cap.text()) > 3 * cap.fontMetrics().averageCharWidth()
+    assert {help_dialog._key_text(k) for _g, rows in SHORTCUT_GROUPS for k, _d in rows} >= {",", "."}
+    d.close()
+    print("test_comma_and_period_caps_are_named_keys OK")
+
+
+def test_the_card_opens_on_whole_rows():
+    """Capped under its rows, the card's scroll column used to end wherever 85 % of the screen fell
+    — at 1280x800 263 px into ANALYSIS, through a row. It now opens with the column ending in the
+    gap after a whole row (never more than one row shorter than the cap), so no line is sliced at
+    the foot and the scrollbar says the rest is below."""
+    from PySide6.QtCore import QPoint
+    d = _shown(ShortcutsDialog())
+    scroll = d._scroll
+    room = int(_APP.primaryScreen().availableGeometry().height() * 0.85)
+    vp = scroll.viewport()
+    body = scroll.widget()
+    if body.height() > vp.height():           # only a capped card has a foot to cut
+        foot = vp.height()
+        sliced = [desc.text() for _g, kw, desc in _row_cells(d)
+                  for top, bottom in [(min(kw.mapTo(body, QPoint(0, 0)).y(),
+                                           desc.mapTo(body, QPoint(0, 0)).y()),
+                                       max(kw.mapTo(body, QPoint(0, kw.height())).y(),
+                                           desc.mapTo(body, QPoint(0, desc.height())).y()))]
+                  if top < foot < bottom]
+        assert not sliced, f"the card opens with its foot ({foot} px) through {sliced}"
+        tallest = max(desc.height() for _g, _kw, desc in _row_cells(d))
+        assert room - foot <= tallest + 2 * theme.SPACE_M, (room, foot)
+    assert scroll.minimumHeight() <= room
+    d.close()
+    print(f"test_the_card_opens_on_whole_rows OK (column {vp.height()} of {body.height()} px)")
 
 
 if __name__ == "__main__":
