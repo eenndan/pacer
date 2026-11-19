@@ -362,6 +362,10 @@ def test_loop_and_slow_are_light_switches_across_every_row():
         assert video.playback_rate() == 0.25 and video.slow_btn.isChecked()
         assert q.table.item(row4, 3).text() == "playing lap 8 (3.02) · 1 of 8 · looping"
         assert "looping" not in q.table.item(row, 3).text()
+        # ⌘K's export row follows the row playing, looped or not (export-this-pass)
+        from studio import command_palette
+        exports = [e.title for e in command_palette.entries(win) if e.title.startswith("Export the")]
+        assert exports == ["Export the C4 pass — lap 8…"], exports
         video.seek(5.0)                            # leaving the pass: both off, 1× back
         assert not video.pane.is_looping() and not video.loop_btn.isChecked()
         assert video.playback_rate() == 1.0 and not video.slow_btn.isChecked()
@@ -428,13 +432,72 @@ def test_the_lap_race_starts_at_his_own_speed_not_at_slow():
         video.set_playback_rate(2.0)
         q.activate(q.row_of(3))
         video.slow_btn.click()
-        assert video.playback_rate() == 0.25
+        assert video.playback_rate() == 0.25 and view.pass_zoomed()
         win.toggle_lap_race()
         _settle()
         assert view.is_racing()
         assert video.playback_rate() == 2.0 and view.race.speed == 2.0, view.race.speed
         assert video.pane.pass_clip() is None and not video.slow_btn.isChecked()
+        assert not view.pass_zoomed(), "the race leaves the pass's zoom too"
         view.end_lap_race()
+    finally:
+        _close(win)
+
+
+def test_one_esc_ends_the_zoom_and_leaves_the_pass():
+    """With a played pass zoomed, Esc means "back to the whole lap": the zoom ends AND Loop and
+    Slow go off, the speed is his again, the toggles hide and the row stops saying playing /
+    looping. A maximised panel still takes the first Esc (pass-zoom's order)."""
+    win = _window()
+    try:
+        view = win.view
+        video, q = view.video, view.corners_page.quickest
+        row = q.row_of(3)
+        q.activate(row)
+        q.activate(row)                            # lap 7, a level lap: the row names it
+        QTest.keyClick(win, Qt.Key_L)
+        video.slow_btn.click()
+        assert view.pass_zoomed() and video.pane.is_looping() and video.playback_rate() == 0.25
+        view._toggle_panel_maximized(view._map_panel)
+        _settle()
+        assert view._maximized_panel is view._map_panel
+        QTest.keyClick(win, Qt.Key_Escape)         # the panel first
+        _settle()
+        assert view._maximized_panel is None and view.pass_zoomed()
+        assert video.pane.is_looping()
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view.pass_zoomed()
+        assert video.pane.pass_clip() is None and not video.pane.is_looping()
+        assert video.playback_rate() == 1.0 and not video.slow_btn.isChecked()
+        assert _toggles(video) == (False, False)
+        assert q.table.item(row, 3).text() == "lap 7 (2.35) · 2 of 6"
+        # no pass zoom left: Esc means nothing more here
+        assert not win._escape_out()
+    finally:
+        _close(win)
+
+
+def test_a_scrub_inside_the_clip_ends_the_loop_and_keeps_the_zoom():
+    win = _window()
+    try:
+        view = win.view
+        video, q = view.video, view.corners_page.quickest
+        row = q.row_of(3)
+        q.activate(row)
+        QTest.keyClick(win, Qt.Key_L)
+        start, end = video.pane.pass_clip()
+        for t in (start + 0.5, (start + end) / 2):  # the tick inside the clip arms the zoom
+            view._apply_position(t)
+        video.seek((start + end) / 2)              # a scrub INSIDE the clip
+        view._apply_position((start + end) / 2)
+        _settle()
+        assert view.pass_zoomed(), "pass-zoom's rule: inside the clip, the zoom stays"
+        assert not video.pane.is_looping() and video.pane.pass_clip() is None
+        assert _toggles(video) == (False, False)
+        assert q.table.item(row, 3).text() == "lap 13 (2.32) · 1 of 6", "not playing, not looping"
+        QTest.keyClick(win, Qt.Key_Escape)         # Esc still the way back to the whole lap
+        assert not view.pass_zoomed()
     finally:
         _close(win)
 

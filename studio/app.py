@@ -3158,7 +3158,8 @@ class StudioWindow(QMainWindow):
           it (QA L1-02). The window is the only viable owner: CentralView is Qt.NoFocus, so a
           keyPressEvent there would never receive the key.
         * A PLAYED PASS'S ZOOM (Corners ▸ Quickest passes): the charts on its corner and the map on
-          its stretch of track come back to the whole lap and the whole track.
+          its stretch of track come back to the whole lap and the whole track, and the pass stops
+          being the subject (Loop and Slow off, the speed his again): one Esc, "the whole lap".
         * WINDOW FULLSCREEN (⌘⌃F / the green button) is the outermost, so it goes last."""
         view = getattr(self, "view", None)
         if view is not None and getattr(view, "is_racing", lambda: False)():
@@ -3170,8 +3171,8 @@ class StudioWindow(QMainWindow):
         if view is not None and getattr(view, "_maximized_panel", None) is not None:
             view._restore_splitter_sizes()  # the inverse of the ⛶ collapse; the view owns the snapshot
             return True
-        if view is not None and getattr(view, "end_pass_zoom", lambda: False)():
-            return True                     # a played pass's zoom: the whole lap and track again
+        if view is not None and getattr(view, "escape_pass", lambda: False)():
+            return True                     # a played pass: the whole lap and track again
         if self.isFullScreen():
             self.showNormal()
             return True

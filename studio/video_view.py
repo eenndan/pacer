@@ -1536,6 +1536,11 @@ class VideoView(QWidget):
         if loop:
             self.pane.set_loop(True)
 
+    def end_pass(self):
+        """The pass stops being the subject (Loop off, Slow's rate back, the toggles hidden), and
+        playback goes on as it was: Esc's "back to the whole lap"."""
+        self.pane.end_pass()
+
     def leave_pass(self):
         """Pause, and the pass stops being the subject (Loop off, Slow's rate back): the Lap race
         takes the map, so a paused loop must not wait under it to resume on the next Space."""

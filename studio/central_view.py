@@ -2014,6 +2014,15 @@ class CentralView(QWidget):
         self.map.unzoom_pass()
         return True
 
+    def escape_pass(self) -> bool:
+        """Esc on a played pass: ONE meaning, "back to the whole lap" — the zoom ends AND the pass
+        stops being the subject (Loop and Slow off, the speed his again, the row's "playing" /
+        "looping" gone). False when no pass zoom was on (Esc then means whatever comes next)."""
+        if not self.end_pass_zoom():
+            return False
+        self.video.end_pass()
+        return True
+
     def _check_pass_zoom(self, t: float):
         """Per tick, two comparisons: the playhead left the pass (a seek, a step, play on past the
         clip's end) → the zoom ends. Armed only once the playhead has been INSIDE the clip, so the
