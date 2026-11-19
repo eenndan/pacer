@@ -910,6 +910,14 @@ figure.hero img.card { display: block; width: 100%; margin: 0; }
   .front.with-card { grid-template-columns: minmax(0, 1fr); }
   figure.hero { max-width: 360px; }
 }
+/* The Stats groups are narrow (a ~270 px table and a note): two columns where the page is wide
+   enough, flowing down the first then the second so the reading order stays the Stats page's, a
+   card never split across the two. One column below 1100 px. Paper keeps a group whole in its
+   own print rule below. */
+@media screen and (min-width: 1100px) {
+  .groups { column-count: 2; column-gap: 16px; }
+  .groups > section { break-inside: avoid; }
+}
 p.lead { font-size: 1.15em; font-weight: 600; margin: 0 0 6px; }
 p.body { margin: 0 0 6px; max-width: 46em; }
 ul.actions { margin: 4px 0 8px; padding-left: 1.2em; }
@@ -932,6 +940,9 @@ tbody.more tr:first-child td { border-top: 2px solid var(--border); }
                           background: var(--surface); }
   h2 { break-after: avoid; }
   tr, li, p.note, img, table.kv, table.meta, table.moments { break-inside: avoid; }
+  /* A figure with its caption, and a Stats group, are each well under a page: kept whole, so no
+     card prints its heading at a page's foot and its body on the next. */
+  section.figure, .groups > section { break-inside: avoid; }
   /* The laps table carries 5 + 2 per corner + split + 2 disclosure columns: small type and tight
      cells fit it to the paper's width rather than cut it at C3. The headers wrap between words
      only (the screen rule); breaking anywhere cut "C1_apex_kmh" mid-word when they were CSV
@@ -971,8 +982,9 @@ def _note(text: str) -> str:
     return f'<p class="note">{html.escape(text)}</p>'
 
 
-def _section(title: str, body: list[str]) -> list[str]:
-    return ["<section>", f"<h2>{html.escape(title)}</h2>", *body, "</section>"]
+def _section(title: str, body: list[str], cls: str = "") -> list[str]:
+    head = f'<section class="{cls}">' if cls else "<section>"
+    return [head, f"<h2>{html.escape(title)}</h2>", *body, "</section>"]
 
 
 def _kv_table(rows, cls: str = "kv") -> list[str]:
@@ -1327,10 +1339,11 @@ def write_report_html(path: str, session, source_label: str = "",
                       tokens: Mapping[str, str] | None = None) -> None:
     """One SELF-CONTAINED page telling the session the way the app does, in the app's order:
     the header (recording, track, date, lap count, best lap, and the `Timing` stamp), then the
-    debrief's answer — the lap card beside the COACHING section (`_front`) — then the Stats
-    page's groups (SESSION, PACE, MOMENTS, IDEAL LAP, SPEED · G, DRIVING, then CORNERS), the
-    slow-lap notes, the lap strip, the laps table (same rows/columns as `write_laps_csv`, via
-    `laps_table`) and the passed snapshots. `images` is an iterable of `(title, png_bytes)` or
+    debrief's answer — the lap card beside the COACHING section (`_front`) — then the passed
+    figures (the pinned map and chart: the pictures come before the tables), then the Stats
+    page's groups (SESSION, PACE, MOMENTS, IDEAL LAP, SPEED · G, DRIVING in two columns on a wide
+    page, then CORNERS), the slow-lap notes, the lap strip and the laps table (same rows/columns
+    as `write_laps_csv`, via `laps_table`). `images` is an iterable of `(title, png_bytes)` or
     `(title, png_bytes, layout_width_px)` — app.py grabs the map/plots widgets (QWidget.grab →
     QImage → PNG bytes), so this module stays Qt-free; `lapstrip` is the `share_lapstrip` card's
     PNG bytes for the same reason (None: no strip, which is what its gate says on a provisional
@@ -1400,6 +1413,12 @@ def write_report_html(path: str, session, source_label: str = "",
     after_pace = next((k + 1 for k, sec in enumerate(summary) if sec[1] == "<h2>PACE</h2>"),
                       len(summary))
     summary.insert(after_pace, _moments_section(session))
+    figures: list[str] = []
+    for item in images:  # (title, png[, width[, caption: what the figure draws]])
+        caption = [_note(item[3])] if len(item) > 3 and item[3] else []
+        # No PNG: the figure could not be drawn, and its caption says so where it would have been.
+        img = [_img(item[0], item[1], item[2] if len(item) > 2 else None)] if item[1] else []
+        figures += _section(item[0], [*img, *caption], "figure")
     out = [
         "<!DOCTYPE html>",
         '<html lang="en"><head><meta charset="utf-8"/>',
@@ -1411,16 +1430,15 @@ def write_report_html(path: str, session, source_label: str = "",
         *_kv_table(meta, "meta"),
         "</header>",
         *_front(session, unit, card, ideal_gap, corners_note),
-        *(line for sec in summary for line in sec),
+        # The pictures straight after the answer: on the demo they sat ~4,800 px down, after nine
+        # text cards, the Laps table and the lap strip.
+        *figures,
+        *(['<div class="groups">', *(line for sec in summary for line in sec), "</div>"]
+          if any(summary) else []),
         *corners,
         *_slow_laps_section(session),
         *_lapstrip_section(lapstrip),
         *_laps_section(session, headers, rows, cue_lap),
+        "</main></body></html>",
     ]
-    for item in images:  # (title, png[, width[, caption: what the figure draws]])
-        caption = [_note(item[3])] if len(item) > 3 and item[3] else []
-        # No PNG: the figure could not be drawn, and its caption says so where it would have been.
-        img = [_img(item[0], item[1], item[2] if len(item) > 2 else None)] if item[1] else []
-        out += _section(item[0], [*img, *caption])
-    out.append("</main></body></html>")
     _atomic_write(path, lambda f: f.write("\n".join(out)))
