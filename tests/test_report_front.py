@@ -7,7 +7,8 @@ WHAT IS HELD, on real Sessions loaded from synthetic GoPro recordings (the shipp
 of the demo circuit: a three-way tie at the top, level rows and two not-ranked rows) plus a two-lap
 session for the empty state and a one-lap one for the gaps that are 0 by construction:
 
-  * the order — header, COACHING, then the Stats groups — and the hero card only when one is passed;
+  * the order — header, COACHING, the pinned map and chart, then the Stats groups (two columns on
+    a wide screen, cool/report-pictures-up) — and the hero card only when one is passed;
   * every Coaching string on the page is `coaching.page_text`'s, row by row, in its order — never a
     second derivation — and the empty state is `coaching.empty_state_copy`'s, never a blank section;
   * the notes a page has no hover for (scope, medians, column meanings, the braking caveat) and the
@@ -134,6 +135,58 @@ def test_the_page_opens_on_the_card_and_coaching_before_the_stats_groups():
     kids = list(bare.find(".//main"))
     assert kids[0].tag == "header" and _text(kids[1].find("h2")) == "COACHING", kids[1].tag
     print("ok order: header → card + COACHING → SESSION, PACE, MOMENTS …; no card, no figure")
+
+
+def test_the_pinned_figures_come_right_after_the_front_page():
+    """cool/report-pictures-up: the map and the chart sat after nine text cards, the lap strip and
+    the Laps table (~4,800 px down at 1100 px on the demo). Now: header → card + COACHING → the
+    figures, in the order they are passed → the Stats groups, together in one `.groups` block →
+    CORNERS → SLOW LAPS → LAP STRIP → Laps. Nothing dropped: every section and image still once."""
+    s = _sessions()["demo"]
+    figs = [("Track map", PNG_1PX, 960, "the map"), ("Speed · Δ", PNG_1PX, 960, "the chart")]
+    root = ET.fromstring(_report(s, card=PNG_1PX, lapstrip=PNG_1PX, images=figs))
+    kids = list(root.find(".//main"))
+    assert kids[0].tag == "header" and kids[1].get("class") == "front with-card", kids[:2]
+    assert [(k.tag, k.get("class"), _text(k.find("h2"))) for k in kids[2:4]] == [
+        ("section", "figure", "Track map"), ("section", "figure", "Speed · Δ")], kids[2:4]
+    groups = kids[4]
+    assert groups.tag == "div" and groups.get("class") == "groups", groups.attrib
+    titles = [_text(sec.find("h2")) for sec in groups]
+    assert titles == ["SESSION", "PACE", "MOMENTS", "IDEAL LAP", "SPEED · G", "DRIVING"], titles
+    rest = [_text(k.find("h2")) for k in kids[5:]]
+    assert rest[0].startswith("CORNERS") and rest[1:] == [
+        "SLOW LAPS", "LAP STRIP", f"Laps ({len(s.valid_lap_ids())})"], rest
+    h2s = [_text(h) for h in root.iter("h2")]
+    assert len(h2s) == len(set(h2s)) == 13, h2s
+    alts = [img.get("alt") for img in root.iter("img")]
+    assert alts == ["Lap card", "Track map", "Speed · Δ", "Lap strip"], alts
+    # Each figure keeps its stated width and its caption, under its own picture.
+    for sec, (_title, _png, width, caption) in zip(kids[2:4], figs, strict=True):
+        assert sec.find("img").get("width") == str(width), sec.find("img").attrib
+        assert _text(sec.find("p")) == caption
+    # No figure passed: no empty figure block, the groups straight under the front page.
+    bare = list(ET.fromstring(_report(s, card=PNG_1PX)).find(".//main"))
+    assert bare[2].get("class") == "groups", bare[2].attrib
+    print("ok order: front page → map, chart → Stats groups (one block) → CORNERS … Laps")
+
+
+def test_the_stats_groups_take_two_columns_only_on_a_wide_screen():
+    """The narrow Stats cards flow in two columns at 1100 px and wider — down the first column
+    then the second, so the Stats page's reading order holds — and one column below that and on
+    paper. A card is never split across the columns, and on paper a group or a figure with its
+    caption is kept on one page (the tall COACHING, CORNERS and Laps cards may still break)."""
+    css = export_data.report_css()
+    rule = re.search(r"@media screen and \(min-width: (\d+)px\) \{\s*\.groups \{ ([^}]*) \}", css)
+    assert rule, "no wide-screen two-column rule for the Stats groups"
+    assert int(rule.group(1)) == 1100, rule.group(1)
+    assert "column-count: 2" in rule.group(2), rule.group(2)
+    assert css.count("column-count") == 1, "the two columns must live only in the wide rule"
+    assert ".groups > section { break-inside: avoid; }" in css
+    paper = css.split("@media print {", 2)[2]
+    assert "section.figure, .groups > section { break-inside: avoid; }" in paper, paper
+    # …and the print rule that lets a tall section break is still there for the others.
+    assert "break-inside: auto" in paper
+    print("ok columns: two at ≥ 1100 px on screen, one below and on paper; cards kept whole")
 
 
 def _assert_page_text_on_page(s, unit=None) -> dict:
@@ -431,6 +484,8 @@ def test_the_scope_note_counts_the_shortlist_the_headline_sums():
 
 if __name__ == "__main__":
     test_the_page_opens_on_the_card_and_coaching_before_the_stats_groups()
+    test_the_pinned_figures_come_right_after_the_front_page()
+    test_the_stats_groups_take_two_columns_only_on_a_wide_screen()
     test_every_coaching_string_is_page_texts_in_the_pages_order()
     test_the_notes_say_what_the_page_says_on_hover()
     test_provisional_and_degraded_timing_stamp_the_coaching_rows()

@@ -845,8 +845,9 @@ def test_the_report_tells_the_apps_story_in_its_order_and_words():
     s = _with_story(make_session(), moments, notes, report)
     text = _report_text(s, images=[("Track map", PNG_1PX)], lapstrip=PNG_1PX)
     heads = _h2s(text)
-    want = ["SESSION", "PACE", "MOMENTS", "SPEED · G", "CORNERS · speeds in km/h", "SLOW LAPS",
-            "LAP STRIP", f"Laps ({len(s.valid_lap_ids())})", "Track map"]
+    # The passed figure comes first, right under the front page (cool/report-pictures-up).
+    want = ["Track map", "SESSION", "PACE", "MOMENTS", "SPEED · G", "CORNERS · speeds in km/h",
+            "SLOW LAPS", "LAP STRIP", f"Laps ({len(s.valid_lap_ids())})"]
     assert [h for h in heads if h in want] == want, heads
     body = "".join(ET.fromstring(text).itertext())
     shown = story.shown_moments(moments)
@@ -1008,7 +1009,14 @@ def test_print_puts_every_laps_column_on_paper():
     assert "overflow-x: auto" in screen and "section.wide" in screen
     assert "overflow: visible" in paper and "break-inside: auto" in paper
     avoid = [line for line in paper.splitlines() if "break-inside: avoid" in line]
-    assert avoid and not any(line.lstrip().startswith("section") for line in avoid), avoid
+    # Kept whole: small blocks only — a figure with its caption and a Stats group are (each well
+    # under a page, cool/report-pictures-up); a bare `section` or `section.wide` (COACHING,
+    # CORNERS, the laps table) never is.
+    selectors = [sel.strip() for line in avoid for sel in line.split("{")[0].split(",")]
+    assert avoid and not {"section", "section.wide"} & set(selectors), selectors
+    assert all(sel in {"tr", "li", "p.note", "img", "table.kv", "table.meta", "table.moments",
+                       "section.figure", ".groups > section", "figure.hero"}
+               for sel in selectors), selectors
     assert "table.laps" in paper and "img.card" in paper
     s = make_session()
     text = _report_text(s, lapstrip=PNG_1PX)
