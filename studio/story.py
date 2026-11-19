@@ -89,12 +89,13 @@ import numpy as np
 
 from ._signal import fmt_time, lap_label, plural
 from .lap_race import ESTIMATED_CLOCK_TIE_S
-from .library import PB_PRECISION_S, within_timing_precision
+from .library import PB_PRECISION_S
 from .stats import (
     MATRIX_DECIMALS,
     TYPICAL_PASS,
     CornerMatrix,
     fmt_pass_vs_typical,
+    is_level,
     pass_vs_typical_s,
 )
 
@@ -390,9 +391,8 @@ def tie_floor(caveat: tuple[str, ...]) -> float:
     return ESTIMATED_CLOCK_TIE_S if CAVEAT_ESTIMATED in caveat else PB_PRECISION_S
 
 
-def _level(gap_s: float, floor: float) -> bool:
-    return (within_timing_precision(gap_s) if floor == PB_PRECISION_S
-            else abs(round(gap_s, 3)) < floor)
+# The level rule itself is `stats.is_level`, shared with Corners ▸ Quickest passes.
+_level = is_level
 
 
 def _laps_text(ids: tuple[int, ...]) -> str:

@@ -226,6 +226,9 @@ def test_every_empty_state_in_the_app_is_the_one_object():
         ("coaching_panel.py", "OpportunitiesPanel.__init__"),
         ("lap_table.py", "CornerTable.__init__"),
         ("lap_table.py", "LapTable.__init__"),
+        # Corners ▸ Quickest passes: "Needs more laps" (under the CORNERS BY LAP minimum) —
+        # QuickestPassTable._needs_laps_body owns the wording.
+        ("lap_table.py", "QuickestPassTable.__init__"),
         ("library_dialog.py", "LibraryDialog.__init__"),
         # The Marks page. ONE construction serving BOTH of its senses — nothing marked yet, and
         # nothing matching the filter — because `EmptyState.set_state` is what those two differ by,

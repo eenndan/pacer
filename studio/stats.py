@@ -47,7 +47,7 @@ import numpy as np
 from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print, lap_label
 from .consistency import sigma
 from .lap_race import ESTIMATED_CLOCK_TIE_S
-from .library import PB_PRECISION_S
+from .library import PB_PRECISION_S, within_timing_precision
 
 if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
     from .gmeter import GMeter
@@ -703,6 +703,16 @@ ROLLING_CAPTION = "best rolling"
 def rolling_level_floor(clock_estimated: bool) -> float:
     """The step under which the rolling best and the best lap read level."""
     return ESTIMATED_CLOCK_TIE_S if clock_estimated else PB_PRECISION_S
+
+
+def is_level(gap_s: float, floor: float) -> bool:
+    """Whether two figures `gap_s` apart are LEVEL under the step `floor`: strictly closer than it,
+    the gap read to the millisecond. At `library.PB_PRECISION_S` that is
+    `within_timing_precision` (exactly 0.070 apart is NOT level, 0.069 is); under an estimated
+    clock's wider step the same strict rule on the gap rounded to 1 ms. The one rule the session
+    moments (`story`) and the Corners tab's Quickest passes name a tie by."""
+    return (within_timing_precision(gap_s) if floor == PB_PRECISION_S
+            else abs(round(gap_s, 3)) < floor)
 
 
 def rolling_caption(rolling: float | None, best: float | None, clock_estimated: bool = False
@@ -1944,6 +1954,99 @@ def corner_matrix(lap_ids, cids, times_by_lap, resolved_by_lap) -> CornerMatrix 
         scales.append(scale)
     return CornerMatrix(lap_ids=ids, cids=cids, cells=cells, resolved=resolved,
                         medians=medians, scales=scales, n_resolved=n_resolved)
+
+
+# ------------------------------------------------------------------------- quickest passes
+# The Corners tab's "Quickest passes" view: per corner, the quickest pass, the lap it was on, and
+# every other pass LEVEL with it. Read off the CORNERS BY LAP cells and nothing else, so its time
+# is the CORNERS table's Best by construction (the same counted cells, the same minimum).
+#
+# WHY "LEVEL" AND NOT A RANK. refused-2026-09 §32 measured the quickest pass through a corner on the
+# demo: at six corners of seven it is one of 6-11 passes within the 0.07 s timing step, and which
+# one comes out on top changes in up to 69 % of the draws under that step. Naming it alone would be
+# a coin toss presented as a fact, so every pass level with it is listed beside it, quickest first,
+# and the view plays them in turn. The step is the app's own: `library.PB_PRECISION_S`, or under an
+# estimated clock that clock's published bound (`rolling_level_floor`, the pair `story.tie_floor`
+# reads), compared on the printed milliseconds as `story._best_lap` compares lap times.
+
+
+@dataclass(frozen=True)
+class QuickestPass:
+    """One corner's quickest counted pass. `time_s` / `lap_id` are None when no lap's pass through
+    the corner was matched on track at both edges (nothing to name). `level_laps` are the OTHER laps
+    whose pass is level with it, quickest first; `next_gap_s` is the printed gap to the next
+    quickest counted pass (None with fewer than two)."""
+
+    cid: int
+    time_s: float | None
+    lap_id: int | None
+    level_laps: tuple[int, ...]
+    next_gap_s: float | None
+    n_counted: int
+    level_times: tuple[float, ...] = ()   # each level lap's own pass, aligned with level_laps
+
+    @property
+    def alone(self) -> bool:
+        """The quickest stands clear of every other pass: nothing level with it, and a runner-up
+        exists to be clear of (one counted pass is not "alone", it is unchallenged)."""
+        return self.lap_id is not None and not self.level_laps and self.next_gap_s is not None
+
+    def play_order(self) -> tuple[int, ...]:
+        """The laps the view plays on repeated activation: the quickest, then each level lap."""
+        return () if self.lap_id is None else (self.lap_id, *self.level_laps)
+
+    def pass_time(self, k: int) -> float | None:
+        """The time of `play_order()[k]`'s own pass through the corner."""
+        if self.time_s is None:
+            return None
+        return self.time_s if k == 0 else self.level_times[k - 1]
+
+
+@dataclass(frozen=True)
+class QuickestPasses:
+    """`quickest_passes`'s result: one QuickestPass per corner in track order, the level step used,
+    and the laps NOT counted at one corner or more (left out of the grid — ⊘ excluded, ⚠ dropout —
+    or with a corner edge not matched on track), session order."""
+
+    passes: list[QuickestPass]
+    level_s: float
+    not_counted: tuple[int, ...]
+
+
+def _ms(x: float) -> int:
+    return int(round(float(x) * 1000))
+
+
+def quickest_passes(matrix: CornerMatrix | None, *, clock_estimated: bool = False,
+                    lap_ids=()) -> QuickestPasses | None:
+    """Per corner of `matrix` (the CORNERS BY LAP grid), its quickest counted pass and the passes
+    level with it (see the block above). `lap_ids` are the session's laps a reader could expect
+    counted (the Laps table's); any of them that is not a grid row is reported as not counted.
+
+    None when there is no grid (no corners, or under MATRIX_MIN_LAPS laps: the grid's own gate)."""
+    if matrix is None:
+        return None
+    level_s = rolling_level_floor(clock_estimated)
+    rows = list(matrix.lap_ids)
+    partial = {lap for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
+               if not all(v is not None and ok for v, ok in zip(row, res, strict=True))}
+    partial |= set(lap_ids) - set(rows)
+    out: list[QuickestPass] = []
+    for col, cid in enumerate(matrix.cids):
+        counted = sorted((val, int(lap))
+                         for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
+                         if (val := row[col]) is not None and res[col])
+        if not counted:
+            out.append(QuickestPass(cid, None, None, (), None, 0, ()))
+            continue
+        best, lap = counted[0]
+        gaps = [(_ms(t) - _ms(best)) / 1000 for t, _ in counted[1:]]
+        level = [(lp, t) for (t, lp), g in zip(counted[1:], gaps, strict=True)
+                 if is_level(g, level_s)]
+        out.append(QuickestPass(cid, best, lap, tuple(lp for lp, _ in level),
+                                round(gaps[0], 3) if gaps else None, len(counted),
+                                tuple(t for _, t in level)))
+    return QuickestPasses(out, level_s, tuple(sorted(partial)))
 
 
 def within_pct_of_best(values, pct: float) -> int | None:

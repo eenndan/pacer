@@ -2774,6 +2774,16 @@ class Session:
         return stats_service.corner_matrix(ids, [c.cid for c in corner_list], times_by_lap,
                                            resolved_by_lap)
 
+    def quickest_passes(self) -> stats_service.QuickestPasses | None:
+        """The Corners tab's Quickest passes: per corner, the quickest pass of the CORNERS BY LAP
+        grid with the passes level with it (`stats.quickest_passes`), so each time is the CORNERS
+        table's Best. The level step widens on an estimated clock, as the session moments' does.
+        Laps of the Laps table that are no grid row (⊘ excluded, ⚠ dropout) count as not counted.
+        None without the grid. Not cached (read on load / re-segment / a click, never per tick)."""
+        return stats_service.quickest_passes(
+            self.corner_matrix(), clock_estimated=bool(self.timing_quality.media_clock),
+            lap_ids=sorted(set(self.valid_lap_ids()) | set(self.excluded_lap_ids())))
+
     def typical_passes(self) -> dict[int, stats_service.TypicalPass]:
         """cid → that corner's typical pass beside the best lap's (`CornerMatrix.typical_pass`:
         the CORNERS BY LAP column's typical, which is the median a Coaching row's Time lost is

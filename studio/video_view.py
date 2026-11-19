@@ -1153,6 +1153,7 @@ class _SeamDelta(QWidget):
 class VideoView(QWidget):
     positionChanged = Signal(float)  # GLOBAL seconds on the session clock (forwarded from the pane)
     chapterChanged = Signal(int)     # current chapter index (forwarded from the PRIMARY pane)
+    clipEnded = Signal()             # PRIMARY pane: a pass's clip ended or was dropped (play_clip)
     seamLoading = Signal(bool)       # PRIMARY pane is reopening the next chapter at a seam (app hint)
     compareToggled = Signal(bool)    # user INTENT: the compare button flipped (CompareController owns
                                      # the decision and calls back set_compare / exit_compare)
@@ -1188,6 +1189,7 @@ class VideoView(QWidget):
         self.pane.playbackStateChanged.connect(self._on_state)
         # Forward only the PRIMARY pane's seam-reopen hint (the secondary is video-only).
         self.pane.seamLoading.connect(self.seamLoading)
+        self.pane.clipEnded.connect(self.clipEnded)
         # A double-click on the PRIMARY video content requests video focus (make the video fill the
         # screen). Only the primary drives it; the secondary is video-only and never toggles focus.
         # Gated on the ⤢ button's enabled state so the gesture and the button agree about when the
@@ -1466,6 +1468,14 @@ class VideoView(QWidget):
     def seek(self, seconds: float):
         """Seek to global session time via the primary pane's chapter-aware seek."""
         self.pane.seek(seconds)
+
+    def play_clip(self, start: float, end: float):
+        """Play GLOBAL [start, end] on the primary pane and pause at `end` (PlayerPane.set_clip_end):
+        the Corners tab's Quickest passes. Normal mode only — its caller leaves compare first. The
+        driver's next seek, play or pause drops the end."""
+        self.pane.seek(start)
+        self.pane.play()
+        self.pane.set_clip_end(end)
 
     def step(self, seconds: float):
         """Step ±`seconds`, clamped to the slider range, through the slider-move seek path (so

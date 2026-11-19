@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
     QApplication,
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -58,7 +59,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, motion, provenance_panel, story, theme, units
+from . import data_quality, motion, prefs, provenance_panel, story, theme, units
 from . import stats as stats_service
 from ._signal import (
     DIST_DECIMALS,
@@ -75,7 +76,7 @@ from ._signal import (
 # The ONE "level with your best" rule (DOMAIN-6): two laps closer than the best instrument can
 # separate at 2σ. The PB sentences say "level" under it; the Δ bar refuses to colour under it.
 from .library import PB_PRECISION_S, within_timing_precision
-from .widgets import NUM_ROLE, EmptyState, NumItem, set_tone
+from .widgets import NUM_ROLE, EmptyState, NumItem, ToggleButton, icon_button, set_tone
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -3161,3 +3162,447 @@ class CornerTable(QWidget):
                 self.table.setItem(r, col, item)
         # Fit once the rows are in — the column widths depend on the values just written.
         self._fit_columns()
+
+
+# ------------------------------------------------------------------ the Corners tab's two views
+# The Corners tab answers two questions: "how did THIS lap take each corner?" (CornerTable, the
+# "Lap N" view) and "where was I quickest through each corner, and show me" (QuickestPassTable).
+# CornersPage puts them behind one pair of buttons, remembered in prefs.CORNERS_VIEW.
+#
+# A QUICKEST PASS IS USUALLY A TIE (refused-2026-09 §32): on the demo, six corners of seven have
+# 6-11 passes within the 0.07 s timing step. So a row names the quickest lap and how many are
+# level with it, never "the fastest", and activating the same row again plays the next level lap.
+CORNERS_VIEW_LAP, CORNERS_VIEW_QUICKEST = prefs.CORNERS_VIEWS
+QUICKEST_COLUMNS = ["Corner", "Quickest", "Lap", "Level with", ""]
+QUICKEST_LEVEL_COL = 3
+QUICKEST_PLAY_COL = 4
+QUICKEST_BTN = "Quickest passes"
+QUICKEST_BTN_TIP = ("Your quickest pass through each corner, the lap it was on and the laps level "
+                    "with it. Click a row (or ↑/↓ and Return) to play that pass; click it again "
+                    "for the next level lap.")
+LAP_VIEW_TIP = "This lap's time, speeds and grip through each corner."
+QUICKEST_NEEDS_LAPS = "Needs more laps"
+QUICKEST_PLAY_TIP = "Play this pass, from just before the corner to just after it (Return)"
+QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap took this corner within "
+                     "{step:.2f} s of it.")
+QUICKEST_COL_TIPS = [
+    "Detected corner in track order, with an arrow for its direction.",
+    "Your quickest time through the corner (seconds), over the passes matched on track at both "
+    "edges: the same figure as Best on the Stats page's CORNERS table.",
+    "The lap that quickest pass was on.",
+    "How many other laps took the corner level with it (within the timing step). Hover a cell "
+    "for the laps.",
+    "Play the pass.",
+]
+LEVEL_NOTE_TIP = "Two passes closer than this are level: the timing cannot tell them apart."
+
+
+def level_note(level_s: float) -> str:
+    """The view's one-line legend for "level"."""
+    return f"Level = within {level_s:.2f} s"
+
+
+def quickest_level_text(qp) -> str:
+    """The "Level with" cell for a `stats.QuickestPass`."""
+    if qp.lap_id is None:
+        return "not timed"
+    if qp.level_laps:
+        return plural(len(qp.level_laps), "more lap")
+    if qp.next_gap_s is None:
+        return "no other lap counted"
+    return f"none · next +{qp.next_gap_s:.3f}"
+
+
+def quickest_level_tip(qp, level_s: float) -> str:
+    """The "Level with" cell's hover: the level laps themselves, quickest first."""
+    if qp.lap_id is None:
+        return ("No lap's pass through this corner was matched on track at both its entry and "
+                "exit, so there is no time to name.")
+    if not qp.level_laps:
+        if qp.next_gap_s is None:
+            return "Only this lap's pass through the corner is counted."
+        return (f"No other lap is within {level_s:.2f} s here: the next quickest is "
+                f"{qp.next_gap_s:.3f} s slower.")
+    laps = ", ".join(lap_label(lap) for lap in qp.level_laps)
+    return (f"Level with lap {lap_label(qp.lap_id)} (within {level_s:.2f} s, the timing step), "
+            f"quickest first: {'lap' if len(qp.level_laps) == 1 else 'laps'} {laps}. Which of "
+            "them comes out on top is down to timing noise. Click the row again to play the next.")
+
+
+def quickest_no_star_tip(qp, level_s: float) -> str:
+    """The Quickest cell's hover on a tie: why it wears no star. The Lap view's star means
+    something else (that lap's time prints as the quickest), so the difference is said here."""
+    n = len(qp.level_laps)
+    return (f"{plural(n, 'more lap')} {'is' if n == 1 else 'are'} level within {level_s:.2f} s, "
+            "so no ★: here it marks a quickest pass no other lap matches.")
+
+
+def quickest_status(label: str, qp, k: int) -> str:
+    """The status line for playing pass `k` of `qp.play_order()` through corner `label`."""
+    order = qp.play_order()
+    lap = f"{lap_label(order[k])} ({qp.pass_time(k):.{PRINT_DECIMALS}f})"
+    if len(order) == 1:
+        clear = "" if qp.next_gap_s is None else f", {qp.next_gap_s:.3f} s clear of the next"
+        return f"Playing lap {lap} through {label}: your quickest pass here{clear}"
+    if k == 0:
+        more = len(order) - 1
+        verb = "is" if more == 1 else "are"
+        return (f"Playing lap {lap} through {label} — {plural(more, 'more lap')} {verb} level "
+                f"here: click {label} again for the next")
+    again = "to start over" if k == len(order) - 1 else "for the next"
+    return (f"Playing lap {lap} through {label}, level pass {k + 1} of {len(order)}: "
+            f"click {label} again {again}")
+
+
+class QuickestPassTable(QWidget):
+    """The Corners tab's "Quickest passes" view: one row per corner — its quickest counted pass
+    (`Session.quickest_passes`), the lap, how many laps are level with it, and ▶. Activating a row
+    (click, ▶, or Return) emits `pass_requested(lap_id, cid, status)`; activating the SAME row
+    again moves to the next level lap, wrapping. The ★ and purple go only on a quickest that stands
+    clear of every other pass, and never while lap timing is provisional (the Laps table's rule).
+    The row's Lap cell keeps naming the quickest lap, beside its time; the "Level with" cell of
+    the row being cycled names the lap playing ("playing lap 9 · 2 of 6")."""
+
+    pass_requested = Signal(int, int, str)
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self.session = session
+        self.result = None          # the last stats.QuickestPasses (None: no grid)
+        self._labels: dict[int, str] = {}
+        self._cycle: tuple[int, int] | None = None   # (cid, k) of the pass last played
+        self._running = False   # that pass's clip is still playing (set_clip_running)
+        self.not_counted = QLabel("")
+        self.not_counted.setProperty("role", "BarLabel")
+        self.not_counted.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XXS,
+                                            GRID_TEXT_INSET, theme.SPACE_XXS)
+        self.not_counted.setVisible(False)
+        self.table = QTableWidget(0, len(QUICKEST_COLUMNS))
+        self.table.setHorizontalHeaderLabels(QUICKEST_COLUMNS)
+        for c, tip in enumerate(QUICKEST_COL_TIPS):
+            self.table.horizontalHeaderItem(c).setToolTip(tip)
+        align_headers_over_their_columns(self.table)
+        # ...but "Level with" is words, left-aligned in its cells: its header sits over them.
+        self.table.horizontalHeaderItem(QUICKEST_LEVEL_COL).setTextAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
+        self.table.setAlternatingRowColors(True)
+        self.table.viewport().setCursor(Qt.PointingHandCursor)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionsClickable(False)
+        hdr.setTextElideMode(Qt.ElideRight)
+        for c in range(len(QUICKEST_COLUMNS)):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(QUICKEST_LEVEL_COL, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(QUICKEST_PLAY_COL, QHeaderView.Fixed)
+        hdr.resizeSection(QUICKEST_PLAY_COL, theme.ICON_BTN.width() + theme.SPACE_S)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        self.table.installEventFilter(self)
+        self._num_font = theme.mono_font(theme.TABLE)
+        self.empty = EmptyState("")
+        self.empty.setVisible(False)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.not_counted)
+        lay.addWidget(self.table)
+        lay.addWidget(self.empty, 1)
+
+    def eventFilter(self, obj, event):
+        # Return / Enter plays the current row (↑/↓ move it: the table's own keys). Nothing else in
+        # the window binds them (see widgets.ActionChip).
+        if (obj is getattr(self, "table", None) and event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)):
+            self.activate(self.table.currentRow())
+            return True
+        return super().eventFilter(obj, event)
+
+    def _on_cell_clicked(self, row: int, _col: int) -> None:
+        self.activate(row)
+
+    def _on_play_clicked(self) -> None:
+        btn = self.sender()
+        if btn is not None:
+            self.activate(int(btn.property("row")))
+
+    def level_s(self) -> float:
+        return self.result.level_s if self.result is not None else PB_PRECISION_S
+
+    def passes(self) -> list:
+        return self.result.passes if self.result is not None else []
+
+    def row_of(self, cid: int) -> int:
+        """The row of corner `cid`, or -1."""
+        return next((r for r, qp in enumerate(self.passes()) if qp.cid == cid), -1)
+
+    def activate(self, row: int) -> bool:
+        """Play row `row`'s pass: the quickest, or — when this row was the last one played — the
+        next level lap (wrapping). False when the row has nothing to play."""
+        passes = self.passes()
+        if not 0 <= row < len(passes) or passes[row].lap_id is None:
+            return False
+        qp = passes[row]
+        order = qp.play_order()
+        k = 0
+        if self._cycle is not None and self._cycle[0] == qp.cid:
+            k = (self._cycle[1] + 1) % len(order)
+        self._play(row, k)
+        return True
+
+    def play_named(self, row: int) -> bool:
+        """Play row `row`'s QUICKEST pass, whatever was cycled before: the command "Quickest C3 —
+        lap 13" names that lap, so it never moves on to a level one. The cycle restarts there."""
+        passes = self.passes()
+        if not 0 <= row < len(passes) or passes[row].lap_id is None:
+            return False
+        self._play(row, 0)
+        return True
+
+    def _play(self, row: int, k: int) -> None:
+        qp = self.passes()[row]
+        self._cycle = (qp.cid, k)
+        self._running = False   # until the view that plays it says the clip runs
+        self.table.selectRow(row)
+        self._paint_playing()
+        self.pass_requested.emit(qp.play_order()[k], qp.cid,
+                                 quickest_status(self.corner_label(qp.cid), qp, k))
+
+    def corner_label(self, cid: int) -> str:
+        """Corner `cid`'s label ("C3") as this view names it."""
+        return self._labels.get(cid, f"C{cid}")
+
+    def set_clip_running(self, on: bool) -> None:
+        """Whether the pass last played is still playing (its clip has not ended or been left):
+        its row says "playing lap 7 …" only while it is."""
+        if bool(on) != self._running:
+            self._running = bool(on)
+            self._paint_playing()
+
+    def forget_cycle(self) -> None:
+        """The driver went somewhere else (another lap picked): the row goes back to its count, and
+        the next click on it starts from the quickest again."""
+        if self._cycle is not None:
+            self._cycle = None
+            self._running = False
+            self._paint_playing()
+
+    def focus_first(self) -> None:
+        """Keyboard-ready: focus the table and, with nothing selected yet, make row 0 current, so
+        the arrow keys and Return work at once. Plays nothing."""
+        if self.table.rowCount() == 0 or not self.table.isVisibleTo(self):
+            return
+        if not self.table.selectionModel().hasSelection():
+            self.table.selectRow(0)
+        self.table.setFocus(Qt.OtherFocusReason)
+
+    def playing(self) -> tuple[int, int] | None:
+        """(cid, lap_id) of the pass last played from this view, or None."""
+        if self._cycle is None:
+            return None
+        row = self.row_of(self._cycle[0])
+        if row < 0:
+            return None
+        return self._cycle[0], self.passes()[row].play_order()[self._cycle[1]]
+
+    def _paint_playing(self) -> None:
+        """The "Level with" cell of the row last played names WHICH level lap is playing."""
+        for r, qp in enumerate(self.passes()):
+            item = self.table.item(r, QUICKEST_LEVEL_COL)
+            if item is None:
+                continue
+            text = quickest_level_text(qp)
+            if self._cycle is not None and self._cycle[0] == qp.cid and qp.level_laps:
+                k, order = self._cycle[1], qp.play_order()
+                text = (f"{'playing ' if self._running else ''}lap {lap_label(order[k])} "
+                        f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) · {k + 1} of {len(order)}")
+            item.setText(text)
+
+    def refresh(self) -> None:
+        """Rebuild from the session (load, re-segment, a reference change)."""
+        corner_list = self.session.corners.corner_list()
+        self._labels = {c.cid: c.label for c in corner_list}
+        self.result = self.session.quickest_passes() if corner_list else None
+        passes = self.passes()
+        row = self.row_of(self._cycle[0]) if self._cycle is not None else -1
+        # A re-segment can drop the corner or change its level laps: keep k inside the new order.
+        self._cycle = (None if row < 0 else
+                       (self._cycle[0], self._cycle[1] % len(passes[row].play_order() or (0,))))
+        self.table.setVisible(bool(passes))
+        self.empty.setVisible(not passes)
+        self.not_counted.setVisible(False)
+        if not passes:
+            self.table.setRowCount(0)
+            self.empty.set_state(QUICKEST_NEEDS_LAPS, self._needs_laps_body())
+            return
+        left = self.result.not_counted
+        if left:
+            laps = ", ".join(lap_label(i) for i in left)
+            self.not_counted.setText(f"{plural(len(left), 'lap')} not counted")
+            self.not_counted.setToolTip(
+                f"Not counted at one corner or more: {'lap' if len(left) == 1 else 'laps'} {laps} "
+                "(⊘ excluded, ⚠ GPS dropout, or a corner edge not matched on track), as in "
+                "the Stats page's CORNERS BY LAP.")
+            self.not_counted.setVisible(True)
+        verified = getattr(self.session, "timing_verified", True)
+        direction = {c.cid: c.direction for c in corner_list}
+        self.table.setRowCount(len(passes))
+        for r, qp in enumerate(passes):
+            label = self._labels.get(qp.cid, f"C{qp.cid}")
+            star = verified and qp.alone
+            time = "–" if qp.time_s is None else f"{qp.time_s:.{PRINT_DECIMALS}f}"
+            cells = [label, time + (BEST_SECTOR_MARK if star else ""),
+                     "–" if qp.lap_id is None else lap_label(qp.lap_id), quickest_level_text(qp)]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                item.setForeground(BASE_COLOR)
+                if col == 0:
+                    set_corner_direction(item, direction.get(qp.cid, 0))
+                elif col == QUICKEST_LEVEL_COL:
+                    item.setToolTip(quickest_level_tip(qp, self.level_s()))
+                    if not qp.level_laps:
+                        item.setForeground(PROVISIONAL_COLOR)
+                else:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setFont(self._num_font)
+                if col == 1 and qp.level_laps:
+                    item.setToolTip(quickest_no_star_tip(qp, self.level_s()))
+                if col == 1 and star:
+                    item.setForeground(QColor(theme.best_sector_colour()))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                    item.setToolTip(QUICKEST_STAR_TIP.format(step=self.level_s()))
+                self.table.setItem(r, col, item)
+            btn = icon_button("ph.play-fill", tooltip=QUICKEST_PLAY_TIP)
+            btn.setFocusPolicy(Qt.NoFocus)
+            btn.setEnabled(qp.lap_id is not None)
+            btn.setAccessibleName(f"Play the quickest pass through {label}")
+            # A bound method and the row on the button, NOT a lambda over `self`: a lambda held by
+            # the connection makes view → button → lambda → view a cycle only the GC can break, and
+            # the GC can run on a load worker's thread, where deleting these widgets crashed
+            # test_studio_features (a bus error in test_reentrant_load_applies_only_latest).
+            btn.setProperty("row", r)
+            btn.clicked.connect(self._on_play_clicked)
+            self.table.setCellWidget(r, QUICKEST_PLAY_COL, btn)
+        self._paint_playing()
+        if row >= 0:
+            self.table.selectRow(row)
+
+    def _needs_laps_body(self) -> str:
+        if not self.session.corners.corner_list():
+            return "Corner analysis needs a few clean laps of track shape for this session."
+        counted = len(self.session.consistency_lap_ids())
+        return (f"Quickest passes are read off the Stats page's CORNERS BY LAP, which needs "
+                f"{stats_service.MATRIX_MIN_LAPS} clean laps; this session has {counted}. The "
+                "Lap view still shows each lap's corners.")
+
+
+class CornersPage(QWidget):
+    """The Corners tab: a two-button switch ("Lap N" · "Quickest passes") over CornerTable and
+    QuickestPassTable. The choice is remembered (prefs.CORNERS_VIEW); with no corner detected the
+    switch hides and the Lap view's own empty state explains, whatever was remembered."""
+
+    view_changed = Signal(str)
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self.session = session
+        self.lap_view = CornerTable(session)
+        self.quickest = QuickestPassTable(session)
+        # Two chips, one exclusive pair: the same pill as the charts' "vs ideal" chip, amber on.
+        self.lap_btn = ToggleButton("Lap corners", tooltip=LAP_VIEW_TIP)
+        self.lap_btn.setProperty("role", "Chip")
+        self.quickest_btn = ToggleButton(QUICKEST_BTN, tooltip=QUICKEST_BTN_TIP)
+        self.quickest_btn.setProperty("role", "Chip")
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        for btn in (self.lap_btn, self.quickest_btn):
+            btn.setAutoDefault(False)
+            self._group.addButton(btn)
+        self.level_label = QLabel(level_note(PB_PRECISION_S))
+        self.level_label.setProperty("role", "BarLabel")
+        self.level_label.setToolTip(LEVEL_NOTE_TIP)
+        self.bar = QWidget()
+        bar = QHBoxLayout(self.bar)
+        bar.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XS, GRID_TEXT_INSET, theme.SPACE_XS)
+        bar.setSpacing(theme.SPACE_S)
+        bar.addWidget(self.lap_btn)
+        bar.addWidget(self.quickest_btn)
+        bar.addStretch(1)
+        bar.addWidget(self.level_label)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.lap_view)
+        self.stack.addWidget(self.quickest)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.bar)
+        lay.addWidget(self.stack, 1)
+        self._view = prefs.corners_view()
+        (self.quickest_btn if self._view == CORNERS_VIEW_QUICKEST else self.lap_btn).setChecked(True)
+        self.lap_btn.clicked.connect(self._on_lap_clicked)
+        self.quickest_btn.clicked.connect(self._on_quickest_clicked)
+        if self._view == CORNERS_VIEW_QUICKEST:
+            self.quickest.refresh()
+        self._apply()
+
+    def _on_lap_clicked(self) -> None:
+        self.set_view(CORNERS_VIEW_LAP)
+
+    def _on_quickest_clicked(self) -> None:
+        self.set_view(CORNERS_VIEW_QUICKEST)
+
+    def has_corners(self) -> bool:
+        return bool(self.session.corners.corner_list())
+
+    def view(self) -> str:
+        """The view on screen: "quickest" only while there are corners to list."""
+        return self._view if self.has_corners() else CORNERS_VIEW_LAP
+
+    def set_view(self, view: str, remember: bool = True) -> None:
+        """Show the "lap" or "quickest" view; `remember` persists the choice (a user's click), and
+        False is navigation (a Coaching Jump showing the Lap view) that must not overwrite it."""
+        if view not in prefs.CORNERS_VIEWS:
+            return
+        changed = view != self._view
+        self._view = view
+        btn = self.quickest_btn if view == CORNERS_VIEW_QUICKEST else self.lap_btn
+        if not btn.isChecked():
+            btn.setChecked(True)
+        if remember:
+            prefs.set_corners_view(view)
+        if view == CORNERS_VIEW_QUICKEST and self.quickest.result is None:
+            self.quickest.refresh()
+        self._apply()
+        if view == CORNERS_VIEW_QUICKEST:
+            self.quickest.focus_first()
+        if changed:
+            self.view_changed.emit(view)
+
+    def set_lap_text(self, lap_id: int | None) -> None:
+        """The Lap button names the lap its view shows."""
+        self.lap_btn.setText("Lap corners" if lap_id is None
+                             else f"Lap {lap_label(lap_id)} corners")
+
+    def refresh_quickest(self) -> None:
+        """Rebuild the Quickest view (the Lap view refreshes on its own path) and re-decide
+        whether the switch shows: a re-segment can find or lose every corner. Off screen it is
+        only marked stale (no grid read on a rebuild nobody sees); `set_view` rebuilds it."""
+        if self._view == CORNERS_VIEW_QUICKEST:
+            self.quickest.refresh()
+        else:
+            self.quickest.result = None
+        self._apply()
+
+    def _apply(self) -> None:
+        corners_on = self.has_corners()
+        self.bar.setVisible(corners_on)
+        quick = corners_on and self._view == CORNERS_VIEW_QUICKEST
+        self.stack.setCurrentWidget(self.quickest if quick else self.lap_view)
+        self.level_label.setVisible(quick and self.quickest.result is not None)
+        self.level_label.setText(level_note(self.quickest.level_s()))

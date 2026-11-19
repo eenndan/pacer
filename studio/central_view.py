@@ -47,7 +47,7 @@ from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
 from ._signal import lap_label, plural
 from .coaching_panel import OpportunitiesPanel, compare_status
 from .compare_controller import CompareController
-from .lap_table import CornerTable, LapTable
+from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable
 from .map_view import MapView
 from .marks_panel import MarksPanel
 from .playback_state import PlaybackState
@@ -791,7 +791,14 @@ class CentralView(QWidget):
         self.plots = PlotsView(self.session)
         self.table = LapTable(self.session)
         # Corners mode: a 2nd table stacked under the same panel (per-corner rows for the selected lap).
-        self.corner_table = CornerTable(self.session)
+        # ...behind a two-button switch: "Lap N" (that table) or "Quickest passes" (the quickest
+        # pass through each corner, one click from the video). `corner_table` stays the Lap view.
+        self.corners_page = CornersPage(self.session)
+        self.corner_table = self.corners_page.lap_view
+        self.corners_page.quickest.pass_requested.connect(self.play_corner_pass)
+        self.corners_page.view_changed.connect(self._on_corners_view_changed)
+        # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
+        self.video.clipEnded.connect(self._on_clip_ended)
         # B4: a Corners row rings its apex on the map, like the Stats CORNERS and Coaching
         # rows — the same maximize-aware handler, so the three surfaces behave identically.
         self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
@@ -987,7 +994,7 @@ class CentralView(QWidget):
         # same split the coaching page uses.
         self.marks_panel = MarksPanel()
         self.table_stack.addWidget(self.table)          # index 0 — Laps (default)
-        self.table_stack.addWidget(self.corner_table)   # index 1 — Corners
+        self.table_stack.addWidget(self.corners_page)   # index 1 — Corners
         self.table_stack.addWidget(self.stats_view)     # index 2 — Stats
         self.table_stack.addWidget(self.opportunities)  # index 3 — Coaching
         self.table_stack.addWidget(self.marks_panel)    # index 4 — Marks
@@ -1630,6 +1637,7 @@ class CentralView(QWidget):
         Cheap: a handful of in-place repaints / redraws, no session recompute."""
         self.table.refresh()
         self.corner_table.refresh()
+        self._refresh_quickest()
         self.map.refresh_palette()
         self.opportunities.refresh()
         self._stats.refresh_palette()   # raw: it re-renders (or defers) on its own — see above
@@ -1749,6 +1757,7 @@ class CentralView(QWidget):
     def _on_user_select(self, ids):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._drop_owned_ring()
+        self._forget_quickest_cycle()   # another lap picked: the Quickest row goes back to its count
         self._on_laps_selected(ids, seek=True)
 
     # ONE OWNED RING, for the two surfaces whose ring belongs to a lap rather than to a corner row:
@@ -1781,6 +1790,10 @@ class CentralView(QWidget):
         self.table_stack.setCurrentIndex(index)
         if index == 1:
             self.corner_table.set_lap(self._corner_lap)
+            # Key 2 onto the remembered Quickest view: its rows take the keys at once.
+            page = getattr(self, "corners_page", None)
+            if page is not None and page.view() == CORNERS_VIEW_QUICKEST:
+                page.quickest.focus_first()
         self._update_table_header()
         if getattr(self, "_debrief", False) and index != 3:
             self._end_debrief(restore_tab=False)   # the driver chose another page
@@ -1815,6 +1828,7 @@ class CentralView(QWidget):
         if getattr(self, "_maximized_panel", None) is self._table_panel:
             self._restore_splitter_sizes()
         self._drop_owned_ring()
+        self._forget_quickest_cycle()
         self.table.select([lap_id])
         entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
                  if cid is not None else None)
@@ -1824,6 +1838,57 @@ class CentralView(QWidget):
             self._playback.followed_lap = self.session.lap_at_time(entry)
         if cid is not None:
             self._pin_owned_ring(cid)
+
+    def _refresh_quickest(self):
+        """Corners ▸ Quickest passes follows every rebuild the Lap view does. getattr-guarded: a
+        test double may carry a corner_table and no page."""
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.refresh_quickest()
+
+    def _forget_quickest_cycle(self):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.forget_cycle()
+
+    def _on_clip_ended(self):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_clip_running(False)
+
+    def _on_corners_view_changed(self, _view: str):
+        self._update_table_header()
+
+    def play_corner_pass(self, lap_id: int, cid: int, status: str = "") -> bool:
+        """The Corners tab's Quickest passes: show lap `lap_id`'s pass through corner `cid` and PLAY
+        it. The lap is selected as a Stats MOMENTS Jump selects it (charts, map ring), the video
+        seeks to the clip start (`CornerModel.pass_clip`: 2 s before the entry, or the previous
+        corner's exit if later) and plays, and the player pauses itself 1 s after the exit
+        (`VideoView.play_clip`; any seek, play or pause of the driver's own drops that end).
+
+        A Lap race in progress ends and a compare is LEFT first: one video, one lap, and the row's
+        click means "show me this pass" wherever the panes were. False when the pass has no clip."""
+        clip = self.session.corners.pass_clip(lap_id, cid)
+        if clip is None:
+            return False
+        if self.is_racing():
+            self.end_lap_race()
+        if self._comparing():
+            self.compare.exit()
+        if getattr(self, "_maximized_panel", None) is self._table_panel:
+            self._restore_splitter_sizes()
+        self._drop_owned_ring()
+        self.table.select([lap_id])
+        self._on_laps_selected([lap_id], seek=False)
+        self.video.play_clip(*clip)
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_clip_running(True)
+        self._playback.followed_lap = self.session.lap_at_time(clip[0])
+        self._pin_owned_ring(cid)
+        if status:
+            self.statusNotice.emit(status)
+        return True
 
     def compare_at_corner(self, tp, lost: str) -> bool:
         """A Coaching row's Compare: SEE the loss the row names. Compare `tp.lap_id` (the lap whose
@@ -2053,7 +2118,13 @@ class CentralView(QWidget):
         if bar is None:
             return
         lap = getattr(self, "_corner_lap", None)
-        bar.setTabText(1, f"Corners · L{lap + 1}" if lap is not None else "Corners")
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.set_lap_text(lap)
+        if page is not None and page.view() == CORNERS_VIEW_QUICKEST:
+            bar.setTabText(1, "Corners · quickest")
+        else:
+            bar.setTabText(1, f"Corners · L{lap + 1}" if lap is not None else "Corners")
         # B1: the header bar was laid out BEFORE this load-time rename widened the tab bar's
         # size hint, and a QTabBar doesn't re-request layout on its own — so the last tab
         # ("Coaching") shipped clipped to "Coach" until the user happened to click a tab.
@@ -2601,6 +2672,7 @@ class CentralView(QWidget):
         self.plots.forget_corner_hover()
         self._push_corner_emphasis()
         self.corner_table.refresh()
+        self._refresh_quickest()
         # The persistent coaching front-door: recompute the top-3 opportunities (the clean-lap set /
         # corner losses shift on a re-segmentation; recomputed per build, never on the 30 Hz tick).
         self.opportunities.refresh()

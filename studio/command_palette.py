@@ -216,11 +216,26 @@ def _registry_entries(window, taken: set[int]) -> list[Entry]:
     return out
 
 
+def _session_entries(window) -> list[Entry]:
+    """The rows that depend on the session on screen, which a static registry cannot hold: one
+    "Quickest C3 — lap 13" per corner (`StudioWindow.quickest_pass_commands`). Guarded like the
+    registry: a missing or failing source costs these rows, never the palette."""
+    source = getattr(window, "quickest_pass_commands", None)
+    if not callable(source):
+        return []
+    try:
+        rows = source()
+    except Exception:  # noqa: BLE001 — a session-derived row must not cost the user the palette
+        return []
+    return [Entry(title, "Corners", "", True, call=call) for title, call in rows]
+
+
 def entries(window) -> list[Entry]:
     """Everything the palette offers, menu first (the app's own ordering, so the resting first row
-    is `Open…`) then the keyboard-only commands in registry order."""
+    is `Open…`), then the keyboard-only commands in registry order, then the session's own rows."""
     menu = _menu_entries(window)
-    return menu + _registry_entries(window, {id(e.action) for e in menu if e.action is not None})
+    return (menu + _registry_entries(window, {id(e.action) for e in menu if e.action is not None})
+            + _session_entries(window))
 
 
 def rank(entry: Entry, query: str) -> int | None:

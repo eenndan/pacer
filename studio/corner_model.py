@@ -50,6 +50,12 @@ _UNSET: Final = _Unset.TOKEN
 # re-cut that moves one cannot land without the bump.
 IDEAL_VERSION = 1
 
+# The clip a Quickest-passes row plays (`CornerModel.pass_clip`): a lead-in long enough to see the
+# approach (2 s at the demo's 75-95 km/h is 40-55 m; its brake points sit 0-0.2 s before the entry
+# Pacer uses) and a second after the exit to see it unwind. A 4-6.5 s clip on the demo.
+PASS_LEAD_S = 2.0
+PASS_TAIL_S = 1.0
+
 # ------------------------------------------------------- ideal-lap donor admission (D1)
 # A partition edge pair closer together than this ON THE REFERENCE ODOMETER is a POINT, not a
 # segment. Two cases produce one: the first corner can begin on the start line (and the last can
@@ -1394,6 +1400,11 @@ class CornerModel:
         `Session._brake_rows` maps each lap's brake ONSETS back into the reference odometer by
         `× ref_total/lap_total` (studio/session.py) for the Stats ▸ BRAKING table and the Coaching
         rows' braking-direction line. It projects samples, not windows, and is untouched here."""
+        return self.corner_edge_media_time(lap_id, cid, "enter")
+
+    def corner_edge_media_time(self, lap_id: int, cid: int, edge: str) -> float | None:
+        """`corner_entry_media_time` for either edge: `edge` is "enter" or "exit". The same
+        projection on the same warp, so a pass's entry and exit come off one alignment."""
         basis = self.basis()
         if basis is None or not basis[0]:
             return None
@@ -1408,7 +1419,32 @@ class CornerModel:
         total_lap = float(dists[-1])
         if total_lap <= 0:
             return None
-        d_enter = float(corners.project_boundaries(
-            [float(corner.enter)], total_ref, total_lap,
+        d_edge = float(corners.project_boundaries(
+            [float(corner.enter if edge == "enter" else corner.exit)], total_ref, total_lap,
             alignment=self.lap_alignment(lap_id, total_lap))[0])
-        return float(np.interp(d_enter, dists, times))
+        return float(np.interp(d_edge, dists, times))
+
+    def pass_clip(self, lap_id: int, cid: int) -> tuple[float, float] | None:
+        """The TELEMETRY-clock (start, end) of the clip that shows `lap_id`'s pass through corner
+        `cid` (the Corners tab's Quickest passes): from PASS_LEAD_S before the entry, or the
+        previous corner's exit when that is later (on the demo the straights before C2, C4 and C7
+        take 1.3-1.8 s, so a flat lead-in would open inside the corner before), to PASS_TAIL_S
+        after the exit. The previous corner of the first one is the last corner of the lap before.
+        None when the pass has no entry or exit."""
+        basis = self.basis()
+        if basis is None or not basis[0]:
+            return None
+        cids = [c.cid for c in basis[0]]
+        if cid not in cids:
+            return None
+        enter = self.corner_edge_media_time(lap_id, cid, "enter")
+        leave = self.corner_edge_media_time(lap_id, cid, "exit")
+        if enter is None or leave is None or leave <= enter:
+            return None
+        k = cids.index(cid)
+        prev = (self.corner_edge_media_time(lap_id, cids[k - 1], "exit") if k > 0 else
+                self.corner_edge_media_time(lap_id - 1, cids[-1], "exit") if lap_id > 0 else None)
+        start = enter - PASS_LEAD_S
+        if prev is not None and start < prev < enter:
+            start = prev
+        return start, leave + PASS_TAIL_S

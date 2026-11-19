@@ -161,7 +161,7 @@ def test_every_group_shares_one_key_column():
     want = [(help_dialog._key_text(k), d) for _g, rows in SHORTCUT_GROUPS for k, d in rows]
     assert _K10_REWORDED <= set(want), sorted(_K10_REWORDED - set(want))
     assert not _K10_WAS & {d for _k, d in want}, "a K10 row still reads its old description"
-    assert len(want) == 32, len(want)
+    assert len(want) == 33, len(want)   # 33: + Return, Corners ▸ Quickest passes (cool/quickest-passes)
     for size in (None, "minimum"):
         d = _shown(ShortcutsDialog())
         if size:
