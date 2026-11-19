@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QImage,
     QKeySequence,
     QShortcut,
+    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -40,10 +41,13 @@ from PySide6.QtWidgets import (
     QFrame,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -2581,6 +2585,9 @@ class StudioWindow(QMainWindow):
         self._next_corner_action.setShortcut(QKeySequence("Alt+Right"))
         self._next_corner_action.triggered.connect(lambda: self._step_corner_pass(+1))
         for action in (self._prev_corner_action, self._next_corner_action):
+            # A HELD key is not a walk through the lap: Qt's auto-repeat would play one pass per
+            # repeat, C1 → C7 in under a second — the reel §31 refuses. One press, one pass.
+            action.setAutoRepeat(False)
             action.setToolTip(
                 "Play the previous / next corner's pass: on the lap of the pass you are studying "
                 "(from Corners ▸ Quickest passes, that corner's quickest), else around the "
@@ -3061,7 +3068,16 @@ class StudioWindow(QMainWindow):
         return out
 
     def _step_corner_pass(self, step: int) -> bool:
-        """View ▸ Previous / Next corner pass (⌥← / ⌥→): `CentralView.step_corner_pass`."""
+        """View ▸ Previous / Next corner pass (⌥← / ⌥→): `CentralView.step_corner_pass`. In a text
+        field (the Marks note, any line edit) ⌥← / ⌥→ keep their macOS meaning, a word back /
+        forward: the window-wide shortcut would otherwise take the key from the field."""
+        field = QApplication.focusWidget()
+        if isinstance(field, QLineEdit):
+            (field.cursorWordBackward if step < 0 else field.cursorWordForward)(False)
+            return False
+        if isinstance(field, (QTextEdit, QPlainTextEdit)):
+            field.moveCursor(QTextCursor.PreviousWord if step < 0 else QTextCursor.NextWord)
+            return False
         view = getattr(self, "view", None)
         if view is None or not hasattr(view, "step_corner_pass"):
             return False

@@ -48,7 +48,7 @@ from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
 from ._signal import PRINT_DECIMALS, lap_label, plural
 from .coaching_panel import OpportunitiesPanel, compare_status
 from .compare_controller import CompareController
-from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable
+from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable, is_selection_click
 from .map_view import MapView
 from .marks_panel import MarksPanel
 from .overlay import broadcast
@@ -1042,7 +1042,7 @@ class CentralView(QWidget):
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
         self.stats_view.moment_jump.connect(self._on_stats_moment_jump)
-        self.stats_view.pass_requested.connect(self.play_lap_pass)   # a CORNERS BY LAP cell
+        self.stats_view.pass_requested.connect(self._on_grid_pass_requested)   # a grid cell
         # Right-click on a row or cell that names one pass: "Play this pass" / "Export this pass…".
         for widget, resolve in (
                 (self.corners_page.quickest.table, self._quickest_menu_pass),
@@ -1959,12 +1959,31 @@ class CentralView(QWidget):
     # re-segment. The zoom (#618) has its own, shorter life (the playhead inside the clip); ⌘K's
     # "Export the C5 pass — lap 6…" and the corner walk read this.
     def pass_subject(self) -> tuple[int, int, str] | None:
-        """(lap, cid, label) of the pass being studied, or None — also None once a re-segment has
-        taken its corner away (the Quickest row's cycle follows the same rule)."""
+        """(lap, cid, label) of the pass being studied, or None.
+
+        THE RULE, one for every surface that reads it (⌘K's export row, the right-click menu, the
+        corner walk; the zoom, Loop and Slow follow the same pass in the player): the pass is the
+        subject from the moment it is played until it is LEFT — a seek away from it, a lap pick, a
+        Jump, Compare, a Lap race, ▶ playing on past it, Esc, a reload or a re-segment that takes
+        its corner away. The clip merely ENDING (the auto-pause 1 s after the exit) does not leave
+        it: he is looking at the corner he just watched, and can still export, loop or walk on
+        from it. The player is the authority on "left" (`PlayerPane.pass_clip`, #621): the subject
+        holds only while the player still holds that same pass."""
+        live = self._live_subject()
+        return None if live is None else (live[0], live[1], self._corner_label(live[1]))
+
+    def _live_subject(self) -> tuple[int, int, str] | None:
+        """(lap, cid, origin) of `pass_subject`'s pass while the rule above holds, else None."""
         subject = getattr(self, "_pass_subject", None)
-        if subject is None or subject[1] not in {c.cid for c in self.session.corners.corner_list()}:
+        if subject is None:
             return None
-        return subject[0], subject[1], self._corner_label(subject[1])
+        lap, cid, origin, clip = subject
+        held = self.video.pane.pass_clip()
+        if held is None or abs(held[0] - clip[0]) > 1e-6:
+            return None
+        if cid not in {c.cid for c in self.session.corners.corner_list()}:
+            return None
+        return lap, cid, origin
 
     def _corner_label(self, cid: int) -> str:
         found = [c.label for c in self.session.corners.corner_list() if c.cid == cid]
@@ -2016,18 +2035,23 @@ class CentralView(QWidget):
         play the lap's own pass through it — the same click a Quickest passes row answers with."""
         self._on_stats_corner_clicked(cid)
         lap = getattr(self, "_corner_lap", None)
-        if lap is not None and cid is not None:
+        if lap is not None and cid is not None and not is_selection_click():
             self.play_lap_pass(lap, cid)
+
+    def _on_grid_pass_requested(self, lap_id: int, cid: int):
+        """A CORNERS BY LAP cell click plays its pass; a ⌘ / ⇧ click is a selection gesture."""
+        if not is_selection_click():
+            self.play_lap_pass(lap_id, cid)
 
     # The right-click menu on a row / cell that names ONE pass. Each resolver answers (lap, cid,
     # play) for the point clicked — `play` the gesture a left click on it makes — or None.
     def _quickest_menu_pass(self, table, pos):
         row = table.indexAt(pos).row()
         q = self.corners_page.quickest
-        passes = q.passes()
-        if not 0 <= row < len(passes) or passes[row].lap_id is None:
+        lap = q.shown_lap(row)
+        if lap is None:
             return None
-        return passes[row].lap_id, passes[row].cid, lambda: q.play_named(row)
+        return lap, q.passes()[row].cid, lambda: q.play_shown(row)
 
     def _corner_row_menu_pass(self, table, pos):
         cid = self.corner_table.cid_at(table.indexAt(pos).row())
@@ -2068,8 +2092,12 @@ class CentralView(QWidget):
     def _show_pass_menu(self, table, target, pos):
         menu = self.pass_menu(target)
         if menu is not None:
-            menu.exec(table.viewport().mapToGlobal(pos))
+            self._run_menu(menu, table.viewport().mapToGlobal(pos))
             menu.deleteLater()
+
+    def _run_menu(self, menu: QMenu, at: QPoint) -> None:
+        """Pop `menu` up at `at` and wait for the choice (the one modal step: a seam for tests)."""
+        menu.exec(at)
 
     def _on_slow_pass_requested(self, lap_id: int, cid: int):
         """The Laps table's "▼ C5" cue: play the culprit corner's pass on that lap (the row click
@@ -2086,10 +2114,10 @@ class CentralView(QWidget):
         if not order:
             self.statusNotice.emit("No corners on this track yet")
             return False
-        subject = getattr(self, "_pass_subject", None)
+        subject = self._live_subject()   # a pass that was LEFT walks from the playhead instead
         if subject is not None:
             lap, cid, origin = subject
-            k = order.index(cid) + step if cid in order else -1
+            k = order.index(cid) + step
             candidates = ([] if not 0 <= k < len(order) else
                           order[k:] if step > 0 else order[k::-1])
         else:
@@ -2147,7 +2175,7 @@ class CentralView(QWidget):
         self._playback.followed_lap = self.session.lap_at_time(clip[0])
         self._pin_owned_ring(cid)
         self._zoom_to_pass(lap_id, cid, clip)
-        self._pass_subject = (int(lap_id), int(cid), origin)
+        self._pass_subject = (int(lap_id), int(cid), origin, (float(clip[0]), float(clip[1])))
         if status:
             self.statusNotice.emit(self._pass_status(status, export_hint))
         return True

@@ -196,6 +196,14 @@ NO_LAPS_HEADLINE = data_quality.NO_LAPS_HEADLINE
 NO_LAPS_TEXT = f"{NO_LAPS_HEADLINE}\n\n{data_quality.no_laps_body()}"
 
 
+def is_selection_click() -> bool:
+    """True while ⌘, ⌃ or ⇧ is held: a click with one of them is a SELECTION gesture (add a lap,
+    extend a range), never a request to play a pass — on a Quickest row, a Corners row, a Stats
+    cell or the slow-lap cue alike (cool/play-every-pass review)."""
+    return bool(QApplication.keyboardModifiers()
+                & (Qt.ControlModifier | Qt.MetaModifier | Qt.ShiftModifier))
+
+
 def _with_star(star_tip: str, tip: str) -> str:
     """The ★ meaning above whatever trust note the cell already carries, blank line between, so
     neither answer is lost (a dropout lap that is also the best lap has two things to say)."""
@@ -2449,7 +2457,8 @@ class LapTable(QWidget):
         if note is not None and story.culprit_cue(note) and \
                 self.table.selectionModel().isRowSelected(row):
             self.slow_corner_clicked.emit(note.corners[0].cid)
-            self.slow_pass_requested.emit(self._lap_id(row), note.corners[0].cid)
+            if not is_selection_click():   # ⌘/⇧-click: the lap joins the selection, nothing plays
+                self.slow_pass_requested.emit(self._lap_id(row), note.corners[0].cid)
 
     def _set_row_current(self, r: int, on: bool):
         """Apply/clear the ▶ prefix + bold on ONE row's Lap cell (the only per-lap-change cue)."""
@@ -3333,7 +3342,8 @@ class QuickestPassTable(QWidget):
         return super().eventFilter(obj, event)
 
     def _on_cell_clicked(self, row: int, _col: int) -> None:
-        self.activate(row)
+        if not is_selection_click():
+            self.activate(row)
 
     def _on_play_clicked(self) -> None:
         btn = self.sender()
@@ -3371,6 +3381,26 @@ class QuickestPassTable(QWidget):
         if not 0 <= row < len(passes) or passes[row].lap_id is None:
             return False
         self._play(row, 0)
+        return True
+
+    def shown_lap(self, row: int) -> int | None:
+        """The lap row `row` names now: the level lap its cycle is on ("playing lap 8 · 3 of 6"),
+        else its quickest. The right-click menu's pass — the same one ⌘K's export row names."""
+        passes = self.passes()
+        if not 0 <= row < len(passes) or passes[row].lap_id is None:
+            return None
+        qp = passes[row]
+        if self._cycle is not None and self._cycle[0] == qp.cid:
+            return qp.play_order()[self._cycle[1]]
+        return qp.lap_id
+
+    def play_shown(self, row: int) -> bool:
+        """Play the pass row `row` names now (`shown_lap`), without moving its cycle on."""
+        passes = self.passes()
+        if not 0 <= row < len(passes) or passes[row].lap_id is None:
+            return False
+        k = self._cycle[1] if self._cycle is not None and self._cycle[0] == passes[row].cid else 0
+        self._play(row, k)
         return True
 
     def _play(self, row: int, k: int) -> None:

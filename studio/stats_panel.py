@@ -1638,9 +1638,11 @@ class StatsView(QWidget):
         self.corner_grid_table = ReportTable(CORNER_GRID_LEAD_COLUMNS, ROW_HEIGHT,
                                              frozen=len(CORNER_GRID_LEAD_COLUMNS))
         self.corner_grid_table.setToolTip(CORNER_GRID_TOOLTIP)
-        # Every cell names one pass, and a click plays it (the hand says so before the click).
+        # A cell names one pass, and a click plays it: the hand says so before the click, over the
+        # cells that WILL play only (not the lap / lap-time columns, not an unmatched cell).
         self._corner_matrix = None
-        self.corner_grid_table.viewport().setCursor(Qt.PointingHandCursor)
+        self.corner_grid_table.viewport().setMouseTracking(True)
+        self.corner_grid_table.viewport().installEventFilter(self)
         self.corner_grid_table.cellClicked.connect(self._on_corner_grid_clicked)
         band.addWidget(self.corner_grid_table)
         self.corner_grid_note = WrapLabel()
@@ -2880,6 +2882,24 @@ class StatsView(QWidget):
         if not lead <= col < lead + len(matrix.cids):
             return None
         return matrix.lap_ids[row], matrix.cids[col - lead]
+
+    def grid_cell_plays(self, row: int, col: int) -> bool:
+        """Whether a click on this CORNERS BY LAP cell plays a pass: a corner cell with a time,
+        matched on track at both edges (CentralView.lap_pass_refusal's rule, read off the grid)."""
+        got = self.grid_pass_at(row, col)
+        if got is None:
+            return False
+        m = self._corner_matrix
+        r, c = m.lap_ids.index(got[0]), m.cids.index(got[1])
+        return m.cells[r][c] is not None and bool(m.resolved[r][c])
+
+    def eventFilter(self, obj, event):
+        grid = getattr(self, "corner_grid_table", None)
+        if grid is not None and obj is grid.viewport() and event.type() == QEvent.MouseMove:
+            index = grid.indexAt(event.position().toPoint())
+            plays = index.isValid() and self.grid_cell_plays(index.row(), index.column())
+            obj.setCursor(Qt.PointingHandCursor if plays else Qt.ArrowCursor)
+        return super().eventFilter(obj, event)
 
     def _on_corner_grid_clicked(self, row: int, col: int):
         got = self.grid_pass_at(row, col)

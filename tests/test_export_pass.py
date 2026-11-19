@@ -294,7 +294,9 @@ def _window():
         QTest.keyClick(win, Qt.Key_Escape)   # leave the debrief landing
         _settle(0.1)
         win._share_card_blocked = lambda: False
-        win.view.video.play_clip = lambda start, end: None
+        # The inert player does not move, but it still TAKES the pass (`set_clip`, play_clip's
+        # last step): the pass being studied is the one the player holds (cool/play-every-pass).
+        win.view.video.play_clip = lambda start, end: win.view.video.pane.set_clip(start, end)
         _DEMO["win"] = win
     return _DEMO["win"]
 
