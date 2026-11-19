@@ -1505,19 +1505,28 @@ def pb_series(index: dict, track: str) -> list[tuple[str, float]]:
     entries (provisional / degraded / dropout — see ``is_trustworthy``) are dropped too, so a
     meaningless "best" never appears in the progression or sets its floor. Legacy trusted-unknown
     entries stay in (back-compat)."""
+    return sorted(((d, best) for d, _start, best in pb_points(index, track)),
+                  key=lambda p: (p[0], p[1]))
+
+
+def pb_points(index: dict, track: str) -> list[tuple[str, int | None, float]]:
+    """``pb_series``'s rows with each row's first-fix clock: ``[(date, start_ms, best), ...]``,
+    in the order the sessions were driven — by date, then by ``start_ms`` within a date (a race
+    day is several heats on one date), rows with no stored start after those with one, by best.
+    The PB chart places a day's sessions in this order (``library_dialog``)."""
     pts = [
-        (e["date"], float(e["best"]))
+        (e["date"], _start_ms(e), float(e["best"]))
         for e in index.get("entries", [])
         if e.get("track") == track and e.get("date") and e.get("best") is not None
         and is_trustworthy(e)
     ]
-    pts.sort(key=lambda p: (p[0], p[1]))
+    pts.sort(key=lambda p: (p[0], p[1] is None, p[1] or 0, p[2]))
     return pts
 
 
 def track_summary(index: dict, track: str) -> dict | None:
     """A compact cross-session progress read for one `track`, for the library header line. Reuses
-    the index + ``pb_series`` (no new cross-session corner analytics). Returns None when `track` is
+    the index + ``pb_points`` (no new cross-session corner analytics). Returns None when `track` is
     falsy; otherwise::
 
         {"track", "sessions",     # total library rows for this track (all, trustworthy or not)
@@ -1525,7 +1534,7 @@ def track_summary(index: dict, track: str) -> dict | None:
          "pb_count",              # count of LATER sessions that BEAT the running best
          "trend"}                 # "improving" | "stalled" | "single" | "none"
 
-    ``best``/``pb_count``/``trend`` come from the TRUSTWORTHY dated series only (``pb_series``), so a
+    ``best``/``pb_count``/``trend`` come from the TRUSTWORTHY dated series only (``pb_points``), so a
     provisional/degraded/dropout "best" never inflates the read; ``sessions`` counts every row so the
     header is honest about the whole library ("12 sessions · best … · 3 PBs"). ``pb_count`` is the
     number of times a LATER session beat the running best — the FIRST session seeds the baseline and
@@ -1535,7 +1544,12 @@ def track_summary(index: dict, track: str) -> dict | None:
     if not track:
         return None
     sessions = sum(1 for e in index.get("entries", []) if e.get("track") == track)
-    series = pb_series(index, track)          # trustworthy, dated, sorted ascending by date
+    # Trustworthy, dated, in the order the sessions were DRIVEN (`pb_points`: by date, then by the
+    # first fix's clock): on a race day "a later session beat the running best" and "the latest
+    # session holds the best" are questions about the heats' order, not their lap times — the
+    # (date, best) order of `pb_series` called heats driven 45.30 then 44.95 "off your PB" beside
+    # a chart drawing them improving (cool/library-same-day review).
+    series = [(d, b) for d, _start, b in pb_points(index, track)]
     if not series:
         return {"track": track, "sessions": sessions, "best": None, "best_date": None,
                 "pb_count": 0, "trend": "none"}

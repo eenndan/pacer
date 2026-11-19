@@ -795,7 +795,7 @@ class CentralView(QWidget):
         # pass through each corner, one click from the video). `corner_table` stays the Lap view.
         self.corners_page = CornersPage(self.session)
         self.corner_table = self.corners_page.lap_view
-        self.corners_page.quickest.pass_requested.connect(self.play_corner_pass)
+        self.corners_page.quickest.pass_requested.connect(self._play_quickest_row)
         self.corners_page.view_changed.connect(self._on_corners_view_changed)
         # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
         self.video.clipEnded.connect(self._on_clip_ended)
@@ -1868,6 +1868,11 @@ class CentralView(QWidget):
 
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
+
+    def _play_quickest_row(self, lap_id: int, cid: int, status: str) -> None:
+        """A Quickest passes row's play: its pass, and its status line says the pass it names can
+        be exported (⌘K lists "Export the C3 pass — lap 13…" exactly while the row names it)."""
+        self.play_corner_pass(lap_id, cid, f"{status} · ⌘K: export this pass" if status else "")
 
     def play_corner_pass(self, lap_id: int, cid: int, status: str = "") -> bool:
         """The Corners tab's Quickest passes: show lap `lap_id`'s pass through corner `cid` and PLAY
