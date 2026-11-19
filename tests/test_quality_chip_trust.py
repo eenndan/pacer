@@ -76,11 +76,9 @@ def _host(view):
     play/pause there) — `__new__` + `_build_shortcuts`, the seam test_command_palette uses, so no
     recording loads and no menu is built.
 
-    1280x520 is not arbitrary: measured on all three states, it is the size at which the Stats
-    page's viewport (~250 px) is shorter than the run-up to the DATA TRUST card on EVERY one of
-    them, so `_scroll_page_away` really can put the card out of reach. At 640 the two real samples'
-    pages are short enough that the card stays on screen at the bottom of the scroll, and the
-    navigation assertions would pass without anything having moved."""
+    1280x520 asks for less than the window's own floor (~520-560 px, by state), so the window
+    opens as short as the app allows it; the Stats viewport is then ~240-260 px. That is not
+    always short enough for the card to leave the screen — see `_shortest_stats_view`."""
     from studio.app import StudioWindow
     win = StudioWindow.__new__(StudioWindow)
     QMainWindow.__init__(win)
@@ -137,6 +135,27 @@ def _in_viewport(scroll, widget) -> bool:
 
 def _trust_heading(stats):
     return next(w for w in stats.findChildren(QLabel) if w.text() == "DATA TRUST")
+
+
+def _shortest_stats_view(view):
+    """Drag the video | lap-panel splitter down until the lap panel sits on its own floor (the
+    5-row minimum `CentralView` gives it) — the shortest Stats viewport a reader can make, and
+    the one in which the most states' DATA TRUST card can be scrolled out of view.
+
+    WHY: the window cannot go shorter (it opens at its floor already), and a short page's card
+    stays on screen at the bottom of the scroll. Measured at the window's floor, heading y in the
+    page / page height / viewport → heading y at the bottom of the scroll:
+        hero6   main 222 / 498 / 259 → -17 (off)   after #623's even gaps 222 / 466 / 259 → +15 (on)
+        karma   main 222 / 434 / 247 → +35 (on)                           222 / 402 / 247 → +67 (on)
+        GPS LOW off on both (a 2.5k px page)
+    #623 removed the tile grids' trailing margins, so hero6's lapless page lost 32 px and its
+    card came on screen: 3 of 9 runs scrolled. With the panel on its floor (viewport 196 px, the
+    pages unchanged) hero6 is off again (-48) and karma still on (+16): 6 of 9, main's count
+    at the window's floor (main's longer pages scroll all 9 here).
+    The splitter is clamped by the app's own minimum, so this follows the layout, not a number."""
+    split = view._left_splitter
+    split.setSizes([sum(split.sizes()), 0])   # clamped to the panel's minimum height
+    _settle()
 
 
 def _scroll_page_away(view):
@@ -335,6 +354,7 @@ def test_activating_the_chip_opens_data_trust_at_the_row_it_is_about():
                 assert isinstance(chip, QAbstractButton), (
                     f"{name}: the chip is a static {type(chip).__name__} — there is nothing to "
                     f"activate")
+                _shortest_stats_view(view)
                 was, hidden = _scroll_page_away(view)
                 scrolled_to += int(hidden)
                 if how == "click":
