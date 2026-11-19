@@ -2,13 +2,13 @@
   "about": "One entry per file in this directory, written by studio/dev/media_capture.py after each capture and checked by tests/test_version.py. version and commit: the app the pixels came from (commit is the HEAD the capture ran on, '+dirty' when studio/ or pacer/ had uncommitted changes; entries backfilled on 2026-09-30 name the commit that added the file). source: a label, never a path. derived: the published file this one was cut from, whose version, commit and waiver it carries. waiver: why a file older than this minor release stays, and the version it was granted at; it lapses at the next minor release.",
   "files": {
     "accuracy.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "5401cd4772397fb2bc6177d66a90729da19e7ce4d66d3d664e6499c2b9b0f1fe",
       "shot": "accuracy",
       "source": "numbers in code",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "best-lap.jpg": {
@@ -20,8 +20,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.15.0",
-        "reason": "not re-rendered at 0.15.0: the source recording (Sandown 3h) is not on this machine; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.12.0 did change export code: the Broadcast style's plates (#585: export_video.py, studio/overlay/) and the ProRes encoder's probe and pinning (#584); neither reaches a Classic export: a painter-level render on the demo of 192 Classic configurations (no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes; lap and whole-recording), 8 frames each overlay-only and composited (3,072 frames), from a v0.11.0 studio/ and from 0.12.0 is byte-identical (one digest, f60fdce7…); 0.13.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.12.0), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.12.0's studio/ and from 0.13.0 is byte-identical (one digest, 1bd1ddfd…); 0.14.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.13.1), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.13.1's studio/ and from 0.14.0 is byte-identical (one digest, 1bd1ddfd…); 0.15.0 did change export code: a Classic Δ printed under the 0.07 s timing step is drawn in the clock's white (#611, the owner's design 3A, 2026-11-18); a painter-level render on the demo of 72 Classic configurations (the best lap, lap 6 and lap 7; no Extras, and the ghost with the corner cards; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes) and 18 Broadcast ones (the same laps; 1080; the three shapes; km/h and mph), 8 frames each, overlay-only and composited (1,440 frames), from v0.14.0's studio/ and from 0.15.0 is byte-identical on the best lap (one digest, 534c5a7b…) and on every Broadcast frame (9f7ba0e1… and f9cb9e8c…), and differs on all 48 Classic configurations of laps 6 and 7, where 120 of 1,534 and 716 of 1,359 frames carry a level Δ; the clip is the best lap's own export, which never shows a Δ (★ BEST), so that change does not reach it; so 0.10.0's reason stands: the pages show the default Classic look; the Broadcast style and the Extras are not shown"
+        "granted_at": "0.16.0",
+        "reason": "not re-rendered at 0.16.0: the source recording (Sandown 3h) is not on this machine; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.12.0 did change export code: the Broadcast style's plates (#585: export_video.py, studio/overlay/) and the ProRes encoder's probe and pinning (#584); neither reaches a Classic export: a painter-level render on the demo of 192 Classic configurations (no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes; lap and whole-recording), 8 frames each overlay-only and composited (3,072 frames), from a v0.11.0 studio/ and from 0.12.0 is byte-identical (one digest, f60fdce7…); 0.13.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.12.0), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.12.0's studio/ and from 0.13.0 is byte-identical (one digest, 1bd1ddfd…); 0.14.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.13.1), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.13.1's studio/ and from 0.14.0 is byte-identical (one digest, 1bd1ddfd…); 0.15.0 did change export code: a Classic Δ printed under the 0.07 s timing step is drawn in the clock's white (#611, the owner's design 3A, 2026-11-18); a painter-level render on the demo of 72 Classic configurations (the best lap, lap 6 and lap 7; no Extras, and the ghost with the corner cards; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes) and 18 Broadcast ones (the same laps; 1080; the three shapes; km/h and mph), 8 frames each, overlay-only and composited (1,440 frames), from v0.14.0's studio/ and from 0.15.0 is byte-identical on the best lap (one digest, 534c5a7b…) and on every Broadcast frame (9f7ba0e1… and f9cb9e8c…), and differs on all 48 Classic configurations of laps 6 and 7, where 120 of 1,534 and 716 of 1,359 frames carry a level Δ; the clip is the best lap's own export, which never shows a Δ (★ BEST), so that change does not reach it; so 0.10.0's reason stands: the pages show the default Classic look; the Broadcast style and the Extras are not shown; 0.16.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.15.0; its one pull request, #614, is the Corners tab's Quickest passes view and the player's clip end), so 0.15.0's reason stands"
       }
     },
     "best-lap.mp4": {
@@ -33,8 +33,8 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.2.0",
       "waiver": {
-        "granted_at": "0.15.0",
-        "reason": "not re-rendered at 0.15.0: the source recording (Sandown 3h) is not on this machine; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.12.0 did change export code: the Broadcast style's plates (#585: export_video.py, studio/overlay/) and the ProRes encoder's probe and pinning (#584); neither reaches a Classic export: a painter-level render on the demo of 192 Classic configurations (no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes; lap and whole-recording), 8 frames each overlay-only and composited (3,072 frames), from a v0.11.0 studio/ and from 0.12.0 is byte-identical (one digest, f60fdce7…); 0.13.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.12.0), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.12.0's studio/ and from 0.13.0 is byte-identical (one digest, 1bd1ddfd…); 0.14.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.13.1), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.13.1's studio/ and from 0.14.0 is byte-identical (one digest, 1bd1ddfd…); 0.15.0 did change export code: a Classic Δ printed under the 0.07 s timing step is drawn in the clock's white (#611, the owner's design 3A, 2026-11-18); a painter-level render on the demo of 72 Classic configurations (the best lap, lap 6 and lap 7; no Extras, and the ghost with the corner cards; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes) and 18 Broadcast ones (the same laps; 1080; the three shapes; km/h and mph), 8 frames each, overlay-only and composited (1,440 frames), from v0.14.0's studio/ and from 0.15.0 is byte-identical on the best lap (one digest, 534c5a7b…) and on every Broadcast frame (9f7ba0e1… and f9cb9e8c…), and differs on all 48 Classic configurations of laps 6 and 7, where 120 of 1,534 and 716 of 1,359 frames carry a level Δ; the clip is the best lap's own export, which never shows a Δ (★ BEST), so that change does not reach it; so 0.10.0's reason stands: the pages show the default Classic look; the Broadcast style and the Extras are not shown"
+        "granted_at": "0.16.0",
+        "reason": "not re-rendered at 0.16.0: the source recording (Sandown 3h) is not on this machine; captured at 0.2.0 (acf6b0c) by the export renderer; 0.6.0's export of overlay.jpg's frame differed from it in the track-map inset (0.48 % of decoded pixels), and 0.6.1 moved the overlay's Δ onto on-track alignment (#512), so the clip's Δ readout likely differs from a current export; 0.12.0 did change export code: the Broadcast style's plates (#585: export_video.py, studio/overlay/) and the ProRes encoder's probe and pinning (#584); neither reaches a Classic export: a painter-level render on the demo of 192 Classic configurations (no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes; lap and whole-recording), 8 frames each overlay-only and composited (3,072 frames), from a v0.11.0 studio/ and from 0.12.0 is byte-identical (one digest, f60fdce7…); 0.13.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.12.0), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.12.0's studio/ and from 0.13.0 is byte-identical (one digest, 1bd1ddfd…); 0.14.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.13.1), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.13.1's studio/ and from 0.14.0 is byte-identical (one digest, 1bd1ddfd…); 0.15.0 did change export code: a Classic Δ printed under the 0.07 s timing step is drawn in the clock's white (#611, the owner's design 3A, 2026-11-18); a painter-level render on the demo of 72 Classic configurations (the best lap, lap 6 and lap 7; no Extras, and the ghost with the corner cards; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes) and 18 Broadcast ones (the same laps; 1080; the three shapes; km/h and mph), 8 frames each, overlay-only and composited (1,440 frames), from v0.14.0's studio/ and from 0.15.0 is byte-identical on the best lap (one digest, 534c5a7b…) and on every Broadcast frame (9f7ba0e1… and f9cb9e8c…), and differs on all 48 Classic configurations of laps 6 and 7, where 120 of 1,534 and 716 of 1,359 frames carry a level Δ; the clip is the best lap's own export, which never shows a Δ (★ BEST), so that change does not reach it; so 0.10.0's reason stands: the pages show the default Classic look; the Broadcast style and the Extras are not shown; 0.16.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.15.0; its one pull request, #614, is the Corners tab's Quickest passes view and the player's clip end), so 0.15.0's reason stands"
       }
     },
     "data-trust.png": {
@@ -46,28 +46,28 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.5.0",
       "waiver": {
-        "granted_at": "0.15.0",
-        "reason": "not re-rendered at 0.15.0: the source recording (Sandown 3h) is not on this machine; captured at 0.5.0 (9e8083f); 0.15.0 changed no Stats page code (stats*.py and stats_panel.py are untouched since v0.14.0; its Coaching theme change, coaching.py #607, is outside both shots); a demo render of both shots from v0.14.0's studio/ and from 0.15.0 is byte-identical (ideal-lap 95a7e0d5…, data-trust 96e93806…, the digests of 0.11.0's to 0.14.0's A/Bs)"
+        "granted_at": "0.16.0",
+        "reason": "not re-rendered at 0.16.0: the source recording (Sandown 3h) is not on this machine; captured at 0.5.0 (9e8083f); 0.15.0 changed no Stats page code (stats*.py and stats_panel.py are untouched since v0.14.0; its Coaching theme change, coaching.py #607, is outside both shots); a demo render of both shots from v0.14.0's studio/ and from 0.15.0 is byte-identical (ideal-lap 95a7e0d5…, data-trust 96e93806…, the digests of 0.11.0's to 0.14.0's A/Bs); 0.16.0 changed no Stats page output (stats.py gained the Corners tab's quickest_passes, and the session moments' level rule moved into it unchanged as is_level; stats_panel.py is untouched since v0.15.0; a Stats page dump on the demo, 261,625 leaves, from v0.15.0's studio/ and from 0.16.0 is equivalent); a demo render of both shots from v0.15.0's studio/ and from 0.16.0 is byte-identical (ideal-lap 95a7e0d5…, data-trust 96e93806…, the digests of 0.11.0's to 0.15.0's A/Bs)"
       }
     },
     "debrief.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "3890c052b9bae65e9ab28a4d416f49b84155fb9780371f3c6521910369a73802",
       "shot": "debrief",
       "source": "synthetic demo",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "hero.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "3fb1491b32d02045b2290ed33a6fa61d67a339e3a6a3c55bd383ca4e50024da2",
       "shot": "hero",
       "source": "synthetic demo (pacer-demo)",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "ideal-lap.png": {
@@ -79,48 +79,48 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.15.0",
-        "reason": "not re-rendered at 0.15.0: the source recording (Sandown 3h) is not on this machine; captured at 0.6.0 (52fe638); 0.15.0 changed no Stats page code (stats*.py and stats_panel.py are untouched since v0.14.0; its Coaching theme change, coaching.py #607, is outside both shots); a demo render of both shots from v0.14.0's studio/ and from 0.15.0 is byte-identical (ideal-lap 95a7e0d5…, data-trust 96e93806…, the digests of 0.11.0's to 0.14.0's A/Bs)"
+        "granted_at": "0.16.0",
+        "reason": "not re-rendered at 0.16.0: the source recording (Sandown 3h) is not on this machine; captured at 0.6.0 (52fe638); 0.15.0 changed no Stats page code (stats*.py and stats_panel.py are untouched since v0.14.0; its Coaching theme change, coaching.py #607, is outside both shots); a demo render of both shots from v0.14.0's studio/ and from 0.15.0 is byte-identical (ideal-lap 95a7e0d5…, data-trust 96e93806…, the digests of 0.11.0's to 0.14.0's A/Bs); 0.16.0 changed no Stats page output (stats.py gained the Corners tab's quickest_passes, and the session moments' level rule moved into it unchanged as is_level; stats_panel.py is untouched since v0.15.0; a Stats page dump on the demo, 261,625 leaves, from v0.15.0's studio/ and from 0.16.0 is equivalent); a demo render of both shots from v0.15.0's studio/ and from 0.16.0 is byte-identical (ideal-lap 95a7e0d5…, data-trust 96e93806…, the digests of 0.11.0's to 0.15.0's A/Bs)"
       }
     },
     "lapstrip.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "d77cc79e5f9b8ba64a058df4aea0da838adf4cb8598989fec91fe2a1b97961ca",
       "shot": "lapstrip",
       "source": "synthetic demo",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "map.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "e3373fcd34edc44398f43857f400e77ab9140ca27fc63e44b243884677296180",
       "shot": "map",
       "source": "synthetic demo (pacer-demo)",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "moments.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "778d5cb5af4a9cd26124f6e9791d2198756705f0661f2002897911233804b4f1",
       "shot": "moments",
       "source": "synthetic demo",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "og.png": {
-      "captured": "2026-11-18",
-      "commit": "5bea72b",
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
       "sha256": "2a4a6ae1482a49192fa582260765e86e3bae109cd7af952106eb1cb29cd1c30f",
       "shot": "og",
       "source": "hero.png",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     },
     "overlay.jpg": {
@@ -132,18 +132,28 @@
       "source": "Sandown 3h 2026 (GX010064)",
       "version": "0.6.0",
       "waiver": {
-        "granted_at": "0.15.0",
-        "reason": "not re-rendered at 0.15.0: the source recording (Sandown 3h) is not on this machine; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; at 0.10.0 a Classic export with no Extras, the dialog's defaults, decoded frame-identical to v0.9.0's (ffmpeg framemd5 equal on all 1365 frames of demo lap 4, the files byte-identical); 0.12.0 did change export code: the Broadcast style's plates (#585: export_video.py, studio/overlay/) and the ProRes encoder's probe and pinning (#584); neither reaches a Classic export: a painter-level render on the demo of 192 Classic configurations (no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes; lap and whole-recording), 8 frames each overlay-only and composited (3,072 frames), from a v0.11.0 studio/ and from 0.12.0 is byte-identical (one digest, f60fdce7…); 0.13.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.12.0), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.12.0's studio/ and from 0.13.0 is byte-identical (one digest, 1bd1ddfd…); 0.14.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.13.1), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.13.1's studio/ and from 0.14.0 is byte-identical (one digest, 1bd1ddfd…); 0.15.0 did change export code: a Classic Δ printed under the 0.07 s timing step is drawn in the clock's white (#611, the owner's design 3A, 2026-11-18); a painter-level render on the demo of 72 Classic configurations (the best lap, lap 6 and lap 7; no Extras, and the ghost with the corner cards; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes) and 18 Broadcast ones (the same laps; 1080; the three shapes; km/h and mph), 8 frames each, overlay-only and composited (1,440 frames), from v0.14.0's studio/ and from 0.15.0 is byte-identical on the best lap (one digest, 534c5a7b…) and on every Broadcast frame (9f7ba0e1… and f9cb9e8c…), and differs on all 48 Classic configurations of laps 6 and 7, where 120 of 1,534 and 716 of 1,359 frames carry a level Δ; so 0.10.0's reason stands for everything in this frame but one: the pages show the default Classic look; the Broadcast style and the Extras are not shown; the exception is that change: a current export draws this frame's \"Δ +0.05\" white, not red, with the same number, sign and place; re-shooting it needs real footage that is not on this machine"
+        "granted_at": "0.16.0",
+        "reason": "not re-rendered at 0.16.0: the source recording (Sandown 3h) is not on this machine; captured at 0.6.0 on 2026-10-03 (fa96c7f), after the Δ alignment of #512; at 0.10.0 a Classic export with no Extras, the dialog's defaults, decoded frame-identical to v0.9.0's (ffmpeg framemd5 equal on all 1365 frames of demo lap 4, the files byte-identical); 0.12.0 did change export code: the Broadcast style's plates (#585: export_video.py, studio/overlay/) and the ProRes encoder's probe and pinning (#584); neither reaches a Classic export: a painter-level render on the demo of 192 Classic configurations (no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes; lap and whole-recording), 8 frames each overlay-only and composited (3,072 frames), from a v0.11.0 studio/ and from 0.12.0 is byte-identical (one digest, f60fdce7…); 0.13.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.12.0), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.12.0's studio/ and from 0.13.0 is byte-identical (one digest, 1bd1ddfd…); 0.14.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.13.1), and a painter-level render on the demo of 96 Classic configurations (the best lap and lap 6; no Extras, the ghost, the corner cards, both; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes), 8 frames each, overlay-only and composited (1,536 frames), from v0.13.1's studio/ and from 0.14.0 is byte-identical (one digest, 1bd1ddfd…); 0.15.0 did change export code: a Classic Δ printed under the 0.07 s timing step is drawn in the clock's white (#611, the owner's design 3A, 2026-11-18); a painter-level render on the demo of 72 Classic configurations (the best lap, lap 6 and lap 7; no Extras, and the ghost with the corner cards; 1080 and 720; source, 9:16 and 1:1; km/h and mph; both palettes) and 18 Broadcast ones (the same laps; 1080; the three shapes; km/h and mph), 8 frames each, overlay-only and composited (1,440 frames), from v0.14.0's studio/ and from 0.15.0 is byte-identical on the best lap (one digest, 534c5a7b…) and on every Broadcast frame (9f7ba0e1… and f9cb9e8c…), and differs on all 48 Classic configurations of laps 6 and 7, where 120 of 1,534 and 716 of 1,359 frames carry a level Δ; so 0.10.0's reason stands for everything in this frame but one: the pages show the default Classic look; the Broadcast style and the Extras are not shown; the exception is that change: a current export draws this frame's \"Δ +0.05\" white, not red, with the same number, sign and place; re-shooting it needs real footage that is not on this machine; 0.16.0 changed no export-video code (export_video.py, studio/overlay/ and theme.py are untouched since v0.15.0; its one pull request, #614, is the Corners tab's Quickest passes view and the player's clip end), so 0.15.0's reason stands"
       }
     },
-    "report.png": {
-      "captured": "2026-11-18",
-      "commit": "2213532",
+    "quickest.png": {
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
       "derived": null,
-      "sha256": "d8d0a06b665ede50e720720e421b229fa5dd67a67b5e3c80d549cc2a556f7020",
+      "sha256": "4c2a57bc906d0ee1ce8651748ee56a213563af5a14796ecf36b3f0b2bfb01f10",
+      "shot": "quickest",
+      "source": "synthetic demo",
+      "version": "0.16.0",
+      "waiver": null
+    },
+    "report.png": {
+      "captured": "2026-11-19",
+      "commit": "1ea3215",
+      "derived": null,
+      "sha256": "8e5cb748587bec1abc079cf03df4756c127525d6403589368008745f09f7155c",
       "shot": "report",
       "source": "synthetic demo",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "waiver": null
     }
   }
