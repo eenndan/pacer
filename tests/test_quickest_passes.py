@@ -46,11 +46,13 @@ def _grid(cols, resolved=None, ids=None):
 
 
 def test_a_tie_names_the_quickest_and_lists_the_level_laps_quickest_first():
-    rows = [[3.050, 2.0], [3.000, 2.5], [3.069, 2.6], [3.071, 2.7], [3.020, 2.8], [3.2, 2.9]]
+    rows = [[3.050, 2.0], [3.000, 2.5], [3.069, 2.6], [3.071, 2.7], [3.020, 2.8], [3.2, 2.9],
+            [3.070, 3.0]]
     qp = stats.quickest_passes(_grid(rows))
     c1, c2 = qp.passes
     assert (c1.time_s, c1.lap_id) == (3.000, 1)
-    # 3.020 (+0.020), 3.050 (+0.050), 3.069 (+0.069) are level; 3.071 (+0.071) is not
+    # 3.020 (+0.020), 3.050 (+0.050), 3.069 (+0.069) are level; 3.070 (EXACTLY the step) and
+    # 3.071 are not — the millisecond boundary the session moments use (see the boundary test)
     assert c1.level_laps == (4, 0, 2), c1
     assert c1.next_gap_s == 0.02 and not c1.alone
     assert c1.play_order() == (1, 4, 0, 2)
@@ -168,7 +170,9 @@ def test_the_switch_the_rows_and_the_tab_title():
         _settle()
         assert page.bar.isVisible() and page.view() == "lap"
         assert view.tab_bar.tabText(1).startswith("Corners · L")
-        assert page.lap_btn.text() == view.tab_bar.tabText(1).replace("Corners · L", "Lap ")
+        # the left chip names a VIEW too: "Lap 13 corners", the lap the tab title names
+        assert page.lap_btn.text() == view.tab_bar.tabText(1).replace("Corners · L", "Lap ") + \
+            " corners"
         page.quickest_btn.click()
         _settle()
         assert page.view() == "quickest" and prefs.corners_view() == "quickest"
@@ -231,14 +235,16 @@ def test_a_row_plays_its_pass_then_the_next_level_lap_and_wraps():
         assert view.table.selected_lap_ids() == [12]
         assert view.map.pinned_corner() == "C3"
         assert win.statusBar().currentMessage().startswith(
-            "Playing lap 13 through C3 — 5 more laps are level here: click C3 again")
+            "Playing lap 13 (2.32) through C3 — 5 more laps are level here: click C3 again")
         # again → the next level lap (7, id 6), named in the row and on the status bar
         q.table.cellClicked.emit(2, 3)
         _settle()
         assert plays[-1] == s.corners.pass_clip(6, 3)
-        assert q.table.item(2, 3).text() == "playing lap 7 · 2 of 6"
+        # the lap playing shows its OWN pass, not the quickest's 2.32 beside it (review fix 2)
+        assert q.table.item(2, 3).text() == "playing lap 7 (2.35) · 2 of 6"
         assert q.table.item(2, 2).text() == "13", "the Lap cell stays the quickest's lap"
-        assert "level pass 2 of 6" in win.statusBar().currentMessage()
+        assert win.statusBar().currentMessage().startswith(
+            "Playing lap 7 (2.35) through C3, level pass 2 of 6"), win.statusBar().currentMessage()
         # Return on the keyboard plays too, and the order wraps after the sixth
         q.table.setFocus()
         for _ in range(4):
@@ -262,6 +268,22 @@ def test_a_row_plays_its_pass_then_the_next_level_lap_and_wraps():
         prefs.set_corners_view("lap")
 
 
+def test_the_level_boundary_is_the_session_moments_own():
+    """Exactly at the step is NOT level, 1 ms inside is, 1 ms outside is not — on both steps, and
+    it is the same function `story` names its ties by (one rule, review fix 9)."""
+    from studio import story
+    assert story._level is stats.is_level
+    for step, est in ((PB_PRECISION_S, False), (0.15, True)):
+        ms = round(step * 1000)
+        rows = [[3.000], [3.000 + (ms - 1) / 1000], [3.000 + ms / 1000], [3.000 + (ms + 1) / 1000],
+                [3.5]]
+        qp = stats.quickest_passes(_grid(rows), clock_estimated=est).passes[0]
+        assert qp.level_laps == (1,), (step, qp)
+        assert qp.level_times == (3.000 + (ms - 1) / 1000,)
+        for gap, want in (((ms - 1) / 1000, True), (ms / 1000, False), ((ms + 1) / 1000, False)):
+            assert stats.is_level(gap, step) is want, (step, gap)
+
+
 def test_a_row_leaves_compare_first():
     prefs.set_corners_view("quickest")
     win = _window()
@@ -271,9 +293,167 @@ def test_a_row_leaves_compare_first():
         view.video.compare_btn.click()
         _settle()
         assert view._comparing()
-        view.corners_page.quickest.activate(0)
+        # C3's quickest is lap 13, the session best, which IS one of the compared pair: a lap
+        # pick of a compared lap does not leave compare, so only the row's own exit can
+        pair = (view.compare.lap_a, view.compare.lap_b)
+        assert 12 in pair, pair
+        view.corners_page.quickest.activate(2)
         _settle()
-        assert not view._comparing() and len(plays) == 1
+        assert not view._comparing() and plays == [win.session.corners.pass_clip(12, 3)]
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_row_ends_a_lap_race():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        plays = _record_plays(view)
+        assert view.start_lap_race(), "the demo could not start a Lap race"
+        _settle()
+        assert view.is_racing()
+        view.corners_page.quickest.activate(4)
+        _settle()
+        assert not view.is_racing() and plays == [win.session.corners.pass_clip(9, 5)]
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_cell_says_playing_only_while_the_clip_runs():
+    """Review fix 5: "playing lap 7 (2.35) · 2 of 6" while the clip runs; "lap 7 (2.35) · 2 of 6"
+    once it has ended (the auto-pause) or been left; the count again once another lap is picked."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        q = view.corners_page.quickest
+        plays = _record_plays(view)
+        q.activate(2)
+        q.activate(2)
+        assert len(plays) == 2
+        assert q.table.item(2, 3).text() == "playing lap 7 (2.35) · 2 of 6"
+        view.video.clipEnded.emit()          # the player paused at the clip end / was left
+        _settle()
+        assert q.table.item(2, 3).text() == "lap 7 (2.35) · 2 of 6"
+        view.table.laps_selected.emit([3])   # the driver picks lap 4 in the Laps table
+        _settle()
+        assert q.table.item(2, 3).text() == "5 more laps"
+        q.activate(2)                        # ...and C3 starts from its quickest again
+        assert plays[-1] == win.session.corners.pass_clip(12, 3)
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_real_pane_reports_the_clip_ending_once():
+    pane = _pane()
+    ended = []
+    pane.clipEnded.connect(lambda: ended.append(True))
+    pane.seek(10.0)
+    pane.play()
+    pane.set_clip_end(15.0)
+    pane._on_position(15_000)
+    assert ended == [True]
+    pane.seek(3.0)                       # no clip left to end
+    assert ended == [True]
+    pane.set_clip_end(20.0)
+    pane.seek(4.0)                       # a scrub ends this one
+    assert ended == [True, True]
+
+
+def test_showing_the_quickest_view_hands_it_the_keys():
+    """Review fix 8: the switch, key 2 onto the remembered view, and the command all leave the
+    table focused with a current row, so the arrow keys and Return work at once."""
+    prefs.set_corners_view("lap")
+    win = _window()
+    try:
+        view = win.view
+        page = view.corners_page
+        plays = _record_plays(view)
+        view.select_lap_tab(1)
+        _settle()
+        page.quickest_btn.click()
+        _settle()
+        t = page.quickest.table
+        assert t.hasFocus() and t.currentRow() == 0, (t.hasFocus(), t.currentRow())
+        assert plays == [], "showing the view plays nothing"
+        QTest.keyClick(t, Qt.Key_Down)
+        QTest.keyClick(t, Qt.Key_Return)
+        assert plays == [win.session.corners.pass_clip(10, 2)], plays
+        # key 2 onto the remembered Quickest view, from another tab
+        view.select_lap_tab(0)
+        view.table.table.setFocus()
+        _settle()
+        QTest.keyClick(win, Qt.Key_2)
+        _settle()
+        assert view.tab_bar.currentIndex() == 1 and t.hasFocus()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_coaching_jump_shows_the_lap_view():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        page = win.view.corners_page
+        assert page.view() == "quickest"
+        win._jump_to_opportunity(3, 0.0)
+        _settle()
+        assert win.view.tab_bar.currentIndex() == 1
+        assert page.view() == "lap" and page.stack.currentWidget() is page.lap_view
+        assert prefs.corners_view() == "quickest", "a jump navigates; it does not choose the view"
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_rebuild_refreshes_the_view_and_the_command_rows():
+    """M8: a rebuild (a re-segment, a reference change) re-reads the grid — on screen at once, and
+    off screen before the next time it is shown or the command palette lists it."""
+    from studio import command_palette
+
+    def titles(win):
+        return [e.title for e in command_palette.entries(win) if e.title.startswith("Quickest ")]
+
+    for shown in ("quickest", "lap"):
+        prefs.set_corners_view(shown)
+        win = _window()
+        try:
+            s, view = win.session, win.view
+            assert "Quickest C3 — lap 13" in titles(win)
+            orig = s.consistency_lap_ids
+            s.consistency_lap_ids = lambda orig=orig: [i for i in orig() if i != 12]
+            try:
+                view.rebuild_derived_views()
+                _settle()
+                got = titles(win)
+                assert "Quickest C3 — lap 7" in got and "Quickest C3 — lap 13" not in got, (shown,
+                                                                                         got)
+                view.corners_page.set_view("quickest", remember=False)
+                t = view.corners_page.quickest.table
+                assert t.item(2, 2).text() == "7", (shown, t.item(2, 2).text())
+            finally:
+                s.consistency_lap_ids = orig
+        finally:
+            _close(win)
+    prefs.set_corners_view("lap")
+
+
+def test_a_tie_says_why_it_has_no_star():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        t = win.view.corners_page.quickest.table
+        assert t.item(2, 1).toolTip() == ("5 more laps are level within 0.07 s, so no ★: here it "
+                                          "marks a quickest pass no other lap matches."), \
+            t.item(2, 1).toolTip()
+        assert "no other lap took this corner" in t.item(4, 1).toolTip()   # the lone C5
+        hdr = t.horizontalHeaderItem(3)
+        assert hdr.textAlignment() & Qt.AlignLeft, "Level with sits over its left-aligned words"
     finally:
         _close(win)
         prefs.set_corners_view("lap")
@@ -341,6 +521,11 @@ def test_cmd_k_lists_one_quickest_row_per_corner_and_runs_it():
         rows[2].run()
         _settle()
         assert plays[-1] == win.session.corners.pass_clip(12, 3)
+        # run again: still the lap the command NAMES (a row click would cycle to lap 7)
+        rows[2].run()
+        _settle()
+        assert plays[-1] == win.session.corners.pass_clip(12, 3), plays
+        assert win.view.corners_page.quickest.playing() == (3, 12)
         assert win.view.tab_bar.currentIndex() == 1
         assert win.view.corners_page.view() == "quickest"
         assert prefs.corners_view() == "lap", "a command shows the view, it does not choose it"

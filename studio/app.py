@@ -1183,11 +1183,14 @@ class StudioWindow(QMainWindow):
 
     def _start_load_worker(self, token: int, paths: list[str]):
         """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
-        # Free any Qt garbage held in reference cycles HERE, on the GUI thread, before a worker
-        # starts allocating: Python's cyclic GC runs on whichever thread trips its threshold, and
-        # a widget it frees on the load worker's thread crashed or deadlocked in ~QTableView
-        # (test_studio_features' reentrant load, measured with 441 cyclic Qt/studio objects from
-        # earlier windows pending: LapTable's own closures hold it in cycles).
+        # A MITIGATION, not a cure. Python's cyclic GC runs on whichever thread trips its
+        # threshold, and Qt widgets held only by reference cycles (LapTable's own closures hold
+        # it in some) crash or deadlock in ~QTableView when that thread is a load worker's —
+        # test_studio_features' reentrant load did, 3 runs of 3, with 441 cyclic Qt/studio objects
+        # from earlier windows pending; main has the same hazard under a forced worker collect.
+        # Collecting HERE frees what is pending when a load starts, on the GUI thread. Garbage made
+        # while a load runs, and the other worker threads (export, demo resolve), stay exposed:
+        # the cure is fewer cycles. tests/test_load_worker_gc.py pins this collect.
         gc.collect()
         worker = SessionLoadWorker(token, paths)
         self._load_worker = worker  # the current worker
@@ -3009,15 +3012,16 @@ class StudioWindow(QMainWindow):
         for qp in page.quickest.passes():
             if qp.lap_id is None:
                 continue
-            label = page.quickest._labels.get(qp.cid, f"C{qp.cid}")
+            label = page.quickest.corner_label(qp.cid)
             out.append((f"Quickest {label} — lap {lap_label(qp.lap_id)}",
                         lambda cid=qp.cid: self.play_quickest_pass(cid)))
         return out
 
     def play_quickest_pass(self, cid: int) -> bool:
-        """Play the quickest pass through corner `cid` from Corners ▸ Quickest passes — as a click
-        on its row, so a second run plays the next level lap. Shows that view (navigation: neither
-        the remembered tab nor the remembered view changes)."""
+        """Play the quickest pass through corner `cid` from Corners ▸ Quickest passes: always the
+        lap the command names (a row click cycles; the command does not), restarting that row's
+        cycle there. Shows that view (navigation: neither the remembered tab nor the remembered
+        view changes)."""
         view = getattr(self, "view", None)
         page = getattr(view, "corners_page", None)
         if page is None:
@@ -3028,7 +3032,7 @@ class StudioWindow(QMainWindow):
             view.select_lap_tab(1)
         finally:
             self._jumping = False
-        return page.quickest.activate(page.quickest.row_of(cid))
+        return page.quickest.play_named(page.quickest.row_of(cid))
 
     def show_stats_tab(self):
         """Lap panel ▸ Stats (3). Not the same as View ▸ Session statistics, which also MAXIMIZES

@@ -705,6 +705,16 @@ def rolling_level_floor(clock_estimated: bool) -> float:
     return ESTIMATED_CLOCK_TIE_S if clock_estimated else PB_PRECISION_S
 
 
+def is_level(gap_s: float, floor: float) -> bool:
+    """Whether two figures `gap_s` apart are LEVEL under the step `floor`: strictly closer than it,
+    the gap read to the millisecond. At `library.PB_PRECISION_S` that is
+    `within_timing_precision` (exactly 0.070 apart is NOT level, 0.069 is); under an estimated
+    clock's wider step the same strict rule on the gap rounded to 1 ms. The one rule the session
+    moments (`story`) and the Corners tab's Quickest passes name a tie by."""
+    return (within_timing_precision(gap_s) if floor == PB_PRECISION_S
+            else abs(round(gap_s, 3)) < floor)
+
+
 def rolling_caption(rolling: float | None, best: float | None, clock_estimated: bool = False
                     ) -> str:
     """"best rolling", or "best rolling · level" when both exist and sit closer than
@@ -1973,6 +1983,7 @@ class QuickestPass:
     level_laps: tuple[int, ...]
     next_gap_s: float | None
     n_counted: int
+    level_times: tuple[float, ...] = ()   # each level lap's own pass, aligned with level_laps
 
     @property
     def alone(self) -> bool:
@@ -1983,6 +1994,12 @@ class QuickestPass:
     def play_order(self) -> tuple[int, ...]:
         """The laps the view plays on repeated activation: the quickest, then each level lap."""
         return () if self.lap_id is None else (self.lap_id, *self.level_laps)
+
+    def pass_time(self, k: int) -> float | None:
+        """The time of `play_order()[k]`'s own pass through the corner."""
+        if self.time_s is None:
+            return None
+        return self.time_s if k == 0 else self.level_times[k - 1]
 
 
 @dataclass(frozen=True)
@@ -2020,15 +2037,15 @@ def quickest_passes(matrix: CornerMatrix | None, *, clock_estimated: bool = Fals
                          for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
                          if (val := row[col]) is not None and res[col])
         if not counted:
-            out.append(QuickestPass(cid, None, None, (), None, 0))
+            out.append(QuickestPass(cid, None, None, (), None, 0, ()))
             continue
         best, lap = counted[0]
         gaps = [(_ms(t) - _ms(best)) / 1000 for t, _ in counted[1:]]
-        level = tuple(lp for (_, lp), g in zip(counted[1:], gaps, strict=True)
-                      if (within_timing_precision(g) if level_s == PB_PRECISION_S
-                          else abs(round(g, 3)) < level_s))
-        out.append(QuickestPass(cid, best, lap, level, round(gaps[0], 3) if gaps else None,
-                                len(counted)))
+        level = [(lp, t) for (t, lp), g in zip(counted[1:], gaps, strict=True)
+                 if is_level(g, level_s)]
+        out.append(QuickestPass(cid, best, lap, tuple(lp for lp, _ in level),
+                                round(gaps[0], 3) if gaps else None, len(counted),
+                                tuple(t for _, t in level)))
     return QuickestPasses(out, level_s, tuple(sorted(partial)))
 
 

@@ -797,6 +797,8 @@ class CentralView(QWidget):
         self.corner_table = self.corners_page.lap_view
         self.corners_page.quickest.pass_requested.connect(self.play_corner_pass)
         self.corners_page.view_changed.connect(self._on_corners_view_changed)
+        # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
+        self.video.clipEnded.connect(self._on_clip_ended)
         # B4: a Corners row rings its apex on the map, like the Stats CORNERS and Coaching
         # rows — the same maximize-aware handler, so the three surfaces behave identically.
         self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
@@ -1755,6 +1757,7 @@ class CentralView(QWidget):
     def _on_user_select(self, ids):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._drop_owned_ring()
+        self._forget_quickest_cycle()   # another lap picked: the Quickest row goes back to its count
         self._on_laps_selected(ids, seek=True)
 
     # ONE OWNED RING, for the two surfaces whose ring belongs to a lap rather than to a corner row:
@@ -1787,6 +1790,10 @@ class CentralView(QWidget):
         self.table_stack.setCurrentIndex(index)
         if index == 1:
             self.corner_table.set_lap(self._corner_lap)
+            # Key 2 onto the remembered Quickest view: its rows take the keys at once.
+            page = getattr(self, "corners_page", None)
+            if page is not None and page.view() == CORNERS_VIEW_QUICKEST:
+                page.quickest.focus_first()
         self._update_table_header()
         if getattr(self, "_debrief", False) and index != 3:
             self._end_debrief(restore_tab=False)   # the driver chose another page
@@ -1821,6 +1828,7 @@ class CentralView(QWidget):
         if getattr(self, "_maximized_panel", None) is self._table_panel:
             self._restore_splitter_sizes()
         self._drop_owned_ring()
+        self._forget_quickest_cycle()
         self.table.select([lap_id])
         entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
                  if cid is not None else None)
@@ -1837,6 +1845,16 @@ class CentralView(QWidget):
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.refresh_quickest()
+
+    def _forget_quickest_cycle(self):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.forget_cycle()
+
+    def _on_clip_ended(self):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_clip_running(False)
 
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
@@ -1863,6 +1881,9 @@ class CentralView(QWidget):
         self.table.select([lap_id])
         self._on_laps_selected([lap_id], seek=False)
         self.video.play_clip(*clip)
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_clip_running(True)
         self._playback.followed_lap = self.session.lap_at_time(clip[0])
         self._pin_owned_ring(cid)
         if status:

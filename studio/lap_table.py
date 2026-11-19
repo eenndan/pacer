@@ -3229,10 +3229,18 @@ def quickest_level_tip(qp, level_s: float) -> str:
             "them comes out on top is down to timing noise. Click the row again to play the next.")
 
 
+def quickest_no_star_tip(qp, level_s: float) -> str:
+    """The Quickest cell's hover on a tie: why it wears no star. The Lap view's star means
+    something else (that lap's time prints as the quickest), so the difference is said here."""
+    n = len(qp.level_laps)
+    return (f"{plural(n, 'more lap')} {'is' if n == 1 else 'are'} level within {level_s:.2f} s, "
+            "so no ★: here it marks a quickest pass no other lap matches.")
+
+
 def quickest_status(label: str, qp, k: int) -> str:
     """The status line for playing pass `k` of `qp.play_order()` through corner `label`."""
     order = qp.play_order()
-    lap = lap_label(order[k])
+    lap = f"{lap_label(order[k])} ({qp.pass_time(k):.{PRINT_DECIMALS}f})"
     if len(order) == 1:
         clear = "" if qp.next_gap_s is None else f", {qp.next_gap_s:.3f} s clear of the next"
         return f"Playing lap {lap} through {label}: your quickest pass here{clear}"
@@ -3263,6 +3271,7 @@ class QuickestPassTable(QWidget):
         self.result = None          # the last stats.QuickestPasses (None: no grid)
         self._labels: dict[int, str] = {}
         self._cycle: tuple[int, int] | None = None   # (cid, k) of the pass last played
+        self._running = False   # that pass's clip is still playing (set_clip_running)
         self.not_counted = QLabel("")
         self.not_counted.setProperty("role", "BarLabel")
         self.not_counted.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XXS,
@@ -3273,6 +3282,9 @@ class QuickestPassTable(QWidget):
         for c, tip in enumerate(QUICKEST_COL_TIPS):
             self.table.horizontalHeaderItem(c).setToolTip(tip)
         align_headers_over_their_columns(self.table)
+        # ...but "Level with" is words, left-aligned in its cells: its header sits over them.
+        self.table.horizontalHeaderItem(QUICKEST_LEVEL_COL).setTextAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -3338,12 +3350,54 @@ class QuickestPassTable(QWidget):
         k = 0
         if self._cycle is not None and self._cycle[0] == qp.cid:
             k = (self._cycle[1] + 1) % len(order)
+        self._play(row, k)
+        return True
+
+    def play_named(self, row: int) -> bool:
+        """Play row `row`'s QUICKEST pass, whatever was cycled before: the command "Quickest C3 —
+        lap 13" names that lap, so it never moves on to a level one. The cycle restarts there."""
+        passes = self.passes()
+        if not 0 <= row < len(passes) or passes[row].lap_id is None:
+            return False
+        self._play(row, 0)
+        return True
+
+    def _play(self, row: int, k: int) -> None:
+        qp = self.passes()[row]
         self._cycle = (qp.cid, k)
+        self._running = False   # until the view that plays it says the clip runs
         self.table.selectRow(row)
         self._paint_playing()
-        label = self._labels.get(qp.cid, f"C{qp.cid}")
-        self.pass_requested.emit(order[k], qp.cid, quickest_status(label, qp, k))
-        return True
+        self.pass_requested.emit(qp.play_order()[k], qp.cid,
+                                 quickest_status(self.corner_label(qp.cid), qp, k))
+
+    def corner_label(self, cid: int) -> str:
+        """Corner `cid`'s label ("C3") as this view names it."""
+        return self._labels.get(cid, f"C{cid}")
+
+    def set_clip_running(self, on: bool) -> None:
+        """Whether the pass last played is still playing (its clip has not ended or been left):
+        its row says "playing lap 7 …" only while it is."""
+        if bool(on) != self._running:
+            self._running = bool(on)
+            self._paint_playing()
+
+    def forget_cycle(self) -> None:
+        """The driver went somewhere else (another lap picked): the row goes back to its count, and
+        the next click on it starts from the quickest again."""
+        if self._cycle is not None:
+            self._cycle = None
+            self._running = False
+            self._paint_playing()
+
+    def focus_first(self) -> None:
+        """Keyboard-ready: focus the table and, with nothing selected yet, make row 0 current, so
+        the arrow keys and Return work at once. Plays nothing."""
+        if self.table.rowCount() == 0 or not self.table.isVisibleTo(self):
+            return
+        if not self.table.selectionModel().hasSelection():
+            self.table.selectRow(0)
+        self.table.setFocus(Qt.OtherFocusReason)
 
     def playing(self) -> tuple[int, int] | None:
         """(cid, lap_id) of the pass last played from this view, or None."""
@@ -3363,7 +3417,8 @@ class QuickestPassTable(QWidget):
             text = quickest_level_text(qp)
             if self._cycle is not None and self._cycle[0] == qp.cid and qp.level_laps:
                 k, order = self._cycle[1], qp.play_order()
-                text = f"playing lap {lap_label(order[k])} · {k + 1} of {len(order)}"
+                text = (f"{'playing ' if self._running else ''}lap {lap_label(order[k])} "
+                        f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) · {k + 1} of {len(order)}")
             item.setText(text)
 
     def refresh(self) -> None:
@@ -3414,6 +3469,8 @@ class QuickestPassTable(QWidget):
                 else:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     item.setFont(self._num_font)
+                if col == 1 and qp.level_laps:
+                    item.setToolTip(quickest_no_star_tip(qp, self.level_s()))
                 if col == 1 and star:
                     item.setForeground(QColor(theme.best_sector_colour()))
                     font = item.font()
@@ -3458,7 +3515,7 @@ class CornersPage(QWidget):
         self.lap_view = CornerTable(session)
         self.quickest = QuickestPassTable(session)
         # Two chips, one exclusive pair: the same pill as the charts' "vs ideal" chip, amber on.
-        self.lap_btn = ToggleButton("Lap", tooltip=LAP_VIEW_TIP)
+        self.lap_btn = ToggleButton("Lap corners", tooltip=LAP_VIEW_TIP)
         self.lap_btn.setProperty("role", "Chip")
         self.quickest_btn = ToggleButton(QUICKEST_BTN, tooltip=QUICKEST_BTN_TIP)
         self.quickest_btn.setProperty("role", "Chip")
@@ -3522,12 +3579,15 @@ class CornersPage(QWidget):
         if view == CORNERS_VIEW_QUICKEST and self.quickest.result is None:
             self.quickest.refresh()
         self._apply()
+        if view == CORNERS_VIEW_QUICKEST:
+            self.quickest.focus_first()
         if changed:
             self.view_changed.emit(view)
 
     def set_lap_text(self, lap_id: int | None) -> None:
         """The Lap button names the lap its view shows."""
-        self.lap_btn.setText("Lap" if lap_id is None else f"Lap {lap_label(lap_id)}")
+        self.lap_btn.setText("Lap corners" if lap_id is None
+                             else f"Lap {lap_label(lap_id)} corners")
 
     def refresh_quickest(self) -> None:
         """Rebuild the Quickest view (the Lap view refreshes on its own path) and re-decide

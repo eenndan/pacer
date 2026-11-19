@@ -167,6 +167,9 @@ class PlayerPane(QWidget):
     # A double-click landed on the VIDEO CONTENT itself (not a panel header) — the shell turns this
     # into the "make the video fill the screen" (video-focus) toggle, like a normal video player.
     videoDoubleClicked = Signal()
+    # A pass's clip is over: its end was reached (and the pane paused there) or dropped by the
+    # driver's own seek / play / pause. Emitted once per clip, by the `_clip_end` setter.
+    clipEnded = Signal()
 
     def __init__(self, source: str | chapters.ChapterMap | None):
         super().__init__()
@@ -206,7 +209,7 @@ class PlayerPane(QWidget):
         # passes); any later seek, play or pause drops it, so a driver who scrubs, presses ▶ or
         # picks a lap is never paused by a clip he has left. NOT the lap window: that one is
         # compare's, rewinds on play and clamps the reported position, none of which a clip wants.
-        self._clip_end: float | None = None
+        self.__clip_end: float | None = None
         # Media playback rate (1.0 = real time). Remembered because a SOURCE SWITCH does not carry
         # it: the rate is a property of the QMediaPlayer's current media on the FFmpeg backend, so
         # a chapter seam would silently drop a slow-motion review back to 1x. Re-applied in
@@ -520,6 +523,19 @@ class PlayerPane(QWidget):
 
     def clip_end(self) -> float | None:
         return self._clip_end
+
+    @property
+    def _clip_end(self) -> float | None:
+        return self.__clip_end
+
+    @_clip_end.setter
+    def _clip_end(self, end: float | None) -> None:
+        # Every site that ends a clip writes None here (the end reached, a seek, play or pause),
+        # so this is the one place that can tell the view the clip is over.
+        ended = self.__clip_end is not None and end is None
+        self.__clip_end = end
+        if ended:
+            self.clipEnded.emit()
 
     # ------------------------------------------------------------- g-meter overlay
     def set_gmeter_visible(self, on: bool):
