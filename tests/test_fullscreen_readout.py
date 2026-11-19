@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -86,11 +86,11 @@ def _close(win):
 
 
 def _at(view, t):
-    """What a playing pane reports at `t`, and the tick that applies it."""
-    view._playback.applied_t = None
+    """What a playing pane reports at `t`, and the tick that applies it (applied_t set first,
+    as `tick` does, so nothing that re-reads it mid-apply sees a stale or missing time)."""
+    view._playback.latest_t = view._playback.applied_t = t
     view.video.pane.positionChanged.emit(t)
     view._apply_position(t)
-    view._playback.applied_t = t
 
 
 def _focus(win):
@@ -303,12 +303,192 @@ def test_the_ruler_marks_the_laps_the_table_marks():
         x = (slider._x_for(a) + slider._x_for(b)) // 2
         assert slider.segment_at(x)[3] == tip
         assert tip == f"Lap {lap_label(best)} · {fmt_time(s.lap_time(best))} · ★ session best"
+        # a slow lap's hover: "▼ slow lap", then where its time went in the cue cell's own words
+        from studio import story
+        slow = next(i for i, m in table_marks.items() if m.startswith("▼"))
+        note = next(n for n in s.slow_lap_notes() if n.lap_id == slow)
+        stip = next(seg[3] for i, seg in zip(s.valid_lap_ids(), segs, strict=True) if i == slow)
+        assert stip == (f"Lap {lap_label(slow)} · {fmt_time(s.lap_time(slow))} · ▼ slow lap\n"
+                        f"{story.row_text(note)}"), stip
         # compare: one lap on the bar, no session ruler
         view.video.compare_btn.click()
         _settle()
         assert slider.segments() == [] and slider.mark_plan() == []
     finally:
         _close(win)
+
+
+def _value_with_handle_at(slider, x):
+    """The slider value whose handle centre sits nearest pixel `x`."""
+    lo, hi = slider.minimum(), slider.maximum()
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if slider._x_for(mid) < x:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def test_a_mark_is_never_painted_over_the_handle():
+    """Review P2: only the glyph's centre was tested against the handle, so the ★ drew over the
+    handle's edge with the handle 12-14 px away. Now any mark whose plate touches the handle is
+    left out — at offsets 0, ±8 and ±14 px — and comes back once the handle has moved off."""
+    win = _window((1280, 800))
+    try:
+        slider = win.view.video.slider
+        star_x = next(x for x, g in slider.mark_plan() if g == "★")
+        for k in (-14, -8, 0, 8, 14, 60):
+            slider.setValue(_value_with_handle_at(slider, star_x + k))
+            _APP.processEvents()
+            handle = slider._handle_rect()
+            drawn = [x for x, g in slider.painted_marks() if g == "★"]
+            if abs(k) <= 14:
+                assert drawn == [], (k, handle, star_x)
+            else:
+                assert drawn == [star_x], k
+            for x, g in slider.painted_marks():
+                r = slider._mark_rect(x, g)
+                assert r.right() < handle.left() or r.left() > handle.right() + 1, (k, x, g)
+    finally:
+        _close(win)
+
+
+def test_a_hidden_or_closed_window_takes_both_overlays_with_it():
+    """Review P2: the readout and the g-meter are top-level windows; one tick after the app window
+    was hidden, the re-pin showed both again over the desktop."""
+    from studio.gmeter_overlay import GMeterOverlay
+    from studio.player_pane import LiveReadout
+    win = _window()
+    try:
+        view = win.view
+        _focus(win)
+        view.video.gmeter_btn.click()
+        t = sum(win.session.lap_window(6)) / 2
+        _at(view, t)
+        ro, dial = _readout(view), view.video.pane.gmeter
+        assert ro.isVisible() and dial.isVisible()
+        win.hide()
+        _at(view, t + 0.5)                         # one tick with the window hidden
+        _settle()
+        assert not ro.isVisible() and not dial.isVisible()
+        win.show()
+        _settle(0.2)
+        _at(view, t + 1.0)
+        assert ro.isVisible() and dial.isVisible(), "and back with the window"
+        view.video.pane.hide()                     # the pane itself hidden: the readout goes too
+        _APP.processEvents()
+        assert not ro.isVisible() and not dial.isVisible(), "hidden with the pane, at once"
+        _at(view, t + 1.5)                         # ...and the next tick does not bring it back
+        assert not ro.isVisible() and not dial.isVisible()
+        view.video.pane.show()
+        _settle(0.1)
+        _at(view, t + 2.0)
+        assert ro.isVisible()
+        win.setWindowState(win.windowState() | Qt.WindowMinimized)   # minimised: the same
+        _APP.processEvents()
+        assert win.isMinimized()
+        _at(view, t + 2.5)
+        assert not ro.isVisible() and not dial.isVisible()
+        win.setWindowState(win.windowState() & ~Qt.WindowMinimized)
+    finally:
+        _close(win)
+    _settle(0.2)
+    orphans = [w for w in QApplication.topLevelWidgets()
+               if isinstance(w, (LiveReadout, GMeterOverlay)) and w.isVisible()]
+    assert orphans == [], orphans
+
+
+def test_the_pass_line_goes_when_the_pass_ends_while_paused():
+    win = _window()
+    try:
+        view = win.view
+        _focus(win)
+        q = view.corners_page.quickest
+        q.activate(q.row_of(3))
+        c0, c1 = view.video.pane.pass_clip()
+        _at(view, (c0 + c1) / 2)
+        assert _readout(view).lines().pass_ == "C3 · lap 13 (2.32)"
+        view.video.loop_btn.click()                # Loop flips: no tick needed
+        assert _readout(view).lines().pass_.endswith(" · looping")
+        view.video.loop_btn.click()                # ...and back off: a plain pass again
+        assert _readout(view).lines().pass_ == "C3 · lap 13 (2.32)"
+        view.video.pane.end_pass()                 # paused, no position change follows
+        assert _readout(view).lines().pass_ == ""
+    finally:
+        _close(win)
+
+
+def test_a_degraded_clock_mutes_the_lap_clock_as_the_table_mutes_lap_times():
+    from studio import lap_table
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        _focus(win)
+        _at(view, sum(s.lap_window(6)) / 2)
+        assert not _readout(view).lines().lap_dim and not lap_table.durations_muted(s)
+        quality = s.timing_quality
+        saved = type(quality).degraded
+        try:
+            type(quality).degraded = property(lambda self: True)
+            assert lap_table.durations_muted(s)
+            _at(view, sum(s.lap_window(6)) / 2 + 0.3)
+            assert _readout(view).lines().lap_dim
+        finally:
+            type(quality).degraded = saved
+    finally:
+        _close(win)
+
+
+def test_the_readout_repaints_only_when_a_printed_run_changes():
+    win = _window()
+    try:
+        view = win.view
+        _focus(win)
+        ro = _readout(view)
+        t = sum(win.session.lap_window(6)) / 2
+        _at(view, t)
+        _settle(0.2)
+
+        class _Paints(QObject):
+            n = 0
+
+            def eventFilter(self, _obj, ev):  # noqa: N802 (Qt override)
+                if ev.type() == QEvent.Paint:
+                    self.n += 1
+                return False
+
+        paints = _Paints()
+        ro.installEventFilter(paints)
+        try:
+            for _ in range(5):
+                _at(view, t)                       # the same moment, five ticks
+                _settle(0.03)
+            assert paints.n == 0, paints.n
+            _at(view, t + 0.25)                    # the clock prints a new value: one repaint
+            _settle(0.1)
+            assert paints.n == 1, paints.n
+        finally:
+            ro.removeEventFilter(paints)
+    finally:
+        _close(win)
+
+
+def test_the_marks_cost_the_video_no_height():
+    """Glyphs on the groove: the slider keeps its height and the video its pixels (main: 498×230
+    at 1280×800, 515×277 at 1440×900; this build measured 498×231 / 515×277)."""
+    for size, floor in (((1280, 800), (498, 230)), ((1440, 900), (515, 277))):
+        win = _window(size)
+        try:
+            video = win.view.video
+            # main's numbers, typed: the slider is HIT_MIN + SPACE_XXS = 26, the scrub row 48
+            assert video.slider.height() == theme.HIT_MIN + theme.SPACE_XXS == 26, \
+                video.slider.height()
+            assert video.scrub_row.height() == 48, video.scrub_row.height()
+            v = video.pane.video
+            assert v.width() >= floor[0] and v.height() >= floor[1], (size, v.size())
+        finally:
+            _close(win)
 
 
 def test_the_card_and_cmd_k_offer_i():

@@ -875,11 +875,15 @@ class PlayerPane(QWidget):
         alike, and — unlike `visibleRegion()`, the other candidate — it can be confused neither by
         the QVideoWidget's native macOS surface nor by the video child obscuring its own parent."""
         vw, vh = self.video.width(), self.video.height()
-        if self.video.isHidden() or vw <= 0 or vh <= 0:
-            return False
+        if self.video.isHidden() or not self.video.isVisible() or vw <= 0 or vh <= 0:
+            return False    # (isVisible: the pane itself, or a panel above it, was hidden)
         top = self.window()
         if top is None or top is self.video:
             return True
+        # A hidden, closed or minimised window hosts nothing: its geometry still intersects
+        # itself, and the next tick's re-pin used to show both overlay windows over the desktop.
+        if not top.isVisible() or top.isMinimized():
+            return False
         top_left = self.video.mapToGlobal(QPoint(0, 0))
         return top.geometry().intersects(QRect(top_left.x(), top_left.y(), vw, vh))
 

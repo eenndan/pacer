@@ -43,7 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -106,6 +106,17 @@ _LOOP_TOOLTIP = ("Loop this pass (L): play it again from its lead-in each time i
                  "Stays on for the next pass you pick; a seek, a lap pick or Compare stops it.")
 _SLOW_TOOLTIP = (f"Slow motion: play the pass at {_RATE_LABELS[0]}.\n"
                  "Stays on for the next pass you pick; leaving the pass gives back your speed.")
+
+
+def ruler_mark_colour(glyph: str) -> str:
+    """The ink of a lap-ruler mark: ★ the best-lap colour (palette-aware, the Laps table's), ▼ text."""
+    return theme.best_lap_colour() if glyph == "★" else theme.C.text
+
+
+def ruler_mark_plate() -> str:
+    """The plate under every lap-ruler mark, so it reads on the amber played groove and the grey
+    unplayed one alike (tests/test_contrast.py)."""
+    return theme.C.canvas
 
 
 def nearest_rate(rate: float) -> float:
@@ -239,6 +250,28 @@ class _LapRulerSlider(QSlider):
             out.append(((xa + xb) // 2, glyph))
         return out
 
+    def _mark_rect(self, x: int, glyph: str, cy: int | None = None):
+        """The plate a mark is painted on, centred on (x, groove centre)."""
+        fm = QFontMetrics(self._mark_font)
+        if cy is None:
+            cy = self._groove_rect().center().y()
+        h = fm.height()
+        w = max(fm.horizontalAdvance(glyph) + 4, h)
+        return QRectF(x - w / 2, cy - h / 2, w, h)
+
+    def _handle_rect(self):
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        return self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+
+    def painted_marks(self) -> list[tuple[int, str]]:
+        """mark_plan less every mark whose plate would touch the handle: the playhead is on (or
+        beside) that lap, and a glyph on the handle's edge reads as a badge on it."""
+        handle = self._handle_rect()
+        return [(x, g) for x, g in self.mark_plan()
+                if not (self._mark_rect(x, g).right() >= handle.left()
+                        and self._mark_rect(x, g).left() <= handle.right() + 1)]
+
     def segment_at(self, x: int) -> tuple[int, int, str, str] | None:
         """The lap under pixel `x`, or None between laps."""
         for seg in self._segments:
@@ -362,26 +395,26 @@ class _LapRulerSlider(QSlider):
     def paintEvent(self, ev):
         super().paintEvent(ev)  # base groove + sub/add-page fill + handle (themed QSS) first
         plan = self.tick_plan()
-        marks = self.mark_plan()
+        marks = self.painted_marks()
         if not (plan["minor"] or plan["major"] or plan["current"] or marks):
             return
         cy = self._groove_rect().center().y()
         painter = QPainter(self)
         if marks:
-            # On the groove, centred in the lap, and left out under the handle (unlike the ticks: a
-            # glyph on the handle reads as a badge on it). ★ in the best-lap colour (palette-aware).
+            # On the groove, centred in the lap, each on its own small CANVAS plate: the groove is
+            # amber where it has been played and grey where it has not, and ★ / ▼ straight on the
+            # amber read 1.12:1 / 1.55:1. On the plate both clear 3:1 on either side
+            # (tests/test_contrast.py). Left out wherever the plate would touch the handle.
+            painter.setRenderHint(QPainter.Antialiasing, True)
             painter.setRenderHint(QPainter.TextAntialiasing, True)
             painter.setFont(self._mark_font)
             fm = QFontMetrics(self._mark_font)
-            opt = QStyleOptionSlider()
-            self.initStyleOption(opt)
-            handle = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle,
-                                                 self)
             for x, glyph in marks:
-                if handle.left() <= x <= handle.right():
-                    continue        # the playhead is on that lap: the handle is the mark there
-                colour = theme.best_lap_colour() if glyph == "★" else theme.C.text
-                painter.setPen(QColor(colour))
+                plate = self._mark_rect(x, glyph, cy)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(ruler_mark_plate()))
+                painter.drawRoundedRect(plate, plate.height() / 2, plate.height() / 2)
+                painter.setPen(QColor(ruler_mark_colour(glyph)))
                 w = fm.horizontalAdvance(glyph)
                 painter.drawText(x - w // 2, cy + (fm.ascent() - fm.descent()) // 2, glyph)
         painter.setRenderHint(QPainter.Antialiasing, False)
@@ -1253,8 +1286,8 @@ class VideoView(QWidget):
     # Not a state mirror: CompareController remains the single source of truth for 'are we
     # comparing', and this says only what the view now holds.
     compareModeChanged = Signal(bool)
-    # The live readout just came on (video focus, or I): the central view fills its lap line now
-    # rather than on the next position change (a paused video has none).
+    # The live readout needs its lines NOW: it just came on (video focus, I), or what it names
+    # changed with no position change (a pass ended while paused, Loop flipped).
     liveReadoutShown = Signal()
 
     # The primary pane's mute choice for THIS RUN of the app (QA 2026-09-26, LIFE-4). Opening another
@@ -1634,6 +1667,7 @@ class VideoView(QWidget):
                 self._release_slow(restore=True)
         for b in (self.loop_btn, self.slow_btn):
             b.setVisible(on)
+        self._refresh_live_readout()   # the readout's pass line follows the pass at once
 
     def _on_loop_toggled(self, on: bool):
         if self.pane.is_looping() != on and not self.pane.set_loop(on):
@@ -1642,6 +1676,7 @@ class VideoView(QWidget):
     def _on_loop_changed(self, on: bool):
         self._reflect(self.loop_btn, on)
         self.loopChanged.emit(on)
+        self._refresh_live_readout()   # ...and its "· looping"
 
     def _on_slow_toggled(self, on: bool):
         if on:
@@ -1896,6 +1931,12 @@ class VideoView(QWidget):
         delta, colour, tail = getattr(self, "_live_delta", ("", None, ""))
         self.pane.set_live_readout(ReadoutLines(lap=lap, lap_dim=dim, delta=delta,
                                                 delta_colour=colour, tail=tail, pass_=pass_line))
+
+    def _refresh_live_readout(self):
+        """Something the readout's lines name changed with no position change (a pass ended while
+        paused, Loop flipped): ask the central view for fresh lines now, not on the next move."""
+        if self.live_readout_shown():
+            self.liveReadoutShown.emit()
 
     def _sync_live_readout(self):
         """Show or hide the readout to match live_readout_shown(); the central view refills its lap

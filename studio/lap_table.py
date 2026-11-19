@@ -297,6 +297,14 @@ _ESTIMATED_TIMING_FALLBACK = ("Timing accuracy degraded — these times may be l
                               "(see the data-quality note over the map).")
 
 
+def durations_muted(session) -> bool:
+    """Whether this table mutes its lap-time (duration) cells: provisional timing (the stronger
+    demotion) or a degraded clock — the two cases `refresh` mutes them in. Read by the fullscreen
+    readout's lap clock too, so the two never treat the same time differently."""
+    return (not getattr(session, "timing_verified", True)
+            or bool(getattr(getattr(session, "timing_quality", None), "degraded", False)))
+
+
 def estimated_timing_tooltip(timing_quality) -> str:
     """The degraded-timing Time/footer tooltip for `timing_quality`, from the shared clock-aware
     detail() so the table matches the map banner + header chip. Falls back to a generic line if a
@@ -2421,6 +2429,12 @@ class LapTable(QWidget):
         if cue and self._cue(lap_id):
             suffix += f"{CUE_SEP}{self._cue(lap_id)}"
         return f"{prefix}{best}{lap_label(lap_id)}{suffix}"  # 1-based display number
+
+    def slow_note_text(self, lap_id) -> str:
+        """Where a slow lap's time went, in the words its cue cell's hover leads with
+        (`story.row_text`, via `slow_note_tip`), or "" for a lap with no note."""
+        note = self._slow_notes.get(lap_id)
+        return story.row_text(note) if note is not None else ""
 
     def ruler_marks(self) -> dict[int, str]:
         """lap id → the mark its Lap cell wears: "★" (the best lap, withheld while timing is

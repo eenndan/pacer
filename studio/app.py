@@ -103,10 +103,11 @@ ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
 # something that JUST happened ("saved…", "reverted…"); with no timeout Qt leaves the last one
 # up indefinitely, so minutes later the bar still asserts a stale fact about the session (B20).
 STATUS_MS = 6000
-# L with no pass playing: where a pass to loop comes from.
+# I, said on the status bar when the video is not filling the screen (where the readout lives).
 READOUT_ON = "Live readout on: lap, lap clock, Δ and speed over the video when it fills the screen (F)"
 READOUT_OFF = "Live readout off: the video fills the screen (F) with the picture alone"
-NO_PASS_TO_LOOP ="Loop needs a pass playing: play one from the Corners tab's Quickest passes"
+# L with no pass playing: where a pass to loop comes from.
+NO_PASS_TO_LOOP = "Loop needs a pass playing: play one from the Corners tab's Quickest passes"
 # How long a RELOAD may run before the working UI is replaced by the "Loading telemetry…" card
 # (ms). The load runs off the UI thread, so a live session stays usable while its successor is
 # read; blanking it instantly meant even a 0.36 s reload flashed the whole window to an

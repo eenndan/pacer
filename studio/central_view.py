@@ -47,7 +47,7 @@ from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
 from ._signal import lap_label, plural
 from .coaching_panel import OpportunitiesPanel, compare_status
 from .compare_controller import CompareController
-from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable
+from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable, durations_muted
 from .map_view import MapView
 from .marks_panel import MarksPanel
 from .overlay import broadcast
@@ -1949,8 +1949,8 @@ class CentralView(QWidget):
         self._drop_owned_ring()
         self.table.select([lap_id])
         self._on_laps_selected([lap_id], seek=False)
-        self.video.play_pass(*clip)   # Loop / Slow, if on, stay on for this pass
         self._played_pass = (lap_id, cid)   # what the fullscreen readout's pass line names
+        self.video.play_pass(*clip)   # Loop / Slow, if on, stay on for this pass
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(True)
@@ -2395,9 +2395,18 @@ class CentralView(QWidget):
                 continue
             bounds.extend(w)
             mark = marks.get(lid, "")
-            note = {"": "", "★": " · ★ session best"}.get(mark, f" · {mark} slow lap")
-            tip = (f"Lap {lap_label(lid)} · {fmt_time(self.session.lap_time(lid))}{note}"
-                   + ("" if verified else " · provisional timing"))
+            # A slow lap's hover leads with where its time went, in the words its cue cell's hover
+            # uses (`LapTable.slow_note_text` = `story.row_text`), on a line of its own.
+            if mark == "★":
+                note = " · ★ session best"
+            elif mark:
+                why = table.slow_note_text(lid) if table is not None else ""
+                note = f" · {mark.split()[0]} slow lap" + (f"\n{why}" if why else "")
+            else:
+                note = ""
+            head, _nl, why = note.partition("\n")
+            tip = (f"Lap {lap_label(lid)} · {fmt_time(self.session.lap_time(lid))}{head}"
+                   + ("" if verified else " · provisional timing") + (f"\n{why}" if why else ""))
             segments.append((w[0], w[1], mark, tip))
         video.set_lap_ticks(bounds)
         video.set_lap_segments(segments)
@@ -2407,9 +2416,11 @@ class CentralView(QWidget):
 
         THE LAP LINE IS THE EXPORT STRIP'S LABEL, "LAP 7   0:23.415": the lap the playhead is in
         and the time since its line, clamped into the lap (export_video._strip_runs), "No lap"
-        outside every lap as a follow-laps export says. Muted while lap timing is provisional — the
-        Laps table's own treatment of the same times, so nothing here is shown that the table
-        withholds. The pass line names the pass the video is playing, with that lap's own time
+        outside every lap as a follow-laps export says. Muted exactly when the Laps table mutes
+        its lap times (`durations_muted`: provisional timing or a degraded clock), so the two never
+        treat the same time differently and nothing here is shown that the table withholds. The Δ
+        line keeps the hero's colour rule (the 0.07 s step on every clock, as the seam and the
+        exports). The pass line names the pass the video is playing, with that lap's own time
         through the corner (`lap_corner_stats`, the Quickest passes view's numbers)."""
         if lap_id is None:
             lap = "No lap"
@@ -2417,7 +2428,7 @@ class CentralView(QWidget):
             win = self.session.lap_window(lap_id)
             elapsed = 0.0 if win is None else min(max(t - win[0], 0.0), win[1] - win[0])
             lap = f"LAP {lap_label(lap_id)}   {fmt_time(elapsed)}"
-        dim = not getattr(self.session, "timing_verified", True)
+        dim = durations_muted(self.session)   # the Laps table's own rule for these times
         self.video.set_live_lap(lap, dim, self._live_pass_line())
 
     def _live_pass_line(self) -> str:
