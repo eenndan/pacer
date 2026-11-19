@@ -49,7 +49,7 @@ os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QMouseEvent  # noqa: E402
+from PySide6.QtGui import QColor, QFontMetrics, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -848,6 +848,117 @@ def test_compare_title_and_hero_agree_in_every_state_without_a_tick():
     print("test_compare_title_and_hero_agree_in_every_state_without_a_tick OK (8 states)")
 
 
+def _hero_at(view, s, d, lead):
+    """The hero's (text, colour) with the session's Δ pinned at `d` in the `lead` reading."""
+    s.delta_at_lap = lambda _lap, _t: d
+    s.delta_to_ideal_at = lambda _lap, _t: d
+    view.ideal_readout_btn.setChecked(lead == "ideal")
+    view._update_diff_box(view._playback.applied_t, view._last_diff_speed, view._last_diff_lap)
+    return view.diff_box.text(), view.diff_box.delta_colour()
+
+
+def test_hero_readout_is_level_under_the_timing_step():
+    """cool/delta-readout-level (discovery6 C-craft P2). The readout was red/green for any |Δ| over
+    5 ms — "Δideal +0.05 s" in red on the demo's best lap — while the compare seam and every burned
+    overlay draw the same quantity neutral under the timing step (0.07 s, on the PRINTED value).
+    Printed 0.06 is level; 0.07 and 0.08 are coloured; both signs; the number and its sign still
+    print, and a level Δbest drops its ▲/▼ as the seam does. The ideal lead is one-way (clamped at
+    0), so only its positive side is a colour question."""
+    from studio import theme as T
+    view, s, t0, _t1 = _real_central_view()
+    keep = (s.delta_at_lap, s.delta_to_ideal_at)
+    try:
+        view.video.positionChanged.emit(float(t0[len(t0) // 2]))
+        view.tick()
+        for d, want in ((0.06, None), (0.07, T.behind_colour()), (0.08, T.behind_colour()),
+                        (0.064, None), (0.066, T.behind_colour()),     # prints +0.06 / +0.07
+                        (-0.06, None), (-0.07, T.ahead_colour()), (-0.08, T.ahead_colour())):
+            text, colour = _hero_at(view, s, d, "best")
+            shown = T.format_delta_value(d)
+            assert text.startswith(f"Δbest {shown} s"), (d, text)
+            assert colour == want, (f"Δbest printed {shown}", colour, want)
+            arrow = T.delta_arrow(d)
+            assert (arrow in text) == (want is not None), ("the ▲/▼ follows the colour", d, text)
+            if d > 0:
+                text, colour = _hero_at(view, s, d, "ideal")
+                assert text.startswith(f"Δideal {shown} s"), (d, text)
+                assert colour == want, (f"Δideal printed {shown}", colour, want)
+    finally:
+        s.delta_at_lap, s.delta_to_ideal_at = keep
+        view.dispose()
+    print("test_hero_readout_is_level_under_the_timing_step OK")
+
+
+def test_hero_readout_asks_the_overlays_level_rule():
+    """The shared-rule guard: the readout decides "level" by `overlay.broadcast.is_level` — the
+    rule the Classic strip, Broadcast and the compare pill call — not by a copy of it. Swapping
+    that one function flips the readout; and the readout agrees with it (and with the compare
+    seam's `within_timing_precision` on the printed value) over a sweep of Δs."""
+    from studio import library
+    from studio import theme as T
+    from studio.overlay import broadcast
+    view, s, t0, _t1 = _real_central_view()
+    keep = (s.delta_at_lap, s.delta_to_ideal_at, broadcast.is_level)
+    try:
+        view.video.positionChanged.emit(float(t0[len(t0) // 2]))
+        view.tick()
+        for d in np.round(np.arange(-0.2, 0.2001, 0.0013), 4):
+            _text, colour = _hero_at(view, s, float(d), "best")
+            level = broadcast.is_level(float(d))
+            assert level == library.within_timing_precision(broadcast.printed_delta(float(d)))
+            assert (colour is None) == (level or T.delta_colour(float(d)) is None), (d, colour)
+        broadcast.is_level = lambda _d: True
+        assert _hero_at(view, s, 0.5, "best")[1] is None, "the readout re-typed the rule"
+        broadcast.is_level = lambda _d: False
+        assert _hero_at(view, s, 0.02, "best")[1] == T.behind_colour(), "the readout re-typed it"
+    finally:
+        s.delta_at_lap, s.delta_to_ideal_at, broadcast.is_level = keep
+        view.dispose()
+    print("test_hero_readout_asks_the_overlays_level_rule OK")
+
+
+def test_hero_readout_tail_is_secondary():
+    """The craft review's P3: "whole lap" (and the speed) printed at the Δ's hero size and weight,
+    so it read as a value. The Δ run keeps the HERO face; the tail paints at BODY, regular, dim."""
+    from studio import theme as T
+    from studio.central_view import HERO_AT_REST_TAG, _at_rest
+    view, _s, _t0, _t1 = _real_central_view()
+    try:
+        box = view.diff_box
+        assert box.font().pixelSize() == T.HERO or box.font().pointSize() == T.HERO, box.font()
+        tail = box.tail_font()
+        size = tail.pixelSize() if tail.pixelSize() > 0 else tail.pointSize()
+        assert size == T.BODY and tail.weight() == T.W_REGULAR, (size, tail.weight())
+        # Painted, it is smaller: the tail's ink is shorter than the head's digits.
+        view.resize(1280, 400)
+        view.show()
+        box.setText(_at_rest(f"Δideal +0.69 s     {HERO_AT_REST_TAG}"))
+        box.set_delta_colour(None)
+        _APP.processEvents()
+        img = box.grab().toImage()
+        head_w = QFontMetrics(box.font()).horizontalAdvance("Δideal +0.69 s     ")
+        dim = QColor(T.C.text_dim)
+
+        def ink_rows(x0, x1, match):
+            rows = set()
+            for y in range(img.height()):
+                for x in range(x0, min(x1, img.width())):
+                    c = img.pixelColor(x, y)
+                    if match(c):
+                        rows.add(y)
+            return len(rows)
+        bright = QColor(T.C.text)
+        head_rows = ink_rows(0, head_w, lambda c: abs(c.lightness() - bright.lightness()) < 30)
+        tail_rows = ink_rows(head_w + 2, head_w + 120,
+                             lambda c: abs(c.red() - dim.red()) < 25
+                             and abs(c.green() - dim.green()) < 25 and abs(c.blue() - dim.blue()) < 25)
+        assert tail_rows and head_rows and tail_rows < head_rows, (head_rows, tail_rows)
+    finally:
+        view.hide()
+        view.dispose()
+    print("test_hero_readout_tail_is_secondary OK")
+
+
 def test_the_speed_chart_labels_every_corner_inside_its_span_in_both_x_modes():
     """cool/chart-corners. The map labels C1…; the speed chart named no corner at all (its only
     grey bands are coast spans). Each corner's map label must now ride the speed chart, on ITS
@@ -945,7 +1056,8 @@ def _hero_ink(view):
     img = box.grab().toImage()
     head, sep, _tail = box.text().partition("     ")
     split = box.contentsRect().left() + QFontMetricsF(box.font()).horizontalAdvance(head + sep) - 4
-    cands = {"behind": theme.behind_colour(), "ahead": theme.ahead_colour(), "text": theme.C.text}
+    cands = {"behind": theme.behind_colour(), "ahead": theme.ahead_colour(), "text": theme.C.text,
+             "dim": theme.C.text_dim}   # the speed run's neutral since cool/delta-readout-level
     runs = ({}, {})
     for y in range(img.height()):
         for x in range(img.width()):
@@ -980,7 +1092,7 @@ def test_the_hero_colours_only_its_delta_never_the_speed():
             _APP.processEvents()
             delta_run, speed_run = _hero_ink(view)
             assert max(delta_run, key=delta_run.get) == hue, (d, delta_run, view.diff_box.text())
-            assert max(speed_run, key=speed_run.get) == "text", (
+            assert max(speed_run, key=speed_run.get) == "dim", (
                 f"the speed must stay neutral beside a Δ of {d:+}", speed_run, view.diff_box.text())
             assert speed_run.get(hue, 0) < 0.05 * sum(speed_run.values()), (d, speed_run)
     finally:
@@ -1417,6 +1529,9 @@ def test_every_panel_header_has_a_maximize_button_that_toggles_and_reflects_stat
 def _run_all():
     test_hero_names_the_baseline_the_compare_chart_draws()
     test_compare_title_and_hero_agree_in_every_state_without_a_tick()
+    test_hero_readout_is_level_under_the_timing_step()
+    test_hero_readout_asks_the_overlays_level_rule()
+    test_hero_readout_tail_is_secondary()
     test_real_qtimer_fires_view_tick_through_studiowindow()
     test_position_signal_then_real_tick_applies_once_and_is_stable()
     test_the_map_marker_moves_on_every_playback_tick()
@@ -2515,7 +2630,7 @@ def _sign_agrees_with_colour(text, colour):
         return sign == "+"
     if colour == theme.ahead_colour():
         return sign in ("−", "-")
-    return mag <= 0.01
+    return mag < 0.07     # neutral only under the timing step (cool/delta-readout-level)
 
 
 def _direct_could_print(view, text, colour):
@@ -2534,6 +2649,8 @@ def _direct_could_print(view, text, colour):
         want_text, want_col = theme.format_delta_speed(v, view._last_diff_speed, lap,
                                                        view._speed_unit)
         want_text = _name_hero_baseline(want_text, view.session.has_reference())
+    from studio.central_view import _level_readout
+    want_text, want_col = _level_readout(want_text, want_col, v)
     return want_text.partition("     ")[0] == head and want_col == colour
 
 
