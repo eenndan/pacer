@@ -27,7 +27,7 @@ Every file written is recorded in `<out>/CAPTURED.json` — shot, app version, c
 and a source LABEL — and `tests/test_version.py` holds docs/media to that record. At each minor
 release a shot is re-captured or waived in writing there. Without a recording, `accuracy`, `og`
 (from hero.png), `debrief`, `lapstrip` and `moments` (all three the demo) can always be
-re-captured, and so can `report` (the demo too); the rest need footage.
+re-captured, and so can `report` and `quickest` (the demo too); the rest need footage.
 
 WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
 
@@ -59,6 +59,9 @@ WHAT IT PRODUCES, AND THE CLAIM EACH IMAGE CARRIES
   report.png      the demo's session report    "the session leaves the app as a document": the
                                                HTML report's first screen, exported with the
                                                debrief up, drawn by QtWebEngine at 2x
+  quickest.png    Corners > Quickest passes    "your quickest pass through each corner, one
+                                               click from the video": the window with C3's row
+                                               playing, on the synthetic demo
 
 TWO THINGS THE OFFSCREEN RENDER CANNOT DO BY ITSELF, AND WHAT THIS DOES ABOUT THEM
 
@@ -1113,6 +1116,59 @@ def shot_report(app: QApplication, out_dir: str, work_dir: str) -> str:
     return png
 
 
+# ====================================================================== 12 — Quickest passes (the demo)
+# The row it plays: C3, a tie (lap 13's 2.32 with five more laps level), so the picture shows the
+# view's honest case, "playing lap 13 (2.32) · 1 of 6", not the one corner that stands clear.
+QUICKEST_CORNER = 3
+
+
+def shot_quickest(app: QApplication, out_dir: str, work_dir: str) -> str:
+    """Corners ▸ Quickest passes on the synthetic demo at the standard window size, C3's row
+    clicked through the view's own path (`QuickestPassTable.activate`, as a click does). The inert
+    player cannot play, so the window is put at the middle of that pass by the position report a
+    playing pane would emit there (not a pane seek, which would end the clip and drop the row's
+    "playing"), and the demo's own frame at that instant is painted into the video pane as the
+    hero's is. Shown as a view, not remembered: the jail's prefs are thrown away anyway."""
+    w = _open_demo(app, "quickest")
+    w.resize(*WINDOW)
+    w.show()
+    settle(app)
+    view = w.view
+    if view.is_debrief():
+        view._end_debrief(restore_tab=False)
+    view.select_lap_tab(1)
+    page = view.corners_page
+    page.set_view("quickest", remember=False)
+    settle(app)
+    q = page.quickest
+    row = q.row_of(QUICKEST_CORNER)
+    if row < 0 or not q.activate(row):
+        raise RuntimeError(f"the demo has no quickest pass through C{QUICKEST_CORNER} to play")
+    settle(app)
+    cid, lap = q.playing()
+    s = w.session
+    enter = s.corners.corner_edge_media_time(lap, cid, "enter")
+    leave = s.corners.corner_edge_media_time(lap, cid, "exit")
+    t = (enter + leave) / 2
+    view.video.pane.positionChanged.emit(t)   # what a playing pane reports: the slider
+    view._apply_position(t)                   # ...and the tick's repaint: readout, map, charts
+    q.set_clip_running(True)
+    _settle_ui(app, w)
+    img = grab(w)
+    pane_widget = view.video.pane.video
+    origin = pane_widget.mapTo(w, QPoint(0, 0))
+    rect = QRect(origin.x(), origin.y(), pane_widget.width(), pane_widget.height())
+    index, local = s.chapters.to_local(t)
+    frame = _ffmpeg_frame(s.chapters.chapters[index].path, local,
+                          os.path.join(work_dir, "quickest_frame.png"))
+    if frame:
+        _paint_frame_into(img, frame, rect)
+    print(f"media_capture: quickest = C{cid} lap {lap + 1} at {t:.3f}s · "
+          f"row reads {q.table.item(row, 3).text()!r}")
+    w.close()
+    return save(img, os.path.join(out_dir, "quickest.png"))
+
+
 # ====================================================================== the capture record
 # Every published file gets an entry in `<out>/CAPTURED.json`: which shot made it, from which app
 # version and commit, on which day, from what, and its sha256. The v0.5.0 media went stale with
@@ -1203,9 +1259,10 @@ def _record(out_dir: str, filename: str, shot: str, source: str,
 
 # ====================================================================== driver
 SHOTS = ("hero", "ideal", "trust", "map", "overlay", "clip", "accuracy", "og", "debrief",
-         "lapstrip", "moments", "report")
+         "lapstrip", "moments", "report", "quickest")
 # The shots that need the recording named on the command line: `accuracy` is drawn from numbers
-# and `og` from hero.png, and `debrief`, `lapstrip`, `moments` and `report` open the synthetic demo.
+# and `og` from hero.png, and `debrief`, `lapstrip`, `moments`, `report` and `quickest` open the
+# synthetic demo.
 _RECORDING_SHOTS = {"hero", "ideal", "trust", "map", "overlay", "clip"}
 
 
@@ -1266,13 +1323,15 @@ def capture(recording: str | None, out_dir: str, only: set[str], work_dir: str,
         record(shot_moments(app, out_dir), "moments", "synthetic demo")
     if "report" in only:
         record(shot_report(app, out_dir, work_dir), "report", "synthetic demo")
+    if "quickest" in only:
+        record(shot_quickest(app, out_dir, work_dir), "quickest", "synthetic demo")
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("recording", nargs="?", default=None,
                     help="INPUT recording (chapter 1; siblings auto-discovered); not needed for "
-                         "accuracy, og, debrief, lapstrip, moments or report alone")
+                         "accuracy, og, debrief, lapstrip, moments, report or quickest alone")
     ap.add_argument("--out", default=os.path.join("docs", "media"),
                     help="OUTPUT directory for the PNGs (default: docs/media)")
     ap.add_argument("--work", default=None,

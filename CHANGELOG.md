@@ -6,6 +6,35 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-11-19
+
+A minor release: one pull request, #614, Wave 11 of the campaign, built to the owner's request of
+18-19 November: your quickest time through each corner, the lap it was on, and that moment in the
+video one click away. The design was his to delegate, and he did.
+
+### Highlights
+
+- **Your quickest pass through each corner, in one list.** Corners ▸ Quickest passes: per corner
+  the quickest time, its lap and how many laps are level with it. On the demo, C3 reads 2.32 on
+  lap 13 with "5 more laps"; the times are Stats ▸ CORNERS Best, nothing new computed (#614)
+- **One click plays it, then stops.** A row, its ▶ or Return seeks to 2 s before the corner, or
+  the previous corner's exit if later (1.3-1.8 s at the demo's C2, C4, C7), plays, and pauses 1 s
+  after the exit. The map rings the corner and the charts show that lap (#614)
+- **A tie is told as a tie.** At six corners of seven on the demo the quickest is level within
+  0.07 s with 5 to 10 other laps: no ★, and its hover says why. Only C5 stands clear, "3.52 ★" on
+  lap 10, "none · next +0.071"; no ★ while lap timing is provisional (#614)
+- **Click again for the next level lap.** C3 again plays lap 7, and the row reads "playing lap 7
+  (2.35) · 2 of 6" while it plays, so the lap on screen always shows its own time (#614)
+- **From the keyboard too.** ↑/↓ and Return in the list, key 2 back onto it, and ⌘K's "Quickest
+  C3 — lap 13", which plays the lap it names every time (#614)
+
+### Added
+
+- Corners tab: a "Quickest passes" view beside "Lap N" — per corner your quickest time, its lap and
+  how many laps are level with it (the demo's C5: 3.52 ★ on lap 10, the next +0.071 s). (#614)
+- Click a row (or ▶, or Return) to play that pass: 2 s before the corner to 1 s after it, then it
+  pauses. Click the same row again for the next level lap; ⌘K lists "Quickest C3 — lap 13". (#614)
+
 ## [0.15.0] — 2026-11-18
 
 A minor release: 7 pull requests from #606 to #612, Wave 10 of the campaign, built to three designs
@@ -2341,7 +2370,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/eenndan/pacer/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/eenndan/pacer/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/eenndan/pacer/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/eenndan/pacer/compare/v0.13.0...v0.13.1
