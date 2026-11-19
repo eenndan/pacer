@@ -3015,6 +3015,13 @@ class StudioWindow(QMainWindow):
             label = page.quickest.corner_label(qp.cid)
             out.append((f"Quickest {label} — lap {lap_label(qp.lap_id)}",
                         lambda cid=qp.cid: self.play_quickest_pass(cid)))
+        # The pass the view names now (the one playing, or played last): export it as a clip —
+        # the overlay picker opened on its "This pass" scope.
+        named = self.exports.pass_subject()
+        if named is not None:
+            lap, cid, label = named
+            out.append((f"Export the {label} pass — lap {lap_label(lap)}…",
+                        lambda: self.exports.export_pass_video(lap, cid, label)))
         return out
 
     def play_quickest_pass(self, cid: int) -> bool:

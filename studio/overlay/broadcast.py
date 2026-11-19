@@ -226,8 +226,7 @@ class BroadcastElement:
         for t in (times if len(times) else [spec.t0]):
             vals = ev.overlay_values_at(s, float(t), spec)
             speeds.append(ev._readout_runs(vals, self._unit)[0])
-            runs = ev._strip_runs(s, vals, spec.lap_t0, spec.is_best_at(vals.lap_id),
-                                  self._palette)
+            runs = ev._frame_strip_runs(s, vals, spec, self._palette)
             if runs is None:
                 continue
             h, c, d = tower_texts(runs[0], runs[1], self._name)
@@ -564,8 +563,7 @@ class BroadcastElement:
         """What this frame shows: (head, clock, Δ row, Δ row colour, progress, bar Δ or None,
         speed). The Classic run builders decide every string."""
         ev, spec = self._ev, self._spec
-        is_best = spec.is_best_at(vals.lap_id)
-        runs = ev._strip_runs(self._session, vals, spec.lap_t0, is_best, self._palette)
+        runs = ev._frame_strip_runs(self._session, vals, spec, self._palette)
         speed = ev._readout_runs(vals, self._unit)[0]
         if runs is None:
             return None, None, _PENDING_DELTA, None, 0.0, None, speed

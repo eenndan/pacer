@@ -112,6 +112,7 @@ class ExportChoice(NamedTuple):
     config: object
     lead: float
     scope: str = export_video.SCOPE_THIS_LAP
+    cid: int | None = None        # SCOPE_PASS: the corner whose pass is rendered
 
 
 class ExportController:
@@ -654,6 +655,8 @@ class ExportController:
         asks only the session-wide rules: each lap's file then answers for itself, and the best
         lap's own file has none."""
         session = getattr(self.win, "session", None)
+        if scope == export_video.SCOPE_PASS:
+            return ghost.PASS_REASON
         try:
             if scope == export_video.SCOPE_SESSION:
                 return ghost.unavailable_reason(session, None, follow_laps=True)
@@ -851,7 +854,32 @@ class ExportController:
         except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
             return float("nan")
         return float(total) if total else float("nan")
-    def _scope_plan(self, scope: str, lap: int, lead: float) -> tuple[float, int, str]:
+    def _pass_seconds(self, lap: int, cid: int) -> float:
+        """How long lap `lap`'s pass clip through corner `cid` runs: the window the render resolves
+        (`export_video.pass_window_for_export`, `CornerModel.pass_clip`'s). NaN without one."""
+        try:
+            win = export_video.pass_window_for_export(self.win.session, lap, cid)
+        except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
+            return float("nan")
+        return (win[3] - win[0]) if win is not None else float("nan")
+
+    def pass_subject(self) -> tuple[int, int, str] | None:
+        """(lap, cid, label) of the corner pass Corners ▸ Quickest passes last played and still
+        names (`QuickestPassTable.playing`: a lap picked elsewhere forgets it), or None. The
+        overlay picker offers its "This pass" scope only then."""
+        view = getattr(self.win, "view", None)
+        page = getattr(view, "corners_page", None) if view is not None else None
+        try:
+            got = page.quickest.playing() if page is not None else None
+        except Exception:  # noqa: BLE001 — an offer never blocks the export it adds to
+            return None
+        if got is None:
+            return None
+        cid, lap = got
+        return int(lap), int(cid), page.quickest.corner_label(cid)
+
+    def _scope_plan(self, scope: str, lap: int, lead: float,
+                    pass_: tuple[int, str] | None = None) -> tuple[float, int, str]:
         """(seconds per file, number of files, what the scope renders) for the hint — resolved
         through `export_video`'s own scope machinery rather than re-counted here, so a row the
         dialog offers is a render the module can actually build."""
@@ -860,6 +888,10 @@ class ExportController:
             return self._export_session_seconds(), 1, "the whole recording"
         if session is None:
             return float("nan"), 1, "this lap"
+        if scope == export_video.SCOPE_PASS and pass_ is not None:
+            return self._pass_seconds(lap, pass_[0]), 1, (
+                f"the {pass_[1]} pass of lap {lap_label(lap)}, from its lead-in to 1 s after the "
+                "exit, with the corner's time and no lap clock")
         try:
             ids = export_video.scope_lap_ids(session, scope, lap)
         except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
@@ -949,7 +981,8 @@ class ExportController:
             return ""
         return "Measuring the footage for the size and the time to render…"
 
-    def _ask_export_options(self, lap: int):
+    def _ask_export_options(self, lap: int, pass_: tuple[int, str] | None = None,
+                            preset_pass: bool = False):
         """Modal scope + shape + output picker returning an `ExportChoice`, or None on cancel.
         Every choice but Contents persists across relaunches (prefs), like the unit and the palette.
 
@@ -957,8 +990,17 @@ class ExportController:
         ninety seconds of render and half an hour of it and every other row is a detail next to
         that; then the run-up, which changes the same number; then the frame's shape; then what
         the frame contains and how big it lands. The hint underneath re-reads every one of them,
-        so the consequences of a choice are visible before it is confirmed rather than after."""
+        so the consequences of a choice are visible before it is confirmed rather than after.
+
+        `pass_` = (cid, label) of lap `lap`'s corner pass: the Export row then ends in "This pass
+        — C3, lap 13" (`SCOPE_PASS`), opened on when `preset_pass` (the pass's own command). That
+        row is never remembered: a pass is the subject of one export, and the next dialog opens on
+        the scope remembered before it."""
         dlg, col = self._export_dialog("Export overlay video")
+        scope_options = list(self._EXPORT_SCOPE_OPTIONS)
+        if pass_ is not None:
+            scope_options.append((f"This pass — {pass_[1]}, lap {lap_label(lap)}",
+                                  export_video.SCOPE_PASS))
 
         desc = QLabel(self._EXPORT_STYLE_DESC[broadcast.STYLE_CLASSIC])   # follows the Style
         desc.setWordWrap(True)
@@ -988,6 +1030,11 @@ class ExportController:
             return box
 
         scope_combo = _combo(self._EXPORT_SCOPE_OPTIONS, self._PREF_EXPORT_SCOPE)
+        remembered_scope = scope_combo.currentIndex()
+        if pass_ is not None:
+            scope_combo.addItem(scope_options[-1][0])
+            if preset_pass:
+                scope_combo.setCurrentIndex(len(scope_options) - 1)
         lead_combo = _combo(self._EXPORT_LEAD_OPTIONS, self._PREF_EXPORT_LEAD)
         aspect_combo = _combo(self._EXPORT_ASPECT_OPTIONS, self._PREF_EXPORT_ASPECT)
         fit_combo = _combo(self._EXPORT_FIT_OPTIONS, self._PREF_EXPORT_FIT)
@@ -1072,6 +1119,8 @@ class ExportController:
 
             def _use_defaults():
                 for key, box in rows.items():
+                    if box is scope_combo and box.currentIndex() >= len(self._EXPORT_SCOPE_OPTIONS):
+                        continue              # the pass the dialog was opened for stays its subject
                     box.setCurrentIndex(self._EXPORT_DEFAULT_INDEX[key])
                 content_combo.setCurrentIndex(0)
                 ticks[_style()] = [False, False]
@@ -1106,7 +1155,7 @@ class ExportController:
         col.addWidget(buttons)
 
         def _update_hint():
-            scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
+            scope = scope_options[scope_combo.currentIndex()][1]
             lead = self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1]
             aspect = self._EXPORT_ASPECT_OPTIONS[aspect_combo.currentIndex()][1]
             content = self._EXPORT_CONTENT_OPTIONS[content_combo.currentIndex()][1]
@@ -1118,10 +1167,11 @@ class ExportController:
             # crop/fit choice only exists where the output's shape differs from the footage's;
             # the H.264 quality preset is not a knob ProRes or PNG have.
             session_scope = scope == export_video.SCOPE_SESSION
-            lead_combo.setEnabled(not session_scope)
+            pass_scope = scope == export_video.SCOPE_PASS    # it carries its own lead-in
+            lead_combo.setEnabled(not (session_scope or pass_scope))
             fit_combo.setEnabled(aspect != export_video.ASPECT_SOURCE)
             q_combo.setEnabled(not overlay_only)
-            lead = 0.0 if session_scope else lead
+            lead = 0.0 if (session_scope or pass_scope) else lead
             # The ghost is disabled, with its reason as the tooltip, where the rules forbid one;
             # its remembered tick is kept but a line below says it will not be drawn, so a choice
             # the user made is never dropped without a word.
@@ -1143,7 +1193,7 @@ class ExportController:
                 (self._CARDS_TIP + (self._CARDS_PROVISIONAL if provisional else ""))
                 if no_cards is None else f"Off here: {no_cards}")
 
-            clip, files, what = self._scope_plan(scope, lap, lead)
+            clip, files, what = self._scope_plan(scope, lap, lead, pass_)
             lines = [f"Renders {what}."]
             if no_ghost is not None and want_ghost:
                 lines.append(f"No ghost in this export: {no_ghost}")
@@ -1197,7 +1247,7 @@ class ExportController:
                              "no audio — for compositing over the original in Resolve or "
                              f"Premiere{player}.")
             size = self._export_size_hint(clip, h, quality, aspect, content, files, source, fit,
-                                          on_line=not (session_scope or lead))
+                                          on_line=not (session_scope or pass_scope or lead))
             if size:
                 lines.append(size)
             if "to render" not in size and self._measuring_line(src):
@@ -1222,8 +1272,10 @@ class ExportController:
             probe_poll.stop()
         if not accepted:
             return None
+        scope = scope_options[scope_combo.currentIndex()][1]
         indices = {
-            self._PREF_EXPORT_SCOPE: scope_combo.currentIndex(),
+            self._PREF_EXPORT_SCOPE: (remembered_scope if scope == export_video.SCOPE_PASS
+                                      else scope_combo.currentIndex()),
             self._PREF_EXPORT_LEAD: lead_combo.currentIndex(),
             self._PREF_EXPORT_ASPECT: aspect_combo.currentIndex(),
             self._PREF_EXPORT_FIT: fit_combo.currentIndex(),
@@ -1238,7 +1290,6 @@ class ExportController:
                 prefs.set(key, on)
         except OSError as exc:
             _log.warning("export extras not remembered (%r)", exc)
-        scope = self._EXPORT_SCOPE_OPTIONS[scope_combo.currentIndex()][1]
         content = self._EXPORT_CONTENT_OPTIONS[content_combo.currentIndex()][1]
         overlay_only = content != self._EXPORT_CONTENT_COMPOSITE
         # Burn the current display unit + semantic palette into the overlay so the export matches the
@@ -1256,9 +1307,10 @@ class ExportController:
             elements=tuple(name for name, box in ((ghost.GhostElement.name, ghost_box),
                                                   (corner_cards.CornerCardsElement.name, cards_box))
                            if box.isChecked() and box.isEnabled())), _style())
-        lead = (0.0 if scope == export_video.SCOPE_SESSION
+        lead = (0.0 if scope in (export_video.SCOPE_SESSION, export_video.SCOPE_PASS)
                 else self._EXPORT_LEAD_OPTIONS[lead_combo.currentIndex()][1])
-        return ExportChoice(config=config, lead=lead, scope=scope)
+        return ExportChoice(config=config, lead=lead, scope=scope,
+                            cid=pass_[0] if scope == export_video.SCOPE_PASS else None)
     # Every failure this export can raise says the product's name IN THE BODY. macOS drops a
     # QMessageBox's window title (documented at _show_error_report and _load_failure_dialog, pinned
     # by test_app_chrome), so "The render failed: …" used to arrive as an unattributed sentence in a
@@ -1268,9 +1320,10 @@ class ExportController:
     _SCOPE_LOG_WORDS = {
         export_video.SCOPE_THIS_LAP: "this lap", export_video.SCOPE_BEST_LAP: "best lap",
         export_video.SCOPE_ALL_LAPS: "all laps", export_video.SCOPE_SESSION: "full session",
+        export_video.SCOPE_PASS: "corner pass",
     }
     @staticmethod
-    def _overlay_suffix(choice, lap: int | None) -> str:
+    def _overlay_suffix(choice, lap: int | None, corner: str | None = None) -> str:
         """What follows the recording's stem in an overlay export's default name, for `lap` (None =
         the whole recording): `_lap14_overlay.mp4`, `_session_overlay.mp4`, the
         `_lap14_overlay_alpha.mov` track, the `_lap14_overlay_png` folder (see
@@ -1279,10 +1332,11 @@ class ExportController:
         The transparent track keeps a name of its own. It used to be `<stem>_overlay.mov`, one
         letter from the burned-in `<stem>_overlay.mp4` beside it, and nothing in Finder said which
         of the two was the video to watch."""
-        return export_video.overlay_output_name("", lap, choice.config)
-    def _overlay_name(self, choice, lap: int | None) -> str:
-        """The default file (or PNG folder) NAME, stem included: `GX010067_lap14_overlay.mp4`."""
-        return os.path.basename(self._export_default(self._overlay_suffix(choice, lap)))
+        return export_video.overlay_output_name("", lap, choice.config, corner)
+    def _overlay_name(self, choice, lap: int | None, corner: str | None = None) -> str:
+        """The default file (or PNG folder) NAME, stem included: `GX010067_lap14_overlay.mp4`
+        (a pass: `GX010067_lap13_C3_overlay.mp4`)."""
+        return os.path.basename(self._export_default(self._overlay_suffix(choice, lap, corner)))
     def _confirm_replace(self, specs, png: bool, panel_asked: bool) -> bool:
         """Ask ONCE before an export overwrites what is already there; True to go ahead.
 
@@ -1328,7 +1382,17 @@ class ExportController:
             for spec in existing:
                 export_video.remove_png_frames(spec.out_path)
         return True
-    def export_overlay_video(self):
+    def export_pass_video(self, lap: int, cid: int, label: str) -> None:
+        """Export lap `lap`'s pass through corner `cid` (`label`, "C3"): the overlay picker,
+        opened on "This pass" (⌘K "Export the C3 pass — lap 13…", offered while Corners ▸
+        Quickest passes names that pass)."""
+        self.export_overlay_video(pass_=(int(lap), int(cid), label), preset_pass=True)
+
+    def export_overlay_video(self, pass_: tuple[int, int, str] | None = None,
+                             preset_pass: bool = False):
+        """File ▸ Export overlay video…: the picker, then the save panel, then the render. Its
+        "This pass" row is offered for `pass_` = (lap, cid, label), else for the pass Quickest
+        passes names now (`pass_subject`)."""
         if self._no_laps_to_export():
             return
         if not export_video.ffmpeg_available():
@@ -1343,7 +1407,10 @@ class ExportController:
                                 f"{APP_NAME} can't render an overlay video for this session: "
                                 "it has no source video file to render onto.")
             return
-        lap = self._export_lap_id()  # the primary/selected lap, falling back to the best lap
+        if pass_ is None:
+            pass_ = self.pass_subject()
+        # the primary/selected lap, falling back to the best lap; a pass names its own lap
+        lap = pass_[0] if (pass_ is not None and preset_pass) else self._export_lap_id()
         win = export_video.lap_window_for_export(self.win.session, lap) if lap is not None else None
         if win is None:
             self.win.statusBar().showMessage("no usable lap to export video for", self._status_ms)
@@ -1355,10 +1422,14 @@ class ExportController:
             self.win.statusBar().showMessage("video export cancelled", self._status_ms)
             return
         # Pick scope + shape + output FIRST (so a cancel here writes nothing), then the save path.
-        choice = self._ask_export_options(lap)
+        if pass_ is not None and pass_[0] != lap:
+            pass_ = None                  # the row names the lap the other rows render
+        choice = (self._ask_export_options(lap) if pass_ is None
+                  else self._ask_export_options(lap, pass_[1:], preset_pass))
         if choice is None:
             return
         scope = choice.scope
+        corner = pass_[2] if (pass_ is not None and scope == export_video.SCOPE_PASS) else None
         png = choice.config.overlay_only and choice.config.alpha_codec == export_video.ALPHA_PNG
         batch = scope == export_video.SCOPE_ALL_LAPS
         # The lap the NAME carries is the lap the scope renders: "Best lap" names the best lap
@@ -1382,14 +1453,14 @@ class ExportController:
             folder = self._export_folder_path(title, home)
             if not folder:
                 return
-            out = os.path.join(folder, self._overlay_name(choice, name_lap))
+            out = os.path.join(folder, self._overlay_name(choice, name_lap, corner))
             if batch:
                 lap_path = lambda i: os.path.join(folder, self._overlay_name(choice, i))  # noqa: E731
         else:
             filt = ("ProRes 4444 with alpha (*.mov)" if choice.config.overlay_only
                     else "MP4 video (*.mp4)")
             out = self._export_save_path("Export overlay video",
-                                         self._overlay_suffix(choice, name_lap), filt)
+                                         self._overlay_suffix(choice, name_lap, corner), filt)
             if not out:
                 return
         # Resolve the scope to one spec per output file. The padding goes through the spec
@@ -1398,7 +1469,7 @@ class ExportController:
         try:
             specs = export_video.build_scope_specs(
                 self.win.session, out, scope, lap_id=lap, config=choice.config,
-                src_path=src, lead=choice.lead, lap_path=lap_path)
+                src_path=src, lead=choice.lead, lap_path=lap_path, cid=choice.cid)
         except ValueError as exc:
             QMessageBox.warning(self.win, self._EXPORT_FAIL_TITLE,
                                 f"{APP_NAME} can't export this:\n{exc}")
