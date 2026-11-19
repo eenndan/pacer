@@ -843,6 +843,7 @@ class CentralView(QWidget):
         self.corners_page.view_changed.connect(self._on_corners_view_changed)
         # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
         self.video.clipEnded.connect(self._on_clip_ended)
+        self.video.liveReadoutShown.connect(self._on_live_readout_shown)
         # ...and again while Loop replays it, and "· looping" while Loop is on.
         self.video.clipStarted.connect(self._on_clip_started)
         self.video.loopChanged.connect(self._on_pass_loop_changed)
@@ -1383,12 +1384,7 @@ class CentralView(QWidget):
 
         self.video.set_compare_enabled(len(self.session.valid_lap_ids()) >= 2)
         # Feed the slider each valid lap's start/end on the global clock as lap-ruler ticks.
-        bounds: list[float] = []
-        for lid in self.session.valid_lap_ids():
-            w = self.session.lap_window(lid)
-            if w is not None:
-                bounds.extend(w)
-        self.video.set_lap_ticks(bounds)
+        self._push_lap_ruler()
         # …and the same bar's GPS-quality strip, from the SAME session. It is pushed here, beside
         # the lap ticks, because both annotate the scrub axis and both are session facts the view
         # is handed rather than derives.
@@ -1954,6 +1950,7 @@ class CentralView(QWidget):
         self.table.select([lap_id])
         self._on_laps_selected([lap_id], seek=False)
         self.video.play_pass(*clip)   # Loop / Slow, if on, stay on for this pass
+        self._played_pass = (lap_id, cid)   # what the fullscreen readout's pass line names
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(True)
@@ -2372,12 +2369,78 @@ class CentralView(QWidget):
         # hero #DiffBox.
         self.video.set_readout(self._transport_readout(t))
         self._update_diff_box(t, sp, lap_id)
+        if self.video.live_readout_shown():
+            self._push_live_lap(t, lap_id)
         # Gate the g_at_time lookup on the overlay being visible. In compare the pair pins each
         # pane's g-meter lap scope, so skip the per-tick primary pin to keep one driver.
         if not self._comparing():
             self.video.set_gmeter_lap(lap_id)
         if self.video.is_gmeter_visible():
             self.video.set_g(self.session.g_at_time(t))
+
+    def _push_lap_ruler(self):
+        """The video's lap ruler: each valid lap's start/end as ticks, and per lap its hover line and
+        the ★ / ▼ its Laps-table Lap cell wears (`LapTable.ruler_marks`, one source). Re-pushed by
+        the rebuild seam and the timing-trust seam, the two that re-decide those marks."""
+        video, table = getattr(self, "video", None), getattr(self, "table", None)
+        if video is None:
+            return
+        marks = table.ruler_marks() if table is not None else {}
+        verified = getattr(self.session, "timing_verified", True)
+        bounds: list[float] = []
+        segments = []
+        for lid in self.session.valid_lap_ids():
+            w = self.session.lap_window(lid)
+            if w is None:
+                continue
+            bounds.extend(w)
+            mark = marks.get(lid, "")
+            note = {"": "", "★": " · ★ session best"}.get(mark, f" · {mark} slow lap")
+            tip = (f"Lap {lap_label(lid)} · {fmt_time(self.session.lap_time(lid))}{note}"
+                   + ("" if verified else " · provisional timing"))
+            segments.append((w[0], w[1], mark, tip))
+        video.set_lap_ticks(bounds)
+        video.set_lap_segments(segments)
+
+    def _push_live_lap(self, t: float, lap_id: int | None):
+        """The fullscreen readout's lap line and pass line (its Δ run comes from _set_diff_text).
+
+        THE LAP LINE IS THE EXPORT STRIP'S LABEL, "LAP 7   0:23.415": the lap the playhead is in
+        and the time since its line, clamped into the lap (export_video._strip_runs), "No lap"
+        outside every lap as a follow-laps export says. Muted while lap timing is provisional — the
+        Laps table's own treatment of the same times, so nothing here is shown that the table
+        withholds. The pass line names the pass the video is playing, with that lap's own time
+        through the corner (`lap_corner_stats`, the Quickest passes view's numbers)."""
+        if lap_id is None:
+            lap = "No lap"
+        else:
+            win = self.session.lap_window(lap_id)
+            elapsed = 0.0 if win is None else min(max(t - win[0], 0.0), win[1] - win[0])
+            lap = f"LAP {lap_label(lap_id)}   {fmt_time(elapsed)}"
+        dim = not getattr(self.session, "timing_verified", True)
+        self.video.set_live_lap(lap, dim, self._live_pass_line())
+
+    def _live_pass_line(self) -> str:
+        played = getattr(self, "_played_pass", None)
+        if played is None or self.video.pane.pass_clip() is None:
+            return ""
+        lap_id, cid = played
+        cache = getattr(self, "_pass_line_cache", None)
+        if cache is None or cache[0] != played:
+            corners = self.session.corners
+            idx, label = next(((i, c.label) for i, c in enumerate(corners.corner_list())
+                               if c.cid == cid), (None, f"C{cid}"))
+            stats = corners.lap_corner_stats(lap_id) if idx is not None else []
+            secs = stats[idx].time if idx is not None and idx < len(stats) else None
+            took = "" if secs is None or math.isnan(secs) else f" ({secs:.2f})"
+            cache = self._pass_line_cache = (played, f"{label} · lap {lap_label(lap_id)}{took}")
+        return cache[1] + (" · looping" if self.video.pane.is_looping() else "")
+
+    def _on_live_readout_shown(self):
+        t = self._playback.applied_t
+        if t is None:
+            return
+        self._push_live_lap(t, self.session.lap_at_time(t))
 
     def _transport_readout(self, t: float) -> str:
         """The transport TIMECODE (C6): the media position, and only that. Deliberately does NOT
@@ -2566,6 +2629,7 @@ class CentralView(QWidget):
     def _set_diff_text(self, text: str, sem_colour: str | None, value: float | None = None):
         text, sem_colour = _level_readout(text, sem_colour, value)
         self.diff_box.setText(text)
+        self.video.set_live_delta(text, sem_colour)   # the fullscreen readout says the same
         # The colour goes on the Δ run ONLY (the speed stays the label's neutral text colour), and
         # only when it changes — no per-tick stylesheet re-layout.
         colour = sem_colour or theme.C.text
@@ -2820,7 +2884,9 @@ class CentralView(QWidget):
         # A race's tracks describe the laps as they were: a re-segment ends it before anything moves.
         self.end_lap_race()
         self.end_pass_zoom()     # ...and so does a pass's zoom: its window is the old corners'
+        self._pass_line_cache = None   # ...and the readout's pass time, read off the old corners
         self.table.refresh()
+        self._push_lap_ruler()         # the ruler's laps and ★ / ▼ follow the table's
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
         self.map.refresh_overlays()
@@ -2885,6 +2951,7 @@ class CentralView(QWidget):
         table = getattr(self, "table", None)
         if table is not None:
             table.refresh_timing_trust()
+            self._push_lap_ruler()       # ★ is withheld / given back with the table's
         mp = getattr(self, "map", None)
         if mp is not None:
             mp.refresh_provisional_cue()

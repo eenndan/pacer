@@ -19,13 +19,15 @@ app-window drag).
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QFontMetrics, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from . import chapters, media_clock
+from . import chapters, media_clock, theme
 from .gmeter_overlay import GMeterOverlay
 
 # The g-meter overlay sits in the TOP-RIGHT corner of the video, sized as a FRACTION of the
@@ -55,6 +57,108 @@ _SEAM_RESUME_WATCHDOG_MS = 8000
 # timer that fires first supersedes a seek about to land — the failure this exists to end: up to
 # 693 ms between drag frames on Sandown 3h's 4K HEVC (P-A p9), 460-560 ms on the synthetic GoPro.
 _DRAG_SEEK_RELEASE_MS = 1000
+
+
+@dataclass(frozen=True)
+class ReadoutLines:
+    """What the live readout over a fullscreen video says — text only, every run already formatted
+    by the surface it mirrors (see CentralView._push_live_lap / _set_diff_text):
+
+      * `lap`   — "LAP 7   0:23.415" (the export strip's label: lap, then the lap clock), or "No lap";
+                  `lap_dim` when lap timing is provisional (the Laps table's muted rows);
+      * `delta` — the hero readout's Δ run, its level rule and colour (`delta_colour`, None = neutral)
+                  applied by the hero's own `_level_readout`; `tail` — its speed or "whole lap";
+      * `pass_` — during a played pass: "C3 · lap 7 (2.35)", "· looping" while Loop is on."""
+
+    lap: str = ""
+    lap_dim: bool = False
+    delta: str = ""
+    delta_colour: str | None = None
+    tail: str = ""
+    pass_: str = ""
+
+
+class LiveReadout(QWidget):
+    """The live readout's WINDOW: numbers only, over the video while it fills the screen.
+
+    A frameless top-level window for the g-meter's reason (module docstring): a child is
+    composited BEHIND the native video surface on macOS. Pinned to the video's TOP-LEFT corner,
+    opposite the g-meter's top-right: on a helmet or kart GoPro the track ahead is the middle of
+    the frame and the bottom is the steering wheel, hands and nose — what slow motion is for —
+    while the top corners are sky, trees and the visor's edge. Mirrors the dial's plate (C.surface
+    at 168/255 with the theme hairline) so it reads over bright footage. Repaints only when a
+    printed run changes, and resizes only when a line's LENGTH does (the face is monospaced)."""
+
+    _PAD = theme.SPACE_S
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                         | Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self._lines = ReadoutLines()
+        self._small = theme.mono_font(theme.EMPHASIS, theme.W_REGULAR)
+        self._big = theme.mono_font(theme.HERO)
+        self._shape: tuple = ()
+        self._hint: QSize | None = None
+
+    def lines(self) -> ReadoutLines:
+        return self._lines
+
+    def set_lines(self, lines: ReadoutLines) -> None:
+        if lines == self._lines:
+            return
+        self._lines = lines
+        shape = (len(lines.lap), len(lines.delta), len(lines.tail), len(lines.pass_))
+        if shape != self._shape:
+            self._shape = shape
+            self._hint = None      # re-measured once, then reused every tick (sizeHint)
+        self.update()
+
+    def _rows(self):
+        """(font, [(text, colour)...]) per painted row — the one layout paint and size share."""
+        ln = self._lines
+        rows = [(self._small, [(ln.lap, theme.C.text_dim if ln.lap_dim else theme.C.text)])]
+        if ln.delta or ln.tail:
+            rows.append((self._big, [(ln.delta, ln.delta_colour or theme.C.text),
+                                     ("  " + ln.tail if ln.tail else "", theme.C.text)]))
+        if ln.pass_:
+            rows.append((self._small, [(ln.pass_, theme.C.accent)]))
+        return rows
+
+    def sizeHint(self):  # noqa: N802 (Qt override)
+        if self._hint is None:
+            self._hint = self._measure()
+        return self._hint
+
+    def _measure(self) -> QSize:
+        w = h = 0
+        for font, runs in self._rows():
+            fm = QFontMetrics(font)
+            w = max(w, sum(fm.horizontalAdvance(t) for t, _c in runs))
+            h += fm.height()
+        return QSize(w + 2 * self._PAD, h + 2 * self._PAD)
+
+    def paintEvent(self, _event):  # noqa: N802 (Qt override)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setBrush(theme.qcolor(theme.C.surface, 168))
+        p.setPen(QPen(theme.qcolor(theme.C.border, 200), 1))
+        p.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2),
+                          theme.RADIUS_M, theme.RADIUS_M)
+        y = self._PAD
+        for font, runs in self._rows():
+            fm = QFontMetrics(font)
+            p.setFont(font)
+            x = self._PAD
+            for text, colour in runs:
+                p.setPen(theme.qcolor(colour))
+                p.drawText(x, y + fm.ascent(), text)
+                x += fm.horizontalAdvance(text)
+            y += fm.height()
+        p.end()
 
 
 def _resolve_notify_overrides(audio: QAudioOutput) -> None:
@@ -244,6 +348,12 @@ class PlayerPane(QWidget):
         # has to stand down whenever the video can't host it (a collapsed panel), and come back
         # when it can. _position_gmeter is the single authority over what's actually shown.
         self._gmeter_on = False
+        # The live readout (LiveReadout): the same kind of top-level window, same pinning hooks, at
+        # the video's top-left. `_readout_on` is the VIEW's decision (fullscreen video + the key),
+        # not whether it is on screen right now — _position_readout decides that.
+        self.live_readout = LiveReadout(self)
+        self.live_readout.hide()
+        self._readout_on = False
         # watch the video widget's move/resize to re-pin the overlay (the pane's own move/resize are
         # caught in moveEvent/resizeEvent; the top-level window's in _watch_top_level).
         self.video.installEventFilter(self)
@@ -675,12 +785,62 @@ class PlayerPane(QWidget):
         self._sync_gmeter()
 
     def _sync_gmeter(self):
-        """Re-pin the overlay window to the video corner if it's on (cheap; called on any geometry
-        change of the video widget, this pane, or the app window)."""
+        """Re-pin the overlay windows to the video corners if they're on (cheap; called on any
+        geometry change of the video widget, this pane, or the app window)."""
         if self._gmeter_on:
             self._position_gmeter()
             if self.gmeter.isVisible():
                 self.gmeter.raise_()
+        if self._readout_on:
+            self._position_readout()
+
+    # ------------------------------------------------------------- live readout overlay
+    def set_live_readout_visible(self, on: bool):
+        """The view's decision to show the readout (see `_readout_on`); on screen only while the
+        video can host it beside the dial (_readout_target_rect)."""
+        self._readout_on = bool(on)
+        if self._readout_on:
+            self._watch_top_level()
+            self._position_readout()
+        else:
+            self.live_readout.hide()
+
+    def is_live_readout_on(self) -> bool:
+        return self._readout_on
+
+    def set_live_readout(self, lines: ReadoutLines):
+        """Per tick while on: hand the readout its runs (it repaints only on a change) and re-pin
+        it, as set_g does for the dial (a top-level window does not follow an app-window drag)."""
+        if not self._readout_on:
+            return
+        self.live_readout.set_lines(lines)
+        self._position_readout()
+
+    def _readout_target_rect(self) -> QRect | None:
+        """The readout's rect in GLOBAL coords at the video's top-left, or None when the video is
+        off screen or too narrow to hold it AND the dial's corner beside it — it never covers the
+        g-meter, which keeps the top-right (the dial's own width is reserved even while it is off,
+        so turning G on can never land the dial on the numbers)."""
+        if not self._video_is_on_screen():
+            return None
+        vw, vh = self.video.width(), self.video.height()
+        hint = self.live_readout.sizeHint()
+        dial_w = int(min(max(vw * _OVERLAY_FRAC, _OVERLAY_MIN_W), _OVERLAY_MAX_W))
+        if hint.width() + dial_w + 3 * _OVERLAY_PAD > vw or hint.height() + 2 * _OVERLAY_PAD > vh:
+            return None
+        corner = self.video.mapToGlobal(QPoint(_OVERLAY_PAD, _OVERLAY_PAD))
+        return QRect(corner.x(), corner.y(), hint.width(), hint.height())
+
+    def _position_readout(self):
+        rect = self._readout_target_rect()
+        if rect is None:
+            self.live_readout.hide()
+            return
+        if self.live_readout.geometry() != rect:
+            self.live_readout.setGeometry(rect)
+        if not self.live_readout.isVisible():
+            self.live_readout.show()
+            self.live_readout.raise_()
 
     def set_g(self, g):
         """Feed (lat_g, long_g, total_g) to the overlay (None blanks the dot); no-op cost when
@@ -806,15 +966,19 @@ class PlayerPane(QWidget):
         self._watch_top_level()
         if self._gmeter_on:
             self._position_gmeter()
+        if self._readout_on:
+            self._position_readout()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         # hide the overlay so a detached top-level can't linger; _gmeter_on stays on for showEvent.
         if self._gmeter_on:
             self.gmeter.hide()
+        self.live_readout.hide()
 
     def closeEvent(self, event):
         self.gmeter.close()   # the overlay has no parent window to close it
+        self.live_readout.close()
         super().closeEvent(event)
 
     def stop(self):
@@ -824,6 +988,7 @@ class PlayerPane(QWidget):
         self._drag_release.stop()
         self.player.stop()
         self.gmeter.close()
+        self.live_readout.close()
 
     def dispose(self):
         """Release decoder + audio + overlay (player/audio are NOT Qt children of the pane, so they
@@ -843,6 +1008,8 @@ class PlayerPane(QWidget):
                      lambda: self.player.setAudioOutput(None),
                      lambda: self.gmeter.close(),
                      lambda: self.gmeter.deleteLater(),
+                     lambda: self.live_readout.close(),
+                     lambda: self.live_readout.deleteLater(),
                      lambda: self.player.deleteLater(),
                      lambda: self.audio.deleteLater()):
             try:

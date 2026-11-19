@@ -214,6 +214,9 @@ COMMANDS: list[Command] = [
     Command("Layout", GlyphKey("F  ·", VIDEO_FULLSCREEN_GLYPH),
             "Make the video fill the screen, or double-click the video (Esc / again to restore)",
             run="toggle_video_focus", palette_key="F"),
+    # The readout over the fullscreen video: lap, lap clock, Δ, speed (video_view, live readout).
+    Command("Layout", "I", "Live readout over the fullscreen video: lap, lap clock, Δ, speed",
+            run="toggle_live_readout"),
     Command("Layout", "Drag", "Drag any splitter: resize the panels (the layout is remembered)"),
     Command("Help", QKeySequence("Ctrl+K"), "Find and run any command"),
     # `run` stays None even though `?` is a live binding: Help ▸ Keyboard shortcuts is a menu item,

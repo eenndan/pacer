@@ -2422,6 +2422,15 @@ class LapTable(QWidget):
             suffix += f"{CUE_SEP}{self._cue(lap_id)}"
         return f"{prefix}{best}{lap_label(lap_id)}{suffix}"  # 1-based display number
 
+    def ruler_marks(self) -> dict[int, str]:
+        """lap id → the mark its Lap cell wears: "★" (the best lap, withheld while timing is
+        provisional) or its culprit cue ("▼ C5"). The video's lap ruler reads THIS, so the two
+        surfaces cannot mark different laps."""
+        marks = {lap: cue for lap in self._slow_notes if (cue := self._cue(lap))}
+        if self._best_lap_id is not None:
+            marks[self._best_lap_id] = BEST_LAP_MARK.strip()
+        return marks
+
     def _cue(self, lap_id) -> str:
         """The lap's culprit cue ("▼ C5"), or "" (no note, or a note with no culprit)."""
         note = self._slow_notes.get(lap_id)

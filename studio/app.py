@@ -104,7 +104,9 @@ ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
 # up indefinitely, so minutes later the bar still asserts a stale fact about the session (B20).
 STATUS_MS = 6000
 # L with no pass playing: where a pass to loop comes from.
-NO_PASS_TO_LOOP = "Loop needs a pass playing: play one from the Corners tab's Quickest passes"
+READOUT_ON = "Live readout on: lap, lap clock, Δ and speed over the video when it fills the screen (F)"
+READOUT_OFF = "Live readout off: the video fills the screen (F) with the picture alone"
+NO_PASS_TO_LOOP ="Loop needs a pass playing: play one from the Corners tab's Quickest passes"
 # How long a RELOAD may run before the working UI is replaced by the "Loading telemetry…" card
 # (ms). The load runs off the UI thread, so a live session stays usable while its successor is
 # read; blanking it instantly meant even a 0.36 s reload flashed the whole window to an
@@ -2866,6 +2868,8 @@ class StudioWindow(QMainWindow):
         shortcut(Qt.Key_BracketRight, self.faster_playback)
         # L → loop the pass playing (the transport's Loop toggle, shown only while there is one).
         shortcut(Qt.Key_L, self.toggle_pass_loop)
+        # I → the live readout over the fullscreen video (I for information, the players' key).
+        shortcut(Qt.Key_I, self.toggle_live_readout)
         # D / N → the charts' two instrument gestures: drop-or-clear the datum (second) cursor, and
         # walk the biggest Δ losses of the lap. Both live on the charts because that is what they
         # measure; both are window-level because that is where every other gesture here is.
@@ -2920,6 +2924,16 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None and not view.video.toggle_pass_loop():
             self.statusBar().showMessage(NO_PASS_TO_LOOP, STATUS_MS)
+
+    def toggle_live_readout(self):
+        """The live readout over the fullscreen video, off / on (I). It only ever shows while the
+        video fills the screen, so outside that the status line says where it lives."""
+        view = getattr(self, "view", None)
+        if view is None:
+            return
+        on = view.video.toggle_live_readout()
+        if not view.is_video_focused():
+            self.statusBar().showMessage(READOUT_ON if on else READOUT_OFF, STATUS_MS)
 
     def _racing(self) -> bool:
         view = getattr(self, "view", None)
