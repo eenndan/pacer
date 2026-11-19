@@ -598,6 +598,314 @@ def test_any_seek_play_or_pause_drops_the_clip_end():
         pane._on_position(15_500)
         assert pane.clip_end() is None and pane.is_playing(), act
 
+# ------------------------------------------------------------------ the pass zoom
+# A played pass zooms the charts onto its corner (the frame `N` and a Coaching Compare use:
+# `corner_plot_window` with its own width either side) and the map onto the clip's stretch of the
+# lap; the zoom lasts while that pass is the subject (DECISIONS §18 listed "the chart shows the
+# whole lap" as open; discovery: the demo's C5 is 5.5 % of the chart's width).
+
+
+def _chart_x(view):
+    lo, hi = view.plots.p_speed.getViewBox().viewRange()[0]
+    return lo, hi
+
+
+def _map_rect(view):
+    (x0, x1), (y0, y1) = view.map.plot.getViewBox().viewRange()
+    return x0, x1, y0, y1
+
+
+def _whole_lap(view):
+    lo, hi = _chart_x(view)
+    fit = view.plots._fit_x_range
+    return abs(lo - fit[0]) < 1e-6 and abs(hi - fit[1]) < 1e-6
+
+
+def _corner_framed(view, cid):
+    x0, x1 = view.session.corner_plot_window(cid, view.plots.axis_mode())
+    lo, hi = _chart_x(view)
+    pad = x1 - x0
+    return abs(lo - (x0 - pad)) < 1e-6 and abs(hi - (x1 + pad)) < 1e-6
+
+
+def _whole_track(view, fitted):
+    x0, x1, y0, y1 = _map_rect(view)
+    f0, f1, g0, g1 = fitted
+    return view.map._view_fitted and abs((x1 - x0) - (f1 - f0)) < 1e-6 and abs(y0 - g0) < 1e-6
+
+
+def _play(view, row):
+    view.corners_page.quickest.activate(row)
+    _settle()
+    cid, lap = view.corners_page.quickest.playing()
+    return cid, lap, view.session.corners.pass_clip(lap, cid)
+
+
+def _inside(view, clip, frac=0.5):
+    """The tick at a point inside the clip, as a playing pane would report it."""
+    t = clip[0] + frac * (clip[1] - clip[0])
+    view._playback.latest_t = t
+    view.tick()
+    return t
+
+
+def test_a_played_pass_zooms_the_charts_and_the_map_onto_its_corner():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        s = win.session
+        view.select_lap_tab(1)
+        _settle()
+        fitted = _map_rect(view)
+        assert _whole_lap(view)
+        cid, lap, clip = _play(view, 4)                    # C5, lap 10
+        assert (cid, lap) == (5, 9)
+        assert _corner_framed(view, 5), (_chart_x(view), s.corner_plot_window(5, "distance"))
+        # the corner fills a third of the chart (it was 5.5 % of the whole lap)
+        lo, hi = _chart_x(view)
+        w0, w1 = s.corner_plot_window(5, "distance")
+        assert abs((w1 - w0) / (hi - lo) - 1 / 3) < 1e-6
+        # the map frames the clip's stretch of lap 10: every point of it inside, the view smaller
+        x0, x1, y0, y1 = _map_rect(view)
+        f0, f1, g0, g1 = fitted
+        assert (x1 - x0) < 0.75 * (f1 - f0) and (y1 - y0) < 0.75 * (g1 - g0)
+        import numpy as np
+        tt = np.asarray(s.tt)
+        sel = (tt >= clip[0]) & (tt <= clip[1])
+        xs, ys = np.asarray(s.tx)[sel], np.asarray(s.ty)[sel]
+        assert xs.min() > x0 and xs.max() < x1 and ys.min() > y0 and ys.max() < y1
+        # ...clear of the map key (left) and the Fit button (right): the free columns
+        from PySide6.QtCore import QPointF
+        m = view.map
+        vbm = m.plot.getViewBox()
+
+        def px(x, y):
+            return m.widget.mapFromScene(vbm.mapViewToScene(QPointF(float(x), float(y)))).x()
+        left, right = px(xs.min(), ys[xs.argmin()]), px(xs.max(), ys[xs.argmax()])
+        assert m._map_key.isVisibleTo(m.widget) and m.fit_btn.isVisibleTo(m.widget)
+        assert left > m._map_key.geometry().right(), (left, m._map_key.geometry())
+        assert right < m.fit_btn.geometry().left(), (right, m.fit_btn.geometry())
+        # the way back where his eyes are: the status line names it
+        assert win.statusBar().currentMessage().endswith(
+            "next · Esc: whole lap · ⌘K: export this pass"), win.statusBar().currentMessage()
+        # ...the marker, at the pass's middle, and the corner's ring are on the canvas
+        _inside(view, clip)
+        _settle()
+        mx, my = view.map.marker.pos().x(), view.map.marker.pos().y()
+        assert x0 < mx < x1 and y0 < my < y1
+        assert view.map.pinned_corner() == "C5"
+        # the visible ways back: the map's Fit, and the chart's readout names Esc
+        assert view.map.fit_btn.isVisibleTo(view.map)
+        assert view.plots.window_label.text().endswith("Esc: whole lap"), \
+            view.plots.window_label.text()
+        # again on the row → the next level lap's... C5 has none: C3's next level lap re-frames
+        cid, lap, clip = _play(view, 2)
+        assert (cid, lap) == (3, 12) and _corner_framed(view, 3)
+        cid, lap, clip2 = _play(view, 2)
+        assert (cid, lap) == (3, 6) and _corner_framed(view, 3) and clip2 != clip
+        # Esc: the whole lap and the whole track, the map's own fit (not the C5 box it came from)
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert _whole_lap(view) and _whole_track(view, fitted)
+        assert not view.map.fit_btn.isVisibleTo(view.map)
+        assert not view.plots.window_label.text().endswith("Esc: whole lap")
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_zoom_stays_through_the_clip_and_its_pause_and_ends_outside_it():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        view.select_lap_tab(1)
+        _settle()
+        fitted = _map_rect(view)
+        cid, lap, clip = _play(view, 0)
+        assert (cid, lap) == (1, 6)
+        # the tick still reporting where the video was before the clip's seek landed: ignored
+        view._playback.latest_t = clip[0] - 30.0
+        view.tick()
+        assert _corner_framed(view, 1) and view.pass_zoomed()
+        for frac in (0.0, 0.3, 0.6, 1.0):
+            _inside(view, clip, frac)
+            assert _corner_framed(view, 1), frac
+        # a lead-in that starts in the lap before crosses the line, and the charts re-draw for
+        # the new lap (`_follow_current_lap`): the frame holds through the refresh
+        view.plots.set_laps([lap - 1, 12])
+        assert _corner_framed(view, 1)
+        view.plots.set_laps([lap, 12])
+        # a backend that reports the frame just past the end BEFORE the pause lands: still that pass
+        view._playback.latest_t = clip[1] + 0.1
+        view.tick()
+        assert _corner_framed(view, 1) and view.pass_zoomed()
+        # the clip pauses itself, and the pause lands late (4K on a loaded Mac): the zoom STAYS
+        view.video.clipEnded.emit()
+        _settle()
+        view._playback.latest_t = clip[1] + 0.5
+        view.tick()
+        assert _corner_framed(view, 1) and not view.map._view_fitted and view.pass_zoomed()
+        for _ in range(3):                    # ...parked there, tick after tick
+            view._playback.applied_t = None
+            view.tick()
+        assert view.pass_zoomed()
+        # play on past the clip → whole lap, whole track
+        view._playback.latest_t = clip[1] + 1.0
+        view.tick()
+        assert _whole_lap(view) and _whole_track(view, fitted)
+        # a pause that lands only 0.1 s late keeps it too
+        _cid, _lap, clip = _play(view, 0)
+        _inside(view, clip)
+        view.video.clipEnded.emit()
+        view._playback.latest_t = clip[1] + 0.1
+        view.tick()
+        assert view.pass_zoomed() and _corner_framed(view, 1)
+        view.end_pass_zoom()
+        # the clip ending because he seeked AWAY (the pane drops the end on a seek) still ends it
+        _cid, _lap, clip = _play(view, 0)
+        _inside(view, clip)
+        view.video.clipEnded.emit()
+        view._playback.latest_t = clip[1] + 30.0
+        view.tick()
+        assert not view.pass_zoomed() and _whole_lap(view)
+        # a scrub/seek back before the clip also ends it
+        _cid, _lap, clip = _play(view, 0)        # again on C1: its next level lap
+        _inside(view, clip)
+        view._playback.latest_t = clip[0] - 3.0
+        view.tick()
+        assert _whole_lap(view) and _whole_track(view, fitted)
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_every_restore_path_puts_the_whole_lap_and_track_back():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        view.select_lap_tab(1)
+        _settle()
+        fitted = _map_rect(view)
+
+        def zoomed():
+            _cid, _lap, clip = _play(view, 4)
+            _inside(view, clip)
+            assert _corner_framed(view, 5) and not view.map._view_fitted
+            return clip
+
+        restores = {
+            "a lap pick": lambda: view.table.laps_selected.emit([3]),
+            "a MOMENTS Jump": lambda: view._on_stats_moment_jump(3, 2),
+            "compare": lambda: view.video.compare_btn.click(),
+            "a Lap race": lambda: view.start_lap_race(),
+            "a re-segment": lambda: view.rebuild_derived_views(),
+            "the axis flip": lambda: view.plots.x_mode_combo.setCurrentIndex(1),
+        }
+        for name, act in restores.items():
+            zoomed()
+            act()
+            _settle()
+            if view.is_racing():
+                view.end_lap_race()
+            if view._comparing():
+                view.video.compare_btn.click()
+            if view.plots.axis_mode() == "time":
+                assert _whole_lap(view), name
+                view.plots.x_mode_combo.setCurrentIndex(0)
+                _settle()
+            assert _whole_lap(view) and _whole_track(view, fitted), name
+            assert not view.pass_zoomed(), name
+
+        # TAKING a view over by hand: that view stays where he put it, the other goes back
+        zoomed()
+        vb = view.plots.p_speed.getViewBox()
+        vb.setXRange(580.0, 620.0, padding=0)
+        vb.sigRangeChangedManually.emit([True, False])     # what a wheel zoom / drag emits
+        _settle()
+        lo, hi = _chart_x(view)
+        assert abs(lo - 580.0) < 1e-6 and abs(hi - 620.0) < 1e-6, "his zoom stays"
+        assert _whole_track(view, fitted) and not view.pass_zoomed()
+        view.plots._reset_x_range()
+        zoomed()
+        view.map.plot.getViewBox().sigRangeChangedManually.emit([True, True])
+        _settle()
+        assert _whole_lap(view) and not view.pass_zoomed() and not view.map._view_fitted
+        view.map.fit_btn.click()
+        _settle()
+        zoomed()
+        view.map.fit_btn.click()                           # the map's Fit
+        _settle()
+        assert _whole_lap(view) and _whole_track(view, fitted) and not view.pass_zoomed()
+        zoomed()
+        view.plots.jump_to_next_loss()                     # N: the tour's own zoom
+        _settle()
+        assert not view.pass_zoomed() and _whole_track(view, fitted)
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_cmd_k_plays_a_pass_zoomed_and_compare_at_a_corner_does_not_hold_or_zoom_the_map():
+    from studio import command_palette
+    prefs.set_corners_view("lap")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        fitted = _map_rect(view)
+        rows = [e for e in command_palette.entries(win) if e.title.startswith("Quickest ")]
+        rows[5].run()                                      # "Quickest C6 — lap 13"
+        _settle()
+        assert _corner_framed(view, 6) and view.pass_zoomed() and not view.map._view_fitted
+        # a Coaching Compare over the zoom: it ends the pass zoom, frames ITS corner as before
+        # (not held: a lap pick or N moves it as ever) and leaves the map on the whole track
+        tp = win.session.typical_passes()[1]
+        assert view.compare_at_corner(tp, "+0.36 s")
+        _settle()
+        assert view._comparing() and not view.pass_zoomed() and not view.plots.frame_held()
+        assert _corner_framed(view, 1) and _whole_track(view, fitted)
+        # ...and a Lap race over a zoom draws on the whole track (Follow off, the race's own view)
+        view.video.compare_btn.click()
+        _settle()
+        rows[5].run()
+        _settle()
+        assert view.pass_zoomed() and view.start_lap_race()
+        _settle()
+        assert not view.map.pass_zoomed() and not view.plots.frame_held()
+        view.end_lap_race()
+        _settle()
+        assert _whole_track(view, fitted) and _whole_lap(view)
+    finally:
+        _close(win)
+
+
+def test_the_tick_inside_a_zoomed_pass_moves_neither_view():
+    """Perf invariant 4 (the tick is cheap lookups): while the playhead runs through the clip, no
+    tick re-frames the charts or re-ranges the map — the zoom is set once, on the play."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        _cid, _lap, clip = _play(view, 4)
+        calls = []
+        orig_frame, orig_range = view.plots.frame_span, view.map.plot.getViewBox().setRange
+        view.plots.frame_span = lambda *a: (calls.append("frame"), orig_frame(*a))
+        view.map.plot.getViewBox().setRange = lambda *a, **k: (calls.append("map"),
+                                                               orig_range(*a, **k))
+        for i in range(60):
+            _inside(view, clip, i / 60)
+        assert calls == [] and view.pass_zoomed(), calls
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
