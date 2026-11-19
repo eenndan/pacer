@@ -3157,7 +3157,7 @@ class StudioWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         """←/→ step the video ±1 s (Shift ±5 s). Esc backs out of every "one thing fills the frame"
-        state — video focus, a maximized panel, window fullscreen. Handled here, not as a QShortcut,
+        state — a Lap race, video focus, a maximized panel, a played pass's zoom, window fullscreen. Handled here, not as a QShortcut,
         so the lap table keeps arrow nav; keyPressEvent only fires when the focus widget didn't use
         the key."""
         if event.key() == Qt.Key_Escape and self._escape_out():

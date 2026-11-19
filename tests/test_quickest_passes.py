@@ -676,6 +676,20 @@ def test_a_played_pass_zooms_the_charts_and_the_map_onto_its_corner():
         sel = (tt >= clip[0]) & (tt <= clip[1])
         xs, ys = np.asarray(s.tx)[sel], np.asarray(s.ty)[sel]
         assert xs.min() > x0 and xs.max() < x1 and ys.min() > y0 and ys.max() < y1
+        # ...clear of the map key (left) and the Fit button (right): the free columns
+        from PySide6.QtCore import QPointF
+        m = view.map
+        vbm = m.plot.getViewBox()
+
+        def px(x, y):
+            return m.widget.mapFromScene(vbm.mapViewToScene(QPointF(float(x), float(y)))).x()
+        left, right = px(xs.min(), ys[xs.argmin()]), px(xs.max(), ys[xs.argmax()])
+        assert m._map_key.isVisibleTo(m.widget) and m.fit_btn.isVisibleTo(m.widget)
+        assert left > m._map_key.geometry().right(), (left, m._map_key.geometry())
+        assert right < m.fit_btn.geometry().left(), (right, m.fit_btn.geometry())
+        # the way back where his eyes are: the status line names it
+        assert win.statusBar().currentMessage().endswith(" · Esc: whole lap"), \
+            win.statusBar().currentMessage()
         # ...the marker, at the pass's middle, and the corner's ring are on the canvas
         _inside(view, clip)
         _settle()
@@ -725,15 +739,39 @@ def test_the_zoom_stays_through_the_clip_and_its_pause_and_ends_outside_it():
         view.plots.set_laps([lap - 1, 12])
         assert _corner_framed(view, 1)
         view.plots.set_laps([lap, 12])
-        # the clip pauses itself at its end: the zoom STAYS
+        # a backend that reports the frame just past the end BEFORE the pause lands: still that pass
+        view._playback.latest_t = clip[1] + 0.1
+        view.tick()
+        assert _corner_framed(view, 1) and view.pass_zoomed()
+        # the clip pauses itself, and the pause lands late (4K on a loaded Mac): the zoom STAYS
         view.video.clipEnded.emit()
         _settle()
-        _inside(view, clip, 1.0)
-        assert _corner_framed(view, 1) and not view.map._view_fitted
+        view._playback.latest_t = clip[1] + 0.5
+        view.tick()
+        assert _corner_framed(view, 1) and not view.map._view_fitted and view.pass_zoomed()
+        for _ in range(3):                    # ...parked there, tick after tick
+            view._playback.applied_t = None
+            view.tick()
+        assert view.pass_zoomed()
         # play on past the clip → whole lap, whole track
         view._playback.latest_t = clip[1] + 1.0
         view.tick()
         assert _whole_lap(view) and _whole_track(view, fitted)
+        # a pause that lands only 0.1 s late keeps it too
+        _cid, _lap, clip = _play(view, 0)
+        _inside(view, clip)
+        view.video.clipEnded.emit()
+        view._playback.latest_t = clip[1] + 0.1
+        view.tick()
+        assert view.pass_zoomed() and _corner_framed(view, 1)
+        view.end_pass_zoom()
+        # the clip ending because he seeked AWAY (the pane drops the end on a seek) still ends it
+        _cid, _lap, clip = _play(view, 0)
+        _inside(view, clip)
+        view.video.clipEnded.emit()
+        view._playback.latest_t = clip[1] + 30.0
+        view.tick()
+        assert not view.pass_zoomed() and _whole_lap(view)
         # a scrub/seek back before the clip also ends it
         _cid, _lap, clip = _play(view, 0)        # again on C1: its next level lap
         _inside(view, clip)

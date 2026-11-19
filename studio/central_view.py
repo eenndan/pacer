@@ -1863,6 +1863,8 @@ class CentralView(QWidget):
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(False)
+        if getattr(self, "_pass_zoom", None) is not None:
+            self._pass_zoom_parked = True    # the next tick's position is where it stopped
 
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
@@ -1896,12 +1898,17 @@ class CentralView(QWidget):
         self._pin_owned_ring(cid)
         self._zoom_to_pass(lap_id, cid, clip)
         if status:
-            self.statusNotice.emit(status)
+            # the way back, where his eyes are as the pass plays (the readout says it too)
+            self.statusNotice.emit(f"{status} · Esc: whole lap" if self.pass_zoomed() else status)
         return True
 
     # How far outside a played pass's clip the playhead may report before its zoom ends: the
     # clip's own pause lands within a frame of its end, and a seek quantises to the millisecond.
     _PASS_ZOOM_SLACK_S = 0.25
+    # ...and how late the clip's own pause may land and still be "that pass": the real player
+    # parked 5-57 ms past the end on the demo; 4K on a loaded Mac can report later. The first
+    # position after the clip ended, up to this far past its end, becomes the zoom's end.
+    _PASS_PARK_MAX_S = 2.0
 
     # A PLAYED PASS ZOOMS ONTO ITS CORNER: the charts frame the corner's window as `N` and a
     # Coaching Compare do (`PlotsView.frame_span`, one rule) and the map frames the clip's stretch
@@ -1919,6 +1926,7 @@ class CentralView(QWidget):
         if window is not None or self.map.pass_zoomed():
             self._pass_zoom = (float(clip[0]), float(clip[1]))
             self._pass_zoom_seen = False     # armed by the first tick inside the clip
+            self._pass_zoom_parked = False   # set by the clip's end (_on_clip_ended)
 
     def pass_zoomed(self) -> bool:
         return getattr(self, "_pass_zoom", None) is not None
@@ -1935,9 +1943,16 @@ class CentralView(QWidget):
     def _check_pass_zoom(self, t: float):
         """Per tick, two comparisons: the playhead left the pass (a seek, a step, play on past the
         clip's end) → the zoom ends. Armed only once the playhead has been INSIDE the clip, so the
-        tick that still reports where the video was before the clip's own seek landed is ignored."""
+        tick that still reports where the video was before the clip's own seek landed is ignored.
+        The first tick after the clip ended is where the pause landed: however late, up to
+        _PASS_PARK_MAX_S past the end, it becomes the zoom's end, so the pause he stops to study
+        the corner at can never end it (a seek away from the clip lands further, or before it)."""
         zoom = self._pass_zoom
         slack = self._PASS_ZOOM_SLACK_S
+        if self._pass_zoom_parked:
+            self._pass_zoom_parked = False
+            if zoom[1] < t <= zoom[1] + self._PASS_PARK_MAX_S:
+                zoom = self._pass_zoom = (zoom[0], t)
         inside = zoom[0] - slack <= t <= zoom[1] + slack
         if inside:
             self._pass_zoom_seen = True

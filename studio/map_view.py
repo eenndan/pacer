@@ -2296,14 +2296,38 @@ class MapView(QWidget):
         if box is None:
             return
         vb = self.plot.getViewBox()
-        vb.setRange(xRange=box[:2], yRange=box[2:], padding=0)
-        r = vb.rect()
-        (x_lo, x_hi), _ = vb.viewRange()
-        if r.width() >= 8:
-            self._scale_bar.set_scale((x_hi - x_lo) / r.width())
-            self._scale_bar.reposition()
-            self._scale_bar.show()
-            self._scale_bar.raise_()
+        r = vb.rect()      # the rect the aspect lock divides by, as _follow_apply
+        w, h = r.width(), r.height()
+        if w < 8 or h < 8:
+            vb.setRange(xRange=box[:2], yRange=box[2:], padding=0)
+            return
+        # Centred in the FREE area, as Follow centres beside the race card: right of the map key
+        # and left of the Fit button, so neither covers the pass or its corner labels. The map is
+        # wide and short, so the columns they take cost the zoom nothing (its height decides it).
+        x0, x1 = self._free_x_span(w)
+        mpp = max((box[1] - box[0]) / (x1 - x0), (box[3] - box[2]) / h)
+        cx, cy = (box[0] + box[1]) / 2, (box[2] + box[3]) / 2
+        xl = cx - (x0 + x1) / 2 * mpp
+        yl = cy - h / 2 * mpp
+        vb.setRange(xRange=(xl, xl + w * mpp), yRange=(yl, yl + h * mpp), padding=0)
+        self._scale_bar.set_scale(mpp)
+        self._scale_bar.reposition()
+        self._scale_bar.show()
+        self._scale_bar.raise_()
+
+    def _free_x_span(self, view_w: float) -> tuple[float, float]:
+        """The pass zoom's free columns (px): right of the map key, left of the Fit button — each
+        only while shown, and never narrower than half the map (a key wider than that is ignored)."""
+        x0, x1 = 0.0, float(view_w)
+        key = getattr(self, "_map_key", None)
+        if key is not None and key.isVisibleTo(self.widget):
+            x0 = float(key.x() + key.width() + _CHROME_INSET)
+        btn = getattr(self, "fit_btn", None)
+        if btn is not None and btn.isVisibleTo(self.widget):
+            x1 = float(btn.x() - _CHROME_INSET)
+        if x1 - x0 < 0.5 * view_w:
+            return 0.0, float(view_w)
+        return x0, x1
 
     def _drop_pass_zoom(self) -> bool:
         """Forget the pass zoom WITHOUT moving the view (the caller decides where it goes)."""
