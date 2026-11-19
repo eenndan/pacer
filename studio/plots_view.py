@@ -366,6 +366,8 @@ DELTA_SHORT_LABELS = {
 # is otherwise undiscoverable (see help_dialog's module docstring), the two keys that make it do
 # something. Kept SHORT: this line shares a row with the window statistics.
 READOUT_HINT = "D: datum cursor · N: next Δ loss"
+# ...and while a played corner pass holds the charts on its corner (`hold_frame`), the way back.
+HELD_FRAME_HINT = "Esc: whole lap"
 # The strip's hover, carrying what the one line has no room for.
 READOUT_TIP = (
     "Chart readout. The left half is the statistic chosen beside it, over the x-range currently "
@@ -442,6 +444,9 @@ class PlotsView(QWidget):
     # only, from mouse moves (never the playhead tick). CentralView owns the hovered-corner state
     # and pushes it back here (set_corner_emphasis) and to the map; no view talks to another.
     cornerHovered = Signal(object)
+    # The frame `hold_frame` held ended because the driver took the x-range over (a pan, a wheel
+    # zoom, `N`) or flipped the axis. CentralView ends the pass zoom on the map too.
+    heldFrameTaken = Signal()
 
     def __init__(self, session: Session):
         super().__init__()
@@ -525,6 +530,9 @@ class PlotsView(QWidget):
         # The x-range refresh() last FITTED, so leaving the tour can put the whole lap back without
         # re-running a fit that would also move y (see _reset_x_range).
         self._fit_x_range: tuple[float, float] | None = None
+        # The corner window a played pass holds the charts on (`hold_frame`), re-framed after every
+        # refresh() until released: a lap-boundary crossing in the clip's lead-in re-draws the laps.
+        self._held_frame: tuple[float, float] | None = None
         # The frozen y-range refresh() fitted, BEFORE any legend headroom — what every legend
         # placement starts from, so a resize re-derives the headroom rather than compounding it.
         self._fit_y_range: tuple[float, float] | None = None
@@ -653,6 +661,8 @@ class PlotsView(QWidget):
         speed_vb.sigResized.connect(lambda *_: self._legend_timer.start(0))
         speed_vb.sigResized.connect(lambda *_: self._declutter_corner_labels())
         speed_vb.sigRangeChangedManually.connect(self._pin_speed_legend)
+        for plot in (self.p_speed, self.p_delta):   # x-linked: a pan on either moves both
+            plot.getViewBox().sigRangeChangedManually.connect(self._take_held_frame)
         if leg is not None:
             self._legend_drag = leg.mouseDragEvent
             leg.mouseDragEvent = self._on_legend_drag
@@ -788,6 +798,7 @@ class PlotsView(QWidget):
             moved = self._companion_at(self._lap_at_cursor(), self._datum_x)
             self._datum_x = moved  # None (nothing drawn to convert against) disarms it honestly
         self._time_mode = index == 1
+        self._take_held_frame()   # its window is in the old axis's units: the whole lap comes back
         self.refresh()
         # Sector positions are mode-dependent; ask app to re-push them for the new mode (F2).
         self.modeChanged.emit(self._axis_mode())
@@ -1806,6 +1817,8 @@ class PlotsView(QWidget):
         self.p_delta.disableAutoRange()
         self._fit_x_range = self._visible_x_range()  # what the loss tour's exit restores
         self._fit_y_range = tuple(self.p_speed.getViewBox().viewRange()[1])
+        if self._held_frame is not None:
+            self.frame_span(*self._held_frame)
         self._legend_pinned = False
 
         # Re-place the cursors on the now-frozen axes (also covers the paused-toggle case).
@@ -2150,6 +2163,7 @@ class PlotsView(QWidget):
         Going through the scrub signals rather than reaching into the map or video is the whole
         point: ScrubController already converts, clamps, coalesces and fans a scrub out to both,
         and in compare mode it distance-locks the second pane too."""
+        self._take_held_frame()   # the tour is the driver's own zoom: a pass's frame lets go
         self._ensure_loss_spans()
         if not self._loss_spans:
             self._loss_index = -1
@@ -2175,6 +2189,36 @@ class PlotsView(QWidget):
         (a corner's window) frame through this one rule; `N`'s walk back out restores the lap."""
         pad = x1 - x0
         self.p_speed.setXRange(x0 - pad, x1 + pad, padding=0)
+
+    def hold_frame(self, x0: float, x1: float) -> None:
+        """`frame_span` a corner window and HOLD it — a played pass's zoom: kept across a refresh
+        (the clip's lead-in can cross a lap boundary, which re-draws the laps) until
+        `release_frame`, or until the driver takes the x-range (`heldFrameTaken`)."""
+        self._held_frame = (float(x0), float(x1))
+        self.frame_span(x0, x1)
+        self._place_speed_legend()   # the corner it chose was clear of the WHOLE lap's curves
+        self._update_readouts()
+
+    def release_frame(self) -> bool:
+        """Put the whole lap back after `hold_frame`. False when nothing was held."""
+        if self._held_frame is None:
+            return False
+        self._held_frame = None
+        self._reset_x_range()
+        self._place_speed_legend()
+        self._update_readouts()
+        return True
+
+    def frame_held(self) -> bool:
+        return self._held_frame is not None
+
+    def _take_held_frame(self, *_):
+        """The driver moved the x-range (or the axis) under a held frame: the range is theirs from
+        here — nothing re-frames it — and the pass zoom ends everywhere."""
+        if self._held_frame is None:
+            return
+        self._held_frame = None
+        self.heldFrameTaken.emit()
 
     def _reset_x_range(self):
         """Put the whole lap back in view — refresh()'s own fitted x-range, replayed.
@@ -2349,7 +2393,7 @@ class PlotsView(QWidget):
             self.window_label,
             f"lap {lap_label(lid)} · {window} · {stat}   speed {speed_txt}   "
             f"{base} {self._fmt_seconds(delta)}",
-            READOUT_HINT))
+            HELD_FRAME_HINT if self._held_frame is not None else READOUT_HINT))
 
     def _x_span(self) -> tuple[float, float] | None:
         """The full x extent of the drawn curves — what "the whole lap" means on this axis."""

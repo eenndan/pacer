@@ -555,7 +555,10 @@ CROSSINGS = {
     ("studio/session.py", "Session.media_time", "to_media"): (_P, "THE picture map"),
     ("studio/session.py", "Session.telemetry_time", "to_telemetry"): (_P, "its exact inverse"),
     # --- seeking and painting the picture
-    ("studio/player_pane.py", "PlayerPane.seek", "to_media"): (_P, "a seek lands on a frame"),
+    # `seek`'s body, which a loop's own rewind to the pass's start also runs (cool/pass-loop-slowmo)
+    ("studio/player_pane.py", "PlayerPane._seek_to", "to_media"): (_P, "a seek lands on a frame"),
+    ("studio/player_pane.py", "PlayerPane._media_end", "to_telemetry"):
+        (_P, "the recording's last frame -> where a pass clip must end"),
     ("studio/player_pane.py", "PlayerPane._on_position", "to_telemetry"):
         (_P, "the frame on screen -> the trace sample it shows"),
     ("studio/export_video.py", "lap_window_for_export", "_media_time"):
