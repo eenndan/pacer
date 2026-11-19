@@ -888,3 +888,104 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
   real display; pull request #582's commit list comment; the published real-footage Coaching
   tables cannot be re-verified offline.
+
+## 18. Recorded at the 0.16.0 release, 2026-11-19
+
+- **v0.16.0 is a minor release**: one pull request, #614, Wave 11 of the campaign section 8
+  records. The Corners tab gets a second view, Quickest passes: per corner the quickest time, its
+  lap, how many laps are level with it and a play button; a row click plays that pass and pauses
+  after it; ⌘K lists one "Quickest" row per corner, naming its lap. It also carries a garbage
+  collection on the GUI thread before a load worker starts (below).
+- **Owner ruling of 2026-11-18/19.** He asked to see the fastest time through each corner with
+  the lap it happened on, and to jump quickly to that moment in the footage. He was shown three
+  options (a view on the Corners tab, a strip of corner chips under the video, a reel of the passes
+  played back to back) and delegated the choice: "decide yourself… Make it very logical and simple
+  to use".
+- **What was chosen for him**, each open to his overrule:
+  - **The Corners tab view**, behind two chips ("Lap 13 corners", "Quickest passes"), the choice
+    remembered; the tab reads "Corners · quickest" while it shows.
+  - **The lead-in is 2 s before the corner's entry, or the previous corner's exit when that is
+    later** (on the demo the straights before three of its seven corners take 1.3 to 1.8 s).
+  - **Play, then pause 1 s after the exit.** Any seek, play or pause of the driver's own drops that
+    pause, so a scrub or a lap pick is never stopped by a clip he has left.
+  - **Name the quickest and count the level laps**, never "fastest" for a tie: the ★ and the
+    purple go only on a quickest no other lap matches within the timing step (0.07 s; 0.15 s on an
+    estimated clock), never while lap timing is provisional. On the demo only its fifth corner stands clear,
+    "3.52 ★" on lap 10, "none · next +0.071"; the hover of a tie says why it has no ★.
+  - **Click the same row again for the next level lap**, wrapping; the row names the lap playing
+    with its own time ("playing lap 7 (2.35) · 2 of 6"), and the Lap cell keeps the quickest's.
+    ⌘K always plays the lap it names.
+- **Refused or deferred, with the reasons.** The strip under the video is deferred: it costs
+  32 px, 12 to 14 % of the video's height at 1440×900 and 1280×800, and leaves no room for the
+  times the request asked for. The back-to-back reel is refused: seven passes in a row read as a
+  lap that was never driven, the reason the ideal-lap film was refused
+  (`studio/docs/refused-2026-09.md` §31). The word "fastest" for a tie is refused: six of the
+  demo's seven corners are ties within 0.07 s, and which lap comes out on top there is timing noise
+  (`studio/docs/refused-2026-09.md` §32).
+- **The garbage collection, and what stays exposed.** Python's cyclic collector frees Qt widgets
+  held only by reference cycles on whichever thread trips its threshold; in the test suite that
+  thread was once a load worker's, and deleting a table there crashed. `gc.collect()` now runs on
+  the GUI thread before a load worker starts, pinned by `tests/test_load_worker_gc.py`. It is a
+  mitigation, not a cure: garbage made while a load runs, and the export and demo-resolve worker
+  threads, stay exposed; the cure is fewer cycles. The crash was only seen in the test suite.
+- **Process.** CI was the pull request's gate; the QA pass drove the view in the real window on
+  the demo (every row, again, the keys, ⌘K, three window sizes, a reload, a start-line drag and its
+  undo, both speed units, Compare, a Lap race, the maximised panel and the debrief) and with the
+  real player on a recording of two chapters (a jump across the chapter seam, a clip that straddles
+  it, 1× and 2×, rapid clicks, sound on, software decoding). The Stats page and the session report
+  are unchanged on the demo: a page dump from v0.15.0's `studio/` and from 0.16.0 is equivalent,
+  and the report's HTML is byte-identical.
+- **The media.** Re-captured on the synthetic demo at 0.16.0: `hero.png`, `map.png`, `og.png`,
+  `debrief.png`, `accuracy.png`, `moments.png` and `lapstrip.png` (its own run), all
+  byte-identical to the files already committed; `report.png`, whose HTML is byte-identical and
+  whose picture differs in 347 anti-aliased pixels of the map line. New: `quickest.png`, the window
+  at 1440×900 with a tied corner's row playing, beside the pages' sentence on the view. The
+  waivers of `data-trust.png` and `ideal-lap.png` are renewed (a demo render from v0.15.0's `studio/` and from
+  0.16.0 is byte-identical), as are those of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4`: no
+  export-video code changed.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. The transport keys could not be confirmed offscreen. The full gate, the
+  soak and the smoke run on the release branch, not in the QA pass.
+- **Open for the owner** (new).
+  - The default Corners view stays the per-lap table, and Quickest passes is one remembered click
+    away; he may prefer it as the default.
+  - Sector lines he draws are not listed in the view yet; the Stats page's SPLITS grid marks each
+    sector's best.
+  - The Stats page's CORNERS BY LAP cells still do not play their pass when clicked.
+  - The strip under the video stays available as a later option.
+  - During a pass the chart shows the whole lap; it does not zoom to the corner.
+  - A corner that follows the previous one with no straight between them starts its clip at that
+    corner's exit, so its approach is barely shown.
+  - A long corner window, which `studio/docs/refused-2026-09.md` §34 keeps whole, plays a long
+    clip.
+  - On one tab the ★ means two things: in the Lap view a time that prints as the quickest, in
+    Quickest passes a quickest no other lap matches; the hover of a tie says so.
+  - At the window's minimum size (1059×546 on the demo) the view's rows scroll; the play buttons
+    stay reachable.
+  - The status line clears after 6 s, before a long clip ends; the row keeps saying "playing".
+  - The first time costs three clicks from the debrief (the Corners tab, the chip, a row); after
+    that, two.
+- **Open for the owner** (carried from section 17): with verdicts on the list, the docked chip
+  says "3 of 3 re-measured" and the verdict lines are one click away at 1280 and 1440; a session
+  with no laps is left out of the welcome's list, and an unreadable library shows the first-visit
+  screen; the overlays use the 0.07 s step even on an estimated clock; a re-profiled corner that
+  keeps its direction is still compared; focus items and Library rows stored before 0.15.0 carry no
+  direction until their recording is opened again; a one-corner shortlist's theme reads oddly;
+  after the docked pair's Jump its Compare is one tab away; a missing file's name in the welcome is
+  cut, losing its number; `overlay.jpg` needs real footage to re-shoot, and `og.png` is also the
+  repository's social preview, uploaded by hand; 13 planted defects no test catches; two slow
+  product paths (the export painter walks every frame twice, windows kept alive in
+  `test_central_view_realqt`); a marginal corner near the 30° detection limit could read "there's
+  no corner there today"; the mixed headline's "N without enough evidence" counts layout refusals
+  with the rest; a Compare started from the maximised page returns to the grid and stays there; the
+  focus verdict's spread-based line prints medians to two decimals; FIRST_LAP's loop paragraph does
+  not name the two newer verdicts, and its step 8 names Jump, not Compare or the Lap race button;
+  the report's Laps card scroll with sector lines; `fmt_time` negatives; Broadcast as the default
+  Style; a ranked corner under the display floor counted in "your N ranked corners"; one lap drawn
+  in two colours in a race over a pick; a session reload stranding widgets; the capture tool's
+  `lapstrip.png` bytes depending on what else the run captures; ranking corners that lose under
+  0.07 s at all; weighing consistency on the middle half rather than σ; the apex and braking
+  reasons have no noise floor; the demo habit is ranked only on its own seed; the overlay's ★/Δ
+  under provisional timing; Extras on in Classic; the ◆ glyph; Follow's default; a Broadcast still;
+  the keys 1-5 right after a load on a real display; pull request #582's commit list comment; the
+  published real-footage Coaching tables cannot be re-verified offline.

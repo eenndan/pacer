@@ -97,6 +97,13 @@ official timing measures the noise floor.
 
 <img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time, large, beside its speed-coloured line with the focus corners ringed">
 
+- **Your quickest pass through each corner, one click from the video.** Corners ▸ **Quickest
+  passes** lists each corner's quickest time and the lap it was on; a click plays that pass from
+  just before the corner and pauses just after it. Where other laps are level within the 0.07 s
+  timing step it says how many, with no ★, and the next click plays the next of them.
+
+<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap and how many laps are level with it, C3's row reading playing lap 13 (2.32) · 1 of 6, only C5's 3.52 starred, the demo's picture, the map marker and the chart cursor all in C3, and a status line saying 5 more laps are level there and to click C3 again for the next">
+
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**
   (correlation alone cannot catch a mis-scaled channel). PACE puts the middle half of your laps
