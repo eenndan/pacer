@@ -3272,6 +3272,7 @@ class QuickestPassTable(QWidget):
         self._labels: dict[int, str] = {}
         self._cycle: tuple[int, int] | None = None   # (cid, k) of the pass last played
         self._running = False   # that pass's clip is still playing (set_clip_running)
+        self._looping = False   # ...and the video's Loop is replaying it (set_looping)
         self.not_counted = QLabel("")
         self.not_counted.setProperty("role", "BarLabel")
         self.not_counted.setContentsMargins(GRID_TEXT_INSET, theme.SPACE_XXS,
@@ -3382,6 +3383,12 @@ class QuickestPassTable(QWidget):
             self._running = bool(on)
             self._paint_playing()
 
+    def set_looping(self, on: bool) -> None:
+        """Whether the video's Loop is replaying that pass: its row ends "· looping"."""
+        if bool(on) != self._looping:
+            self._looping = bool(on)
+            self._paint_playing()
+
     def forget_cycle(self) -> None:
         """The driver went somewhere else (another lap picked): the row goes back to its count, and
         the next click on it starts from the quickest again."""
@@ -3415,10 +3422,13 @@ class QuickestPassTable(QWidget):
             if item is None:
                 continue
             text = quickest_level_text(qp)
-            if self._cycle is not None and self._cycle[0] == qp.cid and qp.level_laps:
+            mine = self._cycle is not None and self._cycle[0] == qp.cid
+            if mine and qp.level_laps:
                 k, order = self._cycle[1], qp.play_order()
                 text = (f"{'playing ' if self._running else ''}lap {lap_label(order[k])} "
                         f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) · {k + 1} of {len(order)}")
+            if mine and self._looping:
+                text += " · looping"
             item.setText(text)
 
     def refresh(self) -> None:

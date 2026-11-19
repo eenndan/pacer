@@ -799,6 +799,9 @@ class CentralView(QWidget):
         self.corners_page.view_changed.connect(self._on_corners_view_changed)
         # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
         self.video.clipEnded.connect(self._on_clip_ended)
+        # ...and again while Loop replays it, and "· looping" while Loop is on.
+        self.video.clipStarted.connect(self._on_clip_started)
+        self.video.loopChanged.connect(self._on_pass_loop_changed)
         # B4: a Corners row rings its apex on the map, like the Stats CORNERS and Coaching
         # rows — the same maximize-aware handler, so the three surfaces behave identically.
         self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
@@ -1375,7 +1378,7 @@ class CentralView(QWidget):
         self.race_card.move(theme.SPACE_S, theme.SPACE_S)
         self.map.attach_race_card(self.race_card)    # so the map's clean grabs leave it out
         self.race = RaceController(self.session, self.map, self.race_card,
-                                   pause_video=self.video.pause,
+                                   pause_video=self.video.leave_pass,
                                    on_change=self.raceChanged.emit)
         self.race_card.playToggled.connect(self.race.toggle_play)
         self.race_card.restartRequested.connect(self.race.restart)
@@ -1856,6 +1859,16 @@ class CentralView(QWidget):
         if page is not None:
             page.quickest.set_clip_running(False)
 
+    def _on_clip_started(self):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_clip_running(True)
+
+    def _on_pass_loop_changed(self, on: bool):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_looping(on)
+
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
 
@@ -1880,7 +1893,7 @@ class CentralView(QWidget):
         self._drop_owned_ring()
         self.table.select([lap_id])
         self._on_laps_selected([lap_id], seek=False)
-        self.video.play_clip(*clip)
+        self.video.play_pass(*clip, key=cid)   # the same corner again keeps Loop / Slow on
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(True)

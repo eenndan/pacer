@@ -170,6 +170,13 @@ class PlayerPane(QWidget):
     # A pass's clip is over: its end was reached (and the pane paused there) or dropped by the
     # driver's own seek / play / pause. Emitted once per clip, by the `_clip_end` setter.
     clipEnded = Signal()
+    # ...and its twin: a clip end was armed (a pass started, or Loop replayed one that had ended).
+    clipStarted = Signal()
+    # The PASS is the subject (True) or no longer is (False): see `_pass`. Drives the transport's
+    # Loop / Slow toggles, which exist only while there is a pass to loop or slow down.
+    passChanged = Signal(bool)
+    # Loop went on / off (`set_loop`), by the toggle or because the pass stopped being the subject.
+    loopChanged = Signal(bool)
 
     def __init__(self, source: str | chapters.ChapterMap | None):
         super().__init__()
@@ -210,6 +217,16 @@ class PlayerPane(QWidget):
         # picks a lap is never paused by a clip he has left. NOT the lap window: that one is
         # compare's, rewinds on play and clamps the reported position, none of which a clip wants.
         self.__clip_end: float | None = None
+        # THE PASS (global start, end) the driver is watching — longer-lived than the clip end: it
+        # survives the pause at the clip's end and a pause of his own, so Loop can still replay it,
+        # and ends with anything that goes somewhere else (a seek of his, ▶ without Loop, a new
+        # clip, compare). `_loop` replays it from `start` each time playback reaches `end`, until
+        # the pass ends; it never moves on to another pass (refused-2026-09 §31: no reel).
+        self.__pass: tuple[float, float] | None = None
+        self._loop = False
+        # Set by a loop's own seek back to the start: until a position before the end arrives,
+        # a late report from the old position must not restart the loop a second time.
+        self._loop_rewinding = False
         # Media playback rate (1.0 = real time). Remembered because a SOURCE SWITCH does not carry
         # it: the rate is a property of the QMediaPlayer's current media on the FFmpeg backend, so
         # a chapter seam would silently drop a slow-motion review back to 1x. Re-applied in
@@ -360,10 +377,16 @@ class PlayerPane(QWidget):
         return self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
 
     def play(self):
+        if self._loop and self.__pass is not None:
+            self._clip_end = self.__pass[1]   # ▶ on a paused loop: the loop runs on
+        else:
+            self._end_pass()                  # ▶ after (or out of) a pass carries on with the lap
+        self._resume()
+
+    def _resume(self):
         # explicit play overrides a pause made mid-seam: honour PLAY on the genuine load (else
         # play-after-pause-during-reopen never resumes).
         self._user_paused_during_reopen = False
-        self._clip_end = None
         if self._pending is not None:
             # ▶ while a seek waits for its source to load (the open's poster, a paused chapter
             # jump): play from THAT target once it lands, not from wherever the load starts.
@@ -380,6 +403,8 @@ class PlayerPane(QWidget):
         # pause mid-reopen: remember it so the deferred resume does not override it (see _apply_pending).
         if self._switching or self._pending is not None:
             self._user_paused_during_reopen = True
+        # The clip stops running, but the PASS stays the subject: paused on it, Loop can still
+        # replay it, and a paused loop resumes on ▶ (see play).
         self._clip_end = None
         self.player.pause()
 
@@ -443,7 +468,11 @@ class PlayerPane(QWidget):
         the position but presents no frame (every fresh source is Stopped), so a seek that does not
         resume play ends paused: _present_paused."""
         self._drag_held = None   # a deliberate seek drops a drag target still waiting its turn
-        self._clip_end = None    # ...and a clip end: the driver has gone somewhere else
+        self._end_pass()         # ...and the pass, its clip end and its loop: he went elsewhere
+        self._seek_to(seconds)
+
+    def _seek_to(self, seconds: float):
+        """`seek`'s body without its "the driver went somewhere else": the loop's own rewind."""
         if self._chapters is None:
             self.player.setPosition(int(seconds * 1000))
             return
@@ -509,6 +538,7 @@ class PlayerPane(QWidget):
     def set_lap_window(self, start_global: float, end_global: float):
         """Confine playback to a lap GLOBAL [start, end]: pause+clamp at end instead of session end.
         Cross-chapter auto-advance still spans seams inside the window."""
+        self._end_pass()   # compare is two laps, not a pass: a loop never runs inside it
         self._lap_window = (float(start_global), float(end_global))
 
     def clear_lap_window(self):
@@ -524,6 +554,69 @@ class PlayerPane(QWidget):
     def clip_end(self) -> float | None:
         return self._clip_end
 
+    def set_clip(self, start_global: float, end_global: float):
+        """A pass's clip: `set_clip_end(end)`, and the pass [start, end] becomes the subject that
+        Loop replays (see `_pass`). Call it AFTER the clip's own seek and play, as set_clip_end."""
+        self._clip_end = float(end_global)
+        self._pass = (float(start_global), float(end_global))
+
+    def pass_clip(self) -> tuple[float, float] | None:
+        """The pass being watched (global start, end), or None."""
+        return self.__pass
+
+    def is_looping(self) -> bool:
+        return self._loop
+
+    def set_loop(self, on: bool) -> bool:
+        """Loop the pass: each time playback reaches its end it goes back to its start and plays
+        on, until the pass ends (a seek of the driver's, ▶ without Loop, a new clip, compare).
+        Turned on while not playing it plays — from where the playhead is when that is inside the
+        pass (paused on a frame of it), else from the start (parked at its end). Turned off, the
+        pass plays out and pauses at its end, the clip's own rule. False when there is no pass."""
+        on = bool(on)
+        if on and self.__pass is None:
+            return False
+        if on == self._loop:
+            return True
+        self._loop = on
+        self._loop_rewinding = False
+        self.loopChanged.emit(on)
+        if on:
+            start, end = self.__pass
+            if not self.is_playing():
+                t = self._latest_global
+                if self._pending is None and not start <= t < end - _WINDOW_STOP_TOL_S:
+                    self._seek_to(start)
+                self._resume()
+            self._clip_end = end
+        return True
+
+    def end_pass(self):
+        """The pass stops being the subject without a seek (VideoView.leave_pass)."""
+        self._end_pass()
+
+    def _end_pass(self):
+        """The driver went somewhere else: the clip end, the pass and its loop all go."""
+        self._clip_end = None
+        self._pass = None
+
+    @property
+    def _pass(self) -> tuple[float, float] | None:
+        return self.__pass
+
+    @_pass.setter
+    def _pass(self, clip: tuple[float, float] | None) -> None:
+        # The one place the pass starts or stops being the subject, so the one place that tells
+        # the transport (passChanged) and drops a loop that has no pass left to replay.
+        was = self.__pass is not None
+        self.__pass = clip
+        if clip is None and self._loop:
+            self._loop = False
+            self._loop_rewinding = False
+            self.loopChanged.emit(False)
+        if was or clip is not None:
+            self.passChanged.emit(clip is not None)
+
     @property
     def _clip_end(self) -> float | None:
         return self.__clip_end
@@ -533,9 +626,12 @@ class PlayerPane(QWidget):
         # Every site that ends a clip writes None here (the end reached, a seek, play or pause),
         # so this is the one place that can tell the view the clip is over.
         ended = self.__clip_end is not None and end is None
+        started = self.__clip_end is None and end is not None
         self.__clip_end = end
         if ended:
             self.clipEnded.emit()
+        elif started:
+            self.clipStarted.emit()
 
     # ------------------------------------------------------------- g-meter overlay
     def set_gmeter_visible(self, on: bool):
@@ -742,10 +838,20 @@ class PlayerPane(QWidget):
         position to the end so the pane parks on the lap's last frame; cross-chapter auto-advance is
         untouched (it carries a seam-straddling lap up to that end)."""
         global_s = self._clock().to_telemetry(self._offset() + ms / 1000.0)
-        end = self._clip_end
-        if end is not None and global_s >= end - _WINDOW_STOP_TOL_S and self.is_playing():
-            self._clip_end = None
-            self.player.pause()
+        clip = self.__pass
+        if self._loop and clip is not None:
+            # Looping: the end sends playback back to the start, still playing. One rewind per
+            # lap of the loop: reports from before the seek lands are still at or past the end.
+            if self._loop_rewinding:
+                self._loop_rewinding = global_s >= clip[1] - _WINDOW_STOP_TOL_S
+            elif global_s >= clip[1] - _WINDOW_STOP_TOL_S and self.is_playing():
+                self._loop_rewinding = True
+                self._seek_to(clip[0])
+        else:
+            end = self._clip_end
+            if end is not None and global_s >= end - _WINDOW_STOP_TOL_S and self.is_playing():
+                self._clip_end = None
+                self.player.pause()
         win = self._lap_window
         if win is not None and global_s >= win[1] - _WINDOW_STOP_TOL_S:
             # reached the lap end: pause and report the clamped end (idempotent).

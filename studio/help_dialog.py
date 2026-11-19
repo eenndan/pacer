@@ -137,6 +137,11 @@ COMMANDS: list[Command] = [
     # they can be read at 1x, and the whole point of watching your own footage is reading them.
     Command("Playback", "[", "Play slower — 0.5× then 0.25× (slow motion)", run="slower_playback"),
     Command("Playback", "]", "Play faster — back to 1× then 2×", run="faster_playback"),
+    # The pass's own two toggles appear on the transport while a Quickest passes row plays; L is
+    # Loop's key, and the row beside it names Slow, which has no key ([ is already slow motion).
+    Command("Playback", "L",
+            "Loop the corner pass playing (again to stop); beside it, Slow plays the pass at 0.25×",
+            run="toggle_pass_loop"),
     Command("Navigation", "← / →", "Step the video back / forward 1 second"),
     Command("Navigation", "Shift + ← / →", "Step the video back / forward 5 seconds"),
     # MARKS — the one cluster in this card that is not about reading a measurement. They sit in

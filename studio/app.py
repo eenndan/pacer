@@ -103,6 +103,8 @@ ISSUES_URL = "https://github.com/eenndan/pacer/issues/new"
 # something that JUST happened ("saved…", "reverted…"); with no timeout Qt leaves the last one
 # up indefinitely, so minutes later the bar still asserts a stale fact about the session (B20).
 STATUS_MS = 6000
+# L with no pass playing: where a pass to loop comes from.
+NO_PASS_TO_LOOP = "Loop needs a pass playing: play one from the Corners tab's Quickest passes"
 # How long a RELOAD may run before the working UI is replaced by the "Loading telemetry…" card
 # (ms). The load runs off the UI thread, so a live session stays usable while its successor is
 # read; blanking it instantly meant even a 0.36 s reload flashed the whole window to an
@@ -2862,6 +2864,8 @@ class StudioWindow(QMainWindow):
         # unclaimed here; the picker in the transport is the same control with a visible state.
         shortcut(Qt.Key_BracketLeft, self.slower_playback)
         shortcut(Qt.Key_BracketRight, self.faster_playback)
+        # L → loop the pass playing (the transport's Loop toggle, shown only while there is one).
+        shortcut(Qt.Key_L, self.toggle_pass_loop)
         # D / N → the charts' two instrument gestures: drop-or-clear the datum (second) cursor, and
         # walk the biggest Δ losses of the lap. Both live on the charts because that is what they
         # measure; both are window-level because that is where every other gesture here is.
@@ -2909,6 +2913,13 @@ class StudioWindow(QMainWindow):
             self.view.race.toggle_play()
             return
         self._video_do(lambda v: v.toggle())
+
+    def toggle_pass_loop(self):
+        """Loop the pass the video is playing (L) — a Corners ▸ Quickest passes row's. With no pass
+        playing it says where one comes from instead of doing nothing."""
+        view = getattr(self, "view", None)
+        if view is not None and not view.video.toggle_pass_loop():
+            self.statusBar().showMessage(NO_PASS_TO_LOOP, STATUS_MS)
 
     def _racing(self) -> bool:
         view = getattr(self, "view", None)
