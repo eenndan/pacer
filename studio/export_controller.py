@@ -890,8 +890,8 @@ class ExportController:
             return float("nan"), 1, "this lap"
         if scope == export_video.SCOPE_PASS and pass_ is not None:
             return self._pass_seconds(lap, pass_[0]), 1, (
-                f"the {pass_[1]} pass of lap {lap_label(lap)}, from its lead-in to 1 s after the "
-                "exit, with the corner's time and no lap clock")
+                f"lap {lap_label(lap)}'s pass through {pass_[1]}, from its lead-in to 1 s after "
+                "the exit, with the corner's time and no lap clock")
         try:
             ids = export_video.scope_lap_ids(session, scope, lap)
         except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates

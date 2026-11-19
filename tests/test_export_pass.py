@@ -328,7 +328,7 @@ def test_the_pass_command_opens_the_dialog_on_this_pass_and_exports_it():
     assert opened["items"][-1] == opened["scope"] and len(opened["items"]) == 5
     assert opened["lead"] is False and opened["ghost"][0] is False
     assert opened["ghost"][1] == f"Off here: {ghost.PASS_REASON}", opened["ghost"]
-    assert f"the C3 pass of lap {lap + 1}" in opened["hint"], opened["hint"]
+    assert f"lap {lap + 1}'s pass through C3" in opened["hint"], opened["hint"]
     assert seen["save"] == f"_lap{lap + 1}_C3_overlay.mp4", seen["save"]
     (spec,) = seen["specs"]
     assert spec.pass_subject is not None and spec.pass_subject.cid == 3 and spec.lap_id == lap
