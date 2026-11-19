@@ -1856,6 +1856,9 @@ class MapView(QWidget):
     # The corner ("C3") whose label or apex dot is under the pointer, None when it leaves — on
     # change only, from mouse moves; silent while a Lap Race runs. CentralView owns the state.
     cornerHovered = Signal(object)
+    # A played corner pass's zoom (zoom_to_pass) ended because the driver took the view over: a
+    # pan, a wheel zoom, Fit or a double-click. CentralView puts the charts back to the lap.
+    passZoomTaken = Signal()
 
     def __init__(self, session: Session):
         super().__init__()
@@ -1952,6 +1955,9 @@ class MapView(QWidget):
         self._follow_restore = None
         self._race_state = None
         self._scale_bar = _ScaleBar(self.widget)
+        # A played corner pass (zoom_to_pass): the ground box it frames, and the view it put aside.
+        self._pass_box: tuple[float, float, float, float] | None = None
+        self._pass_restore = None
 
         # E2: provisional start cue; declared before _rebuild (which may refresh it). None = track
         # known, no cue. See refresh_provisional_cue.
@@ -2077,7 +2083,7 @@ class MapView(QWidget):
         self.fit_btn.setIcon(icon("ph.frame-corners"))
         self.fit_btn.setToolTip("Fit the whole track back into view (or double-click the map)")
         self.fit_btn.setCursor(Qt.PointingHandCursor)
-        self.fit_btn.clicked.connect(self._fit_view)
+        self.fit_btn.clicked.connect(self._fit_by_user)
         self.fit_btn.hide()
         self._sync_fit_btn()
         # Double-click anywhere on the canvas does the same thing — the gesture a user tries first,
@@ -2140,13 +2146,15 @@ class MapView(QWidget):
         our fit while it still stands."""
         if getattr(self, "_follow", None) is not None:
             self._follow_apply()
+        elif getattr(self, "_pass_box", None) is not None:
+            self._pass_apply()
         elif getattr(self, "_view_fitted", False):
             self._fit_view()
 
     def eventFilter(self, obj, event):
         if (event.type() == QEvent.MouseButtonDblClick and obj is self.widget.viewport()
                 and event.button() == Qt.LeftButton):
-            self._fit_view()        # a no-op under Follow, which owns the view
+            self._fit_by_user()     # a no-op under Follow, which owns the view
             return True
         # Leaving the canvas sends no move, so the hover reveal is cleared here (pins and the
         # provisional / no-laps rules are untouched: _sync_timing_chrome still honours them).
@@ -2233,9 +2241,93 @@ class MapView(QWidget):
         self._sync_fit_btn()
 
     def _on_manual_range(self, *_):
-        """The user panned or zoomed: stop re-fitting behind their back, and surface the way back."""
+        """The user panned or zoomed: stop re-fitting behind their back, and surface the way back.
+        Over a pass's zoom the view is theirs from here: it stays, and the pass zoom ends."""
         self._view_fitted = False
         self._sync_fit_btn()
+        if self._drop_pass_zoom():
+            self.passZoomTaken.emit()
+
+    def _fit_by_user(self):
+        """Fit / a double-click: the whole track, ending a pass's zoom if one is on."""
+        taken = self._drop_pass_zoom()
+        self._fit_view()
+        if taken:
+            self.passZoomTaken.emit()
+
+    # ------------------------------------------------------------ a played corner pass
+    # A pass played from Corners ▸ Quickest passes frames the map on that pass: the played lap's
+    # line from the clip's lead-in to its end (CentralView passes the clip's telemetry window), with
+    # a margin, at the aspect the lock gives. It borrows Follow's machinery — the view put aside and
+    # put back exactly, the scale bar while zoomed — and draws nothing new: the lines on the canvas
+    # are the ones it already drew. Never under a Lap race (Follow or the race's own fit owns it).
+    PASS_MARGIN = 0.2         # of the pass's own larger side, each way: room for the C# label
+    PASS_MIN_SIDE_M = 60.0    # a short pass still shows its surroundings (the demo's span 60-130 m)
+
+    def pass_zoomed(self) -> bool:
+        return self._pass_box is not None
+
+    def zoom_to_pass(self, t0: float, t1: float) -> bool:
+        """Frame the trace between telemetry times `t0` and `t1`. A second pass while zoomed moves
+        the zoom and keeps the view the first one put aside. False when nothing could be framed."""
+        if self._race is not None or self._follow is not None:
+            return False
+        tt = np.asarray(self.session.tt, float)
+        lo, hi = np.searchsorted(tt, [t0, t1])
+        xs = np.asarray(self.session.tx, float)[lo:hi + 1]
+        ys = np.asarray(self.session.ty, float)[lo:hi + 1]
+        fin = np.isfinite(xs) & np.isfinite(ys)
+        if fin.sum() < 2:
+            return False
+        xs, ys = xs[fin], ys[fin]
+        cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
+        side = max(xs.max() - xs.min(), ys.max() - ys.min(), self.PASS_MIN_SIDE_M)
+        half = side * (0.5 + self.PASS_MARGIN)
+        if self._pass_box is None:
+            self._pass_restore = (self.plot.getViewBox().viewRange(), self._view_fitted)
+        self._pass_box = (cx - half, cx + half, cy - half, cy + half)
+        self._view_fitted = False
+        self._sync_fit_btn()           # Fit is the map's way back to the whole track
+        self._pass_apply()
+        return True
+
+    def _pass_apply(self):
+        box = self._pass_box
+        if box is None:
+            return
+        vb = self.plot.getViewBox()
+        vb.setRange(xRange=box[:2], yRange=box[2:], padding=0)
+        r = vb.rect()
+        (x_lo, x_hi), _ = vb.viewRange()
+        if r.width() >= 8:
+            self._scale_bar.set_scale((x_hi - x_lo) / r.width())
+            self._scale_bar.reposition()
+            self._scale_bar.show()
+            self._scale_bar.raise_()
+
+    def _drop_pass_zoom(self) -> bool:
+        """Forget the pass zoom WITHOUT moving the view (the caller decides where it goes)."""
+        if self._pass_box is None:
+            return False
+        self._pass_box = None
+        self._pass_restore = None
+        self._scale_bar.hide()
+        return True
+
+    def unzoom_pass(self) -> bool:
+        """Put back the view the pass zoom put aside: our fit (re-run at today's size) or the
+        driver's own range. False when no pass zoom was on."""
+        restore = self._pass_restore
+        if not self._drop_pass_zoom():
+            return False
+        (xr, yr), fitted = restore
+        if fitted:
+            self._fit_view()
+        else:
+            self.plot.getViewBox().setRange(xRange=xr, yRange=yr, padding=0)
+            self._view_fitted = False
+            self._sync_fit_btn()
+        return True
 
     def _sync_fit_btn(self):
         """Show the Fit button iff the view has been moved off the fitted frame."""

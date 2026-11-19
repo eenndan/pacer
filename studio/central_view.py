@@ -1349,6 +1349,8 @@ class CentralView(QWidget):
         # The slider + ←/→ seek pane A; in compare distance-lock the same move to pane B (the hook
         # no-ops outside compare, so wiring it once here is safe).
         self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
+        # FIRST: a played pass's zoom ends before compare draws its pair (either way the toggle goes).
+        self.video.compareToggled.connect(lambda _on: self.end_pass_zoom())
         self.video.compareToggled.connect(self.compare.on_toggled)
         # Compare owns the two-pane stage, which the video-focus maximize can't sensibly frame, so a
         # compare-ON exits video focus first (wired AFTER on_toggled so compare has already entered
@@ -1365,6 +1367,10 @@ class CentralView(QWidget):
         self._hovered_corner: str | None = None   # see _on_corner_hovered
         self.plots.cornerHovered.connect(self._on_corner_hovered)
         self.map.cornerHovered.connect(self._on_corner_hovered)
+        # The driver took one view over by hand: it stays theirs (each view already let go of its
+        # own zoom, so its half of end_pass_zoom is a no-op) and the other goes back.
+        self.plots.heldFrameTaken.connect(self.end_pass_zoom)
+        self.map.passZoomTaken.connect(self.end_pass_zoom)
         self._build_race()
 
     def _build_race(self):
@@ -1758,6 +1764,7 @@ class CentralView(QWidget):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._drop_owned_ring()
         self._forget_quickest_cycle()   # another lap picked: the Quickest row goes back to its count
+        self.end_pass_zoom()
         self._on_laps_selected(ids, seek=True)
 
     # ONE OWNED RING, for the two surfaces whose ring belongs to a lap rather than to a corner row:
@@ -1829,6 +1836,7 @@ class CentralView(QWidget):
             self._restore_splitter_sizes()
         self._drop_owned_ring()
         self._forget_quickest_cycle()
+        self.end_pass_zoom()
         self.table.select([lap_id])
         entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
                  if cid is not None else None)
@@ -1886,9 +1894,55 @@ class CentralView(QWidget):
             page.quickest.set_clip_running(True)
         self._playback.followed_lap = self.session.lap_at_time(clip[0])
         self._pin_owned_ring(cid)
+        self._zoom_to_pass(lap_id, cid, clip)
         if status:
             self.statusNotice.emit(status)
         return True
+
+    # How far outside a played pass's clip the playhead may report before its zoom ends: the
+    # clip's own pause lands within a frame of its end, and a seek quantises to the millisecond.
+    _PASS_ZOOM_SLACK_S = 0.25
+
+    # A PLAYED PASS ZOOMS ONTO ITS CORNER: the charts frame the corner's window as `N` and a
+    # Coaching Compare do (`PlotsView.frame_span`, one rule) and the map frames the clip's stretch
+    # of the played lap. One rule to undo it, the one a driver can predict: the zoom lasts while
+    # that pass is the subject — the playhead inside its clip. It stays when the clip pauses itself
+    # (he is studying the corner); a lap pick, a Jump, a scrub or play past the clip, Compare, a
+    # Lap race, a re-segment or Esc put the whole lap and the whole track back. Taking either view
+    # over by hand (a pan, a wheel zoom, `N`, Fit) leaves that view where he put it and gives the
+    # other back. Nothing is computed: a window and a box, set once; the tick only compares t.
+    def _zoom_to_pass(self, lap_id: int, cid: int, clip: tuple[float, float]):
+        window = self.session.corner_plot_window(cid, self.plots.axis_mode())
+        if window is not None:
+            self.plots.hold_frame(*window)
+        self.map.zoom_to_pass(*clip)
+        if window is not None or self.map.pass_zoomed():
+            self._pass_zoom = (float(clip[0]), float(clip[1]))
+            self._pass_zoom_seen = False     # armed by the first tick inside the clip
+
+    def pass_zoomed(self) -> bool:
+        return getattr(self, "_pass_zoom", None) is not None
+
+    def end_pass_zoom(self) -> bool:
+        """The whole lap on the charts and the whole track on the map. False when no zoom was on."""
+        if getattr(self, "_pass_zoom", None) is None:
+            return False
+        self._pass_zoom = None
+        self.plots.release_frame()
+        self.map.unzoom_pass()
+        return True
+
+    def _check_pass_zoom(self, t: float):
+        """Per tick, two comparisons: the playhead left the pass (a seek, a step, play on past the
+        clip's end) → the zoom ends. Armed only once the playhead has been INSIDE the clip, so the
+        tick that still reports where the video was before the clip's own seek landed is ignored."""
+        zoom = self._pass_zoom
+        slack = self._PASS_ZOOM_SLACK_S
+        inside = zoom[0] - slack <= t <= zoom[1] + slack
+        if inside:
+            self._pass_zoom_seen = True
+        elif self._pass_zoom_seen:
+            self.end_pass_zoom()
 
     def compare_at_corner(self, tp, lost: str) -> bool:
         """A Coaching row's Compare: SEE the loss the row names. Compare `tp.lap_id` (the lap whose
@@ -1910,6 +1964,7 @@ class CentralView(QWidget):
             self._restore_splitter_sizes()     # the panes, charts and map are what it shows
         if self._comparing():
             self.compare.exit()
+        self.end_pass_zoom()     # enter_pair below does not toggle the button the zoom listens to
         cid, a, b = tp.cid, tp.lap_id, tp.best_lap_id
         if not self.compare.enter_pair(a, b):
             return False
@@ -2201,6 +2256,8 @@ class CentralView(QWidget):
             self.compare.tick()
 
     def _apply_position(self, t: float):
+        if getattr(self, "_pass_zoom", None) is not None:
+            self._check_pass_zoom(t)
         self.plots.set_playhead_time(t)
         self._apply_readout(t)
 
@@ -2573,6 +2630,7 @@ class CentralView(QWidget):
         (tests/test_playback_rate.py keeps the sync path ignorant of it)."""
         if self.is_racing() or not self.can_race() or not self.map_on_screen():
             return self.is_racing()
+        self.end_pass_zoom()              # the race owns the map's view (its fit, or Follow)
         if self._comparing():
             self.video.compare_btn.click()
         lap = self.session.lap_at_time(self._playback.applied_t)
@@ -2662,6 +2720,7 @@ class CentralView(QWidget):
         reference load/clear, and the initial build; each call site keeps only its own extras inline."""
         # A race's tracks describe the laps as they were: a re-segment ends it before anything moves.
         self.end_lap_race()
+        self.end_pass_zoom()     # ...and so does a pass's zoom: its window is the old corners'
         self.table.refresh()
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.
