@@ -919,41 +919,55 @@ def test_hero_readout_asks_the_overlays_level_rule():
 
 def test_hero_readout_tail_is_secondary():
     """The craft review's P3: "whole lap" (and the speed) printed at the Δ's hero size and weight,
-    so it read as a value. The Δ run keeps the HERO face; the tail paints at BODY, regular, dim."""
+    so it read as a value. The Δ run keeps the HERO face; the tail paints a step down ON THE Δ's
+    BASELINE — the live speed at EMPHASIS in the text colour (a glance while scrubbing), "whole
+    lap" at BODY, dim. Pinned on the PAINTED pixels, not only on the fonts the widget holds: the
+    tail's ink is at most 3/4 of the head's height and its foot sits on the head's (both runs are
+    digits and letters without descenders here)."""
     from studio import theme as T
-    from studio.central_view import HERO_AT_REST_TAG, _at_rest
+    from studio.central_view import HERO_AT_REST_TAG
     view, _s, _t0, _t1 = _real_central_view()
-    try:
-        box = view.diff_box
-        assert box.font().pixelSize() == T.HERO or box.font().pointSize() == T.HERO, box.font()
-        tail = box.tail_font()
-        size = tail.pixelSize() if tail.pixelSize() > 0 else tail.pointSize()
-        assert size == T.BODY and tail.weight() == T.W_REGULAR, (size, tail.weight())
-        # Painted, it is smaller: the tail's ink is shorter than the head's digits.
-        view.resize(1280, 400)
-        view.show()
-        box.setText(_at_rest(f"Δideal +0.69 s     {HERO_AT_REST_TAG}"))
-        box.set_delta_colour(None)
-        _APP.processEvents()
-        img = box.grab().toImage()
-        head_w = QFontMetrics(box.font()).horizontalAdvance("Δideal +0.69 s     ")
-        dim = QColor(T.C.text_dim)
+    view.resize(1280, 400)
+    view.show()
+    box = view.diff_box
+    prior = (_APP.styleSheet(), _APP.font(), _APP.palette())
+    theme.apply_theme(_APP)           # the real look: themed, the text light on the dark box
 
-        def ink_rows(x0, x1, match):
-            rows = set()
-            for y in range(img.height()):
-                for x in range(x0, min(x1, img.width())):
-                    c = img.pixelColor(x, y)
-                    if match(c):
-                        rows.add(y)
-            return len(rows)
-        bright = QColor(T.C.text)
-        head_rows = ink_rows(0, head_w, lambda c: abs(c.lightness() - bright.lightness()) < 30)
-        tail_rows = ink_rows(head_w + 2, head_w + 120,
-                             lambda c: abs(c.red() - dim.red()) < 25
-                             and abs(c.green() - dim.green()) < 25 and abs(c.blue() - dim.blue()) < 25)
-        assert tail_rows and head_rows and tail_rows < head_rows, (head_rows, tail_rows)
+    def ink(img, x0, x1, colour):
+        """(top row, bottom row) of the pixels near `colour` in columns [x0, x1)."""
+        want = QColor(colour)
+        rows = [y for y in range(img.height()) for x in range(max(x0, 0), min(x1, img.width()))
+                if sum(abs(a - b) for a, b in zip(img.pixelColor(x, y).getRgb()[:3],
+                                                   want.getRgb()[:3], strict=True)) < 60]
+        return (min(rows), max(rows)) if rows else None
+
+    try:
+        assert box.font().pixelSize() == T.HERO or box.font().pointSize() == T.HERO, box.font()
+        # Digits against digits (no Δ, no "/", no ascender), so the two inks compare like for like.
+        for tail, colour in (("95", T.C.text), (HERO_AT_REST_TAG, T.C.text_dim)):
+            head = "0.37"
+            box.setText(f"{head}     {tail}")
+            box.set_delta_colour(None)
+            _APP.processEvents()
+            font, want = box.tail_style(tail)
+            assert want == colour, (tail, want)
+            img = box.grab().toImage()
+            split = box.contentsRect().left() + QFontMetrics(box.font()).horizontalAdvance(
+                head + "  ")
+            h_ink = ink(img, 0, split, T.C.text)
+            t_ink = ink(img, split + 2, img.width(), colour)
+            assert h_ink and t_ink, (tail, h_ink, t_ink)
+            h_h, t_h = h_ink[1] - h_ink[0] + 1, t_ink[1] - t_ink[0] + 1
+            assert t_h <= 0.75 * h_h, ("the tail paints as large as the Δ", tail, h_ink, t_ink)
+            if tail != HERO_AT_REST_TAG:     # "whole lap" has a descender (p): its foot is lower
+                assert abs(t_ink[1] - h_ink[1]) <= 1, ("the tail is off the Δ's baseline", tail,
+                                                       h_ink, t_ink)
+        size = font.pixelSize() if font.pixelSize() > 0 else font.pointSize()
+        assert size == T.BODY, size
     finally:
+        _APP.setStyleSheet(prior[0])
+        _APP.setFont(prior[1])
+        _APP.setPalette(prior[2])
         view.hide()
         view.dispose()
     print("test_hero_readout_tail_is_secondary OK")
@@ -1057,7 +1071,7 @@ def _hero_ink(view):
     head, sep, _tail = box.text().partition("     ")
     split = box.contentsRect().left() + QFontMetricsF(box.font()).horizontalAdvance(head + sep) - 4
     cands = {"behind": theme.behind_colour(), "ahead": theme.ahead_colour(), "text": theme.C.text,
-             "dim": theme.C.text_dim}   # the speed run's neutral since cool/delta-readout-level
+             "dim": theme.C.text_dim}   # "whole lap"'s tone since cool/delta-readout-level
     runs = ({}, {})
     for y in range(img.height()):
         for x in range(img.width()):
@@ -1092,7 +1106,7 @@ def test_the_hero_colours_only_its_delta_never_the_speed():
             _APP.processEvents()
             delta_run, speed_run = _hero_ink(view)
             assert max(delta_run, key=delta_run.get) == hue, (d, delta_run, view.diff_box.text())
-            assert max(speed_run, key=speed_run.get) == "dim", (
+            assert max(speed_run, key=speed_run.get) == "text", (
                 f"the speed must stay neutral beside a Δ of {d:+}", speed_run, view.diff_box.text())
             assert speed_run.get(hue, 0) < 0.05 * sum(speed_run.values()), (d, speed_run)
     finally:

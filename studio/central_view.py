@@ -415,18 +415,24 @@ class _HeroReadout(QLabel):
 
     THE Δ IS THE VALUE; WHAT FOLLOWS IT IS SECONDARY (cool/delta-readout-level). The tail — the
     speed, or "whole lap" at rest — was painted at the Δ's HERO size and weight, so "whole lap"
-    read as a second value. It now paints at ``theme.BODY``, regular, in ``C.text_dim``, on the Δ's
-    baseline: the Δ run alone keeps the hero face. The width floor still measures the whole line in
-    the hero face (`_hero_min_width`), so the smaller tail can only leave room, never clip."""
+    read as a second value. It now paints a step down, on the Δ's baseline, and the Δ run alone
+    keeps the hero face: the LIVE SPEED at ``theme.EMPHASIS``, regular, in ``C.text`` — still a
+    glance while scrubbing (13 px dim was readable, measured in review, not glanceable) — and
+    "whole lap", a label about the Δ rather than a value, at ``theme.BODY`` in ``C.text_dim``. The
+    width floor still measures the whole line in the hero face (`_hero_min_width`), so the smaller
+    tail can only leave room, never clip."""
 
     def __init__(self, text: str):
         super().__init__(text)
         self._delta_colour: str | None = None
-        self._tail_font = theme.mono_font(theme.BODY, theme.W_REGULAR)
+        self._speed_font = theme.mono_font(theme.EMPHASIS, theme.W_REGULAR)
+        self._label_font = theme.mono_font(theme.BODY, theme.W_REGULAR)
 
-    def tail_font(self):
-        """The face the run after the Δ (the speed, or "whole lap") paints in."""
-        return self._tail_font
+    def tail_style(self, tail: str) -> tuple:
+        """(font, colour) the run after the Δ paints in: "whole lap" dim, the speed in text."""
+        if tail == HERO_AT_REST_TAG:
+            return self._label_font, theme.C.text_dim
+        return self._speed_font, theme.C.text
 
     def delta_colour(self) -> str | None:
         """The colour the Δ run paints in, or None (all neutral)."""
@@ -464,8 +470,9 @@ class _HeroReadout(QLabel):
         rect = QRectF(rect)
         x = rect.left() + hm.horizontalAdvance(head + sep)
         baseline = rect.top() + (rect.height() - hm.height()) / 2 + hm.ascent()
-        p.setFont(self._tail_font)
-        p.setPen(QColor(theme.C.text_dim))
+        font, colour = self.tail_style(tail)
+        p.setFont(font)
+        p.setPen(QColor(colour))
         p.drawText(QPointF(x, baseline), tail)
         p.end()
 
