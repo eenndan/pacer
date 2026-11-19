@@ -1950,9 +1950,11 @@ class OpportunitiesPanel(QWidget):
         self.more_hint.setVisible(False)
         lay.addWidget(self.more_hint)
         # The debrief's spare height when it is too short for the picture (`_apply_hero_budget`):
-        # at the foot, as it was before the picture moved up, not a blank band over the headline.
+        # at the foot, as it was before the picture moved up. An Expanding spacer at stretch 0
+        # takes it whenever no item has a stretch (the hero hidden, the table capped) — without it
+        # the lead and the focus list absorbed it and stood 21 px taller than their text at the
+        # minimum window; while the hero shows, its stretch 1 wins and the spacer gets nothing.
         lay.addStretch(0)
-        self._tail = lay.count() - 1
         self._hero_room = 0   # what the lead, the focus list, the theme and the shortlist leave
         # Tab order follows the page down: the chip, the pair, then the table they act on (the
         # table was built first, so creation order alone would visit it before them).
@@ -2535,7 +2537,6 @@ class OpportunitiesPanel(QWidget):
                 self.body.setMaximumHeight(cap)
             self._lay.setStretchFactor(self.body, 0 if capped else 1)
             self._lay.setStretchFactor(self.hero, 1 if want else 0)
-            self._lay.setStretch(self._tail, 1 if capped and not want else 0)
             if self.hero.isHidden() == want:
                 self.hero.setVisible(want)
         finally:

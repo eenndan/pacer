@@ -2865,7 +2865,34 @@ def test_debrief_too_short_for_the_picture_reads_as_before():
             assert panel._header.geometry().top() == 0, panel._header.geometry()
             assert panel.body.maximumHeight() == panel._shortlist_px(), "the table is not capped"
             assert panel.hero.renders == 0, panel.hero.renders
-    print("ok debrief at the minimum window: no picture, no blank band, the headline on top")
+            # THE SWEEP (review of #616): the window's height from its minimum to 800 px in 5 px
+            # steps. At every height the card is either hidden or tall enough to draw, and nothing
+            # blank sits above the headline: hidden, the headline is the page's top; shown, the
+            # headline starts where the card ends. A hero budget that forgot the theme block's
+            # height drew 82-147 px blank bands above the headline at 591-656 px.
+            from studio.coaching_panel import HERO_MIN_PX
+            hero, header = panel.hero, panel._header
+            seen = set()
+            for h in range(win.minimumSizeHint().height(), 801, 5):
+                win.resize(1280, h)
+                D._settle(0.03)
+                for _ in range(3):
+                    _APP.processEvents()
+                shown = not hero.isHidden()
+                seen.add(shown)
+                assert not shown or hero.height() >= HERO_MIN_PX, (h, hero.height())
+                top = hero.geometry().bottom() + 1 if shown else 0
+                assert header.geometry().top() == top, ("a blank band over the headline", h,
+                                                        shown, hero.geometry(), header.geometry())
+                # ...and the spare height of a short window is the page's foot, not padding
+                # inside the lead or the focus list (each block stands at its own text's height).
+                for blk in (panel.debrief_block, panel.focus_block, panel.theme_block):
+                    if not blk.isHidden():
+                        assert blk.height() <= blk.sizeHint().height(), (
+                            "a block stretched by the spare height", h, type(blk).__name__,
+                            blk.height(), blk.sizeHint().height())
+            assert seen == {True, False}, ("the sweep never crossed the card's threshold", seen)
+    print("ok debrief at the minimum window and swept to 800 px: no blank band over the headline")
 
 
 def test_debrief_hero_carries_the_lap_tables_trust_marks():
