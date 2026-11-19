@@ -1669,6 +1669,90 @@ def test_the_pb_chart_same_day_keeps_one_direction():
     print("ok PB chart: one way round on a race day")
 
 
+def test_the_pb_chart_labels_its_own_dates_when_it_thins():
+    """Review of cool/library-same-day (P2). A span with more days than room for ISO labels thins
+    them — and thinning from the range's first day (with a padding that pulled in the empty day
+    before the first session) labelled 05-31, 06-02 … and neither 06-01 nor 06-08 on a chart of
+    06-01, 06-08, 06-10. The days that HAVE a session are kept first (the first one always), the
+    labels never touch, and a whole-day count decides the switch: 13 and 14 days tick ISO dates,
+    15 days pyqtgraph's levels."""
+    from studio.library_dialog import _DAY_TICKS_MAX_DAYS
+
+    _xs, _ys, span, labels = _pb_chart([("A", "2026-06-01", 45.1, 10),
+                                        ("B", "2026-06-08", 44.9, 10),
+                                        ("C", "2026-06-10", 44.8, 10)])
+    # Under half a day of padding while dates are ticked: no empty day pulled in at either end.
+    assert span <= 10 + 2 * 0.45 + 1e-6, span
+    printed = labels[0][1]
+    assert "2026-06-01" in printed and "2026-06-08" in printed, printed
+    assert "2026-05-31" not in printed, printed
+    # A span that cannot label every day: 13 whole days at the dialog's size.
+    _xs, _ys, _span, labels = _pb_chart([("A", "2026-06-01", 45.1, 10),
+                                         ("B", "2026-06-13", 44.9, 10)])
+    ((_spacing, printed),) = labels
+    assert printed[0] == "2026-06-01" and "2026-06-13" in printed, printed
+    assert len(printed) < 13, ("every day labelled: no thinning was needed", printed)
+    # ...and the kept labels keep their distance (never two neighbouring days).
+    days = sorted(int(p[-2:]) for p in printed)
+    gaps = [b - a for a, b in zip(days, days[1:], strict=False)]
+    assert min(gaps) >= 2, printed
+    for n_days, iso in ((13, True), (_DAY_TICKS_MAX_DAYS, True), (15, False)):
+        last = f"2026-06-{n_days:02d}"
+        _xs, _ys, _span, labels = _pb_chart([("A", "2026-06-01", 45.1, 10),
+                                             ("B", last, 44.9, 10)])
+        flat = [t for _sp, lab in labels for t in lab]
+        assert all(t.startswith("2026-") for t in flat) == iso and flat, (n_days, flat)
+    print("ok PB chart: the chart's own dates labelled when thinning; 13/14 ISO, 15 levels")
+
+
+def test_the_pb_chart_y_range_is_one_continuous_rule():
+    """Review (P3): ±1 s around a flat series (0.09 s between two heats is not a cliff), else
+    ±0.55 of the spread — continuous at a 2 s spread, so 1.9 s and 2.1 s look alike and no marker
+    sits on the frame."""
+    from studio.library_dialog import _pb_y_range
+    lo, hi = _pb_y_range([44.95, 45.04])
+    assert abs((hi - lo) - 2.0) < 1e-9 and lo < 44.95 and hi > 45.04, (lo, hi)
+    for spread in (1.9, 2.0, 2.1, 6.0):
+        lo, hi = _pb_y_range([44.0, 44.0 + spread])
+        assert hi - lo >= 1.1 * spread - 1e-9 and hi - lo >= 2.0, (spread, lo, hi)
+        assert lo <= 44.0 - 0.05 * spread + 1e-9 and hi >= 44.0 + 1.05 * spread - 1e-9
+    a, b = (_pb_y_range([44.0, 44.0 + s]) for s in (1.9, 2.1))
+    assert (a[1] - a[0]) < (b[1] - b[0]) < 1.2 * (a[1] - a[0]), (a, b)
+    # Through the dialog: two heats 0.09 s apart on a 2 s window, not a full-height cliff.
+    _xs, ys, _span, _labels = _pb_chart([("A", "2026-06-01", 45.04, 9),
+                                         ("B", "2026-06-01", 44.95, 14)])
+    assert ys == [45.04, 44.95], ys
+
+
+def test_the_race_day_summary_reads_in_driven_order():
+    """Review (P2): the summary beside the chart (`track_summary`) read `pb_series`, ordered by
+    best within a date, so heats driven 45.30 then 44.95 on one day said "off your PB" beside a
+    chart drawing them improving. It reads the driven order now: the later heat beat the running
+    best (1 PB) and holds it (improving). Its only consumer is the dialog's summary line; the
+    Library table keeps its own order."""
+    idx = library.empty_index()
+    for stem, best, hour in (("A", 45.30, 9), ("B", 44.95, 14)):
+        e = _entry(stem, track="MK", date="2026-06-01", best=best, paths=[])
+        e["start_ms"] = _utc_ms("2026-06-01", hour)
+        library.upsert(idx, e)
+    s = library.track_summary(idx, "MK")
+    assert (s["trend"], s["pb_count"], s["best"], s["best_date"]) == (
+        "improving", 1, 44.95, "2026-06-01"), s
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_summary("MK")
+    line = dlg._summary.text()
+    dlg.deleteLater()
+    assert "improving" in line and "off your PB" not in line and "1 PB" in line, line
+    # Driven the other way round (the faster heat first), the day is "off your PB".
+    idx = library.empty_index()
+    for stem, best, hour in (("A", 44.95, 9), ("B", 45.30, 14)):
+        e = _entry(stem, track="MK", date="2026-06-01", best=best, paths=[])
+        e["start_ms"] = _utc_ms("2026-06-01", hour)
+        library.upsert(idx, e)
+    s = library.track_summary(idx, "MK")
+    assert (s["trend"], s["pb_count"]) == ("stalled", 0), s
+
+
 def test_pb_points_are_in_driven_order():
     """`library.pb_points`: by date, then by the first fix's clock within a date (rows with none
     after, by best); `pb_series` keeps its own (date, best) order for the summary's PB count."""

@@ -458,14 +458,23 @@ class _SessionDateAxis(pg.DateAxisItem):
     month, is the one kept.
 
     AND NOTHING FINER THAN A DAY (cool/library-same-day): the chart places a session on its date
-    only (``_pb_xs``), so a span of up to ``_DAY_TICKS_MAX_DAYS`` is ticked at each day's middle
-    with its ISO date, thinned to fit; a longer one keeps pyqtgraph's levels minus any under a
-    day — never "06:00" or "59.600"."""
+    only (``_pb_xs``), so sessions over at most ``_DAY_TICKS_MAX_DAYS`` whole days are ticked at
+    each day's middle with its ISO date, thinned to fit — keeping the days that HAVE a session
+    first, so the chart's own dates are the ones labelled (the first session's always); a longer
+    span keeps pyqtgraph's levels minus any under a day — never "06:00" or "59.600"."""
 
     _day_mode = False
+    _session_days: tuple[int, ...] = ()   # UTC day numbers that hold a session (`set_session_days`)
+
+    def set_session_days(self, xs) -> None:
+        """The plotted sessions' x values: which days the ticks prefer, and how many whole days the
+        chart spans (the switch between the ISO-date ticks and pyqtgraph's levels)."""
+        self._session_days = tuple(sorted({math.floor(x / _DAY_S) for x in xs}))
 
     def tickValues(self, minVal, maxVal, size):  # noqa: N802 (pyqtgraph hook)
-        self._day_mode = 0 < maxVal - minVal <= _DAY_TICKS_MAX_DAYS * _DAY_S
+        days = self._session_days
+        self._day_mode = (days[-1] - days[0] + 1 <= _DAY_TICKS_MAX_DAYS if days
+                          else 0 < maxVal - minVal <= _DAY_TICKS_MAX_DAYS * _DAY_S)
         if self._day_mode:
             return [(_DAY_S, self._day_ticks(minVal, maxVal, size))]
         levels = [(sp, v) for sp, v in super().tickValues(minVal, maxVal, size) if sp >= _DAY_S]
@@ -488,17 +497,22 @@ class _SessionDateAxis(pg.DateAxisItem):
         return out
 
     def _day_ticks(self, minVal, maxVal, size) -> list[float]:
-        """Each UTC day's middle inside the range, every n-th so the ISO labels keep a SPACE_S
-        apart."""
-        first = math.floor(minVal / _DAY_S)
-        mids = [(d + 0.5) * _DAY_S for d in range(first, math.floor(maxVal / _DAY_S) + 1)]
-        mids = [m for m in mids if minVal <= m <= maxVal]
-        if not mids or size <= 0:
-            return mids
+        """Each UTC day's middle inside the range — or, when the ISO labels would come within a
+        SPACE_S of each other, a subset at least that far apart, chosen days-with-a-session first
+        (in date order, so the first session's day always), then the empty days between."""
+        days = [d for d in range(math.floor(minVal / _DAY_S), math.floor(maxVal / _DAY_S) + 1)
+                if minVal <= (d + 0.5) * _DAY_S <= maxVal]
+        if not days or size <= 0:
+            return [(d + 0.5) * _DAY_S for d in days]
         label = QFontMetrics(self.style.get("tickFont") or self.font()).horizontalAdvance(
             "0000-00-00") + theme.SPACE_S
         every = max(1, math.ceil(label / (size * _DAY_S / (maxVal - minVal))))
-        return mids[::every]
+        held = set(self._session_days)
+        chosen: list[int] = []
+        for d in [d for d in days if d in held] + [d for d in days if d not in held]:
+            if all(abs(d - c) >= every for c in chosen):
+                chosen.append(d)
+        return [(d + 0.5) * _DAY_S for d in sorted(chosen)]
 
     def tickStrings(self, values, scale, spacing):  # noqa: N802 (pyqtgraph hook)
         if not self._day_mode:
@@ -657,22 +671,25 @@ def _pb_xs(points: list[tuple[str, int | None, float]]) -> list[float]:
 
 
 def _pb_x_range(xs: list[float]) -> tuple[float, float]:
-    """The chart's x range: the whole days its sessions fall on, padded."""
+    """The chart's x range: the whole days its sessions fall on, padded — by under half a day
+    while the axis ticks dates (an empty day pulled in at either end would take a label from the
+    chart's own first or last session), by 5 % of a longer span."""
     lo = math.floor(min(xs) / _DAY_S) * _DAY_S
     hi = (math.floor(max(xs) / _DAY_S) + 1) * _DAY_S
-    pad = max(_PB_X_PAD_DAYS * _DAY_S, 0.05 * (hi - lo))
+    pad = _PB_X_PAD_DAYS * _DAY_S
+    if (hi - lo) / _DAY_S > _DAY_TICKS_MAX_DAYS:
+        pad = max(pad, 0.05 * (hi - lo))
     return lo - pad, hi + pad
 
 
 def _pb_y_range(ys: list[float]) -> tuple[float, float]:
-    """The chart's y range: ±1 s around a flat series (one session, or bests within a second of
-    each other), else the spread padded by a tenth."""
+    """The chart's y range, centred on the bests: at least ±1 s, so a series flatter than that (one
+    session, or a race day's heats 0.09 s apart) is not drawn as a cliff, else ±0.55 of the spread
+    (a tenth of padding, so no marker sits on the frame). One rule, continuous: a 1.9 s spread and
+    a 2.1 s spread are drawn about the same size."""
     lo, hi = min(ys), max(ys)
-    if hi - lo < 2.0:
-        mid = (lo + hi) / 2
-        return mid - 1.0, mid + 1.0
-    pad = 0.1 * (hi - lo)
-    return lo - pad, hi + pad
+    mid, half = (lo + hi) / 2, max(1.0, 0.55 * (hi - lo))
+    return mid - half, mid + half
 
 
 class LibraryDialog(QDialog):
@@ -1651,6 +1668,7 @@ class LibraryDialog(QDialog):
             # A hard unit range, not autoRange(): with no data pyqtgraph's autorange KEEPS the old
             # bounds (67.771–69.771 → merely re-padded to 67.386–70.156). The plotting branches
             # each set their own range back, so nothing has to be restored here.
+            self.pb_plot.getAxis("bottom").set_session_days(())
             self.pb_plot.getPlotItem().getViewBox().setRange(
                 xRange=(0.0, 1.0), yRange=(0.0, 1.0), padding=0)
 
@@ -1677,6 +1695,7 @@ class LibraryDialog(QDialog):
         day's several on one date — got a degenerate span the date axis ticked in hours or
         sub-seconds."""
         self.pb_plot.disableAutoRange()
+        self.pb_plot.getAxis("bottom").set_session_days(xs)
         self.pb_plot.setXRange(*_pb_x_range(xs), padding=0)
         self.pb_plot.setYRange(*_pb_y_range(ys), padding=0)
 
