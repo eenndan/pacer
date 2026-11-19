@@ -2760,6 +2760,15 @@ def _check_hero_landing(win):
             "a shortlist row is cut", r, t.viewport().height())
     assert not t.verticalScrollBar().isVisible(), "the shortlist scrolls"
     assert hero.geometry().bottom() < panel.height() and hero.height() >= HERO_MIN_PX
+    # THE PICTURE COMES FIRST (cool/debrief-picture-first): the hero is the page's top, then the
+    # headline it illustrates, then the lead, the focus list, the theme and the shortlist. Under
+    # the shortlist it began 487 px down a 1440x900 window.
+    assert hero.geometry().top() == 0, ("the picture is not the page's first thing",
+                                        hero.geometry())
+    tops = [w.geometry().top() for w in (hero, panel._header, panel.debrief_block,
+                                         panel.focus_block, panel.theme_block, panel.body)]
+    assert tops == sorted(tops) and hero.geometry().bottom() < panel._header.geometry().top(), (
+        "the debrief's order", tops)
     assert not panel.debrief_block.note.isHidden(), "the lead shed its note for the hero"
     tb = panel.theme_block
     assert sum(not a.isHidden() for a in tb.actions) == len(tb._lines), "the theme shed a line"
@@ -2836,6 +2845,27 @@ def test_debrief_hero_on_the_demo_landing_and_a_first_open():
             assert win.session.track_name in hero.data().caption, hero.data().caption
     print("ok debrief hero: demo landing 1280x800 + first open 1728x1117 — time = lap table, "
           "rings = focus list (and follow a Remove), one primary Jump, nothing below the fold")
+
+
+def test_debrief_too_short_for_the_picture_reads_as_before():
+    """At the window's minimum size (1059x546 on the demo) the blocks and the shortlist leave the
+    picture ~21 px, under HERO_MIN_PX: the hero hides and the spare height goes to the foot of the
+    page, so the headline is still the page's top — not a blank band above it."""
+    import tempfile
+
+    import test_debrief_landing as D
+    with tempfile.TemporaryDirectory(prefix="hero_min_") as folder, D._fresh_app_support():
+        a, _b = D._two_recordings(folder)
+        with _hero_window(a, (400, 300), demo_env=a) as win:
+            D._settle(0.5)
+            panel = win.view.opportunities
+            assert win.view.is_debrief() and win.height() < 600, (win.size(),)
+            assert panel.hero.data() is not None and panel.hero.isHidden(), (
+                panel.hero.isVisible(), panel.hero.height())
+            assert panel._header.geometry().top() == 0, panel._header.geometry()
+            assert panel.body.maximumHeight() == panel._shortlist_px(), "the table is not capped"
+            assert panel.hero.renders == 0, panel.hero.renders
+    print("ok debrief at the minimum window: no picture, no blank band, the headline on top")
 
 
 def test_debrief_hero_carries_the_lap_tables_trust_marks():

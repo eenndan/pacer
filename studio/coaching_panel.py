@@ -214,19 +214,22 @@ class ThemeBlock(QWidget):
                 QRect(0, 0, inner, 0), Qt.TextWordWrap, text).height()
         return need
 
-    def fit_into(self, width: int, budget_px: int) -> None:
+    def fit_into(self, width: int, budget_px: int) -> int:
         """Show the theme plus as many action lines as fit `budget_px` at `width`; hide the block
-        entirely when even the theme sentence alone does not.
+        entirely when even the theme sentence alone does not. Returns the height it settled for
+        (0 when hidden).
 
         The count is chosen from the widest configuration DOWN, so widening the page brings shed
         lines back (a shed line must never become the floor of the next measurement — the same rule
         widgets.WrapLabel documents for its own minimum). Idempotent."""
         if self._sentence:
             for n in range(len(self._lines), -1, -1):
-                if self._needed_px(width, n) <= budget_px:
+                need = self._needed_px(width, n)
+                if need <= budget_px:
                     self._apply(n, True)
-                    return
+                    return need
         self._apply(0, False)
+        return 0
 
     def _apply(self, n_actions: int, visible: bool) -> None:
         """Set the block's visible configuration, touching a widget ONLY when it changes — an
@@ -1914,8 +1917,8 @@ class OpportunitiesPanel(QWidget):
         # The debrief's lead, above everything it introduces; hidden unless the page IS the debrief.
         self.debrief_block = DebriefBlock()
         self.debrief_block.compare_requested.connect(self.compare_pb_requested)
-        # The debrief's picture, in the canvas the shortlist leaves under it (`_apply_hero_budget`);
-        # hidden, and costing nothing, everywhere else.
+        # The debrief's picture, sized by the canvas the lead, the focus list, the theme and the
+        # shortlist leave (`_apply_hero_budget`); hidden, and costing nothing, everywhere else.
         self.hero = DebriefHero()
         self.hero.corner_clicked.connect(self._jump_to_corner)
         self._hero_budgeting = False
@@ -1923,13 +1926,17 @@ class OpportunitiesPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
+        # THE PICTURE COMES FIRST (cool/debrief-picture-first). Under the shortlist the hero began
+        # 487 px down a 1440x900 window, below 422 px of prose: the first open's one picture was
+        # the last thing on its screen. It now leads the page, above the headline it illustrates;
+        # its height is still only what the blocks below leave it, so moving it sheds no line.
+        lay.addWidget(self.hero, 0)  # on the debrief it takes what the blocks below leave
         lay.addWidget(header)
         lay.addWidget(self.debrief_block)
         lay.addWidget(self.focus_block)
         lay.addWidget(self._focus_line_row)   # in the block's place, only while the block is hidden
         lay.addWidget(self.theme_block)
         lay.addWidget(self.body, 1)  # the rows take the page's full height
-        lay.addWidget(self.hero, 0)  # ...except on the debrief, where the hero takes what they leave
         self._lay = lay
         # THE ROWS THE VIEWPORT COULD NOT HOLD, SAID (LOOK-3, QA 2026-09-26). In the grid the page
         # fits what it can — 3 rows at the owner's layout — and the rest simply were not there: on
@@ -1942,6 +1949,11 @@ class OpportunitiesPanel(QWidget):
         self.more_hint.setContentsMargins(theme.SPACE_S, 2, theme.SPACE_S, 2)
         self.more_hint.setVisible(False)
         lay.addWidget(self.more_hint)
+        # The debrief's spare height when it is too short for the picture (`_apply_hero_budget`):
+        # at the foot, as it was before the picture moved up, not a blank band over the headline.
+        lay.addStretch(0)
+        self._tail = lay.count() - 1
+        self._hero_room = 0   # what the lead, the focus list, the theme and the shortlist leave
         # Tab order follows the page down: the chip, the pair, then the table they act on (the
         # table was built first, so creation order alone would visit it before them).
         QWidget.setTabOrder(self.focus_line, self.jump_button)
@@ -2502,24 +2514,28 @@ class OpportunitiesPanel(QWidget):
         self.hero.set_jumpable(o.cid for o in self._all_rows)
 
     def _apply_hero_budget(self) -> None:
-        """On the debrief, cap the table at its shortlist and give the hero the canvas under it.
+        """On the debrief, cap the table at its shortlist and give the hero the canvas left over.
 
         The layout does the arithmetic: the hero has no height of its own (vertical policy
         Ignored, minimum 0), so it gets only what the lead, the focus list, the theme and the
-        shortlist leave — it can never push one of them down or shrink it — and it paints nothing
-        below ``HERO_MIN_PX`` (``DebriefHero.shows_picture``)."""
+        shortlist leave — it can never push one of them down or shrink it. Where that is under
+        ``HERO_MIN_PX`` (a short window) the hero hides and the spare height goes to the foot of
+        the page, so the page reads as it did before the picture led it (``_hero_room`` is the
+        theme budget's own remainder, so the decision cannot feed back on the hero's height)."""
         if self._hero_budgeting:
             return
         self._hero_budgeting = True
         try:
             rows = (self._shortlist_px() if self._debrief and self.hero.data() is not None
                     and self.body.currentIndex() == 0 else 0)
-            want = rows > 0
-            cap = rows if want else _QWIDGETSIZE_MAX
+            capped = rows > 0
+            want = capped and self._hero_room >= HERO_MIN_PX
+            cap = rows if capped else _QWIDGETSIZE_MAX
             if self.body.maximumHeight() != cap:
                 self.body.setMaximumHeight(cap)
-            self._lay.setStretchFactor(self.body, 0 if want else 1)
+            self._lay.setStretchFactor(self.body, 0 if capped else 1)
             self._lay.setStretchFactor(self.hero, 1 if want else 0)
+            self._lay.setStretch(self._tail, 1 if capped and not want else 0)
             if self.hero.isHidden() == want:
                 self.hero.setVisible(want)
         finally:
@@ -2602,11 +2618,12 @@ class OpportunitiesPanel(QWidget):
                                                   min(int(height * FOCUS_MAX_FRACTION),
                                                       max(room - used, 0)))
                 used += shown + self._sync_action_line("" if shown else chip, False)
-            self.theme_block.fit_into(
+            used += self.theme_block.fit_into(
                 self.width(),
                 min(int(height * THEME_MAX_FRACTION),
                     max(int(height * BLOCKS_MAX_FRACTION) - used, 0),
                     max(room - used, 0)))
+            self._hero_room = max(room - used, 0)
             self._refresh_summary_label()
         finally:
             self._theme_budgeting = False
