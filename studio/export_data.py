@@ -912,11 +912,12 @@ figure.hero img.card { display: block; width: 100%; margin: 0; }
 }
 /* The Stats groups are narrow (a ~270 px table and a note): two columns where the page is wide
    enough, flowing down the first then the second so the reading order stays the Stats page's, a
-   card never split across the two. One column below 1100 px. */
+   card never split across the two. One column below 1100 px. Paper keeps a group whole in its
+   own print rule below. */
 @media screen and (min-width: 1100px) {
   .groups { column-count: 2; column-gap: 16px; }
+  .groups > section { break-inside: avoid; }
 }
-.groups > section { break-inside: avoid; }
 p.lead { font-size: 1.15em; font-weight: 600; margin: 0 0 6px; }
 p.body { margin: 0 0 6px; max-width: 46em; }
 ul.actions { margin: 4px 0 8px; padding-left: 1.2em; }
