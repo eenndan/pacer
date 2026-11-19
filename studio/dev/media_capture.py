@@ -967,9 +967,9 @@ def _open_demo(app: QApplication, shot: str) -> StudioWindow:
 
 
 def shot_debrief(app: QApplication, out_dir: str) -> str:
-    """The first-open debrief, the loop the app is built around: the lead, the focus list Pacer
-    pre-filled, the ranked corners, each one Jump from the video, and under them the picture: the
-    best lap's time and its speed-coloured line with the focus corners ringed.
+    """The first-open debrief, the loop the app is built around: the picture on top (the best
+    lap's time and its speed-coloured line with the focus corners ringed), then the lead, the focus
+    list Pacer pre-filled and the ranked corners, each one Jump from the video.
 
     SHOT ON THE SYNTHETIC DEMO, NEVER ON THE RECORDING ABOVE. The demo is the one session every
     reader can open (`pixi run studio -- --demo`) and it is nobody's driving, so this image shows
@@ -999,8 +999,8 @@ def shot_debrief(app: QApplication, out_dir: str) -> str:
     origin = panel.mapTo(w, QPoint(0, 0))
     bottom = table.viewport().mapTo(
         w, QPoint(0, table.rowViewportPosition(last) + table.rowHeight(last))).y()
-    # The hero sits UNDER the shortlist, in the canvas it leaves: a crop at the last row would cut
-    # the release's headline picture out of the image. When the hero is up, crop to its bottom.
+    # The crop ends at the lower of the last row and the hero's bottom (the hero sat under the
+    # shortlist before 0.17.0 and leads the page since; either way the crop keeps both whole).
     if hero.isVisible() and hero.data() is not None:
         bottom = max(bottom, hero.mapTo(w, QPoint(0, hero.height())).y())
     elif table.rowCount():
