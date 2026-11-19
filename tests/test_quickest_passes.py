@@ -688,8 +688,8 @@ def test_a_played_pass_zooms_the_charts_and_the_map_onto_its_corner():
         assert left > m._map_key.geometry().right(), (left, m._map_key.geometry())
         assert right < m.fit_btn.geometry().left(), (right, m.fit_btn.geometry())
         # the way back where his eyes are: the status line names it
-        assert win.statusBar().currentMessage().endswith(" · Esc: whole lap"), \
-            win.statusBar().currentMessage()
+        assert win.statusBar().currentMessage().endswith(
+            "next · Esc: whole lap · ⌘K: export this pass"), win.statusBar().currentMessage()
         # ...the marker, at the pass's middle, and the corner's ring are on the canvas
         _inside(view, clip)
         _settle()

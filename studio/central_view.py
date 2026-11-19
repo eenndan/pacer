@@ -1872,9 +1872,10 @@ class CentralView(QWidget):
     def _play_quickest_row(self, lap_id: int, cid: int, status: str) -> None:
         """A Quickest passes row's play: its pass, and its status line says the pass it names can
         be exported (⌘K lists "Export the C3 pass — lap 13…" exactly while the row names it)."""
-        self.play_corner_pass(lap_id, cid, f"{status} · ⌘K: export this pass" if status else "")
+        self.play_corner_pass(lap_id, cid, status, export_hint=True)
 
-    def play_corner_pass(self, lap_id: int, cid: int, status: str = "") -> bool:
+    def play_corner_pass(self, lap_id: int, cid: int, status: str = "", *,
+                         export_hint: bool = False) -> bool:
         """The Corners tab's Quickest passes: show lap `lap_id`'s pass through corner `cid` and PLAY
         it. The lap is selected as a Stats MOMENTS Jump selects it (charts, map ring), the video
         seeks to the clip start (`CornerModel.pass_clip`: 2 s before the entry, or the previous
@@ -1903,9 +1904,20 @@ class CentralView(QWidget):
         self._pin_owned_ring(cid)
         self._zoom_to_pass(lap_id, cid, clip)
         if status:
-            # the way back, where his eyes are as the pass plays (the readout says it too)
-            self.statusNotice.emit(f"{status} · Esc: whole lap" if self.pass_zoomed() else status)
+            self.statusNotice.emit(self._pass_status(status, export_hint))
         return True
+
+    def _pass_status(self, status: str, export_hint: bool) -> str:
+        """THE ONE PLACE a played pass's status line is built: the row's own sentence, then the
+        way back while the zoom is on (where his eyes are; the chart readout says it too), then
+        the export ⌘K offers for the pass a Quickest row names. Measured at 1280×800 on the demo:
+        the longest of the 21 row states is 786 px of the 1280 px bar, so nothing is elided."""
+        parts = [status]
+        if self.pass_zoomed():
+            parts.append("Esc: whole lap")
+        if export_hint:
+            parts.append("⌘K: export this pass")
+        return " · ".join(parts)
 
     # How far outside a played pass's clip the playhead may report before its zoom ends: the
     # clip's own pause lands within a frame of its end, and a seek quantises to the millisecond.
