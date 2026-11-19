@@ -226,8 +226,7 @@ class BroadcastElement:
         for t in (times if len(times) else [spec.t0]):
             vals = ev.overlay_values_at(s, float(t), spec)
             speeds.append(ev._readout_runs(vals, self._unit)[0])
-            runs = ev._strip_runs(s, vals, spec.lap_t0, spec.is_best_at(vals.lap_id),
-                                  self._palette)
+            runs = ev._frame_strip_runs(s, vals, spec, self._palette)
             if runs is None:
                 continue
             h, c, d = tower_texts(runs[0], runs[1], self._name)
@@ -291,6 +290,10 @@ class BroadcastElement:
         tower_w = max([tower_w] + [2 * self._pad + self._last_width(r)
                                    for r in fitted_rows.values()])
         self._main_h = L.BROADCAST["tower"].h * u
+        if getattr(spec, "pass_subject", None) is not None:
+            # A pass clip has no Δ row (`export_video.PassSubject`): the tower ends under its
+            # "C3 · 2.32 s" row, a quarter of the header's height below it as the plate's margin.
+            self._main_h = (L.TOWER_HEAD * 1.25 + L.TOWER_PROGRESS + L.TOWER_TIME) * u
         tower_h = self._main_h + ((self._last_gap + self._last_h) if self._holds else 0.0)
         sp_h = L.SPEED_H * u
         self._f_speed = ev._font(sp_h * 0.80, bold=True)
@@ -564,8 +567,7 @@ class BroadcastElement:
         """What this frame shows: (head, clock, Δ row, Δ row colour, progress, bar Δ or None,
         speed). The Classic run builders decide every string."""
         ev, spec = self._ev, self._spec
-        is_best = spec.is_best_at(vals.lap_id)
-        runs = ev._strip_runs(self._session, vals, spec.lap_t0, is_best, self._palette)
+        runs = ev._frame_strip_runs(self._session, vals, spec, self._palette)
         speed = ev._readout_runs(vals, self._unit)[0]
         if runs is None:
             return None, None, _PENDING_DELTA, None, 0.0, None, speed

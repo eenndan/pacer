@@ -245,6 +245,11 @@ class CornerCardsElement:
             return False
         cfg = spec.config
         self.cards = card_rows(ctx.session, int(spec.lap_id), cfg.speed_unit, cfg.palette)
+        # A pass clip (export_video.PassSubject) shows its own corner's card only: the previous
+        # corner's exit is at or before the clip's first frame, and its card would open the clip.
+        subject = getattr(spec, "pass_subject", None)
+        if subject is not None:
+            self.cards = [c for c in self.cards if c.cid == subject.cid]
         if not self.cards:
             return False
         h = float(ctx.plates["readout"].height())

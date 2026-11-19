@@ -560,6 +560,8 @@ CROSSINGS = {
         (_P, "the frame on screen -> the trace sample it shows"),
     ("studio/export_video.py", "lap_window_for_export", "_media_time"):
         (_P, "the exported window is footage"),
+    ("studio/export_video.py", "pass_window_for_export", "_media_time"):
+        (_P, "a pass clip is footage: the clip PlayerPane.seek plays for the same pass_clip"),
     ("studio/export_video.py", "overlay_values_at", "_telemetry_time"):
         (_P, "a burned frame -> the trace sample it shows; g crosses back itself (g_at_time)"),
     ("studio/export_video.py", "_strip_runs", "_telemetry_time"):
