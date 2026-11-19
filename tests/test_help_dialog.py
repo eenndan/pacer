@@ -125,10 +125,19 @@ def _card_rows(dialog) -> list[tuple[str, str, int]]:
             caps = [lb for lb in [key_item.widget(), *key_item.widget().findChildren(QLabel)]
                     if isinstance(lb, QLabel) and lb.property("role") == "KeyCap"]
             desc = desc_item.widget()
-            # A named cap ("Comma") carries the key it documents (",") as its "key" property.
-            rows.append((caps[0].property("key") or caps[0].text(), desc.text(),
-                         desc.mapTo(dialog, QPoint(0, 0)).x()))
+            # A named cap ("Comma") carries the key it documents (",") as its "key" property —
+            # set by the same function that paints the cap, so the key alone proves nothing about
+            # what the user SEES: the painted text must be that key, or its pinned name.
+            key = caps[0].property("key") or caps[0].text()
+            assert caps[0].text() == _SHOWN_AS.get(key, key), (key, caps[0].text())
+            rows.append((key, desc.text(), desc.mapTo(dialog, QPoint(0, 0)).x()))
     return rows
+
+
+#: The only keys the card paints under a NAME instead of their own text (discovery 6: "," and "."
+#: were 2x4 and 3x2 px of ink in the KeyCap face). Pinned here, not read from `help_dialog`, so a
+#: cap renamed in the module (an "M" shown as "Em") fails every test that reads the card's rows.
+_SHOWN_AS = {",": "Comma", ".": "Period"}
 
 
 # The rows K10 reworded: a gesture's key cell became the bare verb (or the button's own glyph) and

@@ -28,6 +28,7 @@ a frame has no key to decode one — and it does NOT block the export the way th
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
@@ -1871,7 +1872,7 @@ def probe_video_size(src_path: str) -> tuple[int, int, float]:
         [FFPROBE, "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate",
          "-of", "default=noprint_wrappers=1:nokey=1", src_path],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, timeout=_PROBE_TIMEOUT.get(),
     ).stdout.split()
     if len(out) < 3:
         raise RuntimeError(f"ffprobe could not read video stream size from {src_path}")
@@ -1893,6 +1894,17 @@ def probe_video_size(src_path: str) -> tuple[int, int, float]:
 # again. A file that could not be asked is remembered as None, so nobody waits on it twice. The
 # renderer never reads this cache — it probes its own source, as it always has.
 _VIDEO_SIZE_CACHE: dict[tuple[str, int, int], tuple[int, int, float] | None] = {}
+
+#: How long the picker's ask may take. An ffprobe that never answers (a stalled network volume, a
+#: wedged process) left the hint "Measuring…" for as long as the dialog stayed open; past this it
+#: is killed and remembered like an unreadable file, so the hint states its estimate. Generous on
+#: purpose: on a loaded Mac the first ask of a session took 13.7 s (REG-4) and still answered.
+HINT_PROBE_TIMEOUT_S = 30.0
+# The ffprobe timeout `probe_video_size` runs under: set only around the picker's ask
+# (`remember_video_size`), so the renderer's own probes keep no limit (export behaviour unchanged)
+# and a test's one-argument stand-in for `probe_video_size` still fits the call.
+_PROBE_TIMEOUT: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "_PROBE_TIMEOUT", default=None)
 
 
 def _video_size_key(path: str) -> tuple[str, int, int] | None:
@@ -1917,10 +1929,14 @@ def remember_video_size(path: str | None) -> tuple[int, int, float] | None:
     if key is None:
         return None
     if key not in _VIDEO_SIZE_CACHE:
+        bound = _PROBE_TIMEOUT.set(HINT_PROBE_TIMEOUT_S)
         try:
             _VIDEO_SIZE_CACHE[key] = probe_video_size(key[0])
         except (OSError, subprocess.SubprocessError, RuntimeError, ValueError):
+            # subprocess.TimeoutExpired included: the child is killed, the hint falls back.
             _VIDEO_SIZE_CACHE[key] = None
+        finally:
+            _PROBE_TIMEOUT.reset(bound)
     return _VIDEO_SIZE_CACHE[key]
 
 

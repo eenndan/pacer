@@ -134,6 +134,9 @@ class SteadyHint(QLabel):
         self.setWordWrap(True)
         # [role="Hint"] ranks BELOW the description above it by SIZE, not by a dimmer colour.
         self.setProperty("role", "Hint")
+        # Top-left, not QLabel's vertical centre: in a box kept taller than its text (the floor,
+        # the reserve) a centred "Measuring…" sat 7 px down and jumped up when the number landed.
+        self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._floor: dict[int, int] = {}
         self._reserve = ""
 

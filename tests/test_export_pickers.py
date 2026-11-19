@@ -260,20 +260,41 @@ def test_the_lap_picker_quotes_the_frames_the_render_writes():
     print(f"ok REG-4: the lap picker quotes the frames the render writes ({quoted})")
 
 
+def _ink_top(label: QLabel) -> int:
+    """The y of the label's first row of painted text, read off its own pixels (the commonest
+    colour is its background): where the user SEES the text start, alignment and margins and all."""
+    img = label.grab().toImage()
+    counts: dict[int, int] = {}
+    for y in range(0, img.height(), 2):
+        for x in range(0, img.width(), 2):
+            counts[img.pixel(x, y)] = counts.get(img.pixel(x, y), 0) + 1
+    bg = max(counts, key=counts.__getitem__)
+    return next((y for y in range(img.height())
+                 if any(img.pixel(x, y) != bg for x in range(img.width()))), -1)
+
+
 def _late_probe(open_dialog, stored: dict, landed=("3840x", "2714x"),
-                geometry: list | None = None) -> list[str]:
+                geometry: list | None = None, fails: bool = False) -> list[str]:
     """Open a picker at "Source" on a recording whose footage probe answers only when released,
     with the dialog's clock already past the 10 s it used to wait. Returns the hint as it read
     when the dialog opened, after that clock jump, and once the probe landed (its Output line
-    names one of `landed`). With `geometry`, the dialog is SHOWN and each of the three moments
-    appends (the hint's height, the y of every combo) to it."""
+    names one of `landed`; with `fails`, the probe raises instead, as on a file ffprobe cannot
+    read, and "landed" is the hint no longer measuring). With `geometry`, the dialog is SHOWN and
+    each of the three moments appends (the hint's height, the y of every combo, the dialog's
+    size, the y of the hint's first row of ink) to it."""
     _reset_prefs(**stored)
     gate = threading.Event()
     real_probe, real_time = ev.probe_video_size, export_controller.time
     skew = {"s": 0.0}
     export_controller.time = SimpleNamespace(
         monotonic=lambda: time.monotonic() + skew["s"], time=time.time, sleep=time.sleep)
-    ev.probe_video_size = lambda _p: (gate.wait(30.0), _E5_FRAME)[1]
+
+    def probe(_p):
+        gate.wait(30.0)
+        if fails:
+            raise RuntimeError("ffprobe could not read video stream size")
+        return _E5_FRAME
+    ev.probe_video_size = probe
     texts = []
     try:
         with tempfile.TemporaryDirectory(prefix="pickers-late-") as td:
@@ -291,7 +312,9 @@ def _late_probe(open_dialog, stored: dict, landed=("3840x", "2714x"),
                         _pump_until(lambda: False, 0.1)
                         geometry.append((hint.height(), [c.mapTo(dlg, c.rect().topLeft()).y()
                                                          for c in dlg.findChildren(QComboBox)],
-                                         dlg.size().toTuple()))
+                                         dlg.size().toTuple(),
+                                         hint.mapTo(dlg, hint.rect().topLeft()).y()
+                                         + _ink_top(hint)))
                 if geometry is not None:
                     dlg.show()
                 note()
@@ -299,7 +322,9 @@ def _late_probe(open_dialog, stored: dict, landed=("3840x", "2714x"),
                 _pump_until(lambda: False, 0.4)
                 note()
                 gate.set()
-                _pump_until(lambda: any(x in hint.text() for x in landed), 20.0)
+                _pump_until((lambda: ev.export_probes_ready(src)) if fails
+                            else (lambda: any(x in hint.text() for x in landed)), 20.0)
+                _pump_until(lambda: False, 0.2)      # the poll's redraw, 50 ms after the answer
                 note()
                 dlg.hide()
                 return QDialog.Rejected
@@ -356,11 +381,117 @@ def test_a_fixed_resolution_quotes_no_guessed_size_before_the_footage_is_measure
         assert "About " not in text and "frames to render" not in text, text
     assert "Output: 1920x1080" in landed and "About " in landed and "to render" in landed, landed
     assert "Measuring the footage" not in landed, landed
-    (h0, ys0, d0), _mid, (h1, ys1, d1) = geometry
+    (h0, ys0, d0, ink0), _mid, (h1, ys1, d1, ink1) = geometry
     assert ys1 == ys0, f"the rows moved when the measured hint landed: {geometry}"
     assert h1 >= h0, (h0, h1)
+    assert ink1 == ink0, f"the hint's text moved when the measured line landed: {geometry}"
 
     print("ok craft P3: no guessed size before the footage is measured; the rows hold still")
+
+
+# Where the reserve is what holds the rows (FakeSession, offscreen, measured 2026-11-19): at All
+# laps in the Broadcast style at 1080p the measuring line wraps to 75 px and the estimate to 90 px;
+# without the reserve the hint opened at 75 and grew when an estimate landed. The whole session has
+# no size to quote on this session (no reserve), so it shows the alignment alone.
+_ALL_LAPS_BROADCAST = {ExportController._PREF_EXPORT_SCOPE: 2, ExportController._PREF_EXPORT_STYLE: 1}
+_SESSION = {ExportController._PREF_EXPORT_SCOPE: 3}
+
+
+def _steady_while_measured(stored: dict, fails: bool = False):
+    """The overlay picker at a fixed row (1080p) and `stored`, shown, its probe landing late (or
+    failing): (texts, geometry) as `_late_probe` reads them."""
+    geometry: list = []
+    texts = _late_probe(lambda win, on: _run_options_dialog(win, on),
+                        {ExportController._PREF_EXPORT_RES: 1, **stored},
+                        landed=("1920x1080",), geometry=geometry, fails=fails)
+    return texts, geometry
+
+
+def _held_still(name: str, geometry: list) -> tuple[int, int]:
+    (h0, ys0, _d0, ink0), _mid, (h1, ys1, _d1, ink1) = geometry
+    assert ys1 == ys0, f"{name}: the rows moved when the hint was re-written: {geometry}"
+    assert h1 == h0, f"{name}: the hint changed height when the number landed: {geometry}"
+    assert ink1 == ink0, f"{name}: the hint's text moved when the number landed: {geometry}"
+    return h0, ink0
+
+
+def test_the_hint_holds_its_text_and_rows_still_when_the_number_lands():
+    """Review of cool/stats-and-dialog-polish: the hint kept QLabel's vertical centring, so in the
+    box it keeps while measuring "Measuring…" sat ~7 px down and jumped up when the number landed.
+    At all laps and the whole session, from open to measured, the hint's first row of ink, its
+    height and every combo stay where they were."""
+    seen = {}
+    for name, stored in (("all laps", _ALL_LAPS_BROADCAST), ("session", _SESSION)):
+        texts, geometry = _steady_while_measured(stored)
+        opened, _waited, landed = texts
+        assert "Measuring the footage" in opened and "About " not in opened, (name, opened)
+        assert "Output: 1920x1080" in landed and "Measuring the footage" not in landed, (
+            name, landed)
+        seen[name] = _held_still(name, geometry)
+    print(f"ok craft P3: the hint's text and rows hold still at all laps and session ({seen})")
+
+
+def test_a_failed_probe_drops_measuring_and_states_the_estimate_in_place():
+    """A probe that FAILS (a file ffprobe cannot read) is an answer too: the hint stops saying it
+    is measuring — a stale "Measuring…" would promise a number that never comes — and states the
+    estimate, the one size there will be. The box kept for that estimate while measuring (the
+    reserve) is what lets it land without the hint growing or the rows moving: at all laps the
+    estimate wraps one line more than the measuring line."""
+    seen = {}
+    for name, stored in (("all laps", _ALL_LAPS_BROADCAST), ("session", _SESSION)):
+        texts, geometry = _steady_while_measured(stored, fails=True)
+        opened, _waited, landed = texts
+        assert "Measuring the footage" in opened, (name, opened)
+        assert "Measuring the footage" not in landed, (
+            f"{name}: still measuring after the probe failed: {landed}")
+        assert "Output: up to 1080p tall" in landed, (name, landed)
+        assert ("About " in landed) == (name == "all laps"), (name, landed)
+        seen[name] = _held_still(name, geometry)
+    print(f"ok craft P3: a failed probe states the estimate in place ({seen})")
+
+
+def test_a_probe_that_never_answers_gives_up_and_states_the_estimate():
+    """`probe_video_size` had no timeout: an ffprobe that never answers left the hint "Measuring…"
+    for as long as the dialog stayed open. The picker's ask (`remember_video_size`) now runs it
+    under `HINT_PROBE_TIMEOUT_S`: the child is killed, the file is remembered as unreadable, and
+    the hint states its estimate. A REAL hanging ffprobe stands in (a script that sleeps), the
+    limit shortened for the test; the renderer's own probes keep no limit."""
+    _reset_prefs(**{ExportController._PREF_EXPORT_RES: 1})
+    real = (ev.FFPROBE, ev.HINT_PROBE_TIMEOUT_S)
+    with tempfile.TemporaryDirectory(prefix="pickers-hang-") as td:
+        hang = os.path.join(td, "ffprobe")
+        with open(hang, "w") as fh:
+            fh.write("#!/bin/sh\nexec sleep 30\n")
+        os.chmod(hang, 0o755)
+        src = os.path.join(td, "GX010098.MP4")
+        with open(src, "wb") as fh:
+            fh.write(b"not really a video")
+        ev.FFPROBE, ev.HINT_PROBE_TIMEOUT_S = hang, 0.5
+        texts = []
+        try:
+            win = _window(FakeSession(laps=(0, 1, 2)), paths=(src,))
+
+            def on_dialog(dlg):
+                hint = _hint(dlg)
+                texts.append(hint.text())
+                start = time.monotonic()
+                _pump_until(lambda: "Measuring the footage" not in hint.text(), 15.0)
+                texts.append((hint.text(), time.monotonic() - start))
+                return QDialog.Rejected
+            _run_options_dialog(win, on_dialog)
+            win.hide()
+            thread = ev._WARM_THREAD
+            if thread is not None:
+                thread.join(5.0)
+        finally:
+            ev.FFPROBE, ev.HINT_PROBE_TIMEOUT_S = real
+        assert ev._PROBE_TIMEOUT.get() is None, "the picker's limit leaked out of its ask"
+    opened, (landed, waited) = texts
+    assert "Measuring the footage" in opened, opened
+    assert "Measuring the footage" not in landed, f"still measuring after {waited:.1f} s: {landed}"
+    assert "About " in landed and "Output: up to 1080p tall" in landed, landed
+    assert waited < 10.0, waited
+    print(f"ok craft P3: a hung probe is given up after its limit ({waited:.1f} s), the estimate shown")
 
 
 def test_the_hint_never_gets_shorter_while_its_dialog_is_open():
@@ -386,7 +517,10 @@ def _run_all():
              test_the_first_dialog_states_the_size_once_a_slow_probe_lands,
              test_the_compare_dialog_waits_for_a_slow_probe_too,
              test_a_fixed_resolution_quotes_no_guessed_size_before_the_footage_is_measured,
-             test_the_hint_never_gets_shorter_while_its_dialog_is_open)
+             test_the_hint_never_gets_shorter_while_its_dialog_is_open,
+             test_the_hint_holds_its_text_and_rows_still_when_the_number_lands,
+             test_a_failed_probe_drops_measuring_and_states_the_estimate_in_place,
+             test_a_probe_that_never_answers_gives_up_and_states_the_estimate)
     failed = []
     for test in tests:
         try:

@@ -322,7 +322,9 @@ def _key_text(key: Keys) -> str:
 #: Keys whose character is a speck in the KeyCap face — "," and "." painted 1.5 x 2 px of ink at
 #: the card's size (craft review, discovery 6) — are written as the named keys the card already
 #: uses for Space and Return. The card only: the palette and the binding guards read `_key_text`,
-#: Qt's own spelling, and each cap keeps that as its "key" property.
+#: Qt's own spelling, and each cap keeps that as its "key" property. "[" and "]" stay glyphs: they
+#: are full-height strokes (3 x 11 px of ink, a capital's height), read like the keycap print, and
+#: "Right bracket" would tie "Shift + ← / →" (86 px) for the card's widest key cell.
 _NAMED_CAPS = {",": "Comma", ".": "Period"}
 
 

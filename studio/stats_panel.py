@@ -1149,8 +1149,16 @@ class StatsView(QWidget):
         # The GROUP separation is paid for by each section heading's own top margin
         # (`stats_common.section_heading`), so a tighter step here tightens the rows without
         # letting the sections run together.
-        page.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
+        # NO TOP MARGIN: each column's first heading already carries SPACE_S above itself, so a
+        # page margin on top of it put every section 8 px lower than it had stood (docked at
+        # 1440x900 that cost PACE's second tile row). The banners, which carry no margin of their
+        # own, get their SPACE_S from `_banner_air`, shown only with one of them.
+        page.setContentsMargins(theme.SPACE_M, 0, theme.SPACE_M, theme.SPACE_M)
         page.setSpacing(theme.SPACE_XS)
+        self._banner_air = QWidget()
+        self._banner_air.setFixedHeight(theme.SPACE_S - theme.SPACE_XS)
+        self._banner_air.setVisible(False)
+        page.addWidget(self._banner_air)
 
         # --- the page's own trust banner + empty state, above everything they qualify.
         # These stay FULL WIDTH at every column count: they qualify the whole page, and a caveat
@@ -2197,6 +2205,8 @@ class StatsView(QWidget):
         self.provisional_banner.setVisible(
             bool(valid) and not getattr(session, "timing_verified", True))
         self._set_no_laps_state(bool(valid))
+        self._banner_air.setVisible(not (self.provisional_banner.isHidden()
+                                         and self.no_laps_note.isHidden()))
         # The absent-accelerometer note sits under the SPEED · G tiles whose dashes it explains,
         # so it hides with them on a lapless recording (the empty-state block tells that story).
         self.no_gmeter_note.setVisible(
