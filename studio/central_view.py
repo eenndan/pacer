@@ -843,6 +843,9 @@ class CentralView(QWidget):
         self.corners_page.view_changed.connect(self._on_corners_view_changed)
         # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
         self.video.clipEnded.connect(self._on_clip_ended)
+        # ...and again while Loop replays it, and "· looping" while Loop is on.
+        self.video.clipStarted.connect(self._on_clip_started)
+        self.video.loopChanged.connect(self._on_pass_loop_changed)
         # B4: a Corners row rings its apex on the map, like the Stats CORNERS and Coaching
         # rows — the same maximize-aware handler, so the three surfaces behave identically.
         self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
@@ -1425,7 +1428,7 @@ class CentralView(QWidget):
         self.race_card.move(theme.SPACE_S, theme.SPACE_S)
         self.map.attach_race_card(self.race_card)    # so the map's clean grabs leave it out
         self.race = RaceController(self.session, self.map, self.race_card,
-                                   pause_video=self.video.pause,
+                                   pause_video=self.video.leave_pass,
                                    on_change=self.raceChanged.emit)
         self.race_card.playToggled.connect(self.race.toggle_play)
         self.race_card.restartRequested.connect(self.race.restart)
@@ -1910,6 +1913,16 @@ class CentralView(QWidget):
         if getattr(self, "_pass_zoom", None) is not None:
             self._pass_zoom_parked = True    # the next tick's position is where it stopped
 
+    def _on_clip_started(self):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_clip_running(True)
+
+    def _on_pass_loop_changed(self, on: bool):
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.set_looping(on)
+
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
 
@@ -1940,7 +1953,7 @@ class CentralView(QWidget):
         self._drop_owned_ring()
         self.table.select([lap_id])
         self._on_laps_selected([lap_id], seek=False)
-        self.video.play_clip(*clip)
+        self.video.play_pass(*clip)   # Loop / Slow, if on, stay on for this pass
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(True)
@@ -1999,6 +2012,15 @@ class CentralView(QWidget):
         self._pass_zoom = None
         self.plots.release_frame()
         self.map.unzoom_pass()
+        return True
+
+    def escape_pass(self) -> bool:
+        """Esc on a played pass: ONE meaning, "back to the whole lap" — the zoom ends AND the pass
+        stops being the subject (Loop and Slow off, the speed his again, the row's "playing" /
+        "looping" gone). False when no pass zoom was on (Esc then means whatever comes next)."""
+        if not self.end_pass_zoom():
+            return False
+        self.video.end_pass()
         return True
 
     def _check_pass_zoom(self, t: float):
