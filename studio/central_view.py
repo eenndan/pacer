@@ -23,7 +23,7 @@ import os
 import time
 from typing import NamedTuple
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -50,6 +50,7 @@ from .compare_controller import CompareController
 from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable
 from .map_view import MapView
 from .marks_panel import MarksPanel
+from .overlay import broadcast
 from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .race_controller import RaceController
@@ -350,6 +351,27 @@ def _at_rest(readout: str) -> str:
     return readout.rsplit("     ", 1)[0] + "     " + HERO_AT_REST_TAG
 
 
+# A GAP THE TIMING CANNOT TELL FROM ZERO IS NOT A COLOUR, ON THE APP'S LARGEST NUMBER TOO
+# (cool/delta-readout-level). The readout coloured any |Δ| over theme.DELTA_EVEN_EPS_S (5 ms), so
+# the demo's best lap at 35 % read "Δideal +0.05 s" in red, while the compare seam (#552) and every
+# burned overlay (Classic, Broadcast, the compare pill: #611) draw the same quantity neutral under
+# the timing step. It now asks the overlays' own rule, `overlay.broadcast.is_level` (the PRINTED
+# value against `library.within_timing_precision`, 0.07 s), called, never re-typed — so "+0.07" is
+# coloured and two equal strings never look different. The 0.07 s step applies on an estimated
+# clock too, as it does on the seam and the exports this readout sits beside: they draw the same
+# Δ-along-the-lap, and a readout that switched to the Lap race's 0.15 s there would disagree with
+# the seam under it in compare. Inside the step the number and its sign still print, without the
+# ▲/▼ (a direction arrow beside a neutral number would claim what the colour disclaims), as the
+# seam does.
+def _level_readout(text: str, sem_colour: str | None, value: float | None
+                   ) -> tuple[str, str | None]:
+    """`(text, colour)` as the hero shows them: neutral and arrow-less when `value` prints level."""
+    if sem_colour is None or not broadcast.is_level(value):
+        return text, sem_colour
+    arrow = theme.delta_arrow(value)
+    return (text.replace(f" {arrow}", "", 1) if arrow else text), None
+
+
 def _hero_min_width(label: QLabel) -> int:
     """Layout floor for the hero Δ/speed readout: the width Qt ITSELF asks for the widest text the
     label can show, in the font and padding it really paints with.
@@ -389,12 +411,28 @@ class _HeroReadout(QLabel):
     """The hero #DiffBox: ONE label (so `text()`, the width floor and every reader stay as they
     were) that paints its Δ run in the gain/loss colour and the speed after it in the label's own
     neutral text colour. It used to be one colour for the whole line, so a positive Δ turned the
-    SPEED red too, as if 45 km/h were a loss. The split is the formatters' own five-space join; a
-    readout without a Δ colour is painted by QLabel itself, untouched."""
+    SPEED red too, as if 45 km/h were a loss. The split is the formatters' own five-space join.
+
+    THE Δ IS THE VALUE; WHAT FOLLOWS IT IS SECONDARY (cool/delta-readout-level). The tail — the
+    speed, or "whole lap" at rest — was painted at the Δ's HERO size and weight, so "whole lap"
+    read as a second value. It now paints a step down, on the Δ's baseline, and the Δ run alone
+    keeps the hero face: the LIVE SPEED at ``theme.EMPHASIS``, regular, in ``C.text`` — still a
+    glance while scrubbing (13 px dim was readable, measured in review, not glanceable) — and
+    "whole lap", a label about the Δ rather than a value, at ``theme.BODY`` in ``C.text_dim``. The
+    width floor still measures the whole line in the hero face (`_hero_min_width`), so the smaller
+    tail can only leave room, never clip."""
 
     def __init__(self, text: str):
         super().__init__(text)
         self._delta_colour: str | None = None
+        self._speed_font = theme.mono_font(theme.EMPHASIS, theme.W_REGULAR)
+        self._label_font = theme.mono_font(theme.BODY, theme.W_REGULAR)
+
+    def tail_style(self, tail: str) -> tuple:
+        """(font, colour) the run after the Δ paints in: "whole lap" dim, the speed in text."""
+        if tail == HERO_AT_REST_TAG:
+            return self._label_font, theme.C.text_dim
+        return self._speed_font, theme.C.text
 
     def delta_colour(self) -> str | None:
         """The colour the Δ run paints in, or None (all neutral)."""
@@ -407,7 +445,7 @@ class _HeroReadout(QLabel):
 
     def paintEvent(self, event):  # noqa: N802 (Qt override)
         head, sep, tail = self.text().partition("     ")
-        if not self._delta_colour or not sep:
+        if not sep:
             super().paintEvent(event)
             return
         fm = QFontMetrics(self.font())
@@ -423,13 +461,19 @@ class _HeroReadout(QLabel):
         p = QPainter(self)
         p.setFont(self.font())
         align = self.alignment()
-        p.setPen(QColor(self._delta_colour))
+        p.setPen(QColor(self._delta_colour) if self._delta_colour
+                 else self.palette().color(self.foregroundRole()))
         p.drawText(rect, align, head)
-        # The tail starts at the FRACTIONAL advance Qt itself lays the whole line out at.
+        # The tail starts at the FRACTIONAL advance Qt itself lays the whole line out at, and sits
+        # on the head's baseline (vertically centred as QLabel centres the head's own line).
+        hm = QFontMetricsF(self.font())
         rect = QRectF(rect)
-        rect.setLeft(rect.left() + QFontMetricsF(self.font()).horizontalAdvance(head + sep))
-        p.setPen(self.palette().color(self.foregroundRole()))
-        p.drawText(rect, align, tail)
+        x = rect.left() + hm.horizontalAdvance(head + sep)
+        baseline = rect.top() + (rect.height() - hm.height()) / 2 + hm.ascent()
+        font, colour = self.tail_style(tail)
+        p.setFont(font)
+        p.setPen(QColor(colour))
+        p.drawText(QPointF(x, baseline), tail)
         p.end()
 
 
@@ -2409,11 +2453,12 @@ class CentralView(QWidget):
 
         def paint(v):
             txt, col = (text, sem_colour) if v is lead else render(v)
-            self._set_diff_text(_at_rest(txt) if at_rest else txt, col)
+            self._set_diff_text(_at_rest(txt) if at_rest else txt, col, v)
 
         self._roll_diff(lead, paint, baseline)
 
-    def _set_diff_text(self, text: str, sem_colour: str | None):
+    def _set_diff_text(self, text: str, sem_colour: str | None, value: float | None = None):
+        text, sem_colour = _level_readout(text, sem_colour, value)
         self.diff_box.setText(text)
         # The colour goes on the Δ run ONLY (the speed stays the label's neutral text colour), and
         # only when it changes — no per-tick stylesheet re-layout.
