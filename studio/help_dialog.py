@@ -182,10 +182,11 @@ COMMANDS: list[Command] = [
     Command("Analysis", "4", "Lap panel: Coaching", run="show_coaching_tab"),
     Command("Analysis", "5", "Lap panel: Marks", run="show_marks_tab"),
     # Corners ▸ Quickest passes: the table's own keys (↑/↓ move, Return plays), so `run` is None.
-    # ⌘K lists one "Quickest C3 — lap 13" row per corner (command_palette._session_entries).
+    # ⌘K lists one "Quickest C3 — lap 13" row per corner (command_palette._session_entries), and
+    # "Export the C3 pass — lap 13…" for the pass the view names (no key: the palette is its door).
     Command("Analysis", "Return",
-            "Corners, Quickest passes: play the selected corner's quickest pass (again: the next "
-            "level lap)"),
+            "Corners, Quickest passes: play the selected corner's quickest pass, charts and map "
+            "zoomed on it (again: the next level lap; Esc: the whole lap)"),
     # View ▸ Lap race. `run` stays None for the ⌘⇧S row's reason: the palette harvests the menu
     # action itself (with its gate reason when the session cannot field two laps).
     Command("Analysis", "R",

@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 from collections.abc import Callable
 
 import pyqtgraph as pg
@@ -454,10 +455,29 @@ class _SessionDateAxis(pg.DateAxisItem):
     at the dialog's opening size: the 31 Jul day tick sat one day from the "Aug" month label and the
     two printed as "31Aug" (board review UX-9c). So a finer level's tick is dropped when its label
     would come within one SPACE_S of a coarser level's; the coarse label, the one that says which
-    month, is the one kept."""
+    month, is the one kept.
+
+    AND NOTHING FINER THAN A DAY (cool/library-same-day): the chart places a session on its date
+    only (``_pb_xs``), so sessions over at most ``_DAY_TICKS_MAX_DAYS`` whole days are ticked at
+    each day's middle with its ISO date, thinned to fit — keeping the days that HAVE a session
+    first, so the chart's own dates are the ones labelled (the first session's always); a longer
+    span keeps pyqtgraph's levels minus any under a day — never "06:00" or "59.600"."""
+
+    _day_mode = False
+    _session_days: tuple[int, ...] = ()   # UTC day numbers that hold a session (`set_session_days`)
+
+    def set_session_days(self, xs) -> None:
+        """The plotted sessions' x values: which days the ticks prefer, and how many whole days the
+        chart spans (the switch between the ISO-date ticks and pyqtgraph's levels)."""
+        self._session_days = tuple(sorted({math.floor(x / _DAY_S) for x in xs}))
 
     def tickValues(self, minVal, maxVal, size):  # noqa: N802 (pyqtgraph hook)
-        levels = super().tickValues(minVal, maxVal, size)
+        days = self._session_days
+        self._day_mode = (days[-1] - days[0] + 1 <= _DAY_TICKS_MAX_DAYS if days
+                          else 0 < maxVal - minVal <= _DAY_TICKS_MAX_DAYS * _DAY_S)
+        if self._day_mode:
+            return [(_DAY_S, self._day_ticks(minVal, maxVal, size))]
+        levels = [(sp, v) for sp, v in super().tickValues(minVal, maxVal, size) if sp >= _DAY_S]
         if len(levels) < 2 or maxVal <= minVal or size <= 0:
             return levels
         px = size / (maxVal - minVal)
@@ -475,6 +495,30 @@ class _SessionDateAxis(pg.DateAxisItem):
             out.append((spacing, kept))
             placed += mine
         return out
+
+    def _day_ticks(self, minVal, maxVal, size) -> list[float]:
+        """Each UTC day's middle inside the range — or, when the ISO labels would come within a
+        SPACE_S of each other, a subset at least that far apart, chosen days-with-a-session first
+        (in date order, so the first session's day always), then the empty days between."""
+        days = [d for d in range(math.floor(minVal / _DAY_S), math.floor(maxVal / _DAY_S) + 1)
+                if minVal <= (d + 0.5) * _DAY_S <= maxVal]
+        if not days or size <= 0:
+            return [(d + 0.5) * _DAY_S for d in days]
+        label = QFontMetrics(self.style.get("tickFont") or self.font()).horizontalAdvance(
+            "0000-00-00") + theme.SPACE_S
+        every = max(1, math.ceil(label / (size * _DAY_S / (maxVal - minVal))))
+        held = set(self._session_days)
+        chosen: list[int] = []
+        for d in [d for d in days if d in held] + [d for d in days if d not in held]:
+            if all(abs(d - c) >= every for c in chosen):
+                chosen.append(d)
+        return [(d + 0.5) * _DAY_S for d in sorted(chosen)]
+
+    def tickStrings(self, values, scale, spacing):  # noqa: N802 (pyqtgraph hook)
+        if not self._day_mode:
+            return super().tickStrings(values, scale, spacing)
+        return [datetime.datetime.fromtimestamp(v, datetime.UTC).date().isoformat()
+                for v in values]
 
 
 # The row words live in studio/library.py now (Qt-free), shared with the welcome screen's recent
@@ -589,6 +633,63 @@ def _epoch_seconds(date: str) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
+
+
+# SESSIONS ON ONE DATE (cool/library-same-day). Every session sat at its date's midnight, so a race
+# day — several heats, several recordings, one date — drew its points on ONE vertical line, and the
+# date axis zoomed into that zero-width span and ticked it in sub-seconds ("59.600 … 01:00:00").
+# The chart claims a DAY and nothing finer: a date's sessions are spread across their day in the
+# order they were driven (`library.pb_points`: the first fix's clock, where the row stores it),
+# n sessions at (k + 1) / (n + 1) of it, and the axis ticks whole days. Placing them at their clock
+# instead was weighed: two heats 40 minutes apart then sit 3 % of a day apart, on one line again at
+# any span past a day, and the axis would need hours to say where — so the order, not the clock.
+_DAY_S = 86400.0
+# Up to this span the axis ticks each day at its middle with its ISO date ("2026-06-01"), the label
+# the table's Date column prints; past it, pyqtgraph's own month/day levels, minus any finer level.
+_DAY_TICKS_MAX_DAYS = 14
+# The x margin either side of the first and last day: under half a day, so one day's chart shows
+# that day's label alone and not its neighbours' at the edges.
+_PB_X_PAD_DAYS = 0.45
+
+
+def _pb_xs(points: list[tuple[str, int | None, float]]) -> list[float]:
+    """The PB chart's x for each of `points` (``library.pb_points``, in driven order): within its
+    date's UTC day at (k + 1) / (n + 1) for the k-th of that date's n sessions; NaN for a
+    malformed date."""
+    per_day: dict[str, int] = {}
+    for date, _start, _best in points:
+        per_day[date] = per_day.get(date, 0) + 1
+    seen: dict[str, int] = {}
+    xs = []
+    for date, _start, _best in points:
+        k = seen.get(date, 0)
+        seen[date] = k + 1
+        midnight = _epoch_seconds(date)
+        xs.append(math.nan if midnight is None
+                  else midnight + _DAY_S * (k + 1) / (per_day[date] + 1))
+    return xs
+
+
+def _pb_x_range(xs: list[float]) -> tuple[float, float]:
+    """The chart's x range: the whole days its sessions fall on, padded — by under half a day
+    while the axis ticks dates (an empty day pulled in at either end would take a label from the
+    chart's own first or last session), by 5 % of a longer span."""
+    lo = math.floor(min(xs) / _DAY_S) * _DAY_S
+    hi = (math.floor(max(xs) / _DAY_S) + 1) * _DAY_S
+    pad = _PB_X_PAD_DAYS * _DAY_S
+    if (hi - lo) / _DAY_S > _DAY_TICKS_MAX_DAYS:
+        pad = max(pad, 0.05 * (hi - lo))
+    return lo - pad, hi + pad
+
+
+def _pb_y_range(ys: list[float]) -> tuple[float, float]:
+    """The chart's y range, centred on the bests: at least ±1 s, so a series flatter than that (one
+    session, or a race day's heats 0.09 s apart) is not drawn as a cliff, else ±0.55 of the spread
+    (a tenth of padding, so no marker sits on the frame). One rule, continuous: a 1.9 s spread and
+    a 2.1 s spread are drawn about the same size."""
+    lo, hi = min(ys), max(ys)
+    mid, half = (lo + hi) / 2, max(1.0, 0.55 * (hi - lo))
+    return mid - half, mid + half
 
 
 class LibraryDialog(QDialog):
@@ -1513,11 +1614,10 @@ class LibraryDialog(QDialog):
         # A track driven both ways round charts the selected row's way only: two layouts' laps on
         # one line would draw the other way's best as a PB of this one (cool/pb-per-direction).
         index, name = self._one_way(track, rotation)
-        series = _library.pb_series(index, track)
+        points = _library.pb_points(index, track)
         xs, ys = [], []
-        for date, best in series:
-            x = _epoch_seconds(date)
-            if x is not None:
+        for x, (_date, _start, best) in zip(_pb_xs(points), points, strict=True):
+            if math.isfinite(x):
                 xs.append(x)
                 ys.append(best)
         self._pb_curve.setData(xs, ys)
@@ -1533,8 +1633,7 @@ class LibraryDialog(QDialog):
             self._pb_title.setText(
                 f"PB progression — {name}  ({fmt_time(min(ys))} best over {over})")
             self._set_pb_empty(None)
-            self.pb_plot.enableAutoRange()
-            self.pb_plot.autoRange()
+            self._frame_pb(xs, ys)
         elif len(ys) == 1:
             # ONE SESSION IS DATA, so the empty state has no business here (§6.3a, found
             # independently by three review lanes): this branch drew the amber point AND put
@@ -1544,7 +1643,7 @@ class LibraryDialog(QDialog):
             # same fact stated where it does not overlap the mark. Empty state and data layer are
             # mutually exclusive now, in both directions.
             self._pb_title.setText(f"PB progression — {name}  ({over}: {fmt_time(ys[0])})")
-            self._frame_single_point(xs[0], ys[0])
+            self._frame_pb(xs, ys)
             self._set_pb_empty(None)
         else:
             left_out = [f"{why[r]} {r}" for r in _library.PB_LEFT_OUT_REASONS if why[r]]
@@ -1560,7 +1659,7 @@ class LibraryDialog(QDialog):
 
     def _set_pb_axes(self, plotted: bool):
         """Label the axes only while something is plotted, and drop the range when nothing is.
-        ``_frame_single_point`` disables autorange, so a de-selected row otherwise leaves ITS
+        ``_frame_pb`` disables autorange, so a de-selected row otherwise leaves ITS
         numbers (67.771–69.771 s) ticking an empty grid — an axis describing a recording the dialog
         is no longer showing. The empty-state sentence is then the only thing in the plot."""
         for side in ("left", "bottom"):
@@ -1569,6 +1668,7 @@ class LibraryDialog(QDialog):
             # A hard unit range, not autoRange(): with no data pyqtgraph's autorange KEEPS the old
             # bounds (67.771–69.771 → merely re-padded to 67.386–70.156). The plotting branches
             # each set their own range back, so nothing has to be restored here.
+            self.pb_plot.getAxis("bottom").set_session_days(())
             self.pb_plot.getPlotItem().getViewBox().setRange(
                 xRange=(0.0, 1.0), yRange=(0.0, 1.0), padding=0)
 
@@ -1589,13 +1689,15 @@ class LibraryDialog(QDialog):
         vb = self.pb_plot.getPlotItem().getViewBox()
         self._pb_empty.setPos(vb.boundingRect().center())
 
-    def _frame_single_point(self, x: float, y: float):
-        """Set a small PADDED axis range around a single (x, y) point so it's framed centrally (a
-        bare ``setData`` of one point with autorange leaves a degenerate zero-width range)."""
+    def _frame_pb(self, xs: list[float], ys: list[float]):
+        """Frame the plotted points: the whole days they fall on (``_pb_x_range``) and their bests
+        (``_pb_y_range``). Autorange framed the points themselves, so one session — or a race
+        day's several on one date — got a degenerate span the date axis ticked in hours or
+        sub-seconds."""
         self.pb_plot.disableAutoRange()
-        day = 86400.0
-        self.pb_plot.setXRange(x - day, x + day, padding=0)
-        self.pb_plot.setYRange(y - 1.0, y + 1.0, padding=0)
+        self.pb_plot.getAxis("bottom").set_session_days(xs)
+        self.pb_plot.setXRange(*_pb_x_range(xs), padding=0)
+        self.pb_plot.setYRange(*_pb_y_range(ys), padding=0)
 
     # ------------------------------------------------------------------ privacy: forget / clear
     def _on_context_menu(self, pos):

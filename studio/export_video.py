@@ -59,7 +59,7 @@ from PySide6.QtGui import (
 )
 
 from . import data_quality, gmeter_overlay, overlay, theme, units
-from ._signal import fmt_time, lap_label, plural
+from ._signal import PRINT_DECIMALS, fmt_time, lap_label, plural
 from .export_palette import EXPORT
 from .timeline import trace_point_at, trace_tail  # noqa: F401  (trace_point_at: tests read ev.*)
 
@@ -277,6 +277,9 @@ SCOPE_THIS_LAP = "lap"
 SCOPE_BEST_LAP = "best"
 SCOPE_ALL_LAPS = "all"
 SCOPE_SESSION = "session"
+# ONE CORNER PASS of one lap (`build_pass_spec`): the clip Corners ▸ Quickest passes plays, from its
+# lead-in to 1 s after the corner's exit. Not a lap scope: it has no lap clock (see `PassSubject`).
+SCOPE_PASS = "pass"
 
 
 # --------------------------------------------------------------------------- configuration
@@ -570,6 +573,20 @@ def _mk_concat_list(chapters_span, tmp_dir: str) -> str:
 
 
 # --------------------------------------------------------------------------- export spec
+@dataclass(frozen=True)
+class PassSubject:
+    """The corner a pass clip shows: its id, its label as the Corners tab prints it ("C3") and the
+    lap's time through it (`CornerModel.lap_corner_stats`, the Quickest passes row's own number).
+
+    A PASS CLIP BURNS NO LAP CLOCK AND NO LAP Δ. Mid-lap, a running lap clock reads as a lap time
+    and the lap's Δ as this corner's gap, and neither is: the strip names the lap and the corner,
+    and from the exit frame on the corner time ("LAP 13   C3 · 2.32 s"). Never "fastest" or ★:
+    six of the demo's seven quickest passes are level with another lap's (DECISIONS §18)."""
+    cid: int
+    label: str
+    time_s: float
+
+
 @dataclass
 class ExportSpec:
     """Everything a render needs, resolved up front so the render loop is pure mechanism.
@@ -616,6 +633,10 @@ class ExportSpec:
     # Set by `build_lap_spec`, the one place a lap becomes an export; a spec built by hand keeps
     # meaning exactly the frames of [t0, t1).
     ends_on_finish: bool = False
+    # A CORNER-PASS clip (`build_pass_spec`): the corner it shows. Then `lead_in`/`lead_out` place
+    # the corner's entry and exit, not a start and finish line, so `lap_t0`/`lap_t1` are the timed
+    # span the overlay waits for — the strip names the corner, and its time once the kart is out.
+    pass_subject: PassSubject | None = None
 
     def __post_init__(self):
         # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
@@ -1148,7 +1169,10 @@ def overlay_values_at(session, t: float, spec: ExportSpec | None = None) -> Over
             session, min(max(t, spec.lap_t0), max(spec.lap_t0, spec.lap_t1 - _LAP_CLOCK_EPS)))
     i = session.index_at_time(tt)
     speed = float(session.tv[i]) if i is not None and len(session.tv) else None
-    delta = session.delta_at_lap(lap_id, clock_t) if (lap_id is not None and started) else None
+    # A pass clip carries no lap Δ (`PassSubject`): nothing on its frames may read the lap's.
+    lap_delta = spec is None or spec.pass_subject is None
+    delta = (session.delta_at_lap(lap_id, clock_t)
+             if (lap_id is not None and started and lap_delta) else None)
     g = session.g_at_time(tt) if getattr(session, "has_gmeter", False) else None
     return OverlayValues(t=t, lap_id=lap_id, speed_kmh=speed, delta_s=delta, g=g, marker_index=i,
                          lap_started=started, lap_finished=finished, tt=tt)
@@ -3067,6 +3091,33 @@ def _strip_runs(session, vals: OverlayValues, lap_t0: float, is_best: bool,
     return label, tail, colour, frac
 
 
+def _pass_strip_runs(vals: OverlayValues, spec: ExportSpec) -> tuple[str, str, str, float]:
+    """`_strip_runs` for a PASS clip (`PassSubject`): "LAP 13   C3", and from the exit frame on
+    "LAP 13   C3 · 2.32 s" — no clock, no Δ, no `★ BEST`. The fill runs through the corner, entry
+    to exit (`spec.lap_t0`/`lap_t1`), so it shows the span the time measures while it is measured.
+    The label keeps the strip's three-space split, so Broadcast's tower reads "LAP 13" over
+    "C3 · 2.32 s" (`broadcast.tower_texts`)."""
+    subject = spec.pass_subject
+    label = f"LAP {lap_label(spec.lap_id)}   {subject.label}"
+    if vals.lap_finished:
+        label += f" · {subject.time_s:.{PRINT_DECIMALS}f} s"
+    span = spec.lap_t1 - spec.lap_t0
+    if vals.lap_finished or span <= 0:
+        frac = 1.0 if vals.lap_finished else 0.0
+    else:
+        frac = min(max((vals.t - spec.lap_t0) / span, 0.0), 1.0) if vals.lap_started else 0.0
+    return label, "", "", frac
+
+
+def _frame_strip_runs(session, vals: OverlayValues, spec: ExportSpec,
+                      palette: str | None) -> tuple[str, str, str, float] | None:
+    """The strip's runs for one frame of `spec`: a pass clip's own (`_pass_strip_runs`), else
+    `_strip_runs` exactly as every lap and session export has called it."""
+    if spec.pass_subject is not None:
+        return _pass_strip_runs(vals, spec)
+    return _strip_runs(session, vals, spec.lap_t0, spec.is_best_at(vals.lap_id), palette)
+
+
 def _burned_runs(session, spec: ExportSpec, fps: float) -> tuple[list[str], list[str], list[str]]:
     """Every string this export will burn: (hero speeds, strip labels, strip tails).
 
@@ -3108,8 +3159,7 @@ def _burned_runs(session, spec: ExportSpec, fps: float) -> tuple[list[str], list
     for t in times:
         vals = overlay_values_at(session, float(t), spec)
         speeds.append(_readout_runs(vals, spec.config.speed_unit)[0])
-        runs = _strip_runs(session, vals, spec.lap_t0, spec.is_best_at(vals.lap_id),
-                           spec.config.palette)
+        runs = _frame_strip_runs(session, vals, spec, spec.config.palette)
         if runs is not None:
             labels.append(runs[0])
             tails.append(runs[1])
@@ -3152,7 +3202,8 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
 
 
 def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: float,
-                 palette: str | None = None, is_best: bool = False) -> None:
+                 palette: str | None = None, is_best: bool = False,
+                 pass_spec: ExportSpec | None = None) -> None:
     """Lap/sector strip (top-left): "LAP n   m:ss.mmm" then the Δ, over a vivid amber time-progress
     fill, on the same slim dark pill as the readout (fitted to its text — `strip_pill_width`).
 
@@ -3162,12 +3213,14 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
 
     `_strip_runs` owns WHAT this frame says — the lap-scoped gating, the clamped clock and the
     tail — because the pill budget has to ask the same question and get the same answer. `t0` is
-    the LAP's start, used only when the session cannot supply a lap window."""
+    the LAP's start, used only when the session cannot supply a lap window. `pass_spec`: a pass
+    clip's spec, whose runs are `_pass_strip_runs`'."""
     k = box.height() / 44.0
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
     p.drawRoundedRect(box, 8 * k, 8 * k)
-    runs = _strip_runs(session, vals, t0, is_best, palette)
+    runs = (_pass_strip_runs(vals, pass_spec) if pass_spec is not None
+            else _strip_runs(session, vals, t0, is_best, palette))
     if runs is None:
         return
     label, tail, colour, frac = runs
@@ -3415,7 +3468,8 @@ class OverlayPainter:
         # every start line; for a single-lap export it is the spec's one verdict, as before.
         if "strip" not in skip:
             _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
-                         self._spec.config.palette, self._spec.is_best_at(vals.lap_id))
+                         self._spec.config.palette, self._spec.is_best_at(vals.lap_id),
+                         pass_spec=self._spec if self._spec.pass_subject is not None else None)
         # ...and the honesty stamp under it, on EVERY frame including the lead-in and the run-off:
         # what it qualifies is the recording, not a moment in it, and a caveat that came and went
         # would be a caveat a single-frame grab or a re-cut could drop.
@@ -4123,6 +4177,9 @@ class Renderer:
             content = "burned-in"
         if getattr(spec, "follow_laps", False):
             what = "full session"
+        elif getattr(spec, "pass_subject", None) is not None:
+            what = (f"lap {lap_label(spec.lap_id)} {spec.pass_subject.label} pass, lead-in "
+                    f"{spec.lead_in:.2f} s / after the exit {spec.lead_out:.2f} s")
         else:
             best = " (best)" if getattr(spec, "is_best", False) else ""
             what = (f"lap {lap_label(spec.lap_id)}{best}, run-up {spec.lead_in:.2f} s / "
@@ -4813,6 +4870,69 @@ def build_lap_spec(session, out_path: str, lap_id: int,
                       lead_in=lap_t0 - t0, lead_out=t1 - lap_t1, ends_on_finish=t1 <= lap_t1)
 
 
+def pass_window_for_export(session, lap_id: int,
+                           cid: int) -> tuple[float, float, float, float] | None:
+    """The MEDIA-clock (t0, entry, exit, t1) of lap `lap_id`'s pass through corner `cid`: the
+    window Corners ▸ Quickest passes PLAYS — `CornerModel.pass_clip`, the one definition (the
+    lead-in from 2 s before the entry or the previous corner's exit, whichever is later, to 1 s
+    after the exit) — with the corner's entry and exit inside it, all converted from the telemetry
+    clock the corner model speaks onto the media clock the picture runs on, as
+    `lap_window_for_export` converts a lap. Clamped to the footage like a lap's padding, never
+    into the corner. None when the pass has no clip."""
+    corners = getattr(session, "corners", None)
+    clip = corners.pass_clip(int(lap_id), int(cid)) if corners is not None else None
+    if clip is None:
+        return None
+    enter = corners.corner_edge_media_time(int(lap_id), int(cid), "enter")
+    leave = corners.corner_edge_media_time(int(lap_id), int(cid), "exit")
+    if enter is None or leave is None:
+        return None
+    t0, t_enter, t_exit, t1 = (_media_time(session, float(t))
+                               for t in (clip[0], enter, leave, clip[1]))
+    t0 = min(t_enter, max(0.0, t0))
+    total = footage_duration(session)
+    if total is not None:
+        t1 = max(t_exit, min(t1, total))
+    if not (t0 <= t_enter < t_exit <= t1):
+        return None
+    return t0, t_enter, t_exit, t1
+
+
+def pass_subject(session, lap_id: int, cid: int) -> PassSubject | None:
+    """The corner lap `lap_id`'s pass clip names: its label and the lap's time through it, the
+    Corners table's (and the Quickest passes row's) number. None when the lap has no time there."""
+    corners = getattr(session, "corners", None)
+    if corners is None:
+        return None
+    st = next((s for s in corners.lap_corner_stats(int(lap_id)) if s.cid == int(cid)), None)
+    if st is None or st.time is None or not math.isfinite(float(st.time)):
+        return None
+    label = next((c.label for c in corners.corner_list() if c.cid == int(cid)), f"C{int(cid)}")
+    return PassSubject(cid=int(cid), label=label, time_s=float(st.time))
+
+
+def build_pass_spec(session, out_path: str, lap_id: int, cid: int,
+                    config: OverlayConfig | None = None,
+                    src_path: str | None = None) -> ExportSpec:
+    """The `ExportSpec` of lap `lap_id`'s pass through corner `cid` (`SCOPE_PASS`): the window
+    `pass_window_for_export` resolves, its source resolved like every scope's (a concat over a
+    chapter seam the pass straddles, `_video_source_for`), and `lead_in`/`lead_out` placing the
+    corner's entry and exit, which the overlay reads as the timed span (`PassSubject`). Raises
+    ValueError when the pass has no clip or no time. The caller owns `spec.source`."""
+    win = pass_window_for_export(session, lap_id, cid)
+    subject = pass_subject(session, lap_id, cid)
+    if win is None or subject is None:
+        raise ValueError(f"lap {lap_label(lap_id)} has no pass through C{cid} to export")
+    t0, t_enter, t_exit, t1 = win
+    best_id = _best_lap_id(session)
+    return ExportSpec(out_path=out_path, lap_id=int(lap_id), t0=t0, t1=t1,
+                      source=_video_source_for(session, t0, t1, src_path),
+                      config=config or OverlayConfig(),
+                      is_best=best_id is not None and int(best_id) == int(lap_id),
+                      best_lap_id=best_id, lead_in=t_enter - t0, lead_out=t1 - t_exit,
+                      pass_subject=subject)
+
+
 def _best_lap_id(session) -> int | None:
     """The session's best lap, or None when the session cannot say (the duck-typed sessions the
     tests build). One accessor, guarded once, because three spec builders now want it."""
@@ -4878,6 +4998,8 @@ def scope_lap_ids(session, scope: str, lap_id: int | None) -> list[int]:
     has a usable window."""
     if scope == SCOPE_SESSION:
         return []
+    if scope == SCOPE_PASS:          # one pass of the lap it names
+        return [int(lap_id)] if lap_id is not None else []
     if scope == SCOPE_BEST_LAP:
         best = _best_lap_id(session)
         return [int(best)] if best is not None else []
@@ -4910,7 +5032,7 @@ def lap_output_path(out_path: str, lap_id: int) -> str:
 
 
 def overlay_output_name(stem: str, lap_id: int | None,
-                        config: OverlayConfig | None = None) -> str:
+                        config: OverlayConfig | None = None, corner: str | None = None) -> str:
     """The default NAME of an overlay export of `lap_id` (None = the whole recording) from the
     recording `stem`, by what the file holds: `GX010067_lap14_overlay.mp4`,
     `GX010067_session_overlay.mp4`, `GX010067_lap14_overlay_alpha.mov` for the ProRes track, and
@@ -4920,8 +5042,13 @@ def overlay_output_name(stem: str, lap_id: int | None,
     `GX010065_lap22_overlay.mp4` and `…_lap23_overlay.mp4`; #262 dropped the lap when the Scope row
     arrived, and every export then proposed `GX010067_overlay.mp4` whatever the lap, so the second
     lap's clip either replaced the first or had to be renamed by hand, and nothing in Finder said
-    which lap a file held. `lap_label` is the number the lap table shows."""
+    which lap a file held. `lap_label` is the number the lap table shows.
+
+    A PASS clip names its corner after the lap (`corner`, the label the Corners tab prints):
+    `GX010067_lap13_C3_overlay.mp4`, so two corners of one lap never take each other's name."""
     what = "session" if lap_id is None else f"lap{lap_label(lap_id)}"
+    if corner and lap_id is not None:
+        what += f"_{corner}"
     cfg = config or OverlayConfig()
     if cfg.overlay_only and cfg.alpha_codec == ALPHA_PNG:
         tail = "_overlay_png"
@@ -4978,7 +5105,8 @@ def output_bytes(path: str) -> int:
 
 def build_scope_specs(session, out_path: str, scope: str, lap_id: int | None = None,
                       config: OverlayConfig | None = None, src_path: str | None = None,
-                      lead: float = 0.0, lap_path=None) -> list[ExportSpec]:
+                      lead: float = 0.0, lap_path=None,
+                      cid: int | None = None) -> list[ExportSpec]:
     """Every `ExportSpec` a scope renders, in order — one for the three lap scopes, one PER LAP for
     All laps, one for the whole session. The caller owns each spec's `source` and must
     `cleanup()` it.
@@ -4997,9 +5125,16 @@ def build_scope_specs(session, out_path: str, scope: str, lap_id: int | None = N
 
     `lap_path(lap_id)` names each file of a multi-lap batch; without it they are
     `lap_output_path(out_path, lap_id)`. The app passes it, because an All-laps batch is asked for
-    as a FOLDER and each file carries the owner's own `<stem>_lap{N}_overlay.mp4` name."""
+    as a FOLDER and each file carries the owner's own `<stem>_lap{N}_overlay.mp4` name.
+
+    `SCOPE_PASS` renders lap `lap_id`'s pass through corner `cid` (`build_pass_spec`); `lead` is
+    ignored there, as for the session: a pass carries its own lead-in."""
     if scope == SCOPE_SESSION:
         return [build_session_spec(session, out_path, config=config, src_path=src_path)]
+    if scope == SCOPE_PASS:
+        if lap_id is None or cid is None:
+            raise ValueError("a pass export needs the lap and the corner")
+        return [build_pass_spec(session, out_path, lap_id, cid, config=config, src_path=src_path)]
     ids = scope_lap_ids(session, scope, lap_id)
     if not ids:
         raise ValueError("this recording has no lap to export for that scope")

@@ -3030,6 +3030,13 @@ class StudioWindow(QMainWindow):
             label = page.quickest.corner_label(qp.cid)
             out.append((f"Quickest {label} — lap {lap_label(qp.lap_id)}",
                         lambda cid=qp.cid: self.play_quickest_pass(cid)))
+        # The pass the view names now (the one playing, or played last): export it as a clip —
+        # the overlay picker opened on its "This pass" scope.
+        named = self.exports.pass_subject()
+        if named is not None:
+            lap, cid, label = named
+            out.append((f"Export the {label} pass — lap {lap_label(lap)}…",
+                        lambda: self.exports.export_pass_video(lap, cid, label)))
         return out
 
     def play_quickest_pass(self, cid: int) -> bool:
@@ -3150,6 +3157,8 @@ class StudioWindow(QMainWindow):
           while four surfaces — the Shortcuts card and all four ⛶ tooltips — promised Esc restores
           it (QA L1-02). The window is the only viable owner: CentralView is Qt.NoFocus, so a
           keyPressEvent there would never receive the key.
+        * A PLAYED PASS'S ZOOM (Corners ▸ Quickest passes): the charts on its corner and the map on
+          its stretch of track come back to the whole lap and the whole track.
         * WINDOW FULLSCREEN (⌘⌃F / the green button) is the outermost, so it goes last."""
         view = getattr(self, "view", None)
         if view is not None and getattr(view, "is_racing", lambda: False)():
@@ -3161,6 +3170,8 @@ class StudioWindow(QMainWindow):
         if view is not None and getattr(view, "_maximized_panel", None) is not None:
             view._restore_splitter_sizes()  # the inverse of the ⛶ collapse; the view owns the snapshot
             return True
+        if view is not None and getattr(view, "end_pass_zoom", lambda: False)():
+            return True                     # a played pass's zoom: the whole lap and track again
         if self.isFullScreen():
             self.showNormal()
             return True
@@ -3168,7 +3179,7 @@ class StudioWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         """←/→ step the video ±1 s (Shift ±5 s). Esc backs out of every "one thing fills the frame"
-        state — video focus, a maximized panel, window fullscreen. Handled here, not as a QShortcut,
+        state — a Lap race, video focus, a maximized panel, a played pass's zoom, window fullscreen. Handled here, not as a QShortcut,
         so the lap table keeps arrow nav; keyPressEvent only fires when the focus widget didn't use
         the key."""
         if event.key() == Qt.Key_Escape and self._escape_out():

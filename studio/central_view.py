@@ -23,7 +23,7 @@ import os
 import time
 from typing import NamedTuple
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -50,6 +50,7 @@ from .compare_controller import CompareController
 from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable
 from .map_view import MapView
 from .marks_panel import MarksPanel
+from .overlay import broadcast
 from .playback_state import PlaybackState
 from .plots_view import PlotsView
 from .race_controller import RaceController
@@ -350,6 +351,27 @@ def _at_rest(readout: str) -> str:
     return readout.rsplit("     ", 1)[0] + "     " + HERO_AT_REST_TAG
 
 
+# A GAP THE TIMING CANNOT TELL FROM ZERO IS NOT A COLOUR, ON THE APP'S LARGEST NUMBER TOO
+# (cool/delta-readout-level). The readout coloured any |Δ| over theme.DELTA_EVEN_EPS_S (5 ms), so
+# the demo's best lap at 35 % read "Δideal +0.05 s" in red, while the compare seam (#552) and every
+# burned overlay (Classic, Broadcast, the compare pill: #611) draw the same quantity neutral under
+# the timing step. It now asks the overlays' own rule, `overlay.broadcast.is_level` (the PRINTED
+# value against `library.within_timing_precision`, 0.07 s), called, never re-typed — so "+0.07" is
+# coloured and two equal strings never look different. The 0.07 s step applies on an estimated
+# clock too, as it does on the seam and the exports this readout sits beside: they draw the same
+# Δ-along-the-lap, and a readout that switched to the Lap race's 0.15 s there would disagree with
+# the seam under it in compare. Inside the step the number and its sign still print, without the
+# ▲/▼ (a direction arrow beside a neutral number would claim what the colour disclaims), as the
+# seam does.
+def _level_readout(text: str, sem_colour: str | None, value: float | None
+                   ) -> tuple[str, str | None]:
+    """`(text, colour)` as the hero shows them: neutral and arrow-less when `value` prints level."""
+    if sem_colour is None or not broadcast.is_level(value):
+        return text, sem_colour
+    arrow = theme.delta_arrow(value)
+    return (text.replace(f" {arrow}", "", 1) if arrow else text), None
+
+
 def _hero_min_width(label: QLabel) -> int:
     """Layout floor for the hero Δ/speed readout: the width Qt ITSELF asks for the widest text the
     label can show, in the font and padding it really paints with.
@@ -389,12 +411,28 @@ class _HeroReadout(QLabel):
     """The hero #DiffBox: ONE label (so `text()`, the width floor and every reader stay as they
     were) that paints its Δ run in the gain/loss colour and the speed after it in the label's own
     neutral text colour. It used to be one colour for the whole line, so a positive Δ turned the
-    SPEED red too, as if 45 km/h were a loss. The split is the formatters' own five-space join; a
-    readout without a Δ colour is painted by QLabel itself, untouched."""
+    SPEED red too, as if 45 km/h were a loss. The split is the formatters' own five-space join.
+
+    THE Δ IS THE VALUE; WHAT FOLLOWS IT IS SECONDARY (cool/delta-readout-level). The tail — the
+    speed, or "whole lap" at rest — was painted at the Δ's HERO size and weight, so "whole lap"
+    read as a second value. It now paints a step down, on the Δ's baseline, and the Δ run alone
+    keeps the hero face: the LIVE SPEED at ``theme.EMPHASIS``, regular, in ``C.text`` — still a
+    glance while scrubbing (13 px dim was readable, measured in review, not glanceable) — and
+    "whole lap", a label about the Δ rather than a value, at ``theme.BODY`` in ``C.text_dim``. The
+    width floor still measures the whole line in the hero face (`_hero_min_width`), so the smaller
+    tail can only leave room, never clip."""
 
     def __init__(self, text: str):
         super().__init__(text)
         self._delta_colour: str | None = None
+        self._speed_font = theme.mono_font(theme.EMPHASIS, theme.W_REGULAR)
+        self._label_font = theme.mono_font(theme.BODY, theme.W_REGULAR)
+
+    def tail_style(self, tail: str) -> tuple:
+        """(font, colour) the run after the Δ paints in: "whole lap" dim, the speed in text."""
+        if tail == HERO_AT_REST_TAG:
+            return self._label_font, theme.C.text_dim
+        return self._speed_font, theme.C.text
 
     def delta_colour(self) -> str | None:
         """The colour the Δ run paints in, or None (all neutral)."""
@@ -407,7 +445,7 @@ class _HeroReadout(QLabel):
 
     def paintEvent(self, event):  # noqa: N802 (Qt override)
         head, sep, tail = self.text().partition("     ")
-        if not self._delta_colour or not sep:
+        if not sep:
             super().paintEvent(event)
             return
         fm = QFontMetrics(self.font())
@@ -423,13 +461,19 @@ class _HeroReadout(QLabel):
         p = QPainter(self)
         p.setFont(self.font())
         align = self.alignment()
-        p.setPen(QColor(self._delta_colour))
+        p.setPen(QColor(self._delta_colour) if self._delta_colour
+                 else self.palette().color(self.foregroundRole()))
         p.drawText(rect, align, head)
-        # The tail starts at the FRACTIONAL advance Qt itself lays the whole line out at.
+        # The tail starts at the FRACTIONAL advance Qt itself lays the whole line out at, and sits
+        # on the head's baseline (vertically centred as QLabel centres the head's own line).
+        hm = QFontMetricsF(self.font())
         rect = QRectF(rect)
-        rect.setLeft(rect.left() + QFontMetricsF(self.font()).horizontalAdvance(head + sep))
-        p.setPen(self.palette().color(self.foregroundRole()))
-        p.drawText(rect, align, tail)
+        x = rect.left() + hm.horizontalAdvance(head + sep)
+        baseline = rect.top() + (rect.height() - hm.height()) / 2 + hm.ascent()
+        font, colour = self.tail_style(tail)
+        p.setFont(font)
+        p.setPen(QColor(colour))
+        p.drawText(QPointF(x, baseline), tail)
         p.end()
 
 
@@ -795,7 +839,7 @@ class CentralView(QWidget):
         # pass through each corner, one click from the video). `corner_table` stays the Lap view.
         self.corners_page = CornersPage(self.session)
         self.corner_table = self.corners_page.lap_view
-        self.corners_page.quickest.pass_requested.connect(self.play_corner_pass)
+        self.corners_page.quickest.pass_requested.connect(self._play_quickest_row)
         self.corners_page.view_changed.connect(self._on_corners_view_changed)
         # Its row says "playing lap 7 …" only while that clip runs (VideoView.play_clip's end).
         self.video.clipEnded.connect(self._on_clip_ended)
@@ -1352,6 +1396,8 @@ class CentralView(QWidget):
         # The slider + ←/→ seek pane A; in compare distance-lock the same move to pane B (the hook
         # no-ops outside compare, so wiring it once here is safe).
         self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
+        # FIRST: a played pass's zoom ends before compare draws its pair (either way the toggle goes).
+        self.video.compareToggled.connect(lambda _on: self.end_pass_zoom())
         self.video.compareToggled.connect(self.compare.on_toggled)
         # Compare owns the two-pane stage, which the video-focus maximize can't sensibly frame, so a
         # compare-ON exits video focus first (wired AFTER on_toggled so compare has already entered
@@ -1368,6 +1414,10 @@ class CentralView(QWidget):
         self._hovered_corner: str | None = None   # see _on_corner_hovered
         self.plots.cornerHovered.connect(self._on_corner_hovered)
         self.map.cornerHovered.connect(self._on_corner_hovered)
+        # The driver took one view over by hand: it stays theirs (each view already let go of its
+        # own zoom, so its half of end_pass_zoom is a no-op) and the other goes back.
+        self.plots.heldFrameTaken.connect(self.end_pass_zoom)
+        self.map.passZoomTaken.connect(self.end_pass_zoom)
         self._build_race()
 
     def _build_race(self):
@@ -1761,6 +1811,7 @@ class CentralView(QWidget):
         # A genuine user click in the lap table also jumps the video to that lap (F1).
         self._drop_owned_ring()
         self._forget_quickest_cycle()   # another lap picked: the Quickest row goes back to its count
+        self.end_pass_zoom()
         self._on_laps_selected(ids, seek=True)
 
     # ONE OWNED RING, for the two surfaces whose ring belongs to a lap rather than to a corner row:
@@ -1832,6 +1883,7 @@ class CentralView(QWidget):
             self._restore_splitter_sizes()
         self._drop_owned_ring()
         self._forget_quickest_cycle()
+        self.end_pass_zoom()
         self.table.select([lap_id])
         entry = (self.session.corners.corner_entry_media_time(lap_id, cid)
                  if cid is not None else None)
@@ -1858,6 +1910,8 @@ class CentralView(QWidget):
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(False)
+        if getattr(self, "_pass_zoom", None) is not None:
+            self._pass_zoom_parked = True    # the next tick's position is where it stopped
 
     def _on_clip_started(self):
         page = getattr(self, "corners_page", None)
@@ -1872,7 +1926,13 @@ class CentralView(QWidget):
     def _on_corners_view_changed(self, _view: str):
         self._update_table_header()
 
-    def play_corner_pass(self, lap_id: int, cid: int, status: str = "") -> bool:
+    def _play_quickest_row(self, lap_id: int, cid: int, status: str) -> None:
+        """A Quickest passes row's play: its pass, and its status line says the pass it names can
+        be exported (⌘K lists "Export the C3 pass — lap 13…" exactly while the row names it)."""
+        self.play_corner_pass(lap_id, cid, status, export_hint=True)
+
+    def play_corner_pass(self, lap_id: int, cid: int, status: str = "", *,
+                         export_hint: bool = False) -> bool:
         """The Corners tab's Quickest passes: show lap `lap_id`'s pass through corner `cid` and PLAY
         it. The lap is selected as a Stats MOMENTS Jump selects it (charts, map ring), the video
         seeks to the clip start (`CornerModel.pass_clip`: 2 s before the entry, or the previous
@@ -1899,9 +1959,79 @@ class CentralView(QWidget):
             page.quickest.set_clip_running(True)
         self._playback.followed_lap = self.session.lap_at_time(clip[0])
         self._pin_owned_ring(cid)
+        self._zoom_to_pass(lap_id, cid, clip)
         if status:
-            self.statusNotice.emit(status)
+            self.statusNotice.emit(self._pass_status(status, export_hint))
         return True
+
+    def _pass_status(self, status: str, export_hint: bool) -> str:
+        """THE ONE PLACE a played pass's status line is built: the row's own sentence, then the
+        way back while the zoom is on (where his eyes are; the chart readout says it too), then
+        the export ⌘K offers for the pass a Quickest row names. Measured at 1280×800 on the demo:
+        the longest of the 21 row states is 786 px of the 1280 px bar, so nothing is elided."""
+        parts = [status]
+        if self.pass_zoomed():
+            parts.append("Esc: whole lap")
+        if export_hint:
+            parts.append("⌘K: export this pass")
+        return " · ".join(parts)
+
+    # How far outside a played pass's clip the playhead may report before its zoom ends: the
+    # clip's own pause lands within a frame of its end, and a seek quantises to the millisecond.
+    _PASS_ZOOM_SLACK_S = 0.25
+    # ...and how late the clip's own pause may land and still be "that pass": the real player
+    # parked 5-57 ms past the end on the demo; 4K on a loaded Mac can report later. The first
+    # position after the clip ended, up to this far past its end, becomes the zoom's end.
+    _PASS_PARK_MAX_S = 2.0
+
+    # A PLAYED PASS ZOOMS ONTO ITS CORNER: the charts frame the corner's window as `N` and a
+    # Coaching Compare do (`PlotsView.frame_span`, one rule) and the map frames the clip's stretch
+    # of the played lap. One rule to undo it, the one a driver can predict: the zoom lasts while
+    # that pass is the subject — the playhead inside its clip. It stays when the clip pauses itself
+    # (he is studying the corner); a lap pick, a Jump, a scrub or play past the clip, Compare, a
+    # Lap race, a re-segment or Esc put the whole lap and the whole track back. Taking either view
+    # over by hand (a pan, a wheel zoom, `N`, Fit) leaves that view where he put it and gives the
+    # other back. Nothing is computed: a window and a box, set once; the tick only compares t.
+    def _zoom_to_pass(self, lap_id: int, cid: int, clip: tuple[float, float]):
+        window = self.session.corner_plot_window(cid, self.plots.axis_mode())
+        if window is not None:
+            self.plots.hold_frame(*window)
+        self.map.zoom_to_pass(*clip)
+        if window is not None or self.map.pass_zoomed():
+            self._pass_zoom = (float(clip[0]), float(clip[1]))
+            self._pass_zoom_seen = False     # armed by the first tick inside the clip
+            self._pass_zoom_parked = False   # set by the clip's end (_on_clip_ended)
+
+    def pass_zoomed(self) -> bool:
+        return getattr(self, "_pass_zoom", None) is not None
+
+    def end_pass_zoom(self) -> bool:
+        """The whole lap on the charts and the whole track on the map. False when no zoom was on."""
+        if getattr(self, "_pass_zoom", None) is None:
+            return False
+        self._pass_zoom = None
+        self.plots.release_frame()
+        self.map.unzoom_pass()
+        return True
+
+    def _check_pass_zoom(self, t: float):
+        """Per tick, two comparisons: the playhead left the pass (a seek, a step, play on past the
+        clip's end) → the zoom ends. Armed only once the playhead has been INSIDE the clip, so the
+        tick that still reports where the video was before the clip's own seek landed is ignored.
+        The first tick after the clip ended is where the pause landed: however late, up to
+        _PASS_PARK_MAX_S past the end, it becomes the zoom's end, so the pause he stops to study
+        the corner at can never end it (a seek away from the clip lands further, or before it)."""
+        zoom = self._pass_zoom
+        slack = self._PASS_ZOOM_SLACK_S
+        if self._pass_zoom_parked:
+            self._pass_zoom_parked = False
+            if zoom[1] < t <= zoom[1] + self._PASS_PARK_MAX_S:
+                zoom = self._pass_zoom = (zoom[0], t)
+        inside = zoom[0] - slack <= t <= zoom[1] + slack
+        if inside:
+            self._pass_zoom_seen = True
+        elif self._pass_zoom_seen:
+            self.end_pass_zoom()
 
     def compare_at_corner(self, tp, lost: str) -> bool:
         """A Coaching row's Compare: SEE the loss the row names. Compare `tp.lap_id` (the lap whose
@@ -1923,6 +2053,7 @@ class CentralView(QWidget):
             self._restore_splitter_sizes()     # the panes, charts and map are what it shows
         if self._comparing():
             self.compare.exit()
+        self.end_pass_zoom()     # enter_pair below does not toggle the button the zoom listens to
         cid, a, b = tp.cid, tp.lap_id, tp.best_lap_id
         if not self.compare.enter_pair(a, b):
             return False
@@ -2214,6 +2345,8 @@ class CentralView(QWidget):
             self.compare.tick()
 
     def _apply_position(self, t: float):
+        if getattr(self, "_pass_zoom", None) is not None:
+            self._check_pass_zoom(t)
         self.plots.set_playhead_time(t)
         self._apply_readout(t)
 
@@ -2417,11 +2550,12 @@ class CentralView(QWidget):
 
         def paint(v):
             txt, col = (text, sem_colour) if v is lead else render(v)
-            self._set_diff_text(_at_rest(txt) if at_rest else txt, col)
+            self._set_diff_text(_at_rest(txt) if at_rest else txt, col, v)
 
         self._roll_diff(lead, paint, baseline)
 
-    def _set_diff_text(self, text: str, sem_colour: str | None):
+    def _set_diff_text(self, text: str, sem_colour: str | None, value: float | None = None):
+        text, sem_colour = _level_readout(text, sem_colour, value)
         self.diff_box.setText(text)
         # The colour goes on the Δ run ONLY (the speed stays the label's neutral text colour), and
         # only when it changes — no per-tick stylesheet re-layout.
@@ -2586,6 +2720,7 @@ class CentralView(QWidget):
         (tests/test_playback_rate.py keeps the sync path ignorant of it)."""
         if self.is_racing() or not self.can_race() or not self.map_on_screen():
             return self.is_racing()
+        self.end_pass_zoom()              # the race owns the map's view (its fit, or Follow)
         if self._comparing():
             self.video.compare_btn.click()
         lap = self.session.lap_at_time(self._playback.applied_t)
@@ -2675,6 +2810,7 @@ class CentralView(QWidget):
         reference load/clear, and the initial build; each call site keeps only its own extras inline."""
         # A race's tracks describe the laps as they were: a re-segment ends it before anything moves.
         self.end_lap_race()
+        self.end_pass_zoom()     # ...and so does a pass's zoom: its window is the old corners'
         self.table.refresh()
         # set_corners re-pushes the corner labels AND clears any stale highlight, so it runs after
         # refresh_overlays and before the corner consumers below.

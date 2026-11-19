@@ -2760,6 +2760,15 @@ def _check_hero_landing(win):
             "a shortlist row is cut", r, t.viewport().height())
     assert not t.verticalScrollBar().isVisible(), "the shortlist scrolls"
     assert hero.geometry().bottom() < panel.height() and hero.height() >= HERO_MIN_PX
+    # THE PICTURE COMES FIRST (cool/debrief-picture-first): the hero is the page's top, then the
+    # headline it illustrates, then the lead, the focus list, the theme and the shortlist. Under
+    # the shortlist it began 487 px down a 1440x900 window.
+    assert hero.geometry().top() == 0, ("the picture is not the page's first thing",
+                                        hero.geometry())
+    tops = [w.geometry().top() for w in (hero, panel._header, panel.debrief_block,
+                                         panel.focus_block, panel.theme_block, panel.body)]
+    assert tops == sorted(tops) and hero.geometry().bottom() < panel._header.geometry().top(), (
+        "the debrief's order", tops)
     assert not panel.debrief_block.note.isHidden(), "the lead shed its note for the hero"
     tb = panel.theme_block
     assert sum(not a.isHidden() for a in tb.actions) == len(tb._lines), "the theme shed a line"
@@ -2836,6 +2845,54 @@ def test_debrief_hero_on_the_demo_landing_and_a_first_open():
             assert win.session.track_name in hero.data().caption, hero.data().caption
     print("ok debrief hero: demo landing 1280x800 + first open 1728x1117 — time = lap table, "
           "rings = focus list (and follow a Remove), one primary Jump, nothing below the fold")
+
+
+def test_debrief_too_short_for_the_picture_reads_as_before():
+    """At the window's minimum size (1059x546 on the demo) the blocks and the shortlist leave the
+    picture ~21 px, under HERO_MIN_PX: the hero hides and the spare height goes to the foot of the
+    page, so the headline is still the page's top — not a blank band above it."""
+    import tempfile
+
+    import test_debrief_landing as D
+    with tempfile.TemporaryDirectory(prefix="hero_min_") as folder, D._fresh_app_support():
+        a, _b = D._two_recordings(folder)
+        with _hero_window(a, (400, 300), demo_env=a) as win:
+            D._settle(0.5)
+            panel = win.view.opportunities
+            assert win.view.is_debrief() and win.height() < 600, (win.size(),)
+            assert panel.hero.data() is not None and panel.hero.isHidden(), (
+                panel.hero.isVisible(), panel.hero.height())
+            assert panel._header.geometry().top() == 0, panel._header.geometry()
+            assert panel.body.maximumHeight() == panel._shortlist_px(), "the table is not capped"
+            assert panel.hero.renders == 0, panel.hero.renders
+            # THE SWEEP (review of #616): the window's height from its minimum to 800 px in 5 px
+            # steps. At every height the card is either hidden or tall enough to draw, and nothing
+            # blank sits above the headline: hidden, the headline is the page's top; shown, the
+            # headline starts where the card ends. A hero budget that forgot the theme block's
+            # height drew 82-147 px blank bands above the headline at 591-656 px.
+            from studio.coaching_panel import HERO_MIN_PX
+            hero, header = panel.hero, panel._header
+            seen = set()
+            for h in range(win.minimumSizeHint().height(), 801, 5):
+                win.resize(1280, h)
+                D._settle(0.03)
+                for _ in range(3):
+                    _APP.processEvents()
+                shown = not hero.isHidden()
+                seen.add(shown)
+                assert not shown or hero.height() >= HERO_MIN_PX, (h, hero.height())
+                top = hero.geometry().bottom() + 1 if shown else 0
+                assert header.geometry().top() == top, ("a blank band over the headline", h,
+                                                        shown, hero.geometry(), header.geometry())
+                # ...and the spare height of a short window is the page's foot, not padding
+                # inside the lead or the focus list (each block stands at its own text's height).
+                for blk in (panel.debrief_block, panel.focus_block, panel.theme_block):
+                    if not blk.isHidden():
+                        assert blk.height() <= blk.sizeHint().height(), (
+                            "a block stretched by the spare height", h, type(blk).__name__,
+                            blk.height(), blk.sizeHint().height())
+            assert seen == {True, False}, ("the sweep never crossed the card's threshold", seen)
+    print("ok debrief at the minimum window and swept to 800 px: no blank band over the headline")
 
 
 def test_debrief_hero_carries_the_lap_tables_trust_marks():
