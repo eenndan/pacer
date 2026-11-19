@@ -1893,7 +1893,7 @@ class CentralView(QWidget):
         self._drop_owned_ring()
         self.table.select([lap_id])
         self._on_laps_selected([lap_id], seek=False)
-        self.video.play_pass(*clip, key=cid)   # the same corner again keeps Loop / Slow on
+        self.video.play_pass(*clip)   # Loop / Slow, if on, stay on for this pass
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.set_clip_running(True)

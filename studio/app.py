@@ -2931,6 +2931,10 @@ class StudioWindow(QMainWindow):
         view = getattr(self, "view", None)
         if view is not None:
             racing = self._racing()
+            if not racing and view.can_race() and view.map_on_screen():
+                # A pass playing is left first, so Slow gives back the driver's own speed
+                # before the race reads it (the race would otherwise start at 0.25×).
+                view.video.leave_pass()
             # The race starts at the transport's rate, on its ladder (0.25× … 2×).
             started = view.toggle_lap_race(view.video.playback_rate(), PLAYBACK_RATES)
             if not racing and not started:

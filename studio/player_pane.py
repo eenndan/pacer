@@ -556,9 +556,29 @@ class PlayerPane(QWidget):
 
     def set_clip(self, start_global: float, end_global: float):
         """A pass's clip: `set_clip_end(end)`, and the pass [start, end] becomes the subject that
-        Loop replays (see `_pass`). Call it AFTER the clip's own seek and play, as set_clip_end."""
-        self._clip_end = float(end_global)
-        self._pass = (float(start_global), float(end_global))
+        Loop replays (see `_pass`). Call it AFTER the clip's own seek and play, as set_clip_end.
+        The end is clamped inside the recording: a pass whose "1 s after the exit" runs past the
+        last frame would otherwise sit at EndOfMedia with Loop lit and never come round."""
+        end = float(end_global)
+        media_end = self._media_end()
+        if media_end is not None:
+            end = min(end, media_end - _WINDOW_STOP_TOL_S)
+        self._clip_end = end
+        self._pass = (float(start_global), end)
+
+    def _media_end(self) -> float | None:
+        """The recording's last instant on the telemetry clock, or None when unknown: the chapter
+        table's total, or the player's own duration once the last chapter is loaded (the two
+        can differ: chapter_duration)."""
+        if self._chapters is None:
+            return None
+        ends = [self._chapters.total_duration] if self._chapters.total_duration > 0 else []
+        duration = getattr(self.player, "duration", None)
+        if duration is not None and self._current_chapter == len(self._chapters) - 1:
+            ms = duration()
+            if ms > 0:
+                ends.append(self._offset() + ms / 1000.0)
+        return self._clock().to_telemetry(min(ends)) if ends else None
 
     def pass_clip(self) -> tuple[float, float] | None:
         """The pass being watched (global start, end), or None."""
@@ -943,6 +963,12 @@ class PlayerPane(QWidget):
             self.seamLoading.emit(True)
             self._pending = (nxt, 0.0, True)
             self._set_source(nxt)
+        elif self._loop and self.__pass is not None:
+            # the recording ran out inside a looping pass (its end is clamped in set_clip, but a
+            # last frame can stop short of it): come round, as the end itself would
+            self._loop_rewinding = True
+            self._seek_to(self.__pass[0])
+            self._resume()
 
     def _on_state(self, state):
         self.playbackStateChanged.emit(state)

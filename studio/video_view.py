@@ -94,10 +94,17 @@ _RATE_TOOLTIP = ("Playback speed — slow motion for reading inputs ([ slower ·
                  "Both videos take the rate together while comparing.")
 # The pass toggles (VideoView.loop_btn / slow_btn), on the bar only while a pass plays.
 SLOW_RATE = PLAYBACK_RATES[0]
+# A WORD on a CHIP, measured. The bar is 498 px at 1280×800 and at the window's minimum, and
+# its timecode grows to "178:12.000" on a three-hour recording (+7 px): that leaves ~50 px for
+# this toggle. As a button "Slow" takes 56 and "0.25×" 62 (either pushes the g-meter, Compare
+# and ⤢ right); "¼×" falls out of the app's face (see the ladder above). The chip pill ("vs
+# ideal" on the charts' bar is the other toggle wearing it) takes 44. The rate itself shows in
+# the speed menu beside it.
+SLOW_LABEL = "Slow"
 _LOOP_TOOLTIP = ("Loop this pass (L): play it again from its lead-in each time it ends.\n"
-                 "Any seek, lap pick or another corner stops it.")
-_SLOW_TOOLTIP = (f"Slow motion for this pass: {_RATE_LABELS[0]}.\n"
-                 "The speed goes back to what it was when you leave the pass.")
+                 "Stays on for the next pass you pick; a seek, a lap pick or Compare stops it.")
+_SLOW_TOOLTIP = (f"Slow motion: play the pass at {_RATE_LABELS[0]}.\n"
+                 "Stays on for the next pass you pick; leaving the pass gives back your speed.")
 
 
 def nearest_rate(rate: float) -> float:
@@ -1278,14 +1285,16 @@ class VideoView(QWidget):
         # the stretch, so appearing moves nothing that was already on the bar.
         self.loop_btn = ToggleButton(glyph="ph.repeat", icon_only=True, tooltip=_LOOP_TOOLTIP)
         self.loop_btn.toggled.connect(self._on_loop_toggled)
-        self.slow_btn = ToggleButton(glyph="ph.person-simple-walk", icon_only=True,
-                                     tooltip=_SLOW_TOOLTIP)
+        # Slow says what it does: its label IS the rate, in the speed menu's own notation.
+        self.slow_btn = ToggleButton(SLOW_LABEL, tooltip=_SLOW_TOOLTIP)
+        self.slow_btn.setProperty("role", "Chip")
         self.slow_btn.toggled.connect(self._on_slow_toggled)
+        self.loop_btn.setAccessibleName("Loop this pass")
+        self.slow_btn.setAccessibleName(f"Slow motion for this pass, {_RATE_LABELS[0]}")
         # The rate Slow replaced, restored exactly when Slow goes off or the pass ends; None while
         # Slow is off. A rate the driver picks himself while Slow is on is his: Slow lets go of it.
         self._slow_restore: float | None = None
-        # Which pass the pane is playing (play_pass's `key`): the same key again keeps Loop / Slow.
-        self._pass_key: object = None
+        # True inside play_pass: the old pass ending there must not turn Slow off.
         self._carrying_pass = False
         for b in (self.loop_btn, self.slow_btn):
             b.setVisible(False)
@@ -1511,18 +1520,19 @@ class VideoView(QWidget):
         self.pane.play()
         self.pane.set_clip(start, end)
 
-    def play_pass(self, start: float, end: float, key=None):
-        """`play_clip`, for a pass named by `key` (the corner). The SAME key again — the Quickest
-        row clicked again for the next level lap — keeps Loop and Slow on for the new pass; any
-        other pass starts plain, as every other way of leaving a pass does."""
-        same = key is not None and key == self._pass_key and self.pane.pass_clip() is not None
-        loop = same and self.pane.is_looping()
-        self._carrying_pass = same     # Slow survives the old pass ending inside play_clip
+    def play_pass(self, start: float, end: float):
+        """`play_clip`, for a pass picked from a Quickest passes row. Loop and Slow are LIGHT
+        SWITCHES: a pass picked while another is still the subject — the same row again for the
+        next level lap, or another corner's row — loops / plays slow as the last one did. Only
+        leaving the pass (a seek, a lap pick, compare, the Lap race…) turns them off. Not a reel
+        (refused-2026-09 §31): every pass is one deliberate click, and nothing advances by itself."""
+        carry = self.pane.pass_clip() is not None
+        loop = carry and self.pane.is_looping()
+        self._carrying_pass = carry    # Slow survives the old pass ending inside play_clip
         try:
             self.play_clip(start, end)
         finally:
             self._carrying_pass = False
-        self._pass_key = key
         if loop:
             self.pane.set_loop(True)
 
@@ -1541,9 +1551,8 @@ class VideoView(QWidget):
 
     def _on_pass_changed(self, on: bool):
         """The pass became the subject, or stopped being it: the toggles come and go with it, and
-        Slow gives the rate back (unless the same corner's next pass carries it on)."""
+        Slow gives the rate back (unless the next pass picked carries it on: play_pass)."""
         if not on and not self._carrying_pass:
-            self._pass_key = None
             if self._slow_restore is not None:
                 self._release_slow(restore=True)
         for b in (self.loop_btn, self.slow_btn):
@@ -2121,9 +2130,9 @@ class VideoView(QWidget):
         self.set_playback_rate(PLAYBACK_RATES[min(max(i, 0), len(PLAYBACK_RATES) - 1)])
 
     def _on_rate_picked(self, index: int):
+        """The picker was used (a genuine user pick) — apply that rung to the panes."""
         if self._slow_restore is not None:
             self._release_slow(restore=False)   # a pick on the speed menu: the rate is his now
-        """The picker was used (a genuine user pick) — apply that rung to the panes."""
         if 0 <= index < len(PLAYBACK_RATES):
             self.set_playback_rate(PLAYBACK_RATES[index])
 

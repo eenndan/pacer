@@ -11,10 +11,11 @@ replaced when the pass ends. These tests pin:
     paused loop resumes on ▶; every way of leaving the pass ends the loop, and ▶ without Loop
     carries on with the lap as before;
   * the real window over the demo (PACER_NO_MEDIA): the toggles come and go with the pass; Slow's
-    rate and its exact restore; a speed the driver picks himself is his; the same row again keeps
-    Loop and Slow for the next level lap and another row ends them; a lap pick, compare, the Lap
-    race and ←/→ end the loop; the row says "· looping"; L, its status line with no pass, the ?
-    card and ⌘K.
+    rate and its exact restore; a speed the driver picks himself is his; Loop and Slow are light
+    switches that stay on for any row picked next; a lap pick, compare, the Lap race and ←/→ end
+    the loop; the Lap race starts at his own speed; the row says "· looping" only while Loop is
+    on; the toggles move nothing already on the bar; L, its status line with no pass, the ? card
+    and ⌘K. And a pass running past the recording's end still loops.
 
 The loop never moves on to another pass or lap (refused-2026-09 §31: no reel). Measured on the
 demo's real QMediaPlayer in the PR, not here: CI's software-decode world cannot time frames.
@@ -69,6 +70,9 @@ class _Player:
 
     def setSource(self, url):
         self.url = url
+
+    def duration(self):
+        return getattr(self, "duration_ms", 0)
 
     def source(self):
         return self.url
@@ -175,6 +179,31 @@ def test_every_way_of_leaving_the_pass_ends_the_loop():
     pane.pause()
     pane.play()                                    # ▶ without Loop: carry on with the lap
     assert pane.pass_clip() is None and not pane.set_loop(True)
+
+
+def test_a_pass_at_the_end_of_the_recording_loops_instead_of_sitting_at_its_end():
+    """"1 s after the exit" can run past the last frame: the end is clamped inside the media,
+    and if the recording still runs out first, EndOfMedia comes round the loop too."""
+    from PySide6.QtCore import QUrl
+
+    from studio import chapters
+    a = os.path.abspath("GXEND.MP4")
+    pane = _pane(chapters.ChapterMap([a], [20.0]))
+    pane.player.setSource(QUrl.fromLocalFile(a))
+    pane.player.duration_ms = 19_950               # the player's own last frame, a bit short
+    pane.seek(17.0)
+    pane.play()
+    pane.set_clip(17.0, 21.0)                      # runs 1 s past the recording
+    start, end = pane.pass_clip()
+    assert start == 17.0 and 19.94 < end < 19.95, end
+    pane.set_loop(True)
+    pane._on_position(19_949)                      # the clamped end: round again
+    assert pane.player.positions[-1] == 17_000 and pane.is_playing()
+    pane._on_position(17_100)
+    pane.player.pause()                            # the media ran out before the end arrived
+    pane._on_media_status(QMediaPlayer.MediaStatus.EndOfMedia)
+    assert pane.player.positions[-1] == 17_000 and pane.is_playing() and pane.is_looping()
+    assert pane.player.positions.count(17_000) == 3
 
 
 def test_a_pass_across_the_chapter_seam_loops_back_into_the_first_chapter():
@@ -305,7 +334,10 @@ def test_slow_plays_the_pass_at_a_quarter_and_gives_back_the_exact_rate():
         _close(win)
 
 
-def test_the_same_row_again_keeps_loop_and_slow_and_another_row_ends_them():
+def test_loop_and_slow_are_light_switches_across_every_row():
+    """Loop and Slow stay on for the next pass picked — the same row again (the next level lap)
+    or another corner's row — and the row that is playing says "· looping"; only leaving the
+    pass turns them off and gives the speed back. Nothing advances by itself (§31)."""
     win = _window()
     try:
         s = win.session
@@ -322,12 +354,87 @@ def test_the_same_row_again_keeps_loop_and_slow_and_another_row_ends_them():
         assert video.pane.is_looping() and video.loop_btn.isChecked()
         assert video.playback_rate() == 0.25 and video.slow_btn.isChecked()
         assert q.table.item(row, 3).text() == "playing lap 7 (2.35) · 2 of 6 · looping"
-        q.activate(q.row_of(5))                    # another corner: a plain pass, at 1× again
+        row4 = q.row_of(4)
+        q.activate(row4)                           # another corner: looped and slow too
         _settle()
+        assert video.pane.pass_clip() == s.corners.pass_clip(7, 4)
+        assert video.pane.is_looping() and video.loop_btn.isChecked()
+        assert video.playback_rate() == 0.25 and video.slow_btn.isChecked()
+        assert q.table.item(row4, 3).text() == "playing lap 8 (3.02) · 1 of 8 · looping"
+        assert "looping" not in q.table.item(row, 3).text()
+        video.seek(5.0)                            # leaving the pass: both off, 1× back
         assert not video.pane.is_looping() and not video.loop_btn.isChecked()
         assert video.playback_rate() == 1.0 and not video.slow_btn.isChecked()
-        assert video.pane.pass_clip() == s.corners.pass_clip(9, 5)
+    finally:
+        _close(win)
+
+
+def test_the_row_stops_saying_looping_when_loop_goes_off_or_the_pass_is_left():
+    win = _window()
+    try:
+        video, q = win.view.video, win.view.corners_page.quickest
+        row = q.row_of(3)
+        q.activate(row)
+        QTest.keyClick(win, Qt.Key_L)
+        assert q.table.item(row, 3).text().endswith(" · looping")
+        QTest.keyClick(win, Qt.Key_L)              # Loop off: the pass plays on, not looped
+        assert q.table.item(row, 3).text() == "playing lap 13 (2.32) · 1 of 6"
+        QTest.keyClick(win, Qt.Key_L)
+        video.seek(5.0)                            # left: no "looping" either
         assert "looping" not in q.table.item(row, 3).text()
+    finally:
+        _close(win)
+
+
+def test_the_toggles_take_the_free_space_and_move_nothing():
+    """The pass toggles sit right of the stretch: every control already on the bar keeps its x
+    when they appear, at 1280×800 and at the window's minimum width, with the demo's timecode and
+    with a three-hour recording's (the widest the readout gets)."""
+    win = _window()
+    try:
+        video, q = win.view.video, win.view.corners_page.quickest
+        fixed = (video.play_btn, video.mute_btn, video.rate_combo, video.readout,
+                 video.gmeter_btn, video.compare_btn, video.fullscreen_btn)
+        for size, clock in (((1280, 800), None), ((win.minimumWidth(), 800), None),
+                            ((1280, 800), "178:12.000"), ((win.minimumWidth(), 800), "178:12.000")):
+            video.seek(5.0)
+            win.resize(*size)
+            if clock:
+                video.set_readout(clock)
+            _settle(0.2)
+            before = [w.mapTo(win, w.rect().topLeft()).x() for w in fixed]
+            q.activate(q.row_of(3))
+            if clock:
+                video.set_readout(clock)
+            _settle(0.2)
+            assert _toggles(video) == (True, True)
+            during = [w.mapTo(win, w.rect().topLeft()).x() for w in fixed]
+            assert during == before, (size, before, during)
+            for b in (video.loop_btn, video.slow_btn):
+                x = b.mapTo(win, b.rect().topLeft()).x()
+                assert video.readout.mapTo(win, video.readout.rect().topRight()).x() < x \
+                    < video.gmeter_btn.mapTo(win, video.gmeter_btn.rect().topLeft()).x(), size
+        assert video.slow_btn.text() == "Slow"
+        assert video.loop_btn.accessibleName() and video.slow_btn.accessibleName()
+    finally:
+        _close(win)
+
+
+def test_the_lap_race_starts_at_his_own_speed_not_at_slow():
+    win = _window()
+    try:
+        view = win.view
+        video, q = view.video, view.corners_page.quickest
+        video.set_playback_rate(2.0)
+        q.activate(q.row_of(3))
+        video.slow_btn.click()
+        assert video.playback_rate() == 0.25
+        win.toggle_lap_race()
+        _settle()
+        assert view.is_racing()
+        assert video.playback_rate() == 2.0 and view.race.speed == 2.0, view.race.speed
+        assert video.pane.pass_clip() is None and not video.slow_btn.isChecked()
+        view.end_lap_race()
     finally:
         _close(win)
 
