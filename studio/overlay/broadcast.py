@@ -290,6 +290,10 @@ class BroadcastElement:
         tower_w = max([tower_w] + [2 * self._pad + self._last_width(r)
                                    for r in fitted_rows.values()])
         self._main_h = L.BROADCAST["tower"].h * u
+        if getattr(spec, "pass_subject", None) is not None:
+            # A pass clip has no Δ row (`export_video.PassSubject`): the tower ends under its
+            # "C3 · 2.32 s" row, a quarter of the header's height below it as the plate's margin.
+            self._main_h = (L.TOWER_HEAD * 1.25 + L.TOWER_PROGRESS + L.TOWER_TIME) * u
         tower_h = self._main_h + ((self._last_gap + self._last_h) if self._holds else 0.0)
         sp_h = L.SPEED_H * u
         self._f_speed = ev._font(sp_h * 0.80, bold=True)

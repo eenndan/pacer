@@ -561,6 +561,17 @@ class ExportController:
                                    "a big speed, the g-meter and a bigger minimap that names its "
                                    "corners.",
     }
+    # ...and with the pass row chosen: what a pass clip burns (no lap clock, no Δ: PassSubject).
+    _PASS_STYLE_DESC = {
+        broadcast.STYLE_CLASSIC: "Burns the overlays into your footage: g-meter, speed, map inset "
+                                 "and a strip naming the lap and the corner, with the corner's "
+                                 "time from its exit.",
+        broadcast.STYLE_BROADCAST: "Burns the overlays into your footage: a tower naming the lap "
+                                   "and the corner, with the corner's time from its exit, a big "
+                                   "speed, the g-meter and a bigger minimap that names its corners.",
+    }
+    # The Run-up row's reason while it is greyed for the pass row.
+    _PASS_LEAD_TIP = "A pass carries its own lead-in and 1 s after the exit."
     # Each remembered row's DEFAULT, by its pref key: what a first launch opens on, and what "Use
     # defaults" puts back — one table, so the two can never disagree about what the defaults are.
     # (Contents' default is its first row, which it opens on every time.)
@@ -1009,9 +1020,20 @@ class ExportController:
 
         # lap_time is a cheap pacer-free accessor (no ffprobe).
         dur = self.win.session.lap_time(lap) if hasattr(self.win, "session") else float("nan")
-        lap_line = QLabel(f"Selected lap {lap_label(lap)}  ·  {fmt_time(dur)}")
+        lap_text = f"Selected lap {lap_label(lap)}  ·  {fmt_time(dur)}"
+        lap_line = QLabel(lap_text)
         lap_line.setProperty("role", "Note")
         col.addWidget(lap_line)
+        # With the pass row chosen the line names the pass, never the lap's time (a pass clip
+        # burns no lap clock): "Lap 13 · C3 · 2.32 s", the Quickest row's number.
+        pass_text = ""
+        if pass_ is not None:
+            try:
+                subject = export_video.pass_subject(self.win.session, lap, pass_[0])
+            except Exception:  # noqa: BLE001 — a caption never blocks the export it describes
+                subject = None
+            pass_text = (f"Lap {lap_label(lap)}  ·  {pass_[1]}"
+                         + (f"  ·  {subject.time_s:.2f} s" if subject is not None else ""))
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
@@ -1169,6 +1191,7 @@ class ExportController:
             session_scope = scope == export_video.SCOPE_SESSION
             pass_scope = scope == export_video.SCOPE_PASS    # it carries its own lead-in
             lead_combo.setEnabled(not (session_scope or pass_scope))
+            lead_combo.setToolTip(self._PASS_LEAD_TIP if pass_scope else "")
             fit_combo.setEnabled(aspect != export_video.ASPECT_SOURCE)
             q_combo.setEnabled(not overlay_only)
             lead = 0.0 if (session_scope or pass_scope) else lead
@@ -1186,7 +1209,8 @@ class ExportController:
                 box.blockSignals(True)
                 box.setChecked(on)
                 box.blockSignals(False)
-            desc.setText(self._EXPORT_STYLE_DESC[_style()])
+            desc.setText((self._PASS_STYLE_DESC if pass_scope else self._EXPORT_STYLE_DESC)[_style()])
+            lap_line.setText(pass_text if pass_scope else lap_text)
             provisional = not bool(getattr(getattr(self.win, "session", None),
                                            "timing_verified", True))
             cards_box.setToolTip(

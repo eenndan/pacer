@@ -228,7 +228,46 @@ def test_lap_and_session_exports_keep_the_lap_strip():
             vals = ev.overlay_values_at(s, float(t), spec)
             assert ev._frame_strip_runs(s, vals, spec, None) == ev._strip_runs(
                 s, vals, spec.lap_t0, spec.is_best_at(vals.lap_id), None)
+            # ...and they keep their lap Δ: only a pass clip drops it
+            if vals.lap_started and vals.lap_id is not None:
+                assert vals.delta_s is not None, (spec.lap_id, t)
         spec.source.cleanup()
+
+
+def test_the_window_stops_at_the_end_of_the_footage():
+    s = _session()
+    lap, cid = _c3()
+    t0, t_in, t_out, t1 = ev.pass_window_for_export(s, lap, cid)
+    real = ev.footage_duration
+    ev.footage_duration = lambda _session: t_out + 0.4     # the recording ends 0.4 s after the exit
+    try:
+        win = ev.pass_window_for_export(s, lap, cid)
+        spec = _spec(lap, cid)
+    finally:
+        ev.footage_duration = real
+    assert win == (t0, t_in, t_out, t_out + 0.4), win
+    assert spec.t1 == t_out + 0.4 and abs(spec.lead_out - 0.4) < 1e-9, (spec.t1, spec.lead_out)
+    spec.source.cleanup()
+
+
+def test_the_broadcast_tower_ends_under_the_corner_time():
+    s = _session()
+    lap, cid = _c3()
+    from studio.overlay import layout
+    towers = {}
+    for name, spec in (("pass", _spec(lap, cid, broadcast.STYLE_BROADCAST)),
+                       ("lap", ev.build_lap_spec(s, "x.mp4", lap, config=broadcast.styled(
+                           ev.OverlayConfig(out_height=720), broadcast.STYLE_BROADCAST)))):
+        painter = ev.OverlayPainter(s, spec, 1280, 720, FPS)
+        towers[name] = next(e for e in painter.elements
+                            if e.name == broadcast.BroadcastElement.name).tower
+        spec.source.cleanup()
+    u = 720.0
+    assert abs(towers["lap"].height() - layout.BROADCAST["tower"].h * u) < 1.0, towers
+    # no Δ row on a pass: the tower is its header, progress line and time row, plus a margin
+    want = (layout.TOWER_HEAD * 1.25 + layout.TOWER_PROGRESS + layout.TOWER_TIME) * u
+    assert abs(towers["pass"].height() - want) < 1.0, (towers["pass"], want)
+    assert towers["lap"].height() - towers["pass"].height() > 0.6 * layout.TOWER_DELTA * u
 
 
 # ------------------------------------------------------------------ the dialog, ⌘K
@@ -266,6 +305,97 @@ def _play_c3(win):
     page.quickest.play_named(page.quickest.row_of(3))
     _settle(0.05)
     return page.quickest.playing()
+
+
+def _level_cell(win, cid=3) -> str:
+    from studio.lap_table import QUICKEST_LEVEL_COL
+    q = win.view.corners_page.quickest
+    return q.table.item(q.row_of(cid), QUICKEST_LEVEL_COL).text()
+
+
+def test_a_repeat_click_exports_the_level_lap_the_row_names():
+    win = _window()
+    q = win.view.corners_page.quickest
+    win.view.corners_page.set_view("quickest", remember=False)
+    q.forget_cycle()
+    q.activate(q.row_of(3))
+    q.activate(q.row_of(3))                      # again: the next level lap
+    _settle(0.05)
+    lap = q.playing()[1]
+    assert lap == 6 and "lap 7 (2.35)" in _level_cell(win), (lap, _level_cell(win))
+    assert win.exports.pass_subject() == (6, 3, "C3")
+    assert win.statusBar().currentMessage().endswith("· ⌘K: export this pass"), \
+        win.statusBar().currentMessage()
+    title = "Export the C3 pass — lap 7…"
+    commands = dict(win.quickest_pass_commands())
+    assert title in commands, list(commands)
+    seen = _export(win, commands[title], lambda _dlg, _rows: QDialog.Accepted)
+    (spec,) = seen["specs"]
+    assert spec.lap_id == 6 and seen["save"] == "_lap7_C3_overlay.mp4", (spec.lap_id, seen)
+    assert (spec.t0, spec.t1) == ev.pass_window_for_export(win.session, 6, 3)[::3]
+    exit_frame = ev.overlay_values_at(win.session, spec.lap_t1, spec)
+    label = ev._frame_strip_runs(win.session, exit_frame, spec, None)[0]
+    assert label == "LAP 7   C3 · 2.35 s", label
+
+
+def test_the_palette_exports_the_pass_the_quickest_row_names_whatever_the_route():
+    """⌘K's export subject is ALWAYS the pass the Quickest row names (its "Level with" cell), and
+    there is no export row when the row names none — after a Laps-table pick, a lap selected
+    another way, or nothing at all."""
+    win = _window()
+    q = win.view.corners_page.quickest
+    win.view.corners_page.set_view("quickest", remember=False)
+
+    def check(route):
+        playing = q.playing()
+        subject = win.exports.pass_subject()
+        rows = [t for t, _c in win.quickest_pass_commands() if t.startswith("Export the")]
+        if playing is None:
+            assert subject is None and not rows, (route, subject, rows)
+            return
+        cid, lap = playing
+        assert subject is not None and subject[:2] == (lap, cid), (route, subject, playing)
+        assert f"lap {lap + 1} (" in _level_cell(win, cid), (route, _level_cell(win, cid))
+        assert rows == [f"Export the C{cid} pass — lap {lap + 1}…"], (route, rows)
+    q.forget_cycle()
+    check("nothing played")
+    q.activate(q.row_of(3))
+    q.activate(q.row_of(3))
+    _settle(0.05)
+    check("a repeat click")
+    win.view.table.select([2])                        # the Laps table's selection, set directly
+    _settle(0.05)
+    check("the Laps table's selection")
+    win.view._on_laps_selected([2])                   # the lap pick the table reports
+    _settle(0.05)
+    check("a lap picked")
+
+
+def test_the_dialog_names_the_pass_and_says_why_run_up_is_off():
+    win = _window()
+    lap, _cid = _c3()
+    _play_c3(win)
+    got = {}
+
+    def lines(dlg):
+        notes = [lab.text() for lab in dlg.findChildren(QLabel) if lab.property("role") == "Note"]
+        return notes
+
+    def act(dlg, rows):
+        got["pass"] = (lines(dlg), rows["Run-up / run-off"].toolTip())
+        rows["Export"].setCurrentIndex(0)             # back to "This lap"
+        got["lap"] = (lines(dlg), rows["Run-up / run-off"].toolTip())
+        return QDialog.Rejected
+    _export(win, lambda: win.exports.export_pass_video(lap, 3, "C3"), act)
+    pass_notes, pass_tip = got["pass"]
+    lap_notes, lap_tip = got["lap"]
+    assert f"Lap {lap + 1}  ·  C3  ·  2.32 s" in pass_notes, pass_notes
+    assert not any("Δ" in n or "Selected lap" in n for n in pass_notes), pass_notes
+    assert pass_tip == "A pass carries its own lead-in and 1 s after the exit.", pass_tip
+    # switched back to a lap scope: the lines are the lap export's own, exactly
+    assert lap_notes == [win.exports._EXPORT_STYLE_DESC[broadcast.STYLE_CLASSIC],
+                         f"Selected lap {lap + 1}  ·  0:44.950"], lap_notes
+    assert lap_tip == "", lap_tip
 
 
 def _rows(dlg):
