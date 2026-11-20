@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirty-five features were built far enough to **measure**, and the measurement said not to ship
+Thirty-seven features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2600,6 +2600,146 @@ the same checking in less time, measured against planted defects — cuts every 
 **What would be new evidence:** lazy imports in `studio/session.py` (and the export path) that
 make the export tests' import set small, so a sound list could skip the tier on most app changes;
 or a pull-request mix dominated by docs-only changes, measured over a campaign.
+
+---
+
+## 36. "Your quickest passes reached their slowest point N m later" (early / late apex) — refused (W13 measure)
+
+**The idea.** `CornerStat.apex_dist`, the lap odometer at a pass's minimum-speed fix, is computed
+for every lap and corner and shown nowhere. Say where the minimum came on the quickest passes
+against the typical ones: "your quickest passes reached their slowest point 3 m later here".
+Only where the difference beats the fix spacing, by the rule the discovery lane wrote down before
+any number came back: |Δ| ≥ max(2 fix spacings, 2σ), and the bootstrap 95 % interval excludes 0.
+
+**How it was measured.** `studio/dev/probes/apex_line.py`, through the real loader, on the
+synthetic GoPro at the truth matrix's three seeds and GPS noise 2 and 4.5.
+- **The plant.** The generator's kart holds a flat speed over each arc, so it has no single
+  minimum. The probe gives every pass one: the speed becomes max(physics, a bowl RISE km/h deep at
+  ±10 m), with its bottom on the corner's true apex, or SHIFT metres later on the even laps at
+  C1, C3, C5 and C7. C2, C4 and C6 stay unshifted as the same run's null. SHIFT is 0, 2, 5 or
+  10 m. RISE is 1 or 3 km/h.
+- **The figure.** Each pass's `apex_dist`, placed in the reference lap's frame through the lap's
+  own projected corner window, the window `lap_corner_stats` measures in. Δ is the median of the
+  planted laps minus the median of the others (7 against 7), with 2,000 bootstrap resamples. σ is
+  the corner's own per-pass scatter, the one the app could compute.
+- **The refinement.** The vertex of a parabola through the 3 and the 5 fixes around the minimum.
+- **The controls.** The same plant with the noise switched off. On every plant-free recording, the
+  split the sentence would really use: the quickest third of the passes by corner time (4 of 14)
+  against the rest. And the demo.
+
+| noise · bowl | per-pass σ | one fix | rule fires, nothing planted | 2 m planted: reads / fires | 5 m | 10 m | laps per group, 2 m at 80 % |
+|---|---|---|---|---|---|---|---|
+| 2 · 3 km/h | 1.90 m | 2.01 m | 1 of 48 | 1.67 m / 1 of 12 | 5.33 m / 9 of 12 | 8.04 m / 12 of 12 | 23 |
+| 2 · 1 km/h | 2.69 m | 1.95 m | 0 of 48 | 0.42 m / 0 of 12 | 3.87 m / 3 of 12 | 8.41 m / 9 of 12 | 45 |
+| 4.5 · 3 km/h | 2.41 m | 1.99 m | 1 of 48 | 1.57 m / 1 of 12 | 5.53 m / 5 of 12 | 7.95 m / 12 of 12 | 36 |
+| 4.5 · 1 km/h | 4.11 m | 1.96 m | 1 of 48 | −0.12 m / 0 of 12 | 3.37 m / 1 of 12 | 5.51 m / 4 of 12 | 104 |
+
+σ is robust (1.4826 × the median absolute deviation) over 147 unplanted passes. "Reads" is the
+median Δ over the 12 planted cells (4 corners × 3 seeds). The last column is the normal
+approximation for the interval alone, at the median's efficiency, from that σ.
+
+**The rule is safe, and it can see almost nothing a driver would call early or late.**
+- **It does not invent.** With nothing planted it fires in 0 or 1 of 48 cells, and in 0 of the 84
+  quickest-third cells of the plant-free recordings.
+- **2 m is invisible.** A shift of about a kart's length reads −0.12 to 1.67 m and fires in 0 or 1
+  of 12 cells. Its interval needs 23 to 104 laps in each group, where a session gives 7 or so.
+- **5 m is a coin toss.** It fires in 1 to 9 of 12 cells, depending on how deep the bowl is.
+  Only 10 m of a deep bowl is reliable, and it reads 8 m. Across the grid the interval held the
+  planted shift in 75 to 92 % of cells, against its nominal 95 %.
+- **The fix spacing is not the floor.** The per-pass scatter is 0.9 to 2.1 fixes. Where the
+  minimum is flat, the minimum fix wanders by the bowl's own width, not by one fix.
+- **The parabola tightens it and changes nothing.** Five fixes cut σ to 1.38 / 2.24 / 1.82 /
+  3.25 m (in the table's row order), and 2 m still fires in 0 of 12 cells everywhere.
+- **The estimator itself is sound.** With the noise off, the 5 m plant reads 4.60 to 5.41 m.
+
+**On the demo the rule fires once, at a corner with no minimum to place.** It fires at 1 of 7
+corners: C7, where the quickest 4 of its 14 passes reach their slowest fix 14.25 m earlier (interval −18.96 to
+−5.92 m, against a 9.34 m threshold). The order of the passes seems to agree: the apex position
+against the corner time gives Spearman ρ +0.61. But C7 is a 41.9 m arc of constant radius, and
+on every lap the demo's true speed stays within 0.1 km/h of its minimum over 31.8 m of it. The
+demo has no early or late at C7, and agreement with the time order does not make the sentence
+true. On the real recording, checked privately, the rule fired at 0 of 7 corners over a whole
+session.
+
+**What moves because of this refusal: nothing in the app.** `apex_dist` stays an input to the
+brake-point bound (`driving_channels.py`). The Corners table keeps its apex speed, with no
+apex position.
+
+**Re-run it** (69 recordings in one `mkdtemp`, then removed, about 16 minutes on a quiet Mac. The
+last line is the JSON):
+
+```bash
+pixi run python -m studio.dev.probes.apex_line
+```
+
+**What would be new evidence:** a receiver with a higher fix rate, or a speed channel fine enough
+that a 2 m shift fires on a session's laps at this rule's false-positive rate. Or a real session
+where the rule fires at a corner and a second session of the same track fires there the same way.
+
+---
+
+## 37. "On your quickest passes you were N m wider at the apex" (line offset at the apex) — refused (W13 measure)
+
+**The idea.** Name the line habit as a number: on the quickest passes against the typical ones,
+how far wider or tighter the kart ran at the apex. The discovery lane set the bar before measuring:
+build only if a 1 m change is recovered with the null's 95th percentile under half of it.
+
+**How it was measured.** `studio/dev/probes/apex_line.py`, on the same recordings as §36.
+- **The figure.** The signed perpendicular offset from the reference lap at the ringed apex
+  (`Corner.apex`), wide positive, from `SessionGeometry.offsets`, the offsets the de-drift itself
+  fits. It was read three ways:
+  - raw;
+  - de-drifted: the lap's `lap_shift`, the app's rigid per-lap receiver shift, taken off;
+  - referenced to the straights: the de-drifted offset minus its median 20–60 m outside each end
+    of the corner window, a local re-zero against drift within the lap.
+- **The plant.** The even laps run AMP metres wide through C1, C3, C5 and C7, a raised cosine over
+  each corner's arc (the shape of `tests/_synthetic.line_change_laps`). The circuit the GPS fixes
+  are drawn from is displaced, so the plant passes through the receiver's noise, drift and the
+  load-time boxcar like a real line. AMP is 0, 0.5, 1 or 2 m.
+- **Per lap and per group.** Per lap is one planted lap minus the other group's median. Per group
+  is the median against the median. Each is set against its null: the unplanted corners, and
+  every corner at AMP 0.
+
+| | raw | de-drifted | referenced to the straights |
+|---|---|---|---|
+| per-lap null, 95th percentile, noise 2 / 4.5 | 1.84 / 4.10 m | 0.79 / 1.59 m | 0.68 / 1.34 m |
+| group null (7 against 7), 95th percentile, noise 2 / 4.5 | 0.63 / 1.41 m | 0.48 / 1.06 m | 0.44 / 0.82 m |
+| 1 m planted, group median reads, noise 2 / 4.5 | 0.66 / 0.66 m | 0.58 / 0.63 m | 0.57 / 0.32 m |
+| 1 m groups over the group null's 95th percentile, noise 2 / 4.5 | 6 / 2 of 12 | 8 / 3 of 12 | 8 / 1 of 12 |
+| 2 m planted, group median reads, noise 2 / 4.5 | 1.34 / 1.26 m | 1.17 / 1.00 m | 1.18 / 1.03 m |
+| lap-to-lap bias, SD of a lap's mean offset, noise 2 / 4.5 | 0.78 / 1.85 m | 0.13 / 0.27 m | 0.16 / 0.32 m |
+
+**Drift is not what stops it.** A receiver's drift between laps puts 0.78 m (noise 2) and 1.85 m
+(noise 4.5) of bias on a lap's raw offset, which would swamp a 1 m change. The app's rigid
+de-drift takes it down to 0.13 and 0.27 m. Re-zeroing against the straights does no better than
+that.
+
+**Two other things stop it.**
+- **A metre does not read as a metre.** A 1 m line reads 0.58 m de-drifted at noise 2, and with
+  the noise switched off it still reads 0.33 to 0.66 m. A plant as long as a corner is about as
+  long as the load-time position boxcar (13 fixes), which spreads it out. The rule's clause on
+  the null passes at noise 2 by 0.02 m (0.48 m under 0.5 m), but a figure that prints a 1 m habit
+  as half a metre fails the clause on recovery. At noise 4.5 the null alone fails it (1.06 m).
+- **The split the sentence needs manufactures a line.** On the plant-free recordings, where every
+  pass drives the centreline, the quickest third by corner time (4 of 14) reads tighter than the
+  rest. The
+  median is −0.22 m at noise 2 and −0.47 m at 4.5. The interval excludes 0 in 8 of 42 cells at
+  noise 2 (all 8 tighter) and in 11 of 42 at 4.5 (10 tighter). Noise-free it excludes 0 at 6 of 7
+  corners, by 0.02 to 0.07 m. A pass whose fixes read tighter also reads quicker through the
+  window the same fixes place. On the demo, whose kart drives one line at every corner, the
+  sentence would say "tighter" at 3 of 7 corners (C1, C2 and C6). The real recording was checked
+  privately: the interval excludes 0 at 5 of 7 corners, every one on the side this artifact
+  predicts, so the footage cannot tell a habit from the instrument.
+
+**What moves because of this refusal: nothing in the app.** The map draws each lap's line, and
+the compare draws two. Neither prints a lateral figure.
+
+**Re-run it:** `pixi run python -m studio.dev.probes.apex_line`, as §36.
+
+**What would be new evidence:** a position chain whose 1 m line change reads within 0.25 m of
+1 m noise-free, and an outcome split that does not read a line from the same fixes that time the
+pass. For example, laps grouped by a decision made before the session, or by the video, with a
+group null under 0.5 m at noise 4.5.
 
 ---
 
