@@ -6,6 +6,50 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-11-20
+
+A minor release: 6 pull requests, #639 and #641 to #645, Wave 14 of the campaign. Its theme: a
+sector pass does everything a corner pass does, and a compare at one pass exports as that pass.
+
+### Highlights
+
+- **Export a sector's pass.** Right-click a sector row ▸ "Export this pass…" renders its clip with
+  "LAP 2   S4" on the plate and the split from the last line on, "· 11.12 s" on the demo (#642)
+- **Compare a sector with your typical pass.** With "Add sector" clicked three times on the demo,
+  S1's quickest, lap 13 (11.20), plays beside the typical lap 5 (11.75): 0.55 s quicker (#641)
+- **Export the pass you are comparing.** Export comparison video opens on "This pass — S1, lap 13
+  against lap 5": both pass clips side by side, the shorter one holding its last frame (#645)
+- **The held gap is a measurement, not a verdict.** After the exit the compare holds the two
+  passes' gap as timed, with no colour or arrow: the quickest of many passes is partly luck (#643)
+- **Every sector row in reach.** A scrollbar beside the ▶ buttons appears when the rows run past
+  the panel, so the last sector is one scroll away and no ▶ is cut (#639)
+- **A no-laps map shows its track.** The "No complete laps" card sits beside the trace instead of
+  over it; on synthetic sessions it used to hide 48 to 57 % of the trace (#644)
+
+### Added
+
+- Export comparison video opens on "This pass" for a compare started at a corner or sector: both
+  pass clips side by side as played, the gap blank, live, then held; "Both whole laps" stays. (#645)
+- "Export this pass…" and ⌘K export a sector row's pass as a clip, like a corner's: 2 s before its
+  first line to 1 s after its last, with "LAP 13   S2 · 5.93 s" from the last line on. (#642)
+- "Compare with my typical pass" works on a sector row of Quickest passes, where the typical split
+  is 0.30 s or more slower; elsewhere the item says the two are level within 0.30 s. (#641)
+
+### Changed
+
+- "Compare with my typical pass" holds the gap after the exit as timed, neutral (no colour or
+  arrow), and says so; a refused row says "within 0.07 s of your typical pass as timed". (#643)
+- In a compare at a corner, the pane Δ badges are neutral, without ▲/▼, inside 0.07 s, as the seam's
+  big Δ already was. (#641)
+
+### Fixed
+
+- With no complete lap, the map's "No complete laps" card sits beside the track instead of over it:
+  the trace and the start/finish line it tells you to drag stay clear, and the line stays on screen.
+  (#644)
+- Corners ▸ Quickest passes shows a scrollbar beside the ▶ buttons when its sector rows run past the
+  panel, so the last sector is visibly one scroll away; the Every lap strip keeps its width. (#639)
+
 ## [0.18.0] — 2026-11-20
 
 A minor release: 10 pull requests, #629 to #636, #638 and #640, Wave 13 of the campaign. Its
@@ -2527,7 +2571,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/eenndan/pacer/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/eenndan/pacer/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/eenndan/pacer/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/eenndan/pacer/compare/v0.15.0...v0.16.0

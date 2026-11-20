@@ -1271,3 +1271,133 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
   real display; pull request #582's commit list comment; the published real-footage Coaching
   tables cannot be re-verified offline.
+
+## 21. Recorded at the 0.19.0 release, 2026-11-20
+
+- **v0.19.0 is a minor release**: 6 pull requests, #639 and #641 to #645, Wave 14 of the campaign
+  section 8 records, its theme "a sector pass does everything a corner pass does, and a compare at
+  one pass exports as that pass".
+  - #639: Corners ▸ Quickest passes shows a scrollbar over the ▶ column's right edge whenever its
+    rows run past the panel; no ▶ is cut and the Every lap strip keeps its width.
+  - #641: "Compare with my typical pass" on a sector row, past the split's 0.30 s step; corners and
+    sectors share one rule (`stats.pass_vs_typical_of`, `PassAnchor`).
+  - #642: "Export this pass…" and its ⌘K row on a sector row: the clip from 2 s before the first
+    line to 1 s after the last, its plate "LAP 2   S4", then "· 11.12 s" from the last line on (the
+    demo after three clicks of "Add sector").
+  - #643: the gap held after the exit in a typical-pass compare is printed as timed, neutral; the
+    status line says "as timed", and a refused row "within 0.07 s of your typical pass as timed".
+  - #644: on a session with no complete lap, the map's card sits beside the track, not on it.
+  - #645: Export comparison video… offers "This pass — S1, lap 13 against lap 5" when the compare
+    was started from a pass: the two pass clips side by side, the shorter holding its last frame,
+    the Δ plate blank, then live, then held.
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19 ("continue and don't come
+  back to me"), with the design delegated to "very logical and simple".
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **The held gap after the exit in a typical-pass compare is neutral** (#643): printed as
+    measured, with no colour and no ▲/▼, on the seam, both pane badges and the exported Δ plate.
+    The quickest of many noisy passes is partly a lucky one, so the true gap behind an offered row
+    is often under the step. Synthetic sessions (the demo at GPS noise 1, 2 and 4.5, two
+    generator seeds at 2 and 4.5; sectors with 2, 3 and 4 lines), offered quickest rows and how
+    many of them have a TRUE gap under the step:
+
+    | | offered | true gap under the step |
+    |---|---|---|
+    | corners, noise 1 (the demo as published) | 4 | 0 |
+    | corners, noise 2 | 11 | 5 |
+    | corners, noise 4.5 | 17 | 11 |
+    | corners, the seeds (no planted habit), noise 2 and 4.5 | 17 | 13 |
+    | sectors, noise 1 (the demo as published) | 3 | 0 |
+    | sectors, noise 2 | 6 | 3 |
+    | sectors, noise 4.5 | 9 | 6 |
+    | sectors, the seeds, noise 2 and 4.5 | 9 | 9 |
+
+    The live gap inside the pass keeps the step's colour rule; a Coaching row's Compare and a plain
+    C compare are unchanged. Reverting is one flag (`PassAnchor.held_neutral`).
+  - **The Quickest rows' scrollbar is laid over the table** (#639), on the ▶ column's spare right
+    edge, with a mask so its first pixels pass clicks to the ▶ under them, and shown only while
+    the rows overflow; a laid-out bar would take its width from the Every lap strip (75 → 63 px at
+    1280×800 docked, under the strip's minimum). Section 20's hidden bar is reversed.
+  - **"This pass" is the default row of the comparison export when the compare was started from a
+    pass** (#645), never remembered; "Both whole laps" is one row down. Each pane plays its own
+    pass clip at real speed, as on screen, rather than the track lock, which would stretch pane B.
+  - **A sector pass's export has the corner cards off**, with their reason in the dialog (#642): a
+    sector clip shows the sector's time, and the cards are for a corner's pass.
+  - **The no-laps map card is pinned beside the track** (#644), in a column on the right or a band
+    along the top, whichever leaves the trace the larger scale; on synthetic sessions the centred
+    card had hidden 48 to 57 % of the trace and the start/finish line it asks him to drag.
+- **Process.** The QA pass drove the merged tree in the real window, offscreen and jailed, at
+  1280×800 and 1440×900, with every dialog and menu through its real `exec()` closed by a timer
+  and every File-menu export fired through `.trigger()` after the menu's own `aboutToShow`: on the
+  demo with three sector lines placed mid-straight (not the even split "Add sector" makes, so its
+  figures below differ from the changelog's), the right-click menu on the last sector row scrolled to under the
+  overlaid bar (Play, Export this pass…, Compare with my typical pass), File ▸ Export overlay
+  video… and Export comparison video… in five states (no pass, a corner pass, a sector pass, a
+  lap compare, a pass compare), the ⌘K rows in each, and a zero-lap synthetic session (the map
+  card beside the track, the Corners and Stats empty states, both exports greyed with the reason).
+  The seam's held gap on screen and the exported Δ plate were read at the same five instants of
+  a corner and a sector compare: the same figure, neutral after the exit in both. Three small
+  demo renders were checked frame by frame: the S4 pass (491 frames, as the dialog said, plate
+  "LAP 2   S4 · 13.36 s"), the S1 pass compare (335 frames, the longer clip; pane A holds its
+  last frame from frame 321 exactly) and a whole-lap compare (1,349 frames). A widget census
+  across the menus, dialogs and compares came back level.
+- **The media.** Re-captured on the synthetic demo at 0.19.0: `quickest.png` (the ▶ buttons sit at
+  their cells' top-left beside the rows' bar lane, #639; 15,254 pixels in the ▶ column differ, the
+  same words and figures). `hero.png`, `og.png`, `map.png`, `accuracy.png`, `debrief.png`,
+  `moments.png`, `report.png` and `lapstrip.png` (its own run) are byte-identical to the files
+  already committed, so the social card did not change. The waivers of `data-trust.png` and
+  `ideal-lap.png` are renewed: #641 changed `stats.py` only to share the pass-against-typical rule,
+  and a demo render of both shots from v0.18.0's `studio/` and from 0.19.0 is byte-identical. Those
+  of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed although 0.19.0 changed export
+  code (#642: a sector pass's clip; #645: a compare at one pass): a painter-level render on the
+  demo of 96 lap, best-lap, run-up and whole-recording configurations and 2 whole-lap compares,
+  1,568 frames, from v0.18.0's `studio/` and from 0.19.0 is byte-identical, so none of it reaches
+  the lap clip those stills show.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. Real macOS fullscreen Spaces, a second monitor and hover could not be
+  checked offscreen. The full gate, the soak and the smoke run on the release branch, not in the
+  QA pass.
+- **Resolved from section 20**: a sector pass's export and its compare with the typical pass
+  (#642, #641); the map's card over the trace (#644); the last sector row cut at 1280×800 docked
+  (#639); and, carried from section 19, exporting a compare started at a corner renders the two
+  whole laps (#645: it now opens on "This pass").
+- **Open for the owner** (new).
+  - The selection effect itself is not corrected: rows are still OFFERED on a lucky quickest pass,
+    and only the held gap's colour is withheld. Correcting it needs a rule the app does not have.
+  - A Coaching row's Compare still colours its held gap: #643 changed only the typical-pass
+    compare.
+  - The first frame of an export can repeat: frames 0 and 1 show the same source frame when a
+    clip's first frame snaps forward. It predates this release and no test catches it.
+  - The free-space estimate sizes a pass comparison by pane A's clip, up to 6.5 % low on the demo.
+  - A double-click on the video while comparing does nothing and says nothing.
+  - While a compare started from a Quickest row's menu runs, the row highlighted is still the pass
+    played before it (S4 while S1 is compared, on the demo).
+  - Each video export leaves its progress dialog and its "export finished" box parented to the
+    window and never freed (a few widgets per export; it predates this release).
+- **Open for the owner** (carried from section 20, each re-checked on 0.19.0's code): section 13's
+  question (should Coaching rank corners that lose under 0.07 s, and name a habit there?);
+  Quickest passes is still not the Corners tab's default view; the readout and the overlays on
+  real macOS fullscreen Spaces and a second monitor are unverified offscreen; the strip hides at
+  1280×800 docked for sessions of about 60 laps or more and for the real recording here; at
+  1440×900 docked the Stats page's even gaps put three tile labels below the fold.
+- **Open for the owner** (carried from sections 18 to 20, untouched by this wave's changes): the
+  strip under the video stays available as a later option; a corner straight after another starts
+  its clip at the previous exit; a long corner window plays a long clip; the ★'s two meanings on
+  one tab; the rows scroll at the window's minimum size; the status line clears after 6 s while
+  the row keeps saying "playing"; the first time costs three clicks from the debrief; with verdicts
+  on the list, the docked chip says "3 of 3 re-measured"; a session with no laps is left out of the
+  welcome's list, and an unreadable library shows the first-visit screen; the overlays use the
+  0.07 s step even on an estimated clock; a re-profiled corner that keeps its direction is still
+  compared; focus items and Library rows stored before 0.15.0 carry no direction until reopened; a
+  one-corner shortlist's theme reads oddly; after the docked pair's Jump its Compare is one tab
+  away; a missing file's name in the welcome is cut; `overlay.jpg` needs real footage to re-shoot;
+  13 planted defects no test catches; two slow product paths; a marginal corner near the 30°
+  detection limit; the mixed headline's count of refusals; a Compare started from the maximised
+  page stays in the grid; the focus verdict's medians to two decimals; FIRST_LAP's loop paragraph
+  and step 8; the report's Laps card scroll with sector lines; `fmt_time` negatives; Broadcast as
+  the default Style; a ranked corner under the display floor; one lap drawn in two colours in a
+  race over a pick; a session reload stranding widgets; the capture tool's `lapstrip.png` bytes;
+  consistency on the middle half rather than σ; the apex and braking reasons' noise floor; the demo
+  habit ranked only on its own seed; the overlay's ★/Δ under provisional timing; Extras on in
+  Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
+  real display; pull request #582's commit list comment; the published real-footage Coaching
+  tables cannot be re-verified offline.
