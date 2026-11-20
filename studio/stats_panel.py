@@ -2501,6 +2501,8 @@ class StatsView(QWidget):
         this and which zero laps already fail (no best lap → no corner basis → no composite). Adding
         it here would be a second gate that agrees with the first only by luck."""
         self.no_laps_note.setVisible(not has_laps)
+        if not has_laps:
+            self.no_laps_prose.setText(data_quality.no_laps_body_for(self.session))
         self._show_no_laps_prose(not has_laps)
         for section in (self._pace_section, self._speed_section):
             section.setVisible(has_laps)

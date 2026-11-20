@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -101,6 +102,10 @@ DROPPED_FIX_CONCERN_FRAC = 0.08
 NO_LAPS_HEADLINE = "No complete laps in this recording."
 NO_LAPS_REASON = ("The GPS may not have locked, or the recording is too short to cross the "
                   "start/finish line.")
+# The KNOWN cause, when the count says so (discovery, a synthetic session whose GPS locked fine
+# and whose kart crossed the line once): the two guesses above are both false there.
+NO_LAPS_ONE_CROSSING_REASON = ("The kart crossed the start/finish line only once in this "
+                               "recording, and a lap needs two crossings.")
 NO_LAPS_NEXT_ACTION = ("If this is the right track, drag the start/finish line on the map to set "
                        "where a lap begins.")
 # The second way out, and it is an ADDITION rather than a replacement: `lap_table.NO_LAPS_ACTION`
@@ -109,15 +114,32 @@ NO_LAPS_NEXT_ACTION = ("If this is the right track, drag the start/finish line o
 NO_LAPS_ALT_ACTION = "If it is the wrong recording, open another with ⌘O."
 
 
-def no_laps_body() -> str:
+def no_laps_body(crossings: int | None = None) -> str:
     """The zero-lap BODY, whole: why it happened, then BOTH ways out, in that order.
 
     THE FUNCTION IS THE FIX — the constants alone were already there and were already ignored. A
     surface cannot state one action without the other because there is no way to ask for half of
     this string, and a surface that re-authors it has to do so visibly, next to a call that says
     what it should have said. `tests/test_state_surfaces.py` reads every zero-lap surface's live
-    text and asserts this exact string is inside it."""
-    return f"{NO_LAPS_REASON} {NO_LAPS_NEXT_ACTION} {NO_LAPS_ALT_ACTION}"
+    text and asserts this exact string is inside it.
+
+    `crossings` is how many times the trace crosses the start/finish line (`Session.lap_count()`:
+    every crossing opens a lap, and the last one stays open). Exactly ONE is a recording whose GPS
+    locked fine and simply never came round again, so the guessed causes give way to the known
+    one; both ways out stay, in the same order."""
+    reason = NO_LAPS_ONE_CROSSING_REASON if crossings == 1 else NO_LAPS_REASON
+    return f"{reason} {NO_LAPS_NEXT_ACTION} {NO_LAPS_ALT_ACTION}"
+
+
+def no_laps_body_for(session: Any) -> str:
+    """`no_laps_body` with `session`'s own crossing count — what every zero-lap surface that holds
+    a session states. A caller with no session (or a double with no lap account) gets the plain
+    body."""
+    count = getattr(session, "lap_count", None)
+    if not callable(count) or getattr(session, "laps", True) is None:
+        return no_laps_body()
+    crossings: Any = count()
+    return no_laps_body(int(crossings))
 
 
 @dataclass(frozen=True)

@@ -2605,6 +2605,7 @@ class MapView(QWidget):
         show = not self.session.valid_lap_ids()
         es.setVisible(show)
         if show:
+            es.set_state(data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body_for(self.session))
             es.raise_()
             self._reposition_empty_state()
         self._sync_timing_chrome()        # no laps = the empty state asks for a drag: show handles

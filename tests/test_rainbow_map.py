@@ -214,7 +214,9 @@ def _stub_session(n=60):
     # they (and Seg.from_pacer) read, so MapView's _rebuild constructs real timing lines.
     line = SimpleNamespace(first=SimpleNamespace(x=-60.0, y=0.0),
                            second=SimpleNamespace(x=-40.0, y=0.0))
-    s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
+    # laps_count: the crossings `lap_count()` reports, which the zero-lap copy reads.
+    s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]),
+                             laps_count=lambda: 0)
     s.lap_trace_segments = lambda lid: [SimpleNamespace(xs=xs, ys=ys, measured=True)]
     # lap_channels is the unified per-sample dict (one accessor for the rainbow map AND the
     # CSV export); the map reads t_telemetry_s / x_m / y_m / speed_kmh / dist_m.

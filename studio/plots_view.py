@@ -1696,6 +1696,7 @@ class PlotsView(QWidget):
         # One delta() call yields both plots' series on the same x basis, so they stay x-linked.
         result = self.session.delta(draw_ids, x_mode=x_mode)
         if not result:
+            self._empty.set_state(EMPTY_HEADLINE, data_quality.no_laps_body_for(self.session))
             self._stack.setCurrentIndex(1)  # E1: no laps -> empty-state placeholder
             self._sync_chart_controls(plotted=False)  # L6-07: nothing to toggle on a blank page
             self._datum_x = None

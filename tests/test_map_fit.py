@@ -58,7 +58,9 @@ def _session(n=240, lap_span=None, valid=(0,), best=0, gap_at=None):
     s.tx, s.ty, s.tt, s.tv = xs, ys, t, speed
     line = SimpleNamespace(first=SimpleNamespace(x=-210.0, y=0.0),
                            second=SimpleNamespace(x=-190.0, y=0.0))
-    s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]))
+    # laps_count: the crossings `lap_count()` reports, which the zero-lap copy reads.
+    s.laps = SimpleNamespace(sectors=SimpleNamespace(start_line=line, sector_lines=[]),
+                             laps_count=lambda: 0)
     a, b = lap_span or (0, n)
     s.lap_trace_segments = lambda lid: [SimpleNamespace(xs=xs[a:b], ys=ys[a:b], measured=True)]
     s.lap_channels = lambda lid: {"t_telemetry_s": t[a:b], "x_m": xs[a:b], "y_m": ys[a:b],

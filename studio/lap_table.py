@@ -1998,6 +1998,8 @@ class LapTable(QWidget):
         # E1: flip to the centred empty-state placeholder when there are no laps to show (else the
         # populated table). Done first so the panel never flashes a blank grid; the footer below
         # the stack refreshes to em-dashes on its own (every accessor returns None with no laps).
+        if not rows:   # the body names a single crossing when that is the cause (data_quality)
+            self._empty.set_state(NO_LAPS_HEADLINE, data_quality.no_laps_body_for(self.session))
         self._stack.setCurrentIndex(1 if not rows else 0)
 
         # N sector lines split each lap into N+1 sub-sectors; show one split column per
@@ -3117,7 +3119,7 @@ class CornerTable(QWidget):
             # grid, the charts panel, the map and the Library dialog now make, so the three cases
             # differ in their words and in nothing else.
             self.empty.set_state(*(
-                (NO_LAPS_HEADLINE, data_quality.no_laps_body())
+                (NO_LAPS_HEADLINE, data_quality.no_laps_body_for(self.session))
                 if not self._has_selectable_laps() else
                 ("No lap selected.",
                  "Pick a lap in the Laps tab to see its corner times, apex speeds and grip.")
