@@ -30,6 +30,7 @@ user must always be able to tell measured GPS from inferred fill.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -95,6 +96,13 @@ def find_gaps(times, gap_s: float = GAP_TIME_S, med_dt: float | None = None):
             "n_missing": max(int(round(dts[i] / med_dt)) - 1, 1),
         })
     return gaps
+
+
+def needs_donors(times, gap_s: float = GAP_TIME_S, med_dt: float | None = None) -> bool:
+    """True when `reconstruct_lap` would read its donor list for these kept-point times: some gap
+    is longer than a SHORT_GAP_MISSING spline bridge. A clean lap, or one whose every gap is
+    short, is drawn without ever looking at a donor — so its caller need not build one."""
+    return any(g["n_missing"] > SHORT_GAP_MISSING for g in find_gaps(times, gap_s, med_dt))
 
 
 def _similarity_map(src, dst_a, dst_b):
@@ -166,7 +174,7 @@ def _donor_subpath(donor_xy, pa, pb):
     return sub, endpoint_err, donor_arc
 
 
-def reconstruct_lap(xs, ys, times, donors,
+def reconstruct_lap(xs, ys, times, donors: Sequence[dict] | Callable[[], Sequence[dict]],
                     gap_s: float = GAP_TIME_S, med_dt: float | None = None):
     """Build the drawable, gap-filled segment list for one lap.
 
@@ -178,6 +186,10 @@ def reconstruct_lap(xs, ys, times, donors,
         {"xy": (M,2) array, "name": str, "is_reference": bool}. Cross-lap donors come first;
         the georeferenced reference centerline (if any) comes LAST so borrow is always
         preferred. The lap being reconstructed should NOT be in its own donor list.
+        May instead be a zero-argument callable returning that list: it is called at most once,
+        and only when a gap actually needs a donor (`needs_donors`) — so a caller whose donor
+        list is costly to build (LapRenderCache's reference-centerline fit, ~0.2 s) pays nothing
+        for a clean lap or one with only short gaps.
 
     Returns
     -------
@@ -198,6 +210,7 @@ def reconstruct_lap(xs, ys, times, donors,
     segments: list[Segment] = []
     fills: list[dict] = []
     cursor = 0  # next un-emitted measured index
+    donor_list: Sequence[dict] | None = None  # `donors`, built at the first gap that reads it
     for g in gaps:
         i, j = g["i"], g["j"]
         # Emit the measured run up to and including the gap's "before" point.
@@ -228,10 +241,12 @@ def reconstruct_lap(xs, ys, times, donors,
             # Borrow is always preferred: pick the best REAL-LAP donor; only if none qualifies
             # do we consider the reference. So a reference fill happens iff no lap covers the
             # section — exactly the priority the task brief requires.
-            tol = max(DONOR_ENDPOINT_TOL_FRAC * chord, DONOR_ENDPOINT_TOL_MIN_M)
+            if donor_list is None:
+                donor_list = donors() if callable(donors) else donors
+            tol =max(DONOR_ENDPOINT_TOL_FRAC * chord, DONOR_ENDPOINT_TOL_MIN_M)
             best_lap = None  # (endpoint_err, sub_xy, name)
             best_ref = None  # (endpoint_err, sub_xy, name)
-            for dn in donors:
+            for dn in donor_list:
                 got = _donor_subpath(dn["xy"], pa, pb)
                 if got is None:
                     continue
