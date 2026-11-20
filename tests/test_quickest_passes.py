@@ -133,11 +133,11 @@ def _settle(seconds=0.1):
         time.sleep(0.005)
 
 
-def _window():
+def _window(path=None):
     from studio.app import StudioWindow
     for k in ("critical", "warning", "information"):
         setattr(QMessageBox, k, staticmethod(lambda *a, **_kw: QMessageBox.Ok))
-    win = StudioWindow([_demo_path()])
+    win = StudioWindow([path or _demo_path()])
     deadline = time.time() + 60
     while win.view is None and time.time() < deadline:
         _settle(0.02)
@@ -2469,6 +2469,97 @@ def test_each_strip_mark_says_what_is_true_of_it_on_a_tie():
     one = stats.quickest_passes(_grid([[3.000], [3.040], [3.3], [3.4], [3.5]])).passes[0]
     m = next(m for m in stats.pass_strip(one, PB_PRECISION_S).marks if m.lap_id == one.lap_id)
     assert strip_mark_tip(m, one).endswith("; 1 more is level"), strip_mark_tip(m, one)
+
+
+# ------------------------------------------------------------------ too few laps: say why
+
+def _few_laps_path(laps: int) -> str:
+    """A synthetic recording of the demo's circuit with `laps` timed laps (0 or 1): the real
+    loader on real GPMF, as the discovery round's "one" / "zero" cases. The stock driver's
+    cold-tyre slice needs three laps, so a 0-lap one drives at form 1.0 everywhere."""
+    key = f"few{laps}"
+    if key not in _DEMO:
+        import numpy as np
+
+        from studio.dev import make_demo as md
+        from studio.dev import synth_gopro as sg
+        _DEMO[key + "dir"] = tempfile.TemporaryDirectory(prefix=f"quickest_{key}_")
+        orig = sg._driver
+
+        def flat(rng, circuit, n):
+            nearest, grip, brake = orig(rng, circuit, max(n, 3))
+            return nearest, np.ones_like(grip[:n]), np.ones_like(brake[:n])
+        sg._driver = flat if laps < 3 else orig
+        try:
+            rec = sg.generate(os.path.join(_DEMO[key + "dir"].name, "rec"), laps=laps,
+                              chapters=1, origin=md.DEMO_ORIGIN)
+        finally:
+            sg._driver = orig
+        (_DEMO[key],) = rec.paths
+    return _DEMO[key]
+
+
+def test_the_corner_walk_on_one_lap_says_why_it_has_nothing_to_play():
+    """Corner times need a few clean laps, so on a one-lap session NO pass plays. ⌥→ said "No
+    later corner to play: this is the last one with a pass on lap 1" — untrue, and the real reason
+    thrown away. It now says the refusal's own sentence; a lap with passes keeps its "last one"
+    (test_a_quickest_walk_ends_on_the_corner_not_on_a_lap)."""
+    win = _window(_few_laps_path(1))
+    try:
+        view, bar = win.view, win.statusBar()
+        assert len(win.session.valid_lap_ids()) == 1
+        lap = win.session.lap_at_time(view._playback.applied_t)
+        assert lap is not None, "the playhead opens on the one lap"
+        first = win.session.corners.corner_list()[0].cid
+        for step in (+1, -1):
+            assert not view.step_corner_pass(step)
+            said = bar.currentMessage()
+            assert said == view.lap_pass_refusal(lap, first), said
+            assert said.startswith("No corner times to play here:") and "with a pass" not in said
+        win._next_corner_action.trigger()                   # ⌥→ / ⌘K, the same words
+        assert bar.currentMessage().startswith("No corner times to play here:")
+    finally:
+        _close(win)
+
+
+def test_the_corner_walk_with_no_complete_lap_says_so():
+    """No complete lap: the corner list is empty too, and the walk said "No corners on this track
+    yet" on a known 7-corner track. It says what every other surface says for that state."""
+    from studio import data_quality
+    win = _window(_few_laps_path(0))
+    try:
+        assert win.session.valid_lap_ids() == []
+        for step in (+1, -1):
+            assert not win.view.step_corner_pass(step)
+            assert win.statusBar().currentMessage() == data_quality.NO_LAPS_HEADLINE
+    finally:
+        _close(win)
+
+
+def test_a_key_on_a_disabled_transport_button_says_its_reason():
+    """C (and ⌘K "Toggle compare mode") clicked the Compare button even while it was disabled,
+    below two valid laps: nothing happened and nothing was said, the reason living only on the
+    button's tooltip. The status line now says that tooltip — one sentence, one source. G, the
+    same one-line shape, does the same for a g-meter toggle a recording cannot have."""
+    win = _window(_few_laps_path(1))
+    try:
+        v, bar = win.view.video, win.statusBar()
+        assert not v.compare_btn.isEnabled()
+        bar.clearMessage()
+        QTest.keyClick(win, Qt.Key_C)
+        _settle()
+        assert not v.compare_btn.isChecked() and not win.view._comparing()
+        assert bar.currentMessage() == v.compare_btn.toolTip(), bar.currentMessage()
+        assert "needs ≥2 valid laps" in bar.currentMessage()
+        bar.clearMessage()
+        v.gmeter_btn.setEnabled(False)                       # what a recording with no g gets
+        v.gmeter_btn.setToolTip("No accelerometer data in this recording")
+        was = v.gmeter_btn.isChecked()
+        win.toggle_gmeter()
+        assert v.gmeter_btn.isChecked() == was
+        assert bar.currentMessage() == "No accelerometer data in this recording"
+    finally:
+        _close(win)
 
 
 if __name__ == "__main__":

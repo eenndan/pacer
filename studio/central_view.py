@@ -2206,8 +2206,9 @@ class CentralView(QWidget):
         being studied, the previous / next corner — on the same lap, or, when that pass came from
         Corners ▸ Quickest passes, that corner's quickest pass. With none, the corner before /
         after the playhead on its lap. Corners a lap cannot play are stepped over; at either end of
-        the lap it stops and says so. A walk stays in the group it started in: from a SECTOR pass
-        it steps the sectors (S2 → S3), from a corner pass or the playhead the corners."""
+        the lap it stops and says so; on a lap with no pass at all it says the refusal's own why.
+        A walk stays in the group it started in: from a SECTOR pass it steps the sectors
+        (S2 → S3), from a corner pass or the playhead the corners."""
         subject = self._live_subject()   # a pass that was LEFT walks from the playhead instead
         noun = "corner"
         order = [c.cid for c in self.session.corners.corner_list()]
@@ -2215,7 +2216,10 @@ class CentralView(QWidget):
             noun = "sector"
             order = [sector_key(c) for c in range(self.session.effective_sector_count() + 1)]
         if not order:
-            self.statusNotice.emit("No corners on this track yet")
+            # With no complete lap the corner list is empty too, but the reason is the laps: the
+            # sentence every other surface uses for that state, not "no corners".
+            self.statusNotice.emit(data_quality.NO_LAPS_HEADLINE if not self.session.valid_lap_ids()
+                                   else "No corners on this track yet")
             return False
         if subject is not None:
             lap, here, origin = subject
@@ -2243,6 +2247,12 @@ class CentralView(QWidget):
             for cid in candidates:
                 if self.lap_pass_refusal(lap, cid) is None:
                     return self.play_lap_pass(lap, cid)
+            why = self.lap_pass_refusal(lap, (candidates or order)[0])
+            if why is not None and all(self.lap_pass_refusal(lap, c) is not None for c in order):
+                # This lap has no pass to play at all (1-2 laps: corner times need a few clean
+                # ones), so "the last one with a pass" would be untrue: say the refusal's own why.
+                self.statusNotice.emit(why)
+                return False
         edge, way = ("first", "earlier") if step < 0 else ("last", "later")
         if origin == PASS_FROM_QUICKEST:
             # This walk crosses laps (each corner's quickest pass), so "on lap N" would be untrue.
