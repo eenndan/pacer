@@ -532,7 +532,8 @@ class PlotsView(QWidget):
         self._fit_x_range: tuple[float, float] | None = None
         # The corner window a played pass holds the charts on (`hold_frame`), re-framed after every
         # refresh() until released: a lap-boundary crossing in the clip's lead-in re-draws the laps.
-        self._held_frame: tuple[float, float] | None = None
+        # (x0, x1, context): see frame_span.
+        self._held_frame: tuple[float, float, float] | None = None
         # The frozen y-range refresh() fitted, BEFORE any legend headroom — what every legend
         # placement starts from, so a resize re-derives the headroom rather than compounding it.
         self._fit_y_range: tuple[float, float] | None = None
@@ -2182,20 +2183,21 @@ class PlotsView(QWidget):
         self._scrub_to(span.x0)
         self._update_readouts()
 
-    def frame_span(self, x0: float, x1: float) -> None:
+    def frame_span(self, x0: float, x1: float, context: float = 1.0) -> None:
         """Zoom the charts (x only, as `N` does) onto plot-x [x0, x1] with the span's own width of
         context on each side, so the approach and the exit are both on screen: the answer to
         "where did I lose it" is rarely inside the loss itself. `N` and a Coaching row's Compare
-        (a corner's window) frame through this one rule; `N`'s walk back out restores the lap."""
-        pad = x1 - x0
+        (a corner's window) frame through this one rule; `N`'s walk back out restores the lap.
+        `context` scales that margin (a long sector's own width either side is most of the lap)."""
+        pad = (x1 - x0) * context
         self.p_speed.setXRange(x0 - pad, x1 + pad, padding=0)
 
-    def hold_frame(self, x0: float, x1: float) -> None:
+    def hold_frame(self, x0: float, x1: float, context: float = 1.0) -> None:
         """`frame_span` a corner window and HOLD it — a played pass's zoom: kept across a refresh
         (the clip's lead-in can cross a lap boundary, which re-draws the laps) until
         `release_frame`, or until the driver takes the x-range (`heldFrameTaken`)."""
-        self._held_frame = (float(x0), float(x1))
-        self.frame_span(x0, x1)
+        self._held_frame = (float(x0), float(x1), float(context))
+        self.frame_span(x0, x1, context)
         self._place_speed_legend()   # the corner it chose was clear of the WHOLE lap's curves
         self._update_readouts()
 

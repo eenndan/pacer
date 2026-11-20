@@ -51,6 +51,7 @@ from . import APP_NAME, export_compare, export_data, export_video, prefs, share_
 from ._signal import fmt_hms, lap_label, plural
 from .overlay import LAYOUT_PREFIX, broadcast, corner_cards, ghost
 from .session import fmt_time
+from .stats import sector_col
 from .workers import VideoExportWorker
 
 _log = logging.getLogger(__name__)
@@ -933,6 +934,8 @@ class ExportController:
         if got is None:
             return None
         lap, cid, label = got
+        if sector_col(cid) is not None:   # a sector pass: not exportable yet (its menu says so)
+            return None
         return int(lap), int(cid), label
 
     def _scope_plan(self, scope: str, lap: int, lead: float,

@@ -2078,23 +2078,82 @@ def quickest_passes(matrix: CornerMatrix | None, *, clock_estimated: bool = Fals
     partial = {lap for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
                if not all(v is not None and ok for v, ok in zip(row, res, strict=True))}
     partial |= set(lap_ids) - set(rows)
-    out: list[QuickestPass] = []
-    for col, cid in enumerate(matrix.cids):
-        marks = tuple((int(lap), float(val))
-                      for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
-                      if (val := row[col]) is not None and res[col])
-        counted = sorted((t, lap) for lap, t in marks)
-        if not counted:
-            out.append(QuickestPass(cid, None, None, (), None, 0, ()))
-            continue
-        best, lap = counted[0]
-        gaps = [(_ms(t) - _ms(best)) / 1000 for t, _ in counted[1:]]
-        level = [(lp, t) for (t, lp), g in zip(counted[1:], gaps, strict=True)
-                 if is_level(g, level_s)]
-        behind = tuple(int(rows[r]) for r in range(len(rows)) if matrix.is_behind(r, col))
-        out.append(QuickestPass(cid, best, lap, tuple(lp for lp, _ in level),
-                                round(gaps[0], 3) if gaps else None, len(counted),
-                                tuple(t for _, t in level), marks, matrix.medians[col], behind))
+    out = [_quickest_column(matrix, rows, col, cid, level_s, matrix.resolved)
+           for col, cid in enumerate(matrix.cids)]
+    return QuickestPasses(out, level_s, tuple(sorted(partial)))
+
+
+def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=None
+                     ) -> QuickestPass:
+    """Column `col` of a heat grid (CornerMatrix or SplitMatrix: `cells`, `medians`, `is_behind`)
+    as one QuickestPass keyed `key`. `resolved` (the corner grid's) masks cells not counted."""
+    marks = tuple((int(lap), float(val))
+                  for r, (lap, row) in enumerate(zip(rows, matrix.cells, strict=True))
+                  if (val := row[col]) is not None and (resolved is None or resolved[r][col]))
+    counted = sorted((t, lap) for lap, t in marks)
+    if not counted:
+        return QuickestPass(key, None, None, (), None, 0, ())
+    best, lap = counted[0]
+    gaps = [(_ms(t) - _ms(best)) / 1000 for t, _ in counted[1:]]
+    level = [(lp, t) for (t, lp), g in zip(counted[1:], gaps, strict=True) if is_level(g, level_s)]
+    behind = tuple(int(rows[r]) for r in range(len(rows)) if matrix.is_behind(r, col))
+    return QuickestPass(key, best, lap, tuple(lp for lp, _ in level),
+                        round(gaps[0], 3) if gaps else None, len(counted),
+                        tuple(t for _, t in level), marks, matrix.medians[col], behind)
+
+
+# ------------------------------------------------------------------------ quickest sectors
+# The same view over the driver's own SECTORS (Stats ▸ SPLITS cells, one source), when he has drawn
+# sector lines. A STRETCH is what a pass goes through: a corner, keyed by its cid (>= 1), or a
+# sector, keyed by `sector_key` (< 0) — ONE int key, so every pass path (play, zoom, the subject,
+# the walk, ⌘K) carries a sector exactly as it carries a corner.
+#
+# WHY A WIDER LEVEL STEP FOR A SPLIT. A split is timed where the lap crosses two sector lines, and
+# `docs/ACCURACY.md` publishes its σ: "0.11 s at recording C's GPS noise", truth matrix row 2
+# (`sector.interior_sd` at noise 2, SPLIT_SIGMA_S unrounded), several times a lap time's. The
+# HOUSE RULE for "level" is 2σ of the difference of two figures that each carry σ, DIFF_2SIGMA_K ×
+# σ: the lap step `library.PB_PRECISION_S` is 2√2 × 0.0247 s, and refused-2026-09 §26 gated sector
+# chips at 2√2 × this same split σ ("The gate is then 0.30 s", `clip_refusals.GATE_K` is this
+# constant). So two splits closer than SECTOR_LEVEL_S (0.30 s) are LEVEL. Measured
+# (studio/dev/probes/sector_quickest.py, the demo and seeds 1 and 2, 2/3/4 sector lines, 84
+# sectors): no sector's TRUE quickest is 0.07 s clear of its next (the largest true margin is
+# 0.055 s), yet at 0.07 s four sectors at noise 2 and ten at noise 4.5 would wear a lone ★, six of
+# those ten on the wrong lap; at SECTOR_LEVEL_S none does, at any noise. On such sessions every
+# sector is a tie: the view names the quickest lap, plays each level lap in turn, and says why.
+DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
+SPLIT_SIGMA_S = 0.106567
+SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
+
+
+def sector_key(col: int) -> int:
+    """The stretch key of sector column `col` (0-based: S1 is -1)."""
+    return -(int(col) + 1)
+
+
+def sector_col(key: int) -> int | None:
+    """The sector column a stretch key names, or None for a corner's cid."""
+    return -int(key) - 1 if key < 0 else None
+
+
+def sector_level_floor(clock_estimated: bool) -> float:
+    """The step under which two splits read level: SECTOR_LEVEL_S, or an estimated clock's wider
+    one should it ever be wider."""
+    return max(SECTOR_LEVEL_S, rolling_level_floor(clock_estimated))
+
+
+def quickest_sectors(matrix: SplitMatrix | None, *, clock_estimated: bool = False,
+                     lap_ids=()) -> QuickestPasses | None:
+    """Per sector of `matrix` (the SPLITS grid), its quickest split and the splits level with it,
+    keyed `sector_key(col)`. Laps of `lap_ids` with a blank row, or no row, are not counted.
+    None without the grid (no sector lines, or under MATRIX_MIN_LAPS laps)."""
+    if matrix is None:
+        return None
+    level_s = sector_level_floor(clock_estimated)
+    rows = list(matrix.lap_ids)
+    partial = {lap for lap, row in zip(rows, matrix.cells, strict=True) if None in row}
+    partial |= set(lap_ids) - set(rows)
+    out = [_quickest_column(matrix, rows, col, sector_key(col), level_s)
+           for col in range(matrix.columns)]
     return QuickestPasses(out, level_s, tuple(sorted(partial)))
 
 

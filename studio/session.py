@@ -2784,6 +2784,92 @@ class Session:
             self.corner_matrix(), clock_estimated=bool(self.timing_quality.media_clock),
             lap_ids=sorted(set(self.valid_lap_ids()) | set(self.excluded_lap_ids())))
 
+    def split_matrix(self) -> stats_service.SplitMatrix | None:
+        """The Stats page's SPLITS grid (`stats.split_matrix` over `consistency_lap_ids`), cut into
+        EFFECTIVE sector columns (a collapsed line emits no boundary: `effective_sector_count`).
+        None with no sector line or too few laps. The one source of every sector time a surface
+        prints or plays."""
+        n_cols = self.effective_sector_count() + 1
+        if n_cols < 2:
+            return None
+        ids = self.consistency_lap_ids()
+        return stats_service.split_matrix(
+            ids, [self.lap_sector_splits(i) for i in ids], columns=n_cols)
+
+    def quickest_sectors(self) -> stats_service.QuickestPasses | None:
+        """Corners ▸ Quickest passes' sector rows: per sector of the SPLITS grid, its quickest
+        split with the splits level with it under the split's own step (`stats.quickest_sectors`).
+        None without sector lines or the grid."""
+        return stats_service.quickest_sectors(
+            self.split_matrix(), clock_estimated=bool(self.timing_quality.media_clock),
+            lap_ids=sorted(set(self.valid_lap_ids()) | set(self.excluded_lap_ids())))
+
+    # ---- a STRETCH: what a played pass goes through, a corner (cid) or a sector (stats.sector_key)
+    # The play path (CentralView.play_corner_pass and everything that reads its subject) asks these
+    # and never which kind it holds.
+    def has_stretch(self, key: int) -> bool:
+        col = stats_service.sector_col(key)
+        if col is None:
+            return any(c.cid == key for c in self.corners.corner_list())
+        return 0 <= col <= self.effective_sector_count()
+
+    def stretch_label(self, key: int) -> str:
+        """"C3" for a corner, "S2" for a sector."""
+        col = stats_service.sector_col(key)
+        if col is not None:
+            return f"S{col + 1}"
+        found = [c.label for c in self.corners.corner_list() if c.cid == key]
+        return found[0] if found else f"C{key}"
+
+    def stretch_clip(self, lap_id: int, key: int) -> tuple[float, float] | None:
+        """The telemetry-clock (start, end) of lap `lap_id`'s pass clip through `key`. A corner's is
+        `CornerModel.pass_clip`; a sector's runs from PASS_LEAD_S before the line it starts at to
+        PASS_TAIL_S after the line it ends at, those instants read off the same chord interpolation
+        as the lap's SPLITS cells (`lap_sector_splits`), so the clip shows exactly the split timed."""
+        col = stats_service.sector_col(key)
+        if col is None:
+            return self.corners.pass_clip(lap_id, key)
+        splits = self.lap_sector_splits(lap_id)
+        if not 0 <= col < len(splits):
+            return None
+        t0 = float(self._lap_columns(lap_id)[0][0])
+        enter = t0 + sum(splits[:col])
+        return (enter - corner_model.PASS_LEAD_S, enter + splits[col] + corner_model.PASS_TAIL_S)
+
+    def stretch_plot_window(self, key: int, mode: str) -> tuple[float, float] | None:
+        """`key`'s window on the charts' shared axis in `mode`: a corner's enter → exit
+        (`corner_plot_window`), a sector's line → line, placed as the charts' sector guide lines
+        are (`sector_plot_positions`), S1 from the lap start and the last sector to the lap end."""
+        col = stats_service.sector_col(key)
+        if col is None:
+            return self.corner_plot_window(key, mode)
+        best = self.best_lap_id()
+        if best is None:
+            return None
+        td = self._lap_time_dist(best)
+        if td is None:
+            return None
+        edges = [0.0, *self.sector_boundary_distances(best), float(td[1][-1])]
+        if not 0 <= col < len(edges) - 1:
+            return None
+        xs = self._best_odometer_plot_positions(["a", "b"], edges[col:col + 2], mode)
+        return (float(xs[0][1]), float(xs[1][1])) if len(xs) == 2 else None
+
+    def stretch_time(self, lap_id: int, key: int) -> float | None:
+        """Lap `lap_id`'s counted time through `key`: its CORNERS BY LAP cell (matched on track at
+        both edges) or its SPLITS cell — the figures Quickest passes names. None when not counted."""
+        col = stats_service.sector_col(key)
+        if col is not None:
+            splits = self.split_matrix()
+            if splits is None or lap_id not in splits.lap_ids or col >= splits.columns:
+                return None
+            return splits.cells[splits.lap_ids.index(lap_id)][col]
+        corners = self.corner_matrix()
+        if corners is None or lap_id not in corners.lap_ids or key not in corners.cids:
+            return None
+        row, col = corners.lap_ids.index(lap_id), corners.cids.index(key)
+        return corners.cells[row][col] if corners.resolved[row][col] else None
+
     def typical_passes(self) -> dict[int, stats_service.TypicalPass]:
         """cid → that corner's typical pass beside the best lap's (`CornerMatrix.typical_pass`:
         the CORNERS BY LAP column's typical, which is the median a Coaching row's Time lost is
