@@ -535,7 +535,9 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         view.compare._set_pane_badge(0, 0.2)
         view.compare._set_seam(0.2)
         assert view.video._cell_a.badge.text() == theme.format_delta_run(0.2, arrow=False)
+        assert view.video._cell_a._badge_colour is None, "neutral: no colour, not just no arrow"
         assert view.video.seam.value.text() == theme.format_delta_run(0.2, arrow=False)
+        assert view.video.seam.value.colour() is None
         # a pane scrubbed out of its clip: the anchor goes, the whole-lap Δ under the plain caption
         seam, ba, _bb, cap_now = _panes_at(view, clip_a[1] + 10.0, xb + 0.2)
         assert view.compare.pass_anchor() is None and cap_now == f"lap {a + 1} vs lap {b + 1}"
