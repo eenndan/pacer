@@ -2927,6 +2927,13 @@ def test_f_and_its_command_while_comparing_say_why_the_video_cannot_fill_the_scr
         _settle()
         assert bar.currentMessage() == reason, repr(bar.currentMessage())
         assert not view.is_video_focused()
+        # ...and so does a double-click on either pane's video (it said nothing before)
+        for pane in (v.pane, v.secondary):
+            bar.clearMessage()
+            QTest.mouseDClick(pane.video, Qt.LeftButton)
+            _settle()
+            assert bar.currentMessage() == reason, repr(bar.currentMessage())
+            assert not view.is_video_focused() and view._comparing()
         # ...and out of compare F does what it always did, saying nothing
         v.compare_btn.click()
         _settle()
@@ -2936,6 +2943,13 @@ def test_f_and_its_command_while_comparing_say_why_the_video_cannot_fill_the_scr
         _settle()
         assert view.is_video_focused() and bar.currentMessage() == ""
         QTest.keyClick(win, Qt.Key_F)
+        _settle()
+        assert not view.is_video_focused()
+        # ...and a double-click enters video focus and leaves it, saying nothing
+        QTest.mouseDClick(v.pane.video, Qt.LeftButton)
+        _settle()
+        assert view.is_video_focused() and bar.currentMessage() == ""
+        QTest.mouseDClick(v.pane.video, Qt.LeftButton)
         _settle()
         assert not view.is_video_focused()
     finally:
