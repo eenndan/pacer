@@ -6,6 +6,49 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-11-20
+
+A minor release: 6 pull requests, #647, #648 and #650 to #653, Wave 15 of the campaign. Its theme:
+every exported frame shows the footage at the instant its overlay is drawn for, and the loose ends
+of 0.19.0 are tied.
+
+### Highlights
+
+- **Every exported frame is the right frame.** Each frame of every video export is now the source
+  frame showing at its overlay's instant; a 59.94 fps synthetic source exported at 30 fps used to
+  run one source frame (17 ms) ahead on nearly every frame (#647)
+- **No repeated first frame, no lag across a seam.** A clip no longer opens on the same picture
+  twice, and a clip across a chapter seam no longer runs one frame behind its telemetry (#647)
+- **The Coaching compare's held gap is a measurement.** After the exit a Coaching row's Compare
+  holds the gap as timed, uncoloured, as "Compare with my typical pass" does (#653)
+- **The highlighted row is the pass you compare.** A ⌘K compare highlights its row in Quickest
+  passes, even after the arrow keys had moved the highlight (#651)
+- **Quickest passes stays smooth on long sessions.** Each Every lap strip is laid out once per
+  size: on a 70-lap synthetic session a full repaint went from 77 to 12 ms, same pixels (#648)
+- **Every export gives its window back.** The progress window is freed when an export ends (#650),
+  and a double-click on the video while comparing says why it cannot fill the screen (#652)
+
+### Changed
+
+- A Coaching row's Compare holds the gap after the corner's exit as timed, uncoloured, as "Compare
+  with my typical pass" does: the best lap's pass is partly a lucky one. Its hover says so. (#653)
+
+### Fixed
+
+- A double-click on the video while comparing two laps now says why the video cannot fill the
+  screen, as F does, instead of doing nothing. (#652)
+- Corners ▸ Quickest passes: while a pass is compared with your typical pass, its row is the one
+  highlighted, also when the compare came from ⌘K after the arrow keys had moved the highlight.
+  (#651)
+- Each video export's progress window is freed once it ends: it used to stay behind, hidden, one
+  more per export for the rest of the session. (#650)
+- Corners ▸ Quickest passes stays smooth on long sessions: each Every-lap strip is laid out once per
+  size, not on every repaint (70-lap synthetic: 77 → 12 ms a repaint), same pixels. (#648)
+- Every exported frame now shows the footage at the instant its overlay is drawn for: a clip no
+  longer opens on a repeated frame or runs a frame (17-33 ms) ahead of its telemetry. (#647)
+- Across a chapter seam, an export's picture and sound no longer start 21 ms early on a recording
+  whose chapters report their audio priming as their start. (#647)
+
 ## [0.19.0] — 2026-11-20
 
 A minor release: 6 pull requests, #639 and #641 to #645, Wave 14 of the campaign. Its theme: a
@@ -2571,7 +2614,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/eenndan/pacer/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/eenndan/pacer/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/eenndan/pacer/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/eenndan/pacer/compare/v0.16.0...v0.17.0
