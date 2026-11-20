@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox, QScrollBar  # noqa: E402
 
@@ -591,12 +591,24 @@ def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
                     if not over:
                         continue
                     bar = bars[0]
-                    # no ▶ pixel under the bar WIDGET (it would take that pixel's click), not
-                    # merely under its painted grip
-                    bar_x = t.viewport().mapFrom(t, bar.geometry().topLeft()).x()
+                    # no ▶ pixel under the bar's HIT AREA (it would take that pixel's click), not
+                    # merely under its painted grip: the region the bar takes input on, and the
+                    # widget Qt's own hit test finds at every ▶ edge pixel, which is the ▶
+                    hit = bar.mask().boundingRect() if not bar.mask().isEmpty() else bar.rect()
+                    hit_x = t.viewport().mapFrom(t, bar.pos() + hit.topLeft()).x()   # bar: a table child
+                    # ...and the grip keeps the theme's SPACE_S, all of it inside the hit area
+                    img = bar.grab().toImage()
+                    grip = [x for x in range(img.width())
+                            if img.pixelColor(x, theme.CTRL_H // 2).alpha() > 0]
+                    assert len(grip) >= theme.SPACE_S and grip[0] >= hit.left(), (grip, hit)
                     for r in range(t.rowCount()):
                         btn = t.cellWidget(r, QUICKEST_PLAY_COL)
-                        assert btn.geometry().right() < bar_x, (size, n, r, btn.geometry(), bar_x)
+                        if not t.viewport().rect().intersects(btn.geometry()):
+                            continue
+                        assert btn.geometry().right() < hit_x, (size, n, r, btn.geometry(), hit_x)
+                        edge = btn.geometry().topRight() + QPoint(0, btn.height() // 2)
+                        at = t.childAt(t.viewport().mapTo(t, edge))
+                        assert at is btn or btn.isAncestorOf(at), (size, n, r, at)
                     assert bar.geometry().right() < t.width()
                     own = t.verticalScrollBar()
                     assert bar.pageStep() == own.pageStep(), (size, n, bar.pageStep(),
@@ -622,8 +634,8 @@ def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
                                                                   own.pageStep())
                 finally:
                     _close(win)
-            if size == (1280, 800):
-                assert base[1] == (False, 73), "the demo's corner strip at 1280×800: retarget"
+            # the demo's corner strip, which the bar may not narrow (75 has 3 px over STRIP_MIN_PX)
+            assert base[1] == (False, {(1280, 800): 75, (1440, 900): 92}[size]), (size, base)
     finally:
         prefs.set_corners_view("lap")
 

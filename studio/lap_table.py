@@ -38,7 +38,16 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QFontMetricsF, QPainter, QPen, QPolygonF
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFontMetrics,
+    QFontMetricsF,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -3650,8 +3659,7 @@ class QuickestPassTable(QWidget):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(QUICKEST_LEVEL_COL, QHeaderView.Stretch)
         hdr.setSectionResizeMode(QUICKEST_PLAY_COL, QHeaderView.Fixed)
-        hdr.resizeSection(QUICKEST_PLAY_COL,   # + the rows bar's overlap (see _place_bar)
-                          theme.ICON_BTN.width() + theme.SPACE_S + theme.SPACE_XXS)
+        hdr.resizeSection(QUICKEST_PLAY_COL, theme.ICON_BTN.width() + theme.SPACE_S)
         # The strip: after the words, before ▶ (see QUICKEST_STRIP_COL), sized by `_fit_strip`.
         self.table.horizontalHeaderItem(QUICKEST_STRIP_COL).setTextAlignment(
             Qt.AlignLeft | Qt.AlignVCenter)
@@ -3722,12 +3730,15 @@ class QuickestPassTable(QWidget):
 
     def _place_bar(self) -> None:
         """The bar over the viewport's right edge, beside the ▶ (at its cell's left, see
-        _GroupRuleDelegate), on the table's frame. The ▶ column is the button plus SPACE_S plus
-        SPACE_XXS, and the bar's track spans that spare lane and the frame, so no ▶ pixel is under
-        the bar (it takes their clicks) and the grip, inset SPACE_XXS, paints beside them."""
+        _GroupRuleDelegate), on the table's frame: its track spans the ▶ column's spare SPACE_S
+        and the frame, and its grip, inset SPACE_XXS, paints in that lane beside the buttons. The
+        track's first SPACE_XXS would lie over each ▶'s last pixels and take their clicks, so the
+        bar's mask leaves that inset out: a masked-out pixel passes its click to the ▶ under it,
+        and the grip keeps its full theme width (the column, and so the strip, pays nothing)."""
         port = self.table.viewport().geometry()
         w = self.rows_bar.sizeHint().width()
         self.rows_bar.setGeometry(QRect(self.table.width() - w, port.top(), w, port.height()))
+        self.rows_bar.setMask(QRegion(theme.SPACE_XXS, 0, w - theme.SPACE_XXS, port.height()))
         self.rows_bar.raise_()
         # The page step follows once the layout has settled: Qt sets the table's AFTER its range,
         # and a viewport resize reaches this filter before the table relays it out, so a copy made
