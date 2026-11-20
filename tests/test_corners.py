@@ -695,6 +695,50 @@ def test_corner_table_populates_and_highlights():
     print("ok corner table: rows, formats, purple session-best, no-op set_lap, range guard")
 
 
+def test_corner_delta_inside_timing_precision_is_not_coloured():
+    """cool/corner-delta-neutral (disc9). The Corners "Lap N" Δ column coloured anything past
+    `theme.delta_colour`'s 5 ms band: −0.01 s green, +0.02 s red, beside the Laps table's Δbest bar
+    and the export corner cards ("≈ best"), which call the same gap level under
+    `library.PB_PRECISION_S`. Inside it the figure is still printed, in the neutral base colour;
+    decided on the printed value, so a raw 0.0674 ("+0.07") is coloured. Same with a reference."""
+    _qapp()
+    import dataclasses
+
+    from PySide6.QtGui import QColor
+
+    from studio import library, theme
+    from studio.lap_table import BASE_COLOR, CornerTable
+    cs, cum_a, sp_a, el_a, cum_b, sp_b, el_b = _two_laps()
+    ref = C.lap_corner_stats(cs, float(cum_a[-1]), cum_a, sp_a * 3.6, el_a)
+    st = C.lap_corner_stats(cs, float(cum_a[-1]), cum_b, sp_b * 3.6, el_b, ref=ref)
+    assert len(st) >= 2, st
+    step = library.PB_PRECISION_S
+    cases = [-0.01, 0.02, 0.0674, -(step + 0.05), step - 0.006, 0.15]
+    cs_n = [cs[i % len(cs)] for i in range(len(cases))]
+    st_n = [dataclasses.replace(st[i % len(st)], delta=d) for i, d in enumerate(cases)]
+    stub = _StubSession(cs_n, {0: [dataclasses.replace(s, delta=0.0) for s in st_n], 1: st_n},
+                        [s.time - 1.0 for s in st_n])
+    table = CornerTable(stub)
+    table.set_lap(1)
+    neutral = BASE_COLOR
+    got = {}
+    for r, d in enumerate(cases):
+        item = table.table.item(r, 2)
+        assert item.text() == fmt_signed(d, 2), (item.text(), d)       # the figure is still shown
+        got[d] = item.foreground().color()
+    assert got[-0.01] == neutral and got[0.02] == neutral, got
+    assert got[step - 0.006] == neutral, got                            # "+0.06" is level
+    assert got[0.0674] == QColor(theme.behind_colour()), got            # prints "+0.07"
+    assert got[-(step + 0.05)] == QColor(theme.ahead_colour()), got
+    assert got[0.15] == QColor(theme.behind_colour()), got
+    # The header says what the colour means, for both baselines.
+    tip = table.table.horizontalHeaderItem(2).toolTip()
+    assert f"under {step:.2f} s is inside timing precision" in tip, tip
+    from studio.lap_table import _corner_col_tips
+    assert f"under {step:.2f} s" in _corner_col_tips("kmh", "Other day")[2]
+    print("ok corner Δ: level inside timing precision, coloured outside, header says so")
+
+
 def test_map_corner_markers_overlay():
     _qapp()
     import pyqtgraph as pg
