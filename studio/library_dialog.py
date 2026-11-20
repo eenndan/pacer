@@ -22,7 +22,7 @@ Layout::
     │                                                 │     carries a trust tag
     │  Dry · air 24° · MG Yellow #3, 42 laps · 11/82  │  ← the selected row's SESSION RECORD…
     │  Not like-for-like vs your best here: Dry vs Wet│  ← …and whether it and the row holding the
-    │  PB progression — <track>   [best-vs-date plot] │     track's best lap were the same kind of day
+    │  Best lap by session — <track>  [best vs date]  │     track's best lap were the same kind of day
     ├───────────────────────────────────────────────┤
     │                [Session record…] [Open] [Close] │
     └───────────────────────────────────────────────┘
@@ -306,6 +306,20 @@ def _pb_axis_pen():
     """The axis line — and the grid, since pyqtgraph's AxisItem falls back from tickPen() to pen().
     A bare colour here would let pyqtgraph build its own one-DEVICE-pixel pen (W5-01)."""
     return pg.mkPen(C.border, width=theme.line_width(1))
+
+def _pb_ring_pen():
+    """The ring round a session that set a PB: the line's own accent, at the line's weight."""
+    return pg.mkPen(C.accent, width=theme.line_width(2))
+
+
+# WHAT THE CHART DRAWS, NAMED FOR IT (cool/library-chart-name). It was titled "PB progression" over
+# a line through EVERY session's best lap, so a slower day drew the line upward under a title that
+# said the personal best had progressed there. The line stays — each session's best is the data a
+# driver reads off it — and the title says so; the sessions that SET a PB (`library.pb_steps`, the
+# rule the summary line above counts "N PBs" by) are ringed, so the summary's count and the rings
+# are one number.
+PB_CHART_TITLE = "Best lap by session"
+
 
 # The progress-summary trend word per library.track_summary["trend"]. "single"/"none" add nothing
 # (there's no trend to read from one/zero sessions) so they map to no word. "level" is the latest
@@ -905,7 +919,7 @@ class LibraryDialog(QDialog):
         root.addWidget(self._compare_line)
 
         # ----- per-track PB-progression mini-chart (best lap vs recording date)
-        self._pb_title = QLabel("PB progression")
+        self._pb_title = QLabel(PB_CHART_TITLE)
         self._pb_title.setProperty("role", "PanelHeader")
         root.addWidget(self._pb_title)
         self.pb_plot = pg.PlotWidget(axisItems={
@@ -940,6 +954,9 @@ class LibraryDialog(QDialog):
             pen=_pb_pen(), symbol="o", symbolSize=7,
             symbolBrush=_PB_BRUSH, symbolPen=_pb_symbol_pen())
         self.pb_plot.addItem(self._pb_curve)
+        # …and a ring round each session that set a PB (PB_CHART_TITLE), drawn over its marker.
+        self._pb_rings = pg.ScatterPlotItem(symbol="o", size=15, pen=_pb_ring_pen(), brush=None)
+        self.pb_plot.addItem(self._pb_rings)
         # Centred in-chart empty-state label, shown when <2 points to plot (see _show_pb). It is a
         # CHILD of the ViewBox, so it is positioned in the box's PIXEL space (_centre_pb_empty) and
         # re-centred on every resize — a data-space position would put it ~1.8e9 px off-screen on a
@@ -1133,6 +1150,7 @@ class LibraryDialog(QDialog):
             self.pb_plot.getAxis(side).setPen(_pb_axis_pen())
         self._pb_curve.setPen(_pb_pen())
         self._pb_curve.setSymbolPen(_pb_symbol_pen())
+        self._pb_rings.setPen(_pb_ring_pen())
 
     def done(self, result: int):
         """Remember a size the user changed on the way out — both Open (accept) and Close/Escape
@@ -1601,7 +1619,8 @@ class LibraryDialog(QDialog):
         instruction that cannot be carried out)."""
         if not track:
             self._pb_curve.setData([], [])
-            self._pb_title.setText("PB progression")
+            self._pb_rings.setData([], [])
+            self._pb_title.setText(PB_CHART_TITLE)
             self._set_pb_axes(False)
             if not self._entries:
                 message = "Analyse two sessions at the same track to see your progression"
@@ -1609,7 +1628,7 @@ class LibraryDialog(QDialog):
                 message = ("This recording's track isn't in your database yet, so there's nothing "
                            "to chart")
             else:
-                message = "Select a recording to see its track's PB progression"
+                message = "Select a recording to see its track's best laps"
             self._set_pb_empty(message)
             return
         # A track driven both ways round charts the selected row's way only: two layouts' laps on
@@ -1622,6 +1641,8 @@ class LibraryDialog(QDialog):
                 xs.append(x)
                 ys.append(best)
         self._pb_curve.setData(xs, ys)
+        steps = _library.pb_steps(ys)
+        self._pb_rings.setData([xs[i] for i in steps], [ys[i] for i in steps])
         self._set_pb_axes(bool(ys))
         # U2: the summary line above counts EVERY row of the track ("3 sessions") while this title
         # counted only the charted ones ("best over 2 sessions") — two totals for one track on one
@@ -1631,8 +1652,10 @@ class LibraryDialog(QDialog):
         over = (f"{len(ys)} of {_plural(total, 'session')}" if total > len(ys)
                 else _plural(len(ys), "session"))
         if len(ys) >= 2:
+            # The rings' legend rides in the title, only when there is a ring to explain.
+            rings = f" · {_plural(len(steps), 'PB')} ringed" if steps else ""
             self._pb_title.setText(
-                f"PB progression — {name}  ({fmt_time(min(ys))} best over {over})")
+                f"{PB_CHART_TITLE} — {name}  ({fmt_time(min(ys))} best over {over}){rings}")
             self._set_pb_empty(None)
             self._frame_pb(xs, ys)
         elif len(ys) == 1:
@@ -1640,22 +1663,22 @@ class LibraryDialog(QDialog):
             # independently by three review lanes): this branch drew the amber point AND put
             # "Not enough sessions on this track yet…" across the middle of the plot, so the
             # sentence was painted THROUGH the datum it was denying. The title already carries the
-            # count and the time — "PB progression — <track>  (1 session: 1:08.201)" — which is the
-            # same fact stated where it does not overlap the mark. Empty state and data layer are
-            # mutually exclusive now, in both directions.
-            self._pb_title.setText(f"PB progression — {name}  ({over}: {fmt_time(ys[0])})")
+            # count and the time — "Best lap by session — <track>  (1 session: 1:08.201)" — which is
+            # the same fact stated where it does not overlap the mark. Empty state and data layer
+            # are mutually exclusive now, in both directions.
+            self._pb_title.setText(f"{PB_CHART_TITLE} — {name}  ({over}: {fmt_time(ys[0])})")
             self._frame_pb(xs, ys)
             self._set_pb_empty(None)
         else:
             left_out = [f"{why[r]} {r}" for r in _library.PB_LEFT_OUT_REASONS if why[r]]
             if left_out:
                 # The rows exist; say what kept each one off, in the tags the table rows print.
-                self._pb_title.setText(f"PB progression — {name}  (0 of {_plural(total, 'session')}"
-                                       " charted)")
+                self._pb_title.setText(f"{PB_CHART_TITLE} — {name}  (0 of "
+                                       f"{_plural(total, 'session')} charted)")
                 self._set_pb_empty(f"{_plural(total, 'session')} on this track, but no dated best "
                                    f"lap that counts as a PB: {', '.join(left_out)}")
             else:
-                self._pb_title.setText(f"PB progression — {name}  (no dated best laps)")
+                self._pb_title.setText(f"{PB_CHART_TITLE} — {name}  (no dated best laps)")
                 self._set_pb_empty("Not enough sessions on this track yet to chart progression")
 
     def _set_pb_axes(self, plotted: bool):

@@ -2686,6 +2686,26 @@ CORNER_COLUMNS = ["Corner", "Time", "Δbest", "Apex", "Δapex", "Entry", "Exit",
 # 8 px NARROWER than "Δbest", so it cannot squeeze the seven columns beside it.
 CORNER_DELTA_COL = 2
 CORNER_DELTA_REF_HEADER = "Δref"
+# What the Δ column's colour means, on its header tooltip (both baselines).
+CORNER_DELTA_LEVEL_NOTE = (f"A gap under {PB_PRECISION_S:.2f} s is inside timing precision, so it "
+                           "is not coloured as a difference.")
+
+
+def corner_delta_colour(delta: float) -> str | None:
+    """The Corners table's Δ (time) colour: neutral (None) inside timing precision, else the
+    shared ahead/behind colour (cool/corner-delta-neutral).
+
+    `theme.delta_colour`'s 5 ms dead band painted −0.01 s green and +0.02 s red beside the Laps
+    table's Δbest bar and the export's corner cards ("≈ best"), which call the same figure level
+    under `library.PB_PRECISION_S` — so one corner gap read as gained, lost and level at once.
+    Decided on the PRINTED value (`fmt_signed(d, 2)`, as the corner cards decide): 0.0674 prints
+    "+0.07", and a "+0.07" in neutral beside a card's "+0.07 s vs best" in loss colour would be two
+    readings of one string. The same step serves Δref: a corner time is a duration inside ONE
+    recording, so a reference from another session adds no clock offset to it, and no wider
+    cross-session corner floor exists for it to use (the corner cards' "≈ ref" uses this one)."""
+    if within_timing_precision(float(fmt_signed(delta, 2).replace("−", "-"))):
+        return None
+    return theme.delta_colour(delta)
 
 
 def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str]:
@@ -2700,11 +2720,12 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
     # wording stays exactly what it has always been, and the reference wording reads as English.
     if ref_label:
         delta_tip = (f"Δ vs the same corner on the reference recording's lap — {ref_label} "
-                     f"(seconds; − is faster)")
+                     f"(seconds; − is faster). {CORNER_DELTA_LEVEL_NOTE}")
         apex_tip = (f"Δ apex speed vs the reference recording's lap — {ref_label} "
                     f"({u}; + is faster)")
     else:
-        delta_tip = "Δ vs the best lap's same corner (seconds; − is faster)"
+        delta_tip = ("Δ vs the best lap's same corner (seconds; − is faster). "
+                     f"{CORNER_DELTA_LEVEL_NOTE}")
         apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster)"
     return [
         "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
@@ -2808,7 +2829,8 @@ CORNER_NAME_COL_PX = 88
 class CornerTable(QWidget):
     """Corners-mode table: one row per detected corner for the selected lap.
 
-    Session-best corner time is purple+bold; Δ columns use the shared delta colour.
+    Session-best corner time is purple+bold; the Δ time column is coloured only outside timing
+    precision (`corner_delta_colour`), Δapex uses the shared delta colour.
     Read-only/unsorted — track order is the meaning. A row click emits ``corner_clicked``
     so the app can ring that corner's apex on the map (B4: the Stats CORNERS and Coaching
     rows already did this — these rows were the odd surface out)."""
@@ -3165,7 +3187,7 @@ class CornerTable(QWidget):
                 # resolution, so the printed time and the mark cannot disagree.
                 (f"{st.time:.{PRINT_DECIMALS}f}", None),
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
-                 (fmt_signed(st.delta, 2), theme.delta_colour(st.delta))),
+                 (fmt_signed(st.delta, 2), corner_delta_colour(st.delta))),
                 (f"{conv(st.apex_speed, u):.{SPEED_DECIMALS}f}", None),
                 # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
                 # rule (negative = green) is applied to the NEGATED speed delta.
