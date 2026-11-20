@@ -28,11 +28,17 @@ TWO GUARDS, because either alone is weak:
   * a BEHAVIOURAL one — actually build an `OverlayPainter` on a real QThread, drive frames through
     it, paint one, and require the process's widget census to be unchanged.
 
+AND THE BLAS POOL (2026-11-20). The export forks ffmpeg off the GUI thread; a fork while another
+thread was inside a threaded numpy matmul stranded it for good (test_export_pass hung in CI inside
+Session.load). `import studio` now makes numpy's BLAS one thread; the last two tests hold that,
+by its count and by racing a forking thread against the g-meter's matmul in a child process.
+
 Run: QT_QPA_PLATFORM=offscreen python tests/test_export_thread_safety.py
 """
 import ast
 import inspect
 import os
+import subprocess
 import sys
 import textwrap
 
@@ -295,6 +301,57 @@ def test_the_live_widget_still_owns_the_same_filter(_=None):
     assert len(a.hull_pts) > 10 and a.peak_right > 0.1, a
     widget.deleteLater()
     print("ok  the live widget's dial state is the exporter's, field for field")
+
+
+# ------------------------------------------------------------------ the BLAS pool and fork()
+# The export forks ffmpeg off the GUI thread (the dialog's warm-up probes, every render) while
+# another thread may be inside numpy: Session.load on the load worker, or on the main thread in a
+# test. numpy's OpenBLAS shuts its worker threads down in the parent before every fork(), so a
+# threaded BLAS call in flight loses its workers and spins in exec_blas forever (studio/__init__.py
+# has the numbers). `import studio` makes the pool one thread; these hold it.
+_RACE = textwrap.dedent("""
+    import subprocess, sys, threading, time
+    import numpy as np
+    sys.path.insert(0, sys.argv[2])
+    import studio
+    stop = False
+    def spawn():   # the export probes' call shape: a forked child with captured pipes
+        while not stop:
+            subprocess.run(["true"], capture_output=True, timeout=10)
+    threading.Thread(target=spawn, daemon=True).start()
+    # the g-meter's rotation in Session.load (gmeter.compute: P @ R.T), at the demo's IMU length:
+    # past OpenBLAS's threading threshold (m*n*k > 262144)
+    P = np.random.default_rng(0).normal(size=(147800, 2))
+    R = np.array([[0.96, -0.30], [0.30, 0.96]])
+    end = time.monotonic() + float(sys.argv[1])
+    while time.monotonic() < end:
+        P @ R.T
+    stop = True
+    print(studio.BLAS_THREADS)
+""")
+
+
+def test_the_blas_pool_is_one_thread_once_studio_is_imported():
+    import studio
+    assert studio.BLAS_THREADS == 1, (
+        f"numpy's BLAS has {studio.BLAS_THREADS!r} threads after `import studio` (None: no OpenBLAS "
+        "setter found — a different BLAS; check it is fork-safe before relaxing this)")
+    print("ok  numpy's BLAS runs one thread once studio is imported")
+
+
+def test_a_fork_beside_a_matmul_never_strands_it():
+    # In a child, because a stranded matmul never returns: the child is killed at the timeout and
+    # the test fails, instead of the whole file hanging until CTest's. Unfixed, the same loop hung
+    # 10 runs of 10 even when it ran only 0.3 s (on the dev Mac; the stack is CI's hang dump's).
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out = subprocess.run([sys.executable, "-c", _RACE, "2", root], capture_output=True,
+                             text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("a matmul beside a forking thread never returned: the BLAS pool lost "
+                             "its workers to a fork (see studio/__init__.py)") from None
+    assert out.returncode == 0 and out.stdout.strip() == "1", (out.returncode, out.stderr[-2000:])
+    print("ok  2 s of matmuls beside a thread forking children: every one returned")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,10 @@ per-lap arrays, so this module never touches the bound core.
 
 The reference centerline is ONE circuit's shape, so it is offered as a donor only when
 `studio/reference.py` accepts the fit as that circuit; on any other track `donors_for`
-returns the cross-lap donors alone (see `reference_centerline_xy`).
+returns the cross-lap donors alone (see `reference_centerline_xy`). The fit is LAZY: it runs
+only for a session where some lap has a gap long enough to read a donor (`gapfill.needs_donors`),
+on the first draw after a (re-)segmentation (`_warm_reference`) — never for a gap-free session,
+and never on the playback tick.
 
 Cache lifetime — the perf invariant (see Session.set_timing_lines): the draw segments are
 computed once per lap on FIRST DRAW, never per frame, and become stale on re-segmentation
@@ -30,7 +33,7 @@ re-derive an answer that does not move.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 
@@ -54,9 +57,13 @@ class LapRenderCache:
                  valid_lap_ids: Callable[[], list[int]],
                  lap_has_dropout: Callable[[int], bool],
                  lap_time: Callable[[int], float],
-                 trace_times: np.ndarray):
+                 trace_times: np.ndarray,
+                 all_lap_ids: Callable[[], Iterable[int]] | None = None):
         self._lap_xyt = lap_xyt
         self._valid_lap_ids = valid_lap_ids
+        # Every lap the map can draw (out- and in-laps too) — scanned once for a gap that needs a
+        # donor, see _warm_reference. Defaults to the valid laps for a caller that has no others.
+        self._all_lap_ids = all_lap_ids or valid_lap_ids
         self._lap_has_dropout = lap_has_dropout
         self._lap_time = lap_time
         self._trace_times = trace_times
@@ -66,12 +73,16 @@ class LapRenderCache:
         # Lazily-built georeferenced track centerline (fallback donor). NOT cleared on
         # re-segment (see the module docstring).
         self._reference_xy = None
+        # Whether this segmentation's laps were scanned for a donor-needing gap (_warm_reference).
+        self._gaps_scanned = False
 
     def invalidate(self) -> None:
         """Drop the per-lap draw segments — called from Session.set_timing_lines (the single
         re-segmentation point): lap ids/windows and donor traces are all stale after a
-        timing-line change. The reference centerline is deliberately kept (module docstring)."""
+        timing-line change. The reference centerline is deliberately kept (module docstring);
+        the gap scan is redone, because the new laps are new windows."""
         self._segs.clear()
+        self._gaps_scanned = False
 
     def lap_trace_segments(self, lap_id: int) -> list[gapfill.Segment]:
         """Ordered list of `gapfill.Segment` for drawing this lap: measured GPS runs and
@@ -83,10 +94,30 @@ class LapRenderCache:
         if cached is not None:
             return cached
         xs, ys, ts = self._lap_xyt(lap_id)
-        donors = self.donors_for(lap_id)
-        segs, _fills = gapfill.reconstruct_lap(xs, ys, ts, donors, med_dt=self.median_sample_dt())
+        med_dt = self.median_sample_dt()
+        self._warm_reference(med_dt)
+        # The donor list is handed over UNBUILT: reconstruct_lap asks for it only at a gap that
+        # needs one, so a clean lap never builds it — and the reference fit inside it never runs
+        # for a session without such a gap (the demo has none: ~0.2 s saved per open).
+        segs, _fills = gapfill.reconstruct_lap(xs, ys, ts, lambda: self.donors_for(lap_id),
+                                               med_dt=med_dt)
         self._segs[lap_id] = segs
         return segs
+
+    def _warm_reference(self, med_dt: float) -> None:
+        """Run the reference fit NOW, on the first draw after a (re-)segmentation, when any lap
+        has a gap that will read a donor — so its ~0.2 s lands where it always did (the map's
+        first draw, at open or after a timing-line edit) and never on the 30 Hz tick, which draws
+        a lap's segments for the first time when playback crosses into it. A session with no
+        such gap never fits. The scan is one np.diff per lap; the fit itself stays cached."""
+        if self._gaps_scanned:
+            return
+        self._gaps_scanned = True
+        if self._reference_xy is not None:
+            return
+        if any(gapfill.needs_donors(self._lap_xyt(lap)[2], med_dt=med_dt)
+               for lap in self._all_lap_ids()):
+            self.reference_centerline_xy()
 
     def median_sample_dt(self) -> float:
         """Median inter-sample interval over the whole trace (s) — used to size gaps."""

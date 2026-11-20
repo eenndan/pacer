@@ -326,6 +326,7 @@ class Session:
             lap_has_dropout=self.lap_has_dropout,
             lap_time=self.lap_time,
             trace_times=self.tt,
+            all_lap_ids=lambda: range(self.lap_count()),
         )
 
         # Cursor/plot/video-sync coordinate conversions (studio/timeline.py); owns the lap-window

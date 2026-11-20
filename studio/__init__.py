@@ -33,5 +33,43 @@ Run:  pixi run studio [GoPro.MP4 ...]   (or: python -m studio [files])
 # user-visible sentences, fixed in U5). Identifiers are not names and keep their own spelling: the
 # `pacer` package, "~/Library/Application Support/pacer", ".pacer.json" sidecars and the
 # `app.pacer.studio` bundle id.
-__version__ = "0.20.0"
+__version__ = "0.20.1"
 APP_NAME = "Pacer Studio"
+
+
+# ONE BLAS THREAD, FOR THE WHOLE PROCESS, BEFORE ANYTHING RUNS. numpy's OpenBLAS (pthreads) registers
+# a fork handler that shuts its worker threads down in the PARENT before every fork(), and Python's
+# subprocess forks on macOS (posix_spawn only with close_fds=False). A fork from one thread while
+# another is inside a threaded BLAS call takes that call's workers away mid-flight, and the caller
+# spins in OpenBLAS's exec_blas forever: the g-meter's (N, 2) @ (2, 2) in Session.load (threaded
+# from N > 65536, the demo has 147 800) hung for good, 10 of 10 times, beside a thread running
+# subprocess.run(["true"]) in a loop, and test_export_pass hung in CI exactly there while the
+# export dialog's warm-up thread ran its ffmpeg probes. The app forks ffmpeg off the GUI thread
+# (the warm-up probes, every export render) and loads on a worker. Pacer's arrays are a few
+# hundred thousand rows at most, so one thread costs nothing measurable (the PR that added this
+# timed it); a fork can then never strand a worker. tests/test_export_thread_safety.py holds it.
+def _single_threaded_blas() -> int | None:
+    """Set the BLAS pool numpy loaded to one thread; return its thread count after, or None when
+    this numpy's BLAS exposes no OpenBLAS setter (a different BLAS: the test then says so)."""
+    import ctypes
+
+    import numpy  # noqa: F401 — loads the BLAS whose symbols are looked up below
+
+    try:
+        everything = ctypes.CDLL(None)   # dlsym over every image the process has loaded
+    except OSError:
+        return None
+    # numpy's PyPI wheels prefix and suffix OpenBLAS's symbols (scipy-openblas, ILP64); a plain
+    # OpenBLAS build has the bare names.
+    for prefix, suffix in (("scipy_openblas", "64_"), ("scipy_openblas", ""),
+                           ("openblas", "64_"), ("openblas", "")):
+        setter = getattr(everything, f"{prefix}_set_num_threads{suffix}", None)
+        getter = getattr(everything, f"{prefix}_get_num_threads{suffix}", None)
+        if setter is not None and getter is not None:
+            setter.argtypes, getter.restype = [ctypes.c_int], ctypes.c_int
+            setter(1)
+            return int(getter())
+    return None
+
+
+BLAS_THREADS = _single_threaded_blas()

@@ -118,6 +118,41 @@ def test_endpoints_continuous():
     print("test_endpoints_continuous OK")
 
 
+def test_donors_are_built_only_for_a_gap_that_reads_them():
+    """`donors` may be a callable (LapRenderCache hands its list over UNBUILT, because building
+    it runs the ~0.2 s reference-centerline fit). It must be called never for a clean lap or a
+    short (spline) gap, exactly once for a lap with two long gaps — and give the same segments
+    as the built list. On the eager code a callable is iterated as a list and raises."""
+    calls = []
+    donor = make_circle_lap(rot=0.003, scale=1.001)
+    built = [{"xy": np.column_stack([donor[0], donor[1]]), "name": "1", "is_reference": False}]
+
+    def lazy():
+        calls.append(1)
+        return built
+
+    unread = [make_circle_lap(gap=gap) for gap in (None, (80, 83))]  # clean; a short gap
+    for xs, ys, ts in unread:
+        gf.reconstruct_lap(xs, ys, ts, donors=lazy, med_dt=0.1)
+        assert calls == [], "the donor list was built for a lap that never reads it"
+
+    xs, ys, ts = make_circle_lap(gap=(30, 60))
+    keep = np.ones(len(xs), bool)
+    keep[110:140] = False  # a second long gap in the same lap
+    xs, ys, ts = xs[keep], ys[keep], ts[keep]
+    segs, fills = gf.reconstruct_lap(xs, ys, ts, donors=lazy, med_dt=0.1)
+    assert len(calls) == 1, f"the donor list was built {len(calls)} times for one lap"
+    # needs_donors is the same predicate, for a caller that must know before drawing.
+    assert [gf.needs_donors(t, med_dt=0.1) for _x, _y, t in unread] == [False, False]
+    assert gf.needs_donors(ts, med_dt=0.1) is True
+    want, want_fills = gf.reconstruct_lap(xs, ys, ts, donors=built, med_dt=0.1)
+    assert [f["source"] for f in fills] == [f["source"] for f in want_fills] == ["borrow:1"] * 2
+    for got_s, want_s in zip(segs, want, strict=True):
+        assert got_s.measured == want_s.measured
+        assert np.array_equal(got_s.xs, want_s.xs) and np.array_equal(got_s.ys, want_s.ys)
+    print("test_donors_are_built_only_for_a_gap_that_reads_them OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
