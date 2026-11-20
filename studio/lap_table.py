@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
@@ -29,13 +30,14 @@ from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
     QLineF,
+    QPointF,
     QRect,
     QRectF,
     QSize,
     Qt,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QFontMetricsF, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -55,6 +57,7 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -3215,9 +3218,28 @@ class CornerTable(QWidget):
 # 6-11 passes within the 0.07 s timing step. So a row names the quickest lap and how many are
 # level with it, never "the fastest", and activating the same row again plays the next level lap.
 CORNERS_VIEW_LAP, CORNERS_VIEW_QUICKEST = prefs.CORNERS_VIEWS
-QUICKEST_COLUMNS = ["Corner", "Quickest", "Lap", "Level with", ""]
+QUICKEST_COLUMNS = ["Corner", "Quickest", "Lap", "Level with", "", "Every lap"]
 QUICKEST_LEVEL_COL = 3
 QUICKEST_PLAY_COL = 4
+# The strip column (`_PassStripDelegate`): every counted lap's time through the corner. LOGICALLY
+# last, so every other column keeps its index (the menus, ⌘K and the tests address cells by it);
+# the header moves it between the words and ▶, so the words never move when it shows or hides.
+#
+# IT SHOWS ONLY WHERE THE WORDS KEEP THEIR ROOM. Measured on the demo at 1×, the docked panel gives
+# "Level with" and the strip 275 px between them at a 1280×800 window and 292 px at 1440×900. The
+# longest words a row prints there are a cycled row's, "playing lap 14 (2.68) · 11 of 11" (200 px
+# measured as Qt paints them, with the cell's box), and 254 px once Loop adds " · looping". So the
+# strip takes what is left after the longest words THIS session can print without Loop — 75 px at
+# 1280×800, 92 px at 1440×900, STRIP_MAX_PX in a maximised panel — hides below STRIP_MIN_PX, and
+# steps aside while Loop runs (the video is the subject then; the words widen into its place).
+# A 60-lap session's wider digits need 214 px: hidden at 1280×800 docked, 78 px at 1440×900.
+# Never a horizontal scrollbar, never an elided word.
+QUICKEST_STRIP_COL = 5
+STRIP_MIN_PX = 3 * theme.SPACE_XL   # 72: the demo's tightest band (C1, 0.07 of 0.44 s) still 8 px
+STRIP_MAX_PX = 12 * theme.SPACE_L   # 192: wider adds no reading, only distance from the words
+STRIP_ROLE = Qt.UserRole + 5        # (the row's stats.PassStrip, the lap wearing ★ or None)
+STRIP_PLAYING_ROLE = Qt.UserRole + 6   # the lap the row's cycle names (ringed), or None
+LOOPING_SUFFIX = " · looping"
 QUICKEST_BTN = "Quickest passes"
 QUICKEST_BTN_TIP = ("Your quickest pass through each corner, the lap it was on and the laps level "
                     "with it. Click a row (or ↑/↓ and Return) to play that pass; click it again "
@@ -3235,6 +3257,10 @@ QUICKEST_COL_TIPS = [
     "How many other laps took the corner level with it (within the timing step). Hover a cell "
     "for the laps.",
     "Play the pass.",
+    "Every counted lap's time through the corner, one dot each, quickest at the left. The shaded "
+    "band is the timing step from the quickest: the dots inside it are level with it. Dashed: the "
+    "corner's typical pass. Each row has its own scale, so a wide band is a tight corner. Hover a "
+    "dot for its lap.",
 ]
 LEVEL_NOTE_TIP = "Two passes closer than this are level: the timing cannot tell them apart."
 
@@ -3296,6 +3322,216 @@ def quickest_status(label: str, qp, k: int) -> str:
             f"click {label} again {again}")
 
 
+def quickest_cycle_text(qp, k: int | None, running: bool, looping: bool) -> str:
+    """The "Level with" cell: its count, or — for the row last played (`k`, its place in
+    `qp.play_order()`) — which level lap that is, "playing" while its clip runs."""
+    text = quickest_level_text(qp)
+    if k is not None and qp.level_laps:
+        order = qp.play_order()
+        text = (f"{'playing ' if running else ''}lap {lap_label(order[k])} "
+                f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) · {k + 1} of {len(order)}")
+    if k is not None and looping:
+        text += LOOPING_SUFFIX
+    return text
+
+
+def strip_words(label: str, qp, strip, level_s: float, piled: int = 0) -> str:
+    """The strip cell's words (its hover and accessible text): what the dots say. `piled`: marks
+    the cell is too narrow to give a place of their own (see strip_geometry), said in words."""
+    n = len(strip.marks)
+    level = sum(1 for m in strip.marks if m.level)
+    words = f"{plural(n, 'counted lap')} through {label}: "
+    if level > 1:
+        words += f"{level} level with the quickest (within {level_s:.2f} s)"
+    elif qp.next_gap_s is not None:
+        words += f"the quickest alone, the next {qp.next_gap_s:.3f} s slower"
+    else:
+        words += "only one"
+    if qp.typical_s is not None:
+        words += f"; typical {qp.typical_s:.{PRINT_DECIMALS}f}"
+    off = sum(1 for m in strip.marks if m.behind)
+    if off:
+        words += f"; {plural(off, 'lap')} ▼ far slower, off the scale at the right"
+    if piled:
+        words += (f"; {plural(piled, 'lap')} drawn on top of another dot here: hover a pile "
+                  "for its laps")
+    return words + "."
+
+
+def strip_mark_tip(mark, qp, pile=()) -> str:
+    """A hovered dot: its lap and its own time, what it is on the strip, and the other laps drawn
+    in the same place (`pile`, when the cell is too narrow to part them). "The quickest" only for
+    a lone one: on a tie the timing cannot tell which pass is quicker, so each is "level"."""
+    what = ("the quickest" if mark.lap_id == qp.lap_id and qp.alone
+            else "▼ off the scale" if mark.behind
+            else "level with the quickest" if mark.level
+            else "slower than the band")
+    tip = f"Lap {lap_label(mark.lap_id)}: {mark.time_s:.{PRINT_DECIMALS}f} · {what}"
+    if mark.level and mark.lap_id == qp.lap_id and not qp.alone:
+        tip += " (the Quickest column names this lap)"
+    if pile:
+        tip += (f"\n{plural(len(pile) + 1, 'lap')} here: "
+                + ", ".join(lap_label(lap) for lap in (mark.lap_id, *pile)))
+    return tip
+
+
+STRIP_DOT_R = 2.0                    # a mark's radius at 1× (4 px dots: 14 laps in 60 px stay apart)
+STRIP_PILE_R = 1.5                   # ...and when a pile overflows STRIP_STACK at STRIP_DOT_R
+STRIP_RING_PX = 1.5                  # the ring round the lap the row's cycle names
+STRIP_STAR_SCALE = 1.5               # the lone ★ quickest's dot: 4 px of purple read as grey at 1×
+# Where a dot that would cover another goes, in that order, one dot's width apart: five places at
+# STRIP_DOT_R fit a 28 px row with the ring; a pile that overflows them (a 60-lap session's tight
+# corner) gets STRIP_PILE_STACK's nine at STRIP_PILE_R. Only past that are dots drawn on top of
+# each other, and the cell's words and hover then say how many laps sit there.
+STRIP_STACK = (0, -1, 1, -2, 2)
+STRIP_PILE_STACK = (0, -1, 1, -2, 2, -3, 3, -4, 4)
+# The band is a quiet ground under the dots, well under the lap bar's LAP_BAR_ALPHA: at that alpha
+# the level dots (C.text) lost their edge against it; on the selection fill it still shows.
+STRIP_BAND_ALPHA = 64
+
+
+@dataclass(frozen=True)
+class StripLayout:
+    """`strip_geometry`'s result: the level band, the typical's x (None without one), (mark,
+    centre) per mark in lap order, the dot radius used, and `piles` — for each mark drawn on top of
+    another, the laps under it (empty when every mark has a place of its own)."""
+
+    band: QRectF
+    typical: float | None
+    marks: list
+    r: float
+    piles: dict
+
+    @property
+    def piled(self) -> int:
+        return len(self.piles)
+
+    def pile_at(self, centre: QPointF, lap_id: int) -> tuple[int, ...]:
+        """The OTHER laps drawn within one dot of `centre` (a hover on a pile names them all)."""
+        return tuple(m.lap_id for m, c in self.marks if m.lap_id != lap_id
+                     and math.hypot(c.x() - centre.x(), c.y() - centre.y()) < 2 * self.r - 1e-9)
+
+
+def strip_geometry(strip, rect: QRectF) -> StripLayout:
+    """Where `_PassStripDelegate` puts a row's strip inside cell `rect`. The scale runs over the
+    cell less its padding and one ringed dot at each end, and less a gutter at the right when the
+    row has a ▼ to put there, so the ▼ never sits on the slowest dot. A pass that is NOT level
+    (the row's `is_level` rule, never the pixel) is pushed clear of the band — at most one dot's
+    radius, the millisecond the rule rounds — so no position contradicts the rule. Dots that would
+    cover each other stack above and below the line, in time order (see STRIP_STACK)."""
+    pad = theme.SPACE_XS + STRIP_DOT_R + STRIP_RING_PX
+    gutter = 2 * STRIP_DOT_R + theme.SPACE_XS if any(m.behind for m in strip.marks) else 0.0
+    left, width = rect.left() + pad, max(rect.width() - 2 * pad - gutter, 1.0)
+    inset = theme.SPACE_XS
+    band = QRectF(left, rect.top() + inset, strip.band_x * width, rect.height() - 2 * inset)
+    typical = None if strip.typical_x is None else left + strip.typical_x * width
+    mid = rect.center().y()
+    order = sorted(range(len(strip.marks)), key=lambda j: (strip.marks[j].x, j))
+    layout = None
+    for r, stack in ((STRIP_DOT_R, STRIP_STACK), (STRIP_PILE_R, STRIP_PILE_STACK)):
+        centres: dict[int, QPointF] = {}
+        piles: dict[int, tuple[int, ...]] = {}
+        for i in order:
+            m = strip.marks[i]
+            if m.behind:
+                x = left + width + gutter
+            else:
+                x = left + m.x * width
+                if not m.level:
+                    x = max(x, band.right() + r)
+
+            def clear(lv, x=x, r=r, centres=centres):
+                y = mid + lv * 2 * r
+                return min((math.hypot(c.x() - x, c.y() - y) for c in centres.values()),
+                           default=math.inf)
+            lv = next((lv for lv in stack if clear(lv) >= 2 * r - 1e-9), None)
+            if lv is None:
+                lv = max(stack, key=clear)
+                piles[i] = ()
+            centres[i] = QPointF(x, mid + lv * 2 * r)
+        layout = StripLayout(band, typical, [(m, centres[i]) for i, m in enumerate(strip.marks)],
+                             r, piles)
+        if not piles:
+            break
+    assert layout is not None
+    return StripLayout(layout.band, layout.typical, layout.marks, layout.r,
+                       {strip.marks[i].lap_id: layout.pile_at(c, strip.marks[i].lap_id)
+                        for i, c in ((i, layout.marks[i][1]) for i in layout.piles)})
+
+
+class _PassStripDelegate(QStyledItemDelegate):
+    """Paints the Quickest passes strip (see QUICKEST_STRIP_COL / stats.pass_strip) and nothing
+    else: installed on that one column, seven cells. Colours are resolved per paint through the
+    palette accessors, so the colour-blind switch reaches it with no restyle step.
+
+    WHAT EACH MARK IS. The band: the timing step from the quickest, at its true width on the row's
+    own scale. A pass LEVEL with the quickest is a filled dot, and every one is drawn alike, the
+    quickest among them: the timing cannot order them, so the strip does not either. A pass that
+    is not level is a hollow ring, outside the band — shape and colour both, not a shade of grey
+    alone. The quickest takes the purple only when it stands alone AND timing is verified, the ★'s
+    own rule beside it. Dashed: the typical pass (the corner's median, Coaching's). A ▼ cell is a
+    triangle in the gutter at the right edge, off the scale. The lap the row's cycle names wears
+    the accent ring: "2 of 6" visible on the strip."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.paints = 0   # cells painted, for the repaint-cost test
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.text = ""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)   # the row's band, selection and alternate fill
+        data = index.data(STRIP_ROLE)
+        if not data:
+            return
+        self.paints += 1
+        strip, star_lap = data
+        playing = index.data(STRIP_PLAYING_ROLE)
+        rect = QRectF(option.rect)
+        lay = strip_geometry(strip, rect)
+        painter.save()
+        painter.setClipRect(option.rect)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        fill = QColor(theme.C.text_dim)
+        fill.setAlpha(STRIP_BAND_ALPHA)
+        painter.fillRect(lay.band, fill)
+        level_ink, other_ink = QColor(theme.C.text), QColor(theme.C.text_dim)
+        best_ink, behind_ink = QColor(theme.best_sector_colour()), QColor(theme.behind_colour())
+        ring_pen = QPen(other_ink, theme.BORDER_PX)
+        r = lay.r
+        for mark, c in lay.marks:
+            if mark.behind:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(behind_ink)
+                painter.drawPolygon(QPolygonF([QPointF(c.x() - r, c.y() - r - 0.5),
+                                               QPointF(c.x() + r, c.y()),
+                                               QPointF(c.x() - r, c.y() + r + 0.5)]))
+            elif not mark.level:
+                painter.setPen(ring_pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(c, r - theme.BORDER_PX / 2, r - theme.BORDER_PX / 2)
+            else:
+                star = mark.lap_id == star_lap   # alone in its band: nothing else to tell it from
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(best_ink if star else level_ink)
+                painter.drawEllipse(c, r * STRIP_STAR_SCALE if star else r,
+                                    r * STRIP_STAR_SCALE if star else r)
+        if lay.typical is not None:
+            # Over the dots and taller than their stack: under them it hid behind the cluster it
+            # sits in (the demo's C2, C4, C6).
+            painter.setPen(QPen(QColor(theme.C.text_dim), theme.BORDER_PX, Qt.DashLine))
+            painter.drawLine(QLineF(lay.typical, rect.top() + theme.SPACE_XXS, lay.typical,
+                                    rect.bottom() - theme.SPACE_XXS))
+        ringed = next((c for mark, c in lay.marks if mark.lap_id == playing), None)
+        if ringed is not None:
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(theme.C.accent), STRIP_RING_PX))
+            painter.drawEllipse(ringed, r + STRIP_RING_PX, r + STRIP_RING_PX)
+        painter.restore()
+
+
 class QuickestPassTable(QWidget):
     """The Corners tab's "Quickest passes" view: one row per corner — its quickest counted pass
     (`Session.quickest_passes`), the lap, how many laps are level with it, and ▶. Activating a row
@@ -3344,8 +3580,18 @@ class QuickestPassTable(QWidget):
         hdr.setSectionResizeMode(QUICKEST_LEVEL_COL, QHeaderView.Stretch)
         hdr.setSectionResizeMode(QUICKEST_PLAY_COL, QHeaderView.Fixed)
         hdr.resizeSection(QUICKEST_PLAY_COL, theme.ICON_BTN.width() + theme.SPACE_S)
+        # The strip: after the words, before ▶ (see QUICKEST_STRIP_COL), sized by `_fit_strip`.
+        self.table.horizontalHeaderItem(QUICKEST_STRIP_COL).setTextAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter)
+        hdr.setSectionResizeMode(QUICKEST_STRIP_COL, QHeaderView.Fixed)
+        hdr.moveSection(hdr.visualIndex(QUICKEST_STRIP_COL), hdr.visualIndex(QUICKEST_PLAY_COL))
+        self.table.setColumnHidden(QUICKEST_STRIP_COL, True)
+        self.strip_delegate = _PassStripDelegate(self.table)
+        self.table.setItemDelegateForColumn(QUICKEST_STRIP_COL, self.strip_delegate)
+        self._level_need_px = 0   # the longest "Level with" text this session can print, boxed
         self.table.cellClicked.connect(self._on_cell_clicked)
         self.table.installEventFilter(self)
+        self.table.viewport().installEventFilter(self)
         self._num_font = theme.mono_font(theme.TABLE)
         self.empty = EmptyState("")
         self.empty.setVisible(False)
@@ -3358,11 +3604,100 @@ class QuickestPassTable(QWidget):
     def eventFilter(self, obj, event):
         # Return / Enter plays the current row (↑/↓ move it: the table's own keys). Nothing else in
         # the window binds them (see widgets.ActionChip).
-        if (obj is getattr(self, "table", None) and event.type() == QEvent.KeyPress
+        table = getattr(self, "table", None)
+        if (obj is table and event.type() == QEvent.KeyPress
                 and event.key() in (Qt.Key_Return, Qt.Key_Enter)):
             self.activate(self.table.currentRow())
             return True
+        if table is not None and obj is table.viewport():
+            if event.type() == QEvent.Resize:
+                self._fit_strip()
+            elif event.type() == QEvent.ToolTip and self._strip_tip(event):
+                return True
         return super().eventFilter(obj, event)
+
+    def _strip_tip(self, event) -> bool:
+        """A hover on a strip names the lap and time of the dot nearest the pointer."""
+        index = self.table.indexAt(event.pos())
+        data = index.data(STRIP_ROLE) if index.column() == QUICKEST_STRIP_COL else None
+        passes = self.passes()
+        if not data or not 0 <= index.row() < len(passes):
+            return False
+        lay = strip_geometry(data[0], QRectF(self.table.visualRect(index)))
+        p = QPointF(event.pos())
+        mark, c = min(lay.marks, key=lambda mc: (mc[1] - p).manhattanLength())
+        tip = strip_mark_tip(mark, passes[index.row()], lay.pile_at(c, mark.lap_id))
+        QToolTip.showText(event.globalPos(), f"{tip}\n{index.data(Qt.ToolTipRole)}",
+                          self.table.viewport())
+        return True
+
+    def _fit_strip(self) -> None:
+        """Show the strip column only with room for it once the "Level with" words have theirs,
+        and not while Loop runs (see QUICKEST_STRIP_COL), at most STRIP_MAX_PX; the words' column
+        takes the rest."""
+        t = self.table
+        others = sum(t.columnWidth(c) for c in range(QUICKEST_LEVEL_COL)) + \
+            t.columnWidth(QUICKEST_PLAY_COL)
+        room = t.viewport().width() - others - self._level_need_px
+        show = t.rowCount() > 0 and room >= STRIP_MIN_PX and not self._looping
+        if show:
+            t.horizontalHeader().resizeSection(QUICKEST_STRIP_COL, min(room, STRIP_MAX_PX))
+            self._strip_words_at_width()
+        if t.isColumnHidden(QUICKEST_STRIP_COL) == show:
+            t.setColumnHidden(QUICKEST_STRIP_COL, not show)
+
+    def _strip_words_at_width(self) -> None:
+        """Each strip's words at the width it now has: a pile too dense to part is said in them
+        (strip_geometry). Written only when they change: a write is a repaint."""
+        t = self.table
+        cell = QRectF(0, 0, t.columnWidth(QUICKEST_STRIP_COL), theme.GRID_ROW_H)
+        for r, qp in enumerate(self.passes()):
+            item = t.item(r, QUICKEST_STRIP_COL)
+            data = item.data(STRIP_ROLE) if item is not None else None
+            if not data:
+                continue
+            words = strip_words(self.corner_label(qp.cid), qp, data[0], self.level_s(),
+                                strip_geometry(data[0], cell).piled)
+            if item.toolTip() != words:
+                item.setToolTip(words)
+                item.setData(Qt.AccessibleTextRole, words)
+
+    def _measure_level_need(self) -> int:
+        """The widest "Level with" cell this session can print beside the strip — any row cycled
+        to any of its level laps and playing; not looping, when the strip steps aside — with the
+        cell's own box (QSS padding + Qt's text margin)."""
+        t = self.table
+        item = t.item(0, QUICKEST_LEVEL_COL)
+        if item is None:
+            return 0
+        texts = [QUICKEST_COLUMNS[QUICKEST_LEVEL_COL]]
+        for qp in self.passes():
+            texts.append(quickest_level_text(qp))
+            texts += [quickest_cycle_text(qp, k, True, False)
+                      for k in range(len(qp.play_order()))]
+        # Measured the way Qt paints the cell: the text is laid out at its FRACTIONAL advance and
+        # elided when that passes the style's text rect less its text margin. An integer
+        # QFontMetrics advance (176.25 → 176) and a box read off the size hint left the demo's
+        # longest words 1 px short ("… · 11 of…", the review of #627). So: the float advance,
+        # rounded up, plus the box the style really takes round a cell's text, plus a hairline.
+        opt, w = self._level_option(item, 1000)
+        style = t.style()
+        text_rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, t)
+        margin = style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, t) + 1
+        box = w - (text_rect.width() - 2 * margin)
+        fm = QFontMetricsF(opt.font)
+        return math.ceil(max(fm.horizontalAdvance(s) for s in texts)) + box + theme.BORDER_PX
+
+    def _level_option(self, item, width: int):
+        """A "Level with" cell's style option as the delegate paints it, `width` px wide."""
+        t = self.table
+        idx = t.indexFromItem(item)
+        opt = QStyleOptionViewItem()
+        opt.initFrom(t.viewport())
+        opt.widget = t
+        t.itemDelegateForIndex(idx).initStyleOption(opt, idx)
+        opt.rect = QRect(0, 0, width, t.rowHeight(idx.row()) or theme.GRID_ROW_H)
+        return opt, width
 
     def _on_cell_clicked(self, row: int, _col: int) -> None:
         if not is_selection_click():
@@ -3447,9 +3782,11 @@ class QuickestPassTable(QWidget):
             self._paint_playing()
 
     def set_looping(self, on: bool) -> None:
-        """Whether the video's Loop is replaying that pass: its row ends "· looping"."""
+        """Whether the video's Loop is replaying that pass: its row ends "· looping", and the strip
+        steps aside for those words (see QUICKEST_STRIP_COL)."""
         if bool(on) != self._looping:
             self._looping = bool(on)
+            self._fit_strip()
             self._paint_playing()
 
     def forget_cycle(self) -> None:
@@ -3479,20 +3816,21 @@ class QuickestPassTable(QWidget):
         return self._cycle[0], self.passes()[row].play_order()[self._cycle[1]]
 
     def _paint_playing(self) -> None:
-        """The "Level with" cell of the row last played names WHICH level lap is playing."""
+        """The "Level with" cell of the row last played names WHICH level lap is playing, and its
+        strip rings that lap. Only a cell whose value changes is written: a write is a repaint."""
         for r, qp in enumerate(self.passes()):
             item = self.table.item(r, QUICKEST_LEVEL_COL)
             if item is None:
                 continue
-            text = quickest_level_text(qp)
             mine = self._cycle is not None and self._cycle[0] == qp.cid
-            if mine and qp.level_laps:
-                k, order = self._cycle[1], qp.play_order()
-                text = (f"{'playing ' if self._running else ''}lap {lap_label(order[k])} "
-                        f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) · {k + 1} of {len(order)}")
-            if mine and self._looping:
-                text += " · looping"
-            item.setText(text)
+            k = self._cycle[1] if mine else None
+            text = quickest_cycle_text(qp, k, self._running, self._looping)
+            if item.text() != text:
+                item.setText(text)
+            strip = self.table.item(r, QUICKEST_STRIP_COL)
+            ringed = qp.play_order()[k] if k is not None and qp.play_order() else None
+            if strip is not None and strip.data(STRIP_PLAYING_ROLE) != ringed:
+                strip.setData(STRIP_PLAYING_ROLE, ringed)
 
     def refresh(self) -> None:
         """Rebuild from the session (load, re-segment, a reference change)."""
@@ -3551,6 +3889,7 @@ class QuickestPassTable(QWidget):
                     item.setFont(font)
                     item.setToolTip(QUICKEST_STAR_TIP.format(step=self.level_s()))
                 self.table.setItem(r, col, item)
+            self.table.setItem(r, QUICKEST_STRIP_COL, self._strip_item(label, qp, star))
             btn = icon_button("ph.play-fill", tooltip=QUICKEST_PLAY_TIP)
             btn.setFocusPolicy(Qt.NoFocus)
             btn.setEnabled(qp.lap_id is not None)
@@ -3563,8 +3902,23 @@ class QuickestPassTable(QWidget):
             btn.clicked.connect(self._on_play_clicked)
             self.table.setCellWidget(r, QUICKEST_PLAY_COL, btn)
         self._paint_playing()
+        self._level_need_px = self._measure_level_need()
+        self._fit_strip()
         if row >= 0:
             self.table.selectRow(row)
+
+    def _strip_item(self, label: str, qp, star: bool) -> QTableWidgetItem:
+        """Row `qp`'s strip cell: the stats.PassStrip the delegate paints, and its words."""
+        item = QTableWidgetItem("")
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        strip = stats_service.pass_strip(qp, self.level_s())
+        if strip is not None:
+            item.setData(STRIP_ROLE, (strip, qp.lap_id if star else None))
+            words = strip_words(label, qp, strip, self.level_s())
+            item.setToolTip(words)
+            item.setData(Qt.AccessibleTextRole, words)
+        return item
 
     def _needs_laps_body(self) -> str:
         if not self.session.corners.corner_list():

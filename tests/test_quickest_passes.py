@@ -12,7 +12,10 @@ second click on the same row plays the next level lap. These tests pin:
     remembered view, the tab title, the rows, a row's activation reaching the play path with the
     right lap / corner / clip, again → the next level lap, wrapping, the edge states, ★ withheld on
     provisional timing, ⌘K's per-corner rows;
-  * the player's one-shot clip end: it pauses there, and any seek / play / pause drops it.
+  * the player's one-shot clip end: it pauses there, and any seek / play / pause drops it;
+  * each row's strip of every counted pass (`stats.pass_strip`): the row's own cells, the level
+    band at its true width, the typical, the ▼ off the scale, the ring on the lap playing, the
+    room it may take beside the words, and no repaint on a playback tick.
 """
 import os
 import sys
@@ -1405,6 +1408,524 @@ def test_the_hand_shows_only_over_cells_that_play():
         assert hover(3, lead + 1) == Qt.ArrowCursor, "an unmatched cell does not play"
     finally:
         _close(win)
+
+
+# ------------------------------------------------------------------ every lap's time, at a glance
+# (cool/quickest-sparklines) Each row's strip: every counted pass through the corner as a dot on
+# the row's own time scale, quickest at the left, the level band at its true width, the typical
+# dashed, a ▼ cell off the scale, the lap the row's cycle names ringed. Read off the SAME
+# `stats.quickest_passes` result as the row (one source), shown only where the words keep room.
+
+
+def test_the_strip_is_the_rows_own_counted_cells_band_and_typical():
+    from studio.stats import STRIP_MIN_SPAN_STEPS, pass_strip
+    rows = [[3.050, 2.0], [3.000, 2.5], [3.069, 2.6], [3.300, 2.7], [3.020, 2.8], [3.2, 2.9],
+            [9.000, 3.0]]
+    res = [[True, True]] * 5 + [[False, True], [True, True]]
+    qp = stats.quickest_passes(_grid(rows, res))
+    c1 = qp.passes[0]
+    # every COUNTED pass in lap order: lap 5's unmatched cell is not drawn
+    assert c1.marks == ((0, 3.050), (1, 3.000), (2, 3.069), (3, 3.300), (4, 3.020), (6, 9.000))
+    assert c1.typical_s == _grid(rows, res).medians[0]
+    assert c1.behind_laps == (6,), "the grid's ▼ (9.000 s) is the strip's only off-scale mark"
+    s = pass_strip(c1, qp.level_s)
+    assert (s.lo, s.hi) == (3.000, 3.300), "quickest → slowest ON-scale pass"
+    assert abs(s.band_x - PB_PRECISION_S / 0.300) < 1e-12, "the band is the step at true width"
+    assert abs(s.typical_x - (c1.typical_s - 3.0) / 0.3) < 1e-12
+    by_lap = {m.lap_id: m for m in s.marks}
+    assert [m.lap_id for m in s.marks] == [0, 1, 2, 3, 4, 6]
+    assert by_lap[1].x == 0.0 and by_lap[3].x == 1.0
+    assert by_lap[6].behind and by_lap[6].x == 1.0 and not by_lap[6].level
+    # LEVEL is the row's own rule (play_order, is_level on the printed ms), never the pixel
+    assert {m.lap_id for m in s.marks if m.level} == set(c1.play_order()) == {1, 4, 0, 2}
+    assert all(m.x <= s.band_x + 1e-9 for m in s.marks if m.level)
+    # EXACTLY the step behind is not level (the text's rule, on the printed ms), even though its raw
+    # gap (3.070 − 3.000 = 0.06999…) is not more than the step: a pixel rule would call it level
+    edge = pass_strip(stats.quickest_passes(_grid([[3.000], [3.070], [3.069], [3.3], [3.4]]))
+                      .passes[0], PB_PRECISION_S)
+    by_lap = {m.lap_id: m for m in edge.marks}
+    assert by_lap[2].level and not by_lap[1].level, edge
+    # a tight corner: every pass inside one step → the span floors at two steps, the band at half
+    wide = pass_strip(qp.passes[1], qp.level_s)
+    # C2: lap 6's 3.0 is the grid's ▼ (0.30 over the median), so the scale stops at 2.9
+    assert qp.passes[1].alone and qp.passes[1].behind_laps == (6,)
+    assert abs((wide.hi - wide.lo) - 0.9) < 1e-12
+    flat = stats.quickest_passes(_grid([[2.00], [2.01], [2.02], [2.03], [2.04]]))
+    fs = pass_strip(flat.passes[0], flat.level_s)
+    assert abs((fs.hi - fs.lo) - STRIP_MIN_SPAN_STEPS * PB_PRECISION_S) < 1e-12
+    assert abs(fs.band_x - 1 / STRIP_MIN_SPAN_STEPS) < 1e-12
+    # on an estimated clock the band widens with the step, on the same cells
+    est = stats.quickest_passes(_grid(rows, res), clock_estimated=True)
+    assert abs(pass_strip(est.passes[0], est.level_s).band_x - 0.15 / 0.300) < 1e-12
+    # nothing counted, nothing drawn
+    none = stats.quickest_passes(_grid([[2.0, 3.0]] * 5, [[False, True]] * 5))
+    assert none.passes[0].marks == () and pass_strip(none.passes[0], none.level_s) is None
+
+
+def test_the_demo_strips_show_the_lone_quickest_the_habit_and_the_ties():
+    """Not forced, read: C5's quickest alone short of every other dot; C1's planted habit as two
+    clusters far apart; the ties as several dots inside the band."""
+    s = _demo_session()
+    qp = s.quickest_passes()
+    strips = {p.cid: stats.pass_strip(p, qp.level_s) for p in qp.passes}
+    for p in qp.passes:
+        assert len(strips[p.cid].marks) == p.n_counted == 14
+        assert p.typical_s is not None
+    c5 = strips[5]
+    others = [m.x for m in c5.marks if m.lap_id != 9]
+    assert qp.passes[4].alone and min(others) > c5.band_x, "C5's quickest stands alone"
+    xs = sorted(m.x for m in strips[1].marks)
+    gaps = [b - a for a, b in zip(xs, xs[1:], strict=False)]
+    big = max(gaps)
+    assert big > 0.7 and gaps.index(big) == 5, ("C1: six quick passes, a gap of most of the "
+                                                f"scale, eight slow ones: {xs}")
+    for cid in (1, 2, 3, 4, 6, 7):
+        inside = [m for m in strips[cid].marks if m.level]
+        assert len(inside) >= 6 and all(m.x <= strips[cid].band_x + 1e-9 for m in inside)
+    # lap 6's spin at C5 and C6 is the grid's ▼: off the scale, not squashing the rest
+    assert {m.lap_id for c in (5, 6) for m in strips[c].marks if m.behind} == {5}
+
+
+def _strip_table(win, w, h, maximised=False):
+    view = win.view
+    win.resize(w, h)
+    _settle(0.3)
+    view.select_lap_tab(1)
+    if maximised != (view._maximized_panel is view._table_panel):
+        view._toggle_panel_maximized(view._table_panel)
+    _settle(0.3)
+    return view.corners_page.quickest
+
+
+def _painted_whole(t, row, col):
+    """Whether cell (row, col)'s text is painted WHOLE, measured as Qt paints it: the style's text
+    rect less its text margin, against the text's fractional advance (and its elision). A size
+    hint is not the paint: it passed while the cell read "… · 11 of…" (the review of #627)."""
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+    idx = t.model().index(row, col)
+    opt = QStyleOptionViewItem()
+    opt.initFrom(t.viewport())
+    opt.widget = t
+    t.itemDelegateForIndex(idx).initStyleOption(opt, idx)
+    opt.rect = t.visualRect(idx)
+    style = t.style()
+    avail = (style.subElementRect(QStyle.SE_ItemViewItemText, opt, t).width()
+             - 2 * (style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, t) + 1))
+    fm = QFontMetricsF(opt.font)
+    return (fm.horizontalAdvance(opt.text) <= avail
+            and fm.elidedText(opt.text, Qt.ElideRight, avail) == opt.text), (opt.text, avail)
+
+
+def _strip_room_everywhere():
+    """The fit, at whatever device pixel ratio this process runs: docked at 1280×800 and 1440×900
+    and in a maximised panel, every row's "Level with" words painted whole in every state — its
+    count, each level lap cycled, playing, and with Loop on — no scrollbar, the strip shown beside
+    them (stepping aside under Loop). Returns the strip widths."""
+    from studio.lap_table import QUICKEST_LEVEL_COL, QUICKEST_STRIP_COL
+    prefs.set_corners_view("quickest")
+    win = _window()
+    widths = {}
+    try:
+        t = win.view.corners_page.quickest.table
+        for size in ((1440, 900, False), (1280, 800, False), (1440, 900, True),
+                     (1280, 800, True)):
+            q = _strip_table(win, *size)
+            assert not t.isColumnHidden(QUICKEST_STRIP_COL), (size, t.viewport().width(),
+                                                               q._level_need_px)
+            widths[size] = t.columnWidth(QUICKEST_STRIP_COL)
+            assert t.rowCount() == 7
+            states = [(None, False, False)] + [
+                ((qp.cid, k), running, looping) for qp in q.passes()
+                for k in range(len(qp.play_order())) for running in (False, True)
+                for looping in (False, True)]
+            longest = ""
+            for cycle, running, looping in states:
+                q._cycle, q._running = cycle, running
+                q.set_looping(looping)
+                q._paint_playing()
+                assert t.isColumnHidden(QUICKEST_STRIP_COL) == looping, size
+                for r in range(7):
+                    whole, why = _painted_whole(t, r, QUICKEST_LEVEL_COL)
+                    assert whole, (size, cycle, running, looping, why)
+                    longest = max(longest, why[0], key=len)
+                assert not t.verticalScrollBar().isVisible(), size
+                assert not t.horizontalScrollBar().isVisible(), size
+            assert longest.endswith("· 11 of 11 · looping"), longest
+            q.set_looping(False)
+            q._cycle, q._running = None, False
+            q._paint_playing()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+    return widths
+
+
+def test_the_strip_shows_only_where_the_words_keep_their_room():
+    """Docked at 1280×800 and 1440×900, and in a maximised panel, the strip takes what the words
+    leave. Never a scrollbar, never an elided word, in any state a row prints (C2 cycled to its
+    11th level lap is the longest); while Loop runs it steps aside and the longer "· looping" words
+    fit too. The words never move when it shows or hides."""
+    from studio.lap_table import (
+        QUICKEST_LEVEL_COL,
+        QUICKEST_PLAY_COL,
+        QUICKEST_STRIP_COL,
+        STRIP_MAX_PX,
+        STRIP_MIN_PX,
+        QuickestPassTable,
+    )
+    widths = _strip_room_everywhere()
+    assert all(STRIP_MIN_PX <= w for w in widths.values()), widths
+    assert widths[(1440, 900, True)] == widths[(1280, 800, True)] == STRIP_MAX_PX, widths
+    # between the words and ▶: showing it never moves the words
+    q = QuickestPassTable(_demo_session())
+    hdr = q.table.horizontalHeader()
+    assert hdr.visualIndex(QUICKEST_STRIP_COL) == hdr.visualIndex(QUICKEST_PLAY_COL) - 1
+    assert hdr.visualIndex(QUICKEST_LEVEL_COL) == QUICKEST_LEVEL_COL
+    assert q.table.horizontalHeaderItem(QUICKEST_STRIP_COL).text() == "Every lap"
+    print("strip widths", widths)
+
+
+def test_the_words_are_whole_at_two_device_pixels_per_point_too():
+    """The same fit at QT_SCALE_FACTOR=2 (a Retina screen's device pixel ratio), in a child
+    process: the ratio is fixed when the QApplication starts."""
+    import subprocess
+    code = ("import sys; sys.path.insert(0, 'tests'); import test_quickest_passes as T; "
+            "print('widths', T._strip_room_everywhere())")
+    # The child is jailed in its own right (AGENTS.md rule 2): it builds a window and writes prefs.
+    env = {**os.environ, "QT_SCALE_FACTOR": "2", "QT_QPA_PLATFORM": "offscreen",
+           "PACER_APP_SUPPORT_JAIL": "1", "PACER_NO_MEDIA": "1"}
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env, capture_output=True,
+                       text=True, timeout=300)
+    assert r.returncode == 0, (r.stdout[-2000:], r.stderr[-4000:])
+    assert "widths {" in r.stdout, r.stdout[-2000:]
+
+
+def _paint_cell(delegate, table, row, col, margin=12):
+    """Paint one cell through the delegate into an image with `margin` px of transparency round
+    it: (image, the cell's rect inside it)."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+    w, h = table.columnWidth(col), table.rowHeight(row)
+    img = QImage(w + 2 * margin, h + 2 * margin, QImage.Format_ARGB32)
+    img.fill(0)
+    opt = QStyleOptionViewItem()
+    opt.initFrom(table.viewport())
+    opt.state &= ~QStyle.State_HasFocus      # no current-cell outline: only what the strip paints
+    cell = QRect(margin, margin, w, h)
+    opt.rect = QRect(cell)
+    opt.widget = table
+    p = QPainter(img)
+    delegate.paint(p, opt, table.model().index(row, col))
+    p.end()
+    return img, cell
+
+
+def test_the_strip_paints_each_mark_where_its_time_is_and_nothing_outside_its_cell():
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QColor
+
+    from studio.lap_table import (
+        QUICKEST_STRIP_COL,
+        STRIP_DOT_R,
+        STRIP_PLAYING_ROLE,
+        STRIP_RING_PX,
+        STRIP_ROLE,
+        strip_geometry,
+    )
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900, maximised=True)
+        t = q.table
+        rect = QRectF(t.visualRect(t.model().index(0, QUICKEST_STRIP_COL)))
+        for r, qp in enumerate(q.passes()):
+            strip, star_lap = t.item(r, QUICKEST_STRIP_COL).data(STRIP_ROLE)
+            assert strip == stats.pass_strip(qp, q.level_s()), "one source: the row's own result"
+            lay = strip_geometry(strip, rect)
+            band, typical, marks, rad = lay.band, lay.typical, lay.marks, lay.r
+            assert len(marks) == qp.n_counted and lay.piled == 0, (r, len(marks), lay.piles)
+            pad = theme.SPACE_XS + STRIP_DOT_R + STRIP_RING_PX
+            gutter = 2 * STRIP_DOT_R + theme.SPACE_XS if qp.behind_laps else 0
+            span_px = rect.width() - 2 * pad - gutter        # the row's scale, lo → hi
+            assert band.left() == rect.left() + pad
+            # each dot at its own time on the row's scale — a pass NOT level pushed clear of the
+            # band (one radius at most) — the quickest at the band's left edge, ▼ in the gutter
+            for m, c in marks:
+                want = band.left() + m.x * span_px
+                if m.behind:
+                    want = band.left() + span_px + gutter
+                elif not m.level:
+                    assert c.x() - rad >= band.right() - 1e-9, (r, m, "a not-level dot on the band")
+                    assert c.x() - want <= rad + 1e-9, (r, m)
+                    want = max(want, band.right() + rad)
+                assert abs(c.x() - want) < 1e-9, (r, m)
+            assert next(c.x() for m, c in marks if m.lap_id == qp.lap_id) == band.left()
+            on_scale = [c.x() for m, c in marks if not m.behind]
+            for m, c in marks:
+                if m.behind:   # the gutter: a ▼ never sits on the slowest dot (C5)
+                    assert c.x() - max(on_scale) >= 2 * rad, (r, c.x(), max(on_scale))
+            # the band in px is the step on this row's scale: band_px / span_px == step / span
+            assert abs(band.width() / span_px - q.level_s() / (strip.hi - strip.lo)) < 1e-9
+            assert abs(typical - (band.left() + strip.typical_x * span_px)) < 1e-9
+            assert all(rect.contains(c) for _m, c in marks)
+            assert star_lap == (qp.lap_id if qp.alone else None), r
+        # paint the cycled C3 row: the ring is round the lap the cycle names, nothing leaks out
+        q._cycle, q._running = (3, 1), True
+        q._paint_playing()
+        assert t.item(2, QUICKEST_STRIP_COL).data(STRIP_PLAYING_ROLE) == 6
+        img, cell = _paint_cell(q.strip_delegate, t, 2, QUICKEST_STRIP_COL)
+        for y in range(img.height()):
+            for x in range(img.width()):
+                if not cell.contains(x, y):
+                    assert img.pixel(x, y) == 0, f"painted outside the cell at {x},{y}"
+        strip = t.item(2, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0]
+        marks = strip_geometry(strip, QRectF(cell)).marks
+        centre = next(c for m, c in marks if m.lap_id == 6)
+        # a pass NOT level is a hollow ring (shape, not only a grey), a level one a filled dot:
+        # the C3 row's isolated ones, read at their centres
+        def isolated(m, c):
+            return all(o is m or (o_c - c).manhattanLength() > 8 for o, o_c in marks)
+        hollow = [c for m, c in marks if not m.level and not m.behind and isolated(m, c)]
+        filled = [c for m, c in marks if m.level and isolated(m, c)]
+        assert hollow and filled, "the C3 row has isolated dots of both kinds"
+        for c in hollow:
+            px = QColor.fromRgba(img.pixel(int(c.x()), int(c.y())))
+            assert px.alpha() < 64 or px.lightness() < 100, ("a hollow ring's centre", px.name())
+        for c in filled:
+            px = QColor.fromRgba(img.pixel(int(c.x()), int(c.y())))
+            assert px.lightness() > 150, ("a level dot is filled", px.name())
+        accent = QColor(theme.C.accent)
+
+        def accent_near(c):
+            return any(QColor(img.pixel(int(c.x()) + dx, int(c.y()) + dy)).red() > 200
+                       and abs(QColor(img.pixel(int(c.x()) + dx, int(c.y()) + dy)).hue()
+                               - accent.hue()) < 12
+                       for dx in range(-5, 6) for dy in range(-5, 6))
+        assert accent_near(centre), "lap 7 (2 of 6) is ringed"
+        far = [c for m, c in marks if abs(c.x() - centre.x()) > 12]
+        assert far and not any(accent_near(QPointF(c)) for c in far), "and no other dot"
+        # the lone C5 quickest takes the purple; withheld below
+        img5, cell5 = _paint_cell(q.strip_delegate, t, 4, QUICKEST_STRIP_COL)
+        s5 = t.item(4, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0]
+        c9 = next(c for m, c in strip_geometry(s5, QRectF(cell5)).marks if m.lap_id == 9)
+        assert QColor(img5.pixel(int(c9.x()), int(c9.y()))).name() == \
+            QColor(theme.best_sector_colour()).name()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_provisional_timing_withholds_the_strips_purple():
+    from studio.lap_table import QUICKEST_STRIP_COL, STRIP_ROLE
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900, maximised=True)
+        cls = type(win.session)
+        saved = cls.timing_verified
+        cls.timing_verified = property(lambda _self: False)
+        try:
+            q.refresh()
+            assert all(q.table.item(r, QUICKEST_STRIP_COL).data(STRIP_ROLE)[1] is None
+                       for r in range(7))
+        finally:
+            cls.timing_verified = saved
+        q.refresh()
+        assert q.table.item(4, QUICKEST_STRIP_COL).data(STRIP_ROLE)[1] == 9
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_playback_tick_never_repaints_the_strips_and_a_new_lap_repaints_one():
+    from studio.lap_table import QUICKEST_STRIP_COL
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900, maximised=True)
+        view = win.view
+        _record_plays(view)
+        _cid, _lap, clip = _play(view, 2)
+        _settle(0.2)
+        before = q.strip_delegate.paints
+        assert not q.table.isColumnHidden(QUICKEST_STRIP_COL) and before > 0
+        for i in range(60):
+            _inside(view, clip, i / 60)
+            _APP.processEvents()
+        _settle(0.1)
+        assert q.strip_delegate.paints == before, (before, q.strip_delegate.paints)
+        q.activate(2)                       # the next level lap: its row's strip re-rings
+        _settle(0.2)
+        assert 1 <= q.strip_delegate.paints - before <= 2, q.strip_delegate.paints - before
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_strip_says_its_dots_in_words():
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QHelpEvent
+
+    from studio.lap_table import QUICKEST_STRIP_COL
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900, maximised=True)
+        t = q.table
+        c5 = t.item(4, QUICKEST_STRIP_COL)
+        words = c5.data(Qt.AccessibleTextRole)
+        assert words == c5.toolTip() == ("14 counted laps through C5: the quickest alone, the next "
+                                         "0.071 s slower; typical 3.61; 1 lap ▼ far slower, off "
+                                         "the scale at the right."), words
+        assert t.item(1, QUICKEST_STRIP_COL).toolTip().startswith(
+            "14 counted laps through C2: 11 level with the quickest (within 0.07 s)")
+        assert "fastest" not in " ".join(t.item(r, QUICKEST_STRIP_COL).toolTip().lower()
+                                         for r in range(7))
+        assert t.item(4, 3).text() == "none · next +0.071", "the row's words are unchanged"
+        # a hover names the nearest dot's lap and its own time
+        shown = []
+        from studio import lap_table
+        saved = lap_table.QToolTip.showText
+        lap_table.QToolTip.showText = staticmethod(lambda _p, text, *_a: shown.append(text))
+        try:
+            rect = t.visualRect(t.model().index(4, QUICKEST_STRIP_COL))
+            pos = QPoint(rect.left() + 9, rect.center().y())
+            ev = QHelpEvent(QHelpEvent.ToolTip, pos, t.viewport().mapToGlobal(pos))
+            QApplication.sendEvent(t.viewport(), ev)
+        finally:
+            lap_table.QToolTip.showText = saved
+        assert shown and shown[0].startswith("Lap 10: 3.52 · the quickest\n14 counted laps"), shown
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def _crowded(lay):
+    """Pairs of dot centres on one strip closer than a dot's width that no pile owns up to."""
+    import math
+    out = []
+    for i, (m1, c1) in enumerate(lay.marks):
+        for m2, c2 in lay.marks[i + 1:]:
+            close = math.hypot(c1.x() - c2.x(), c1.y() - c2.y()) < 2 * lay.r - 1e-9
+            if close and m1.lap_id not in lay.piles and m2.lap_id not in lay.piles:
+                out.append((m1.lap_id, m2.lap_id))
+    return out
+
+
+def _sixty_lap_passes(seed=7):
+    """A synthetic 60-lap session's Quickest passes (the owner's real sessions run 38-65 laps):
+    seven corners, each a tight cluster (σ 0.012-0.08 s) round its own typical."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    base = [3.0, 2.6, 2.3, 3.0, 3.5, 2.8, 3.4]
+    sig = [0.012, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08]
+    cols = [[b + abs(rng.normal(0, s)) for b, s in zip(base, sig, strict=True)]
+            for _ in range(60)]
+    return stats.quickest_passes(_grid(cols))
+
+
+def test_every_dot_has_a_place_or_its_pile_is_said():
+    """No two dots on a row drawn closer than a dot's width unless the row's words say a pile is
+    there and its hover names the laps. The demo needs no pile at any width it is shown at; a
+    60-lap session's tight corners take the smaller pile stack, and what still overflows is said."""
+    from PySide6.QtCore import QPointF, QRectF
+
+    from studio.lap_table import (
+        QUICKEST_STRIP_COL,
+        STRIP_MIN_PX,
+        STRIP_PILE_R,
+        strip_geometry,
+        strip_mark_tip,
+        strip_words,
+    )
+    qp = _demo_session().quickest_passes()
+    for w in (STRIP_MIN_PX, 76, 93, 192):
+        for p in qp.passes:
+            lay = strip_geometry(stats.pass_strip(p, qp.level_s), QRectF(0, 0, w, theme.GRID_ROW_H))
+            assert lay.piled == 0 and not _crowded(lay), (w, p.cid, lay.r)
+    # a pass exactly the step behind: not level, so a ring clear of the band
+    edge = stats.pass_strip(stats.quickest_passes(_grid([[3.000], [3.070], [3.069], [3.3], [3.4]]))
+                            .passes[0], PB_PRECISION_S)
+    lay = strip_geometry(edge, QRectF(0, 0, 76, theme.GRID_ROW_H))
+    c = {m.lap_id: cc for m, cc in lay.marks}
+    assert c[1].x() - lay.r >= lay.band.right() - 1e-9 and c[2].x() <= lay.band.right() + 1e-9
+    # sixty laps
+    many = _sixty_lap_passes()
+    radii = set()
+    for p in many.passes:
+        s = stats.pass_strip(p, many.level_s)
+        lay = strip_geometry(s, QRectF(0, 0, 76, theme.GRID_ROW_H))
+        radii.add(lay.r)
+        assert len(lay.marks) == 60 and not _crowded(lay), (p.cid, _crowded(lay))
+        assert all(QRectF(0, 0, 76, theme.GRID_ROW_H).contains(cc) for _m, cc in lay.marks)
+        words = strip_words(f"C{p.cid}", p, s, many.level_s, lay.piled)
+        assert ("drawn on top of another dot" in words) == bool(lay.piled), words
+        for lap, under in lay.piles.items():
+            m, cc = next((m, cc) for m, cc in lay.marks if m.lap_id == lap)
+            assert under and lay.pile_at(QPointF(cc), lap) == under
+            tip = strip_mark_tip(m, p, under)
+            assert f"{len(under) + 1} laps here" in tip, tip
+    assert STRIP_PILE_R in radii, radii   # sixty laps overflow the first stack at every corner
+    # ...and the view says it in the cell's words at the width it has
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900)   # at 1280×800 docked sixty laps' longer words hide it
+        saved = win.session.quickest_passes
+        win.session.quickest_passes = lambda: many
+        try:
+            q.refresh()
+            _settle(0.1)
+            t = q.table
+            assert not t.isColumnHidden(QUICKEST_STRIP_COL)
+            said = [t.item(r, QUICKEST_STRIP_COL).toolTip() for r in range(7)]
+            cell = QRectF(0, 0, t.columnWidth(QUICKEST_STRIP_COL), theme.GRID_ROW_H)
+            for r, p in enumerate(many.passes):
+                piled = strip_geometry(stats.pass_strip(p, many.level_s), cell).piled
+                assert ("drawn on top" in said[r]) == bool(piled), (r, piled, said[r])
+                assert t.item(r, QUICKEST_STRIP_COL).data(Qt.AccessibleTextRole) == said[r]
+        finally:
+            win.session.quickest_passes = saved
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_click_on_the_strip_plays_the_row_and_a_tie_is_never_called_the_quickest():
+    from PySide6.QtCore import QPoint, QRectF
+    from PySide6.QtGui import QHelpEvent
+
+    from studio import lap_table
+    from studio.lap_table import QUICKEST_STRIP_COL, STRIP_ROLE, strip_geometry
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900)
+        t = q.table
+        plays = _record_plays(win.view)
+        _click(t, 2, QUICKEST_STRIP_COL)                 # a REAL click on C3's strip
+        assert plays and plays[-1] == win.session.corners.pass_clip(12, 3), plays
+        # hover C2's quickest (lap 11): a tie of 11, so "level", never "the quickest"
+        rect = t.visualRect(t.model().index(1, QUICKEST_STRIP_COL))
+        lay = strip_geometry(t.item(1, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0], QRectF(rect))
+        c = next(c for m, c in lay.marks if m.lap_id == 10)
+        shown = []
+        saved = lap_table.QToolTip.showText
+        lap_table.QToolTip.showText = staticmethod(lambda _p, text, *_a: shown.append(text))
+        try:
+            pos = QPoint(round(c.x()), round(c.y()))
+            QApplication.sendEvent(t.viewport(), QHelpEvent(QHelpEvent.ToolTip, pos,
+                                                            t.viewport().mapToGlobal(pos)))
+        finally:
+            lap_table.QToolTip.showText = saved
+        assert shown and shown[0].startswith("Lap 11: 2.62 · level with the quickest"), shown
+        assert "· the quickest" not in shown[0], shown
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
 
 
 # ------------------------------------------------------------------ this pass vs the typical pass
