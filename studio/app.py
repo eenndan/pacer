@@ -1648,6 +1648,13 @@ class StudioWindow(QMainWindow):
                                       desync_notice, chapter_notice, tracks_notice, library_notice,
                                       sidecar_write_notice, drop_notice) if p) or None
 
+    def _retract_status(self, text: str) -> None:
+        """Take `text` off the status bar if it is still what the bar shows: the view's sentence
+        about a pass or a corner compare that was just left (never a newer message)."""
+        bar = self.statusBar()
+        if text and bar.currentMessage() == text:
+            bar.clearMessage()
+
     def _apply_session_notice(self) -> str | None:
         """Put the current _session_notice on the status bar and return it.
 
@@ -2077,6 +2084,11 @@ class StudioWindow(QMainWindow):
         # A transient fact a panel has no status bar to state (U2: a lap selection trimmed to the
         # charts' cap). Timed like every other just-happened confirmation.
         self.view.statusNotice.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
+        # ...and a sentence about a state that just ended goes at once (CentralView._hold_status),
+        # if it is still the line showing. Guarded: the lifecycle tests' stand-in views.
+        retracted = getattr(self.view, "statusRetracted", None)
+        if retracted is not None:
+            retracted.connect(self._retract_status)
         # A pass's right-click "Export this pass…" (guarded: the lifecycle tests' stand-in views,
         # and windows a test builds piecemeal without the export controller).
         export_pass = getattr(self.view, "passExportRequested", None)
@@ -3240,7 +3252,7 @@ class StudioWindow(QMainWindow):
             view._restore_splitter_sizes()  # the inverse of the ⛶ collapse; the view owns the snapshot
             return True
         if view is not None and getattr(view, "leave_corner_compare", lambda: False)():
-            return True                     # this pass beside the typical one: back to this lap
+            return True                     # a compare at a corner (either kind): left, as C leaves it
         if view is not None and getattr(view, "escape_pass", lambda: False)():
             return True                     # a played pass: the whole lap and track again
         if self.isFullScreen():

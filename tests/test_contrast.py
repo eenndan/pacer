@@ -253,7 +253,7 @@ def test_the_lap_ruler_marks_read_on_both_grooves_in_both_palettes():
         for palette in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
             theme.set_palette(palette)
             plate = video_view.ruler_mark_plate()
-            for glyph in ("★", "▼"):
+            for glyph in ("★", "▼", video_view.RULER_SLOW_TICK):   # the tick: a narrow lap's ▼
                 ink = video_view.ruler_mark_colour(glyph)
                 assert contrast(ink, plate) >= 3.0, (palette, glyph, ink, plate)
                 for groove in (C.accent, C.border):          # what the plate sits on, for scale:

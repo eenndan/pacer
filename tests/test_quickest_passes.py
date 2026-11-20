@@ -1921,7 +1921,8 @@ def test_a_click_on_the_strip_plays_the_row_and_a_tie_is_never_called_the_quicke
                                                             t.viewport().mapToGlobal(pos)))
         finally:
             lap_table.QToolTip.showText = saved
-        assert shown and shown[0].startswith("Lap 11: 2.62 · level with the quickest"), shown
+        assert shown and shown[0].startswith(
+            "Lap 11: 2.62 · the lap the Quickest column names; 10 more are level"), shown
         assert "· the quickest" not in shown[0], shown
     finally:
         _close(win)
@@ -2267,6 +2268,180 @@ def test_c_keeps_its_whole_lap_meaning_while_a_pass_is_studied():
     finally:
         _close(win)
         prefs.set_corners_view("lap")
+
+
+# ---------------------------------------------- the 0.17.0 QA: small defects between the features
+
+
+def test_leaving_a_pass_takes_its_status_line_down_at_once():
+    """A played pass's line ("… · Esc: whole lap · ⌘K: export this pass") stayed up to 6 s after
+    the pass, its zoom and ⌘K's export row were gone. Every way of leaving it takes the line down
+    at once — the mechanism the corner compare's line uses (`CentralView._hold_status`) — and a
+    newer message is never wiped by it."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view, bar = win.view, win.statusBar()
+        _record_plays(view)
+
+        def play():
+            v = win.view
+            v.select_lap_tab(1)
+            _settle()
+            q = v.corners_page.quickest
+            q.activate(q.row_of(3))
+            _settle()
+            said = bar.currentMessage()
+            assert v.pass_subject() is not None and said.endswith(
+                "Esc: whole lap · ⌘K: export this pass"), said
+            return said
+
+        def esc():
+            QTest.keyClick(win, Qt.Key_Escape)
+
+        def race():
+            win._race_action.trigger()
+
+        def jump():
+            win._jump_to_opportunity(5, 0.0)
+
+        for name, leave in (("Esc", esc), ("a lap pick", lambda: view.table.laps_selected.emit([4])),
+                            ("C", win.toggle_compare), ("a Lap race", race), ("a Jump", jump)):
+            said = play()
+            leave()
+            _settle()
+            assert view.pass_subject() is None, name
+            assert bar.currentMessage() != said, (name, bar.currentMessage())
+            if name == "a Jump":       # the Jump's own line is newer, and stays
+                assert bar.currentMessage().startswith("jumped to C5"), bar.currentMessage()
+            if view._comparing():
+                win.toggle_compare()
+            if view.is_racing():
+                view.end_lap_race()
+            _settle()
+        # a newer message is never taken down by the pass it outlived
+        said = play()
+        bar.showMessage("something else", 6000)
+        esc()
+        _settle()
+        assert bar.currentMessage() == "something else"
+        # a reload: the old view's line goes with it
+        said = play()
+        old = win.view
+        win._load([_demo_path()])
+        deadline = time.time() + 60
+        while (win.view is None or win.view is old) and time.time() < deadline:
+            _settle(0.02)
+        assert win.view is not None and win.view is not old
+        assert bar.currentMessage() != said, bar.currentMessage()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_quickest_walk_ends_on_the_corner_not_on_a_lap():
+    """⌥→ from a Quickest row plays each corner's QUICKEST pass, on whichever lap it is: at the
+    end it said "the last one with a pass on lap 2", a lap the walk had left long before."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view, bar = win.view, win.statusBar()
+        _record_plays(view)
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        q.activate(q.row_of(1))
+        _settle()
+        assert not view.step_corner_pass(-1)
+        assert bar.currentMessage() == "No earlier corner to play: C1 is the first corner"
+        for _ in range(6):
+            assert view.step_corner_pass(+1)
+        assert view.pass_subject()[1] == 7
+        assert not view.step_corner_pass(+1)
+        said = bar.currentMessage()
+        assert said == "No later corner to play: C7 is the last corner", said
+        assert "lap" not in said
+        # a per-lap walk keeps its lap (test_the_corner_walk_plays_one_pass_per_press)
+        assert view.play_lap_pass(3, 7) and not view.step_corner_pass(+1)
+        assert bar.currentMessage() == ("No later corner to play: this is the last one with a "
+                                        "pass on lap 4")
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_esc_leaves_either_corner_compare_and_keeps_its_meaning_in_a_whole_lap_one():
+    """Esc left this-pass-vs-typical (its line says "C or Esc") but not a Coaching row's Compare,
+    which C leaves. Now Esc leaves any compare AT A CORNER exactly as C does; in a whole-lap compare
+    (C, the button) it still does nothing, as on main."""
+    win = _window()
+    try:
+        view, s, bar = win.view, win.session, win.statusBar()
+        _record_plays(view)
+        tp = s.typical_passes()[1]
+        # what C does to a Coaching Compare: one video again, both laps still on the charts
+        assert view.compare_at_corner(tp, "+0.36 s")
+        _settle()
+        win.toggle_compare()
+        _settle()
+        by_c = (view._comparing(), view.table.selected_lap_ids(), view.plots.selected_lap_ids())
+        # ...and Esc does the same, and takes its line down
+        assert view.compare_at_corner(tp, "+0.36 s")
+        _settle()
+        said = bar.currentMessage()
+        assert said.startswith("C1 · lap 4"), said
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view._comparing() and view.compare.corner_anchor() is None
+        assert (view._comparing(), view.table.selected_lap_ids(),
+                view.plots.selected_lap_ids()) == by_c
+        assert bar.currentMessage() == ""
+        # this pass vs the typical one: Esc leaves it (back to lap 13), as its line says
+        assert view.compare_pass_with_typical(12, 3)
+        _settle()
+        assert "C or Esc: back to lap 13" in bar.currentMessage()
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view._comparing() and view.table.selected_lap_ids() == [12]
+        # a whole-lap compare: Esc is not its way out (C is), unchanged
+        view.table.laps_selected.emit([3])
+        _settle()
+        win.toggle_compare()
+        _settle()
+        assert view._comparing() and view.compare.corner_anchor() is None
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert view._comparing()
+        win.toggle_compare()
+        _settle()
+    finally:
+        _close(win)
+
+
+def test_each_strip_mark_says_what_is_true_of_it_on_a_tie():
+    """The hover called every level pass "level with the quickest" — the named lap included, level
+    with itself. Each mark now says what is true of IT."""
+    from studio.lap_table import strip_mark_tip
+    qp = _demo_session().quickest_passes()
+    c2 = next(p for p in qp.passes if p.cid == 2)            # lap 11 named, 10 more level
+    marks = {m.lap_id: m for m in stats.pass_strip(c2, qp.level_s).marks}
+    named = strip_mark_tip(marks[c2.lap_id], c2, (), qp.level_s)
+    assert named == (f"Lap 11: {marks[10].time_s:.2f} · the lap the Quickest column names; "
+                     f"{len(c2.level_laps)} more are level"), named
+    other = c2.level_laps[0]
+    tip = strip_mark_tip(marks[other], c2, (), qp.level_s)
+    assert tip == (f"Lap {other + 1}: {marks[other].time_s:.2f} · level with lap 11 (within "
+                   f"{qp.level_s:.2f} s)"), tip
+    assert "Quickest column" not in tip and "quickest" not in tip
+    slower = next(m for m in marks.values() if not m.level and not m.behind)
+    assert strip_mark_tip(slower, c2, (), qp.level_s).endswith("· slower than the band")
+    c5 = next(p for p in qp.passes if p.cid == 5)            # a lone quickest
+    m5 = next(m for m in stats.pass_strip(c5, qp.level_s).marks if m.lap_id == c5.lap_id)
+    assert strip_mark_tip(m5, c5, (), qp.level_s).endswith("· the quickest")
+    # one more level lap: singular
+    one = stats.quickest_passes(_grid([[3.000], [3.040], [3.3], [3.4], [3.5]])).passes[0]
+    m = next(m for m in stats.pass_strip(one, PB_PRECISION_S).marks if m.lap_id == one.lap_id)
+    assert strip_mark_tip(m, one).endswith("; 1 more is level"), strip_mark_tip(m, one)
 
 
 if __name__ == "__main__":

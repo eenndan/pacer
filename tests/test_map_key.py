@@ -261,6 +261,45 @@ def test_the_plate_says_what_clicking_it_does():
     print("test_the_plate_says_what_clicking_it_does OK")
 
 
+def test_a_pass_zoom_folds_the_key_and_gives_back_the_users_own_state():
+    """The 0.17.0 QA (docs/media/quickest.png): with C3's pass zoomed the key's plate covered the
+    C5 label. While a pass zoom is on the plate folds to its title row; when it ends the user's own
+    state comes back — open if he had it open, collapsed if he had collapsed it — and the stored
+    choice is never written by the zoom."""
+    for chose in (False, True):
+        prefs.set_map_key_collapsed(chose)
+        mv = _map()
+        key = mv._map_key
+        writes = []
+        key._on_toggle = writes.append
+        assert key.painted_collapsed() is chose
+        assert mv.zoom_to_pass(2.0, 6.0) and mv.pass_zoomed()
+        _APP.processEvents()
+        assert key.painted_collapsed() and key.height() == key.collapsed_height(), chose
+        assert key.collapsed() is chose and prefs.map_key_collapsed() is chose and not writes
+        # pinned to the corner at its new height
+        assert key.y() == mv.widget.height() - key.height() - _CHROME_INSET
+        assert mv.zoom_to_pass(8.0, 12.0)           # the next pass: still folded
+        assert key.painted_collapsed()
+        assert mv.unzoom_pass()
+        _APP.processEvents()
+        assert key.painted_collapsed() is chose and key.collapsed() is chose and not writes
+        assert key.y() == mv.widget.height() - key.height() - _CHROME_INSET
+        _drop(mv)
+    # a click on the folded plate opens it for this zoom and changes nothing he chose
+    prefs.set_map_key_collapsed(False)
+    mv = _map()
+    key = mv._map_key
+    assert mv.zoom_to_pass(2.0, 6.0)
+    assert "folded while a pass is zoomed" in key.toolTip()
+    _press(key)
+    assert not key.painted_collapsed() and not key.collapsed()
+    assert prefs.map_key_collapsed() is False
+    assert mv.unzoom_pass() and not key.painted_collapsed()
+    _drop(mv)
+    print("test_a_pass_zoom_folds_the_key_and_gives_back_the_users_own_state OK")
+
+
 # ------------------------------------------------------------------- D1-10
 def test_every_labelled_control_in_a_panel_toolbar_carries_a_glyph():
     """D1-10, as a rule rather than a line number.
