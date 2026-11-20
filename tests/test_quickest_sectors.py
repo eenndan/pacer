@@ -585,6 +585,58 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         prefs.set_corners_view("lap")
 
 
+def test_the_highlighted_row_is_the_pass_being_compared_from_the_menu_or_cmd_k():
+    """A compare with the typical pass highlights the row whose pass it compares, whatever was
+    highlighted before (DECISIONS §21: S4 stayed highlighted while S1 was compared). Two doors:
+    ⌘K's row for the pass studied after ↓ moved the highlight off it, and the row's menu opened
+    with no press on the row first (as an accessibility "show menu" opens it). A pass that is no
+    row's quickest or level lap leaves no row highlighted; Esc keeps the compared row."""
+    prefs.set_corners_view("quickest")
+    win = _window(3)
+    try:
+        view = win.view
+        _record_plays(view)
+        q = view.corners_page.quickest
+        s1, s4 = q.row_of(stats.sector_key(0)), q.row_of(stats.sector_key(3))
+
+        def selected():
+            return [i.row() for i in q.table.selectionModel().selectedRows()]
+        # ⌘K: S1 played from its row, then ↓ ↓ moves the highlight; the compare row is S1's
+        q.activate(s1)
+        _settle()
+        q.table.setFocus()
+        QTest.keyClick(q.table, Qt.Key_Down)
+        QTest.keyClick(q.table, Qt.Key_Down)
+        assert selected() == [s1 + 2]
+        rows = [c for t, c in win.quickest_pass_commands() if t.startswith("Compare")]
+        assert len(rows) == 1
+        rows[0]()
+        _settle()
+        assert view._comparing() and view.compare.pass_anchor() == "S1"
+        assert selected() == [s1], (selected(), s1)
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view._comparing() and selected() == [s1]
+        # the menu: S4 played and highlighted, S1's Compare fired with no press on S1's row
+        q.activate(s4)
+        _settle()
+        assert selected() == [s4]
+        _quickest_compare(view, q, s1).trigger()
+        _settle()
+        assert view._comparing() and view.compare.pass_anchor() == "S1"
+        assert selected() == [s1], (selected(), s1)
+        # a lap that is not the row's quickest nor level with it: no row names that pass
+        lap, cid = next((lap, qp.cid) for qp in q.passes()
+                        for lap in win.session.valid_lap_ids() if lap not in qp.play_order()
+                        and view.typical_compare_refusal(lap, qp.cid) is None)
+        assert view.compare_pass_with_typical(lap, cid)
+        _settle()
+        assert selected() == [], selected()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
 def test_export_this_pass_on_a_sector_row_opens_the_picker_on_that_sector_and_exports_it():
     """The S3 row's right-click "Export this pass…", fired as the real QAction: the overlay picker
     opens under its real exec() (a timer reads it, then accepts), on "This pass — S3, lap N", with
