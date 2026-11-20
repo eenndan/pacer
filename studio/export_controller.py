@@ -1468,11 +1468,17 @@ class ExportController:
         Quickest passes names that pass)."""
         self.export_overlay_video(pass_=(int(lap), int(cid), label), preset_pass=True)
 
-    def export_overlay_video(self, pass_: tuple[int, int, str] | None = None,
+    def export_overlay_video(self, *, pass_: tuple[int, int, str] | None = None,
                              preset_pass: bool = False):
         """File ▸ Export overlay video…: the picker, then the save panel, then the render. Its
         "This pass" row is offered for `pass_` = (lap, cid, label), else for the pass Quickest
-        passes names now (`pass_subject`)."""
+        passes names now (`pass_subject`).
+
+        KEYWORD-ONLY, because the menu item connects straight to this method. PySide hands a slot
+        the signal's arguments whenever it has positional room for them, so `triggered(bool)` landed
+        `checked=False` in `pass_` and the File menu and ⌘K row raised a TypeError instead of
+        opening the picker (0.17.0 – 0.18.0). A keyword-only parameter is never filled from a
+        signal (measured on PySide 6.11); tests/test_export_menu_entry.py fires the real action."""
         if self._no_laps_to_export():
             return
         if not export_video.ffmpeg_available():
