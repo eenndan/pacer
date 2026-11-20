@@ -113,9 +113,13 @@ from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: 
 
 # The H.264 encoder is known, as it is from a session's second export dialog on: these tests (and
 # the pickers', polish's and probe's, which import this file) read a picker's hint the moment it
-# opens. The first dialog's wait for it is test_export_probe's. One real probe, ~0.5 s, the work
-# the first dialog of this process used to do on the GUI thread.
-export_video.videotoolbox_usable()
+# opens. The first dialog's wait for it is test_export_probe's, and the probe's own logic is held
+# there through a fake ffmpeg. Settled here as a STUB, not a real probe: the same answer on every
+# machine (libx264), and no VideoToolbox session that can hang a CI VM for its 30 s timeout. No
+# test in these files needs the machine's answer: each one that names an encoder either pins
+# `resolve_encoder` or reads the one "auto" resolves to.
+export_video._H264.answer, export_video._H264.probes = False, 1
+
 # The File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
 # "Copy stats summary" (N13) joined them: it publishes the same numbers the HTML report does, so
 # it takes the same has_laps gate and the same REASON tooltip — L1-03's finding was that a new

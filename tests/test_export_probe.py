@@ -36,9 +36,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["PACER_NO_MEDIA"] = "1"
 
 # test_export_gates diverts every store into a temp tree on import, before any window exists.
-from PySide6.QtCore import QTimer  # noqa: E402
+from PySide6.QtCore import QPoint, QTimer  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
+    QComboBox,
     QDialog,
     QLabel,
     QMessageBox,
@@ -479,10 +480,12 @@ def test_the_first_export_click_opens_at_once_and_the_hint_waits_for_the_h264_pr
     that has not asked the H.264 encoder yet, its probe held: the dialog is up before the probe
     answers, its hint says it is measuring and quotes no size, and once the probe lands it names
     the encoder `resolve_encoder` picks, with a size and a time. On main the hint asked the probe
-    on the GUI thread, so the dialog came up only when it answered (the demo: 520-635 ms)."""
+    on the GUI thread, so the dialog came up only when it answered (the demo: 520-635 ms). The
+    ProRes probe behind it is held for the whole test: the burned-in figure lands on the H.264
+    answer alone, without waiting for a session it does not use."""
     _clear_export_preset()
-    gate, calls = threading.Event(), []
-    _fresh(_FakeProbe(True), h264=_REAL_H264[0])
+    gate, calls, prores_gate = threading.Event(), [], threading.Event()
+    _fresh(_FakeProbe(True, gate=prores_gate), h264=_REAL_H264[0])
     ev.videotoolbox_encoder_available = _listed_after(gate, calls)
     real_size = ev.probe_video_size
     ev.probe_video_size = lambda _p: (1920, 1080, 30.0)
@@ -518,12 +521,14 @@ def test_the_first_export_click_opens_at_once_and_the_hint_waits_for_the_h264_pr
                 QTimer.singleShot(5, poll)
                 return
             seen["last"] = text
+            seen["prores_then"] = ev.prores_videotoolbox_state()
             dlg.reject()
         try:
             QTimer.singleShot(0, poll)
             win._export_video_action.trigger()
         finally:
             gate.set()
+            prores_gate.set()
             ev.probe_video_size = real_size
             _restore()
             win.hide()
@@ -536,6 +541,8 @@ def test_the_first_export_click_opens_at_once_and_the_hint_waits_for_the_h264_pr
     assert "Measuring this Mac's video encoder" in seen["frame_known"], seen["frame_known"]
     assert len(calls) == 1, f"the encoder was listed {len(calls)} times"
     assert f"with {ev.SW_H264}, about " in last and "Measuring" not in last, last
+    assert seen["prores_then"] == "probing", (
+        f"the figure was only shown once the ProRes probe was {seen['prores_then']!r}")
     print(f"ok: the first export click opens in {up * 1000:.0f} ms; the hint waits for H.264")
 
 
@@ -598,6 +605,154 @@ def test_the_h264_encoder_chosen_is_the_one_it_always_was():
     print("ok: the H.264 encoder is the one the old probe chose, each answer kept")
 
 
+def test_the_warm_up_asks_the_frame_then_h264_then_prores():
+    """The order is what makes the burned-in figure (the default contents) land first: the frame
+    (~45 ms), then the H.264 session it is priced on, and only then the ProRes one."""
+    order = []
+
+    class _Recording(_FakeProbe):
+        def __init__(self, name):
+            super().__init__(True)
+            self.name = name
+
+        def __call__(self):
+            order.append(self.name)
+            return super().__call__()
+    _fresh(_Recording("prores"), h264=_Recording("h264"))
+    real_size = ev.probe_video_size
+    ev.probe_video_size = lambda _p: order.append("frame") or (1920, 1080, 30.0)
+    try:
+        with tempfile.TemporaryDirectory(prefix="probe-order-") as td:
+            src = os.path.join(td, "GX010099.MP4")
+            with open(src, "wb") as fh:
+                fh.write(b"not really a video")
+            ev.warm_export_probes(src).join(10)
+    finally:
+        ev.probe_video_size = real_size
+        _restore()
+    assert order == ["frame", "h264", "prores"], order
+    print(f"ok: the warm-up asks {order}")
+
+
+def test_a_frame_that_cannot_be_read_leaves_only_the_encoder_to_measure():
+    """A recording ffprobe cannot read has its answer (no frame) and keeps the estimate: while the
+    H.264 probe is still out, what the hint waits for is the encoder, and it says so."""
+    gate = threading.Event()
+    _fresh(_FakeProbe(True), h264=_FakeProbe(True, gate=gate))
+    real_size = ev.probe_video_size
+
+    def unreadable(_p):
+        raise RuntimeError("ffprobe could not read video stream size")
+    ev.probe_video_size = unreadable
+    try:
+        with tempfile.TemporaryDirectory(prefix="probe-unreadable-") as td:
+            src = os.path.join(td, "GX010099.MP4")
+            with open(src, "wb") as fh:
+                fh.write(b"not really a video")
+            assert "Measuring the footage" in ExportController._measuring_line(src)
+            ev.warm_export_probes(src)
+            deadline = time.monotonic() + 5
+            while ev.videotoolbox_state() != "probing" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ev.known_video_size(src) is None and ev.video_size_asked(src)
+            said = ExportController._measuring_line(src)
+            assert said.startswith("Measuring this Mac's video encoder"), said
+    finally:
+        gate.set()
+        ev.probe_video_size = real_size
+        _restore()
+    print("ok: an unreadable frame leaves the hint measuring the encoder, and it says so")
+
+
+def _geometry(dlg) -> dict:
+    """Where every row of a picker sits, the hint's height and the dialog's: what moves under the
+    reader's eye when a figure lands."""
+    rows = {f"combo{i}": box.mapTo(dlg, QPoint(0, 0)).y()
+            for i, box in enumerate(dlg.findChildren(QComboBox))}
+    return {**rows, "hint": _hint(dlg).height(), "dialog": dlg.height()}
+
+
+def _held_and_landed(open_picker, src: str, answer: bool) -> tuple[dict, dict, str, str]:
+    """Open a picker through `open_picker` (its REAL exec) with the H.264 probe held: its geometry
+    and hint once the frame is in and only the encoder is measured, then once the figure lands."""
+    gate = threading.Event()
+    _fresh(_FakeProbe(True), h264=_FakeProbe(answer, gate=gate))
+    seen, t0 = {}, time.monotonic()
+
+    def poll():
+        dlg = QApplication.activeModalWidget()
+        late = time.monotonic() - t0 > 8
+        if not isinstance(dlg, QDialog) or not dlg.isVisible():
+            QTimer.singleShot(5, poll)
+            return
+        text = _hint(dlg).text()
+        if not gate.is_set():
+            if not late and "Measuring this Mac's video encoder" not in text:
+                QTimer.singleShot(5, poll)
+                return
+            seen.setdefault("ticks", 0)
+            seen["ticks"] += 1
+            if seen["ticks"] < 4 and not late:     # let the layout settle on this text
+                QTimer.singleShot(20, poll)
+                return
+            seen["before"], seen["measuring"] = _geometry(dlg), text
+            seen["ticks"] = 0
+            gate.set()
+        if ("Measuring" in text or ev.videotoolbox_state() == "probing") and not late:
+            QTimer.singleShot(5, poll)
+            return
+        seen["ticks"] += 1
+        if seen["ticks"] < 4 and not late:
+            QTimer.singleShot(20, poll)
+            return
+        seen["after"], seen["landed"] = _geometry(dlg), _hint(dlg).text()
+        dlg.reject()
+    real_size = ev.probe_video_size
+    ev.probe_video_size = lambda _p: (1920, 1080, 30.0)
+    try:
+        QTimer.singleShot(0, poll)
+        open_picker()
+    finally:
+        gate.set()
+        ev.probe_video_size = real_size
+        _restore()
+    return seen["before"], seen["after"], seen["measuring"], seen["landed"]
+
+
+def test_the_rows_hold_still_when_the_encoder_figure_lands():
+    """Both pickers, both answers: the hint keeps room for the figure while the encoder is
+    measured (priced with libx264, the longer line), so when it lands no row moves and the hint
+    neither grows nor shrinks. The comparison picker's rows jumped 30 px (45 -> 75-80 px hint in a
+    fixed-height dialog) before it kept that room (review of #649)."""
+    _clear_export_preset()
+    results = []
+    with tempfile.TemporaryDirectory(prefix="probe-rows-") as td:
+        src = os.path.join(td, "GX010099.MP4")
+        with open(src, "wb") as fh:
+            fh.write(b"not really a video")
+        win = _window(FakeSession(laps=(0, 1, 2)), paths=(src,))
+        win.exports.sync_menu()
+        saved_pair = ExportController.compare_pair
+        ExportController.compare_pair = lambda _self: (0, 2, None, False)
+        try:
+            for answer in (True, False):
+                for name, open_picker in (
+                        ("overlay", win._export_video_action.trigger),
+                        ("comparison", win.exports._ask_compare_options)):
+                    before, after, measuring, landed = _held_and_landed(open_picker, src, answer)
+                    assert "About " in landed and "Measuring" not in landed, (name, landed)
+                    assert "About " not in measuring, (name, measuring)
+                    assert before == after, (
+                        f"{name}, VideoToolbox {answer}: the picker moved when its figure landed "
+                        f"{ {k: (before[k], after[k]) for k in before if before[k] != after.get(k)} }")
+                    results.append(f"{name}/{answer}: hint {after['hint']} px")
+        finally:
+            ExportController.compare_pair = saved_pair
+            win.hide()
+            _clear_export_preset()
+    print(f"ok: no row moves when the encoder figure lands ({', '.join(results)})")
+
+
 def _run_all():
     tests = (test_concurrent_callers_and_dialog_opens_share_one_probe,
              test_callers_waiting_on_a_probe_that_misses_take_its_miss,
@@ -609,7 +764,10 @@ def _run_all():
              test_the_dialog_never_waits_and_says_what_it_knows_in_each_state,
              test_the_first_export_click_opens_at_once_and_the_hint_waits_for_the_h264_probe,
              test_an_export_started_before_the_h264_probe_answers_waits_for_its_answer,
-             test_the_h264_encoder_chosen_is_the_one_it_always_was)
+             test_the_h264_encoder_chosen_is_the_one_it_always_was,
+             test_the_warm_up_asks_the_frame_then_h264_then_prores,
+             test_a_frame_that_cannot_be_read_leaves_only_the_encoder_to_measure,
+             test_the_rows_hold_still_when_the_encoder_figure_lands)
     failed = []
     for test in tests:
         try:

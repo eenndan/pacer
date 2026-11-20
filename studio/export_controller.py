@@ -884,14 +884,15 @@ class ExportController:
         return " Real size follows how much the footage moves." if codec == export_video.SW_H264 else ""
     def _compare_size_hint(self, dur: float, out_height: int, quality: str, layout: str,
                            source: tuple[int, int, float] | None = None,
-                           ends_on_finish: bool = True) -> str:
+                           ends_on_finish: bool = True, h264: str | None = None) -> str:
         """The compare picker's size-and-time line, from the COMPARE'S OWN frame: two panes, side
         by side (twice as wide) or stacked (twice as tall), sized by `compare_geometry`, the
         renderer's own rule. The bytes come from the one size model every export reads; the time
         from `export_compare.estimate_compare_seconds`, which costs the second decode every
         frame pays. "" when there is nothing honest to say: an unknown lap A, or "Source" before
         pane A's footage frame is known (`source`, filled behind the dialog), or before the H.264
-        probe has answered (`export_video.known_encoder`).
+        probe has answered (`export_video.known_encoder`); `h264` prices it with that encoder
+        instead, for the room the hint keeps for the figure.
 
         The frames are the render's own: lap A's window plus its FINISH FRAME, the one that shows
         both lap times (`with_finish_frame`), which a compare always ends on. The size is priced on
@@ -909,10 +910,10 @@ class ExportController:
         geo = export_compare.compare_geometry((src_w, src_h), (src_w, src_h), cfg)
         fps = export_video.resolve_fps(cfg, src_fps)
         frames = export_video.planned_frames(dur, fps, ends_on_finish=ends_on_finish)
-        codec = export_video.known_encoder()     # None until the H.264 probe answers: measuring
+        codec = h264 or export_video.known_encoder()   # None until the H.264 probe answers
         if codec is None:
             return ""
-        size =export_video.fmt_bytes(export_video.estimate_output_bytes(
+        size = export_video.fmt_bytes(export_video.estimate_output_bytes(
             geo.out_w, geo.out_h, fps, frames / fps, quality, codec))
         took = export_compare.estimate_compare_seconds(geo.out_w, geo.out_h, frames, codec)
         timing = f", about {fmt_hms(took)} to render" if took else ""
@@ -1072,7 +1073,9 @@ class ExportController:
         nothing."""
         if not src or export_video.export_probes_ready(src):
             return ""
-        if export_video.known_video_size(src) is None and os.path.isfile(src):
+        # The footage only while its frame is still being asked: a file that could not be read
+        # has its answer (none), and what is left to wait for is the encoder.
+        if not export_video.video_size_asked(src):
             return "Measuring the footage for the size and the time to render…"
         return "Measuring this Mac's video encoder for the size and the time to render…"
 
@@ -1363,7 +1366,7 @@ class ExportController:
             measuring = self._measuring_line(src)
             # Only while there IS a frame to wait for: a file the probe cannot read keeps the
             # guess, the one size there will ever be.
-            guessed = bool(measuring) and source is None and os.path.isfile(src)
+            guessed = bool(measuring) and not export_video.video_size_asked(src)
             # A burned-in export before the H.264 probe has answered has no figure at all; the
             # room kept for it is libx264's, the longer line of the two.
             unpriced = bool(measuring) and not size and not overlay_only
@@ -1726,17 +1729,26 @@ class ExportController:
             else:
                 lines = ["The clip is as long as the first lap, and carries that lap's audio — "
                          "the second pane is time-warped by the lock, so its sound would be too."]
-            size = self._compare_size_hint(
-                pass_clip if at_pass else clip,
-                self._COMPARE_RES_OPTIONS[res_combo.currentIndex()][1],
-                self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
-                self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
-                export_video.known_video_size(src), ends_on_finish=not at_pass)
+            args = (pass_clip if at_pass else clip,
+                    self._COMPARE_RES_OPTIONS[res_combo.currentIndex()][1],
+                    self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
+                    self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
+                    export_video.known_video_size(src))
+            size = self._compare_size_hint(*args, ends_on_finish=not at_pass)
+            measuring = self._measuring_line(src)
+            # While a figure is still being measured the hint keeps room for it, priced with
+            # libx264 (the longer line), so the rows above do not jump when it lands — the dialog
+            # is fixed-height, and the line it waits for is two lines longer than "Measuring…".
+            reserve = ""
+            if measuring and not size:
+                priced = self._compare_size_hint(*args, ends_on_finish=not at_pass,
+                                                 h264=export_video.SW_H264)
+                reserve = "  ".join([*lines, priced]) if priced else ""
             if size:
                 lines.append(size)
-            elif self._measuring_line(src):
-                lines.append(self._measuring_line(src))
-            hint.setText("  ".join(lines))
+            elif measuring:
+                lines.append(measuring)
+            hint.show_text("  ".join(lines), reserve)
         for combo in (layout_combo, res_combo, q_combo, scope_combo):
             if combo is not None:
                 combo.currentIndexChanged.connect(_update_hint)

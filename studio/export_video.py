@@ -2056,6 +2056,13 @@ def known_video_size(path: str | None) -> tuple[int, int, float] | None:
     return _VIDEO_SIZE_CACHE.get(key) if key is not None else None
 
 
+def video_size_asked(path: str | None) -> bool:
+    """True once `remember_video_size` has an outcome for this file — its frame, or None when it
+    could not be read — or when there is no file to ask."""
+    key = _video_size_key(path) if path else None
+    return key is None or key in _VIDEO_SIZE_CACHE
+
+
 def remember_video_size(path: str | None) -> tuple[int, int, float] | None:
     """`probe_video_size`, once per file, into the cache `known_video_size` reads. None when the
     file cannot be asked (missing, unreadable, no ffprobe)."""
