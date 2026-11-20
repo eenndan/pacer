@@ -35,6 +35,7 @@ from PySide6.QtCore import (
     QRectF,
     QSize,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QFontMetricsF, QPainter, QPen, QPolygonF
@@ -3649,7 +3650,8 @@ class QuickestPassTable(QWidget):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(QUICKEST_LEVEL_COL, QHeaderView.Stretch)
         hdr.setSectionResizeMode(QUICKEST_PLAY_COL, QHeaderView.Fixed)
-        hdr.resizeSection(QUICKEST_PLAY_COL, theme.ICON_BTN.width() + theme.SPACE_S)
+        hdr.resizeSection(QUICKEST_PLAY_COL,   # + the rows bar's overlap (see _place_bar)
+                          theme.ICON_BTN.width() + theme.SPACE_S + theme.SPACE_XXS)
         # The strip: after the words, before ▶ (see QUICKEST_STRIP_COL), sized by `_fit_strip`.
         self.table.horizontalHeaderItem(QUICKEST_STRIP_COL).setTextAlignment(
             Qt.AlignLeft | Qt.AlignVCenter)
@@ -3708,22 +3710,29 @@ class QuickestPassTable(QWidget):
         """The overlaid bar takes the table's own range and page, and shows only while there is
         more to reach."""
         own = self.table.verticalScrollBar()
-        self.rows_bar.setPageStep(own.pageStep())
-        self.rows_bar.setSingleStep(own.singleStep())
         self.rows_bar.setRange(low, high)
         self.rows_bar.setValue(own.value())
         self._place_bar()
         self.rows_bar.setVisible(high > low)
 
+    def _copy_steps(self) -> None:
+        own = self.table.verticalScrollBar()
+        self.rows_bar.setPageStep(own.pageStep())
+        self.rows_bar.setSingleStep(own.singleStep())
+
     def _place_bar(self) -> None:
         """The bar over the viewport's right edge, beside the ▶ (at its cell's left, see
-        _GroupRuleDelegate), on the table's frame: its transparent track spans the ▶ column's
-        spare SPACE_S and the frame, so the grip (inset SPACE_XXS) paints in that lane, clear of
-        the button."""
+        _GroupRuleDelegate), on the table's frame. The ▶ column is the button plus SPACE_S plus
+        SPACE_XXS, and the bar's track spans that spare lane and the frame, so no ▶ pixel is under
+        the bar (it takes their clicks) and the grip, inset SPACE_XXS, paints beside them."""
         port = self.table.viewport().geometry()
         w = self.rows_bar.sizeHint().width()
         self.rows_bar.setGeometry(QRect(self.table.width() - w, port.top(), w, port.height()))
         self.rows_bar.raise_()
+        # The page step follows once the layout has settled: Qt sets the table's AFTER its range,
+        # and a viewport resize reaches this filter before the table relays it out, so a copy made
+        # here was one layout behind (7 rows for 10 after a rebuild, 12 for 8 after a resize).
+        QTimer.singleShot(0, self, self._copy_steps)
 
     def _strip_tip(self, event) -> bool:
         """A hover on a strip names the lap and time of the dot nearest the pointer."""

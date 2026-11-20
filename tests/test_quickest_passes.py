@@ -199,7 +199,9 @@ def test_the_switch_the_rows_and_the_tab_title():
             ["C6", "2.80", "13", "10 more laps"],
             ["C7", "3.42", "2", "5 more laps"],
         ], got
-        assert not t.verticalScrollBar().isVisible() and not t.horizontalScrollBar().isVisible()
+        # nothing overflows: no row below the fold (the overlaid bar would show) and no column cut
+        assert t.verticalScrollBar().maximum() == 0 and not page.quickest.rows_bar.isVisible()
+        assert not t.horizontalScrollBar().isVisible()
         assert "laps 9, 8, 12, 10, 13" in t.item(0, 3).toolTip()
         assert "fastest" not in " ".join(t.item(r, c).toolTip().lower() + t.item(r, c).text()
                                          for r in range(7) for c in range(4))
@@ -1549,7 +1551,8 @@ def _strip_room_everywhere():
                     whole, why = _painted_whole(t, r, QUICKEST_LEVEL_COL)
                     assert whole, (size, cycle, running, looping, why)
                     longest = max(longest, why[0], key=len)
-                assert not t.verticalScrollBar().isVisible(), size
+                assert t.verticalScrollBar().maximum() == 0, size    # every row in view...
+                assert not q.rows_bar.isVisible(), size              # ...so no bar says otherwise
                 assert not t.horizontalScrollBar().isVisible(), size
             assert longest.endswith("· 11 of 11 · looping"), longest
             q.set_looping(False)

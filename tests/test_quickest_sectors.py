@@ -591,12 +591,16 @@ def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
                     if not over:
                         continue
                     bar = bars[0]
-                    grip_x = t.viewport().mapFrom(t, bar.geometry().topLeft()).x() + \
-                        theme.SPACE_XXS
+                    # no ▶ pixel under the bar WIDGET (it would take that pixel's click), not
+                    # merely under its painted grip
+                    bar_x = t.viewport().mapFrom(t, bar.geometry().topLeft()).x()
                     for r in range(t.rowCount()):
                         btn = t.cellWidget(r, QUICKEST_PLAY_COL)
-                        assert btn.geometry().right() < grip_x, (size, n, r, btn.geometry())
+                        assert btn.geometry().right() < bar_x, (size, n, r, btn.geometry(), bar_x)
                     assert bar.geometry().right() < t.width()
+                    own = t.verticalScrollBar()
+                    assert bar.pageStep() == own.pageStep(), (size, n, bar.pageStep(),
+                                                              own.pageStep())
                     bar.setValue(bar.maximum())
                     _settle()
                     last = t.rowCount() - 1
@@ -607,10 +611,19 @@ def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
                     t.scrollToTop()                   # ...and the bar follows the table back
                     _settle()
                     assert bar.value() == 0
+                    # the page follows the table's after a resize and a rebuild (it was copied
+                    # one layout behind: 12 for 8 after a resize, 7 for 10 after a rebuild)
+                    w, h = size
+                    for change in ((win.resize, w, h - 60), (win.resize, w, h),
+                                   (win.view.rebuild_derived_views,)):
+                        change[0](*change[1:])
+                        _settle(0.2)
+                        assert bar.pageStep() == own.pageStep(), (size, n, bar.pageStep(),
+                                                                  own.pageStep())
                 finally:
                     _close(win)
             if size == (1280, 800):
-                assert base[1] == (False, 75), "the demo's corner strip at 1280×800: retarget"
+                assert base[1] == (False, 73), "the demo's corner strip at 1280×800: retarget"
     finally:
         prefs.set_corners_view("lap")
 
