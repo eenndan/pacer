@@ -106,6 +106,18 @@ _PLOTS_BASELINE_LABELS = {
     plots_view.DELTA_BASELINE_REFERENCE: _PLOTS_LABEL_REF,
 }
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
+def typical_compare_status(v, label: str) -> str:
+    """The status line of "compare this pass with my typical pass": both laps with their own
+    printed times, and the gap between those two printed times (`PassVsTypical.gap_s`), quicker or
+    slower — never "fastest", and no cause (an apex or exit speed column beside it was refused as
+    noise: discovery 6, B (d))."""
+    d = PRINT_DECIMALS
+    way = "quicker" if v.gap_s > 0 else "slower"
+    return (f"Comparing lap {lap_label(v.lap_id)} ({v.pass_s:.{d}f}) with your typical pass, lap "
+            f"{lap_label(v.typical_lap_id)} ({v.typical_pass_s:.{d}f}): {abs(v.gap_s):.{d}f} s "
+            f"{way} through {label} · C or Esc: back to lap {lap_label(v.lap_id)}")
+
+
 # Where the pass being studied was played from (`CentralView.pass_subject`): the corner walk from a
 # Quickest passes row steps to the next corner's QUICKEST pass, from anywhere else along the lap.
 PASS_FROM_QUICKEST = "quickest"
@@ -1417,6 +1429,8 @@ class CentralView(QWidget):
         self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
         # FIRST: a played pass's zoom ends before compare draws its pair (either way the toggle goes).
         self.video.compareToggled.connect(lambda _on: self.end_pass_zoom())
+        self.video.compareToggled.connect(self._on_corner_compare_left)
+        self.compare.on_anchor_dropped = self._on_anchor_dropped
         self.video.compareToggled.connect(self.compare.on_toggled)
         # Compare owns the two-pane stage, which the video-focus maximize can't sensibly frame, so a
         # compare-ON exits video focus first (wired AFTER on_toggled so compare has already entered
@@ -2084,11 +2098,23 @@ class CentralView(QWidget):
         export_action = menu.addAction("Export this pass…")
         label = self._corner_label(cid)
         export_action.triggered.connect(lambda: self.passExportRequested.emit(lap, cid, label))
+        compare_action = menu.addAction("Compare with my typical pass")
+        compare_action.triggered.connect(lambda: self.compare_pass_with_typical(lap, cid))
         why = self.lap_pass_refusal(lap, cid)
         if why is not None:
             for action in (play_action, export_action):
                 action.setEnabled(False)
                 action.setToolTip(why)
+        # Greyed out with its own reason: level with the typical pass, or it IS the typical pass.
+        why_not = self.typical_compare_refusal(lap, cid)
+        if why_not is not None:
+            compare_action.setEnabled(False)
+            compare_action.setToolTip(why_not)
+        else:
+            v = self.session.pass_vs_typical(lap, cid)
+            compare_action.setToolTip(
+                f"Lap {lap_label(lap)} and your typical pass through {label}, lap "
+                f"{lap_label(v.typical_lap_id)}, side by side from the lead-in")
         return menu
 
     def _show_pass_menu(self, table, target, pos):
@@ -2273,17 +2299,11 @@ class CentralView(QWidget):
         race in progress ends first (one map, one story — the same end compareToggled triggers).
         A compare already on is left first, and Esc or a lap pick leaves this one as any other.
         False when nothing changed."""
-        if not self.video.compare_btn.isEnabled():
-            return False
-        if self.is_racing():
-            self.end_lap_race()
-        if getattr(self, "_maximized_panel", None) is not None:
-            self._restore_splitter_sizes()     # the panes, charts and map are what it shows
-        if self._comparing():
-            self.compare.exit()
-        self.end_pass_zoom()     # enter_pair below does not toggle the button the zoom listens to
         cid, a, b = tp.cid, tp.lap_id, tp.best_lap_id
-        if not self.compare.enter_pair(a, b):
+        d = PRINT_DECIMALS
+        caption = (f"lap {lap_label(a)} ({tp.pass_s:.{d}f}) vs best lap {lap_label(b)} "
+                   f"({tp.best_pass_s:.{d}f}) · {self._corner_label(cid)}")
+        if not self._enter_corner_pair(cid, a, b, tp.pass_s, tp.best_pass_s, caption):
             return False
         corners = self.session.corners
         for side, lap in ((0, a), (1, b)):
@@ -2293,8 +2313,155 @@ class CentralView(QWidget):
         window = self.session.corner_plot_window(cid, self.plots.axis_mode())
         if window is not None:
             self.plots.frame_span(*window)
-        self._ring_corner(cid)
+        self._corner_status = True
         self.statusNotice.emit(compare_status(tp, lost))
+        return True
+
+    def _enter_corner_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
+                           caption: str) -> bool:
+        """Compare lap `a` (pane A, the charts' cursor) with lap `b` AT corner `cid`: C's gates (two
+        valid laps; a Lap race ends first), the grid restored, any compare or pass zoom left, the
+        pair entered, the corner ringed, and both Δ badges and the seam anchored at the corner
+        (`compare_controller.CornerAnchor`: nothing in the lead-in, the gap since the entry inside
+        it, the passes' printed gap held after the exit) under `caption`, the pair named for the
+        whole comparison. `pass_a` / `pass_b` are the two passes' times through the corner. False
+        when nothing changed."""
+        if not self.video.compare_btn.isEnabled():
+            return False
+        if self.is_racing():
+            self.end_lap_race()
+        if getattr(self, "_maximized_panel", None) is not None:
+            self._restore_splitter_sizes()     # the panes, charts and map are what it shows
+        if self._comparing():
+            self.compare.exit()
+        self.end_pass_zoom()     # enter_pair below does not toggle the button the zoom listens to
+        if not self.compare.enter_pair(a, b):
+            return False
+        corners = self.session.corners
+        sides = []
+        for lap, pass_s in ((a, pass_a), (b, pass_b)):
+            entry = corners.corner_edge_media_time(lap, cid, "enter")
+            leave = corners.corner_edge_media_time(lap, cid, "exit")
+            clip = corners.pass_clip(lap, cid)
+            sides.append(None if None in (entry, leave, clip) else
+                         (entry, leave, clip[0], clip[1], pass_s))
+        if None not in sides:
+            self.compare.set_corner_anchor(self._corner_label(cid), caption, *sides)
+        self._ring_corner(cid)
+        return True
+
+    # ------------------------------------------------------------- this pass vs the typical one
+    # "What did I do differently?" in one step: THIS pass (pane A, the charts' cursor) beside the
+    # corner's typical pass (pane B) — Coaching's typical, the same `typical_pass_lap`, with this
+    # lap where the best lap stands — both panes from the lead-in, playing once and pausing at their
+    # own clip ends, the charts and the map zoomed on the corner as a played pass is (#618). Offered
+    # only where the two printed times are NOT level under the timing step (`stats.is_level`): six
+    # of the demo's seven quickest passes tie with the next lap, and a level pair has no difference
+    # to look for. Leaving: C, the compare button, Esc or a lap pick — and the charts go back to
+    # this lap alone (`_on_corner_compare_left`). Loop and Slow are off in it: compare is not a
+    # pass (#621's `set_compare` ends the pass), and two panes looping on different lengths would
+    # drift apart.
+    def typical_compare_refusal(self, lap_id: int, cid: int) -> str | None:
+        """Why lap `lap_id`'s pass through `cid` cannot be compared with the typical pass, or None."""
+        why = self.lap_pass_refusal(lap_id, cid)
+        if why is not None:
+            return why
+        label, lap = self._corner_label(cid), lap_label(lap_id)
+        v = self.session.pass_vs_typical(lap_id, cid)
+        if v is None:
+            matrix = self.session.corner_matrix()
+            col = matrix.cids.index(cid) if matrix is not None and cid in matrix.cids else None
+            if col is not None and lap_id in matrix.lap_ids:
+                row = matrix.lap_ids.index(lap_id)
+                if matrix.cells[row][col] is None or not matrix.resolved[row][col]:
+                    return (f"Lap {lap}'s pass through {label} is not counted in the corner "
+                            "times (not matched on track), so there is no typical pass to set "
+                            "beside it")
+            return (f"{label} has too few counted passes for a typical one (it needs "
+                    "a median of several laps matched on track)")
+        if v.is_typical:
+            return (f"Lap {lap}'s pass ({v.pass_s:.{PRINT_DECIMALS}f}) is your typical pass "
+                    f"through {label}: there is nothing typical to set beside it")
+        if v.level:
+            return (f"Lap {lap}'s pass through {label} is level with your typical pass (within "
+                    f"{v.level_s:.2f} s): nothing to tell apart")
+        if not self.video.compare_btn.isEnabled():
+            return "Compare needs two laps"
+        return None
+
+    def typical_compare_title(self, lap_id: int, cid: int) -> str | None:
+        """⌘K's row for the pass being studied, "Compare lap 13 through C3 with typical lap 1",
+        or None where `typical_compare_refusal` refuses it."""
+        if self.typical_compare_refusal(lap_id, cid) is not None:
+            return None
+        v = self.session.pass_vs_typical(lap_id, cid)
+        return (f"Compare lap {lap_label(lap_id)} through {self._corner_label(cid)} with typical "
+                f"lap {lap_label(v.typical_lap_id)}")
+
+    def compare_pass_with_typical(self, lap_id: int, cid: int) -> bool:
+        """Compare lap `lap_id`'s pass through `cid` with the corner's typical pass (see above).
+        Refused, with the reason on the status line, where `typical_compare_refusal` says so."""
+        why = self.typical_compare_refusal(lap_id, cid)
+        if why is not None:
+            self.statusNotice.emit(why)
+            return False
+        v = self.session.pass_vs_typical(lap_id, cid)
+        corners = self.session.corners
+        clip_a = corners.pass_clip(lap_id, cid)
+        clip_b = corners.pass_clip(v.typical_lap_id, cid)
+        if clip_a is None or clip_b is None:
+            self.statusNotice.emit(f"Lap {lap_label(v.typical_lap_id)}'s pass has no clip")
+            return False
+        self._forget_quickest_cycle()          # the pass being studied is left for the pair
+        d, label = PRINT_DECIMALS, self._corner_label(cid)
+        caption = (f"lap {lap_label(lap_id)} ({v.pass_s:.{d}f}) vs typical lap "
+                   f"{lap_label(v.typical_lap_id)} ({v.typical_pass_s:.{d}f}) · {label}")
+        if not self._enter_corner_pair(cid, lap_id, v.typical_lap_id, v.pass_s,
+                                       v.typical_pass_s, caption):
+            return False
+        self.video.seek_pane(0, clip_a[0])
+        self.video.seek_pane(1, clip_b[0])
+        self.video.play()
+        # Each pane pauses itself at its OWN clip end (1 s after its exit), once.
+        self.video.pane.set_clip_end(clip_a[1])
+        if self.video.secondary is not None:
+            self.video.secondary.set_clip_end(clip_b[1])
+        self._zoom_to_pass(lap_id, cid, clip_a)
+        self._corner_compare = (int(lap_id), int(v.typical_lap_id))
+        self._corner_status = True
+        self.statusNotice.emit(typical_compare_status(v, label))
+        return True
+
+    def _on_anchor_dropped(self):
+        """The compare stopped being "this corner" — left (C, Esc, the button, a lap pick, a
+        Quickest row, ⌥→, a Coaching Compare), a pane repointed, or a pane played or scrubbed out
+        of its clip. ONE place for every way: the corner-compare state goes, and the status line
+        that named the pair is cleared at once rather than lingering its 6 s over a new view."""
+        self._corner_compare = None
+        if getattr(self, "_corner_status", False):
+            self._corner_status = False
+            self.statusNotice.emit("")
+
+    def _on_corner_compare_left(self, on: bool):
+        """compareToggled: a compare of this pass with the typical one was left (C, the button,
+        Esc, a lap pick). The charts go back to this lap alone — unless the driver just picked
+        other laps, whose selection is the one that stands."""
+        pair = getattr(self, "_corner_compare", None)
+        if on or pair is None:
+            return
+        self._corner_compare = None
+        if sorted(self.table.selected_lap_ids()) == sorted(pair):
+            self.table.select([pair[0]])
+            self.plots.set_laps([pair[0]])
+            self._set_corner_lap(pair[0])
+
+    def leave_corner_compare(self) -> bool:
+        """Esc on a compare of this pass with the typical one: leave it. False when none is on —
+        including a later plain compare, whose pair is not this one (the anchor says which)."""
+        if (getattr(self, "_corner_compare", None) is None or not self._comparing()
+                or self.compare.corner_anchor() is None):
+            return False
+        self.video.compare_btn.click()      # compareToggled(False): the exit, then the restore
         return True
 
     # ------------------------------------------------------------- the hovered corner
