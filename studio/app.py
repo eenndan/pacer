@@ -2084,6 +2084,11 @@ class StudioWindow(QMainWindow):
         # A transient fact a panel has no status bar to state (U2: a lap selection trimmed to the
         # charts' cap). Timed like every other just-happened confirmation.
         self.view.statusNotice.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
+        # F / ⌘K "fill the screen" refused while comparing: the ⤢ button's reason, as C / G say
+        # theirs (`_press_or_say`). Guarded: the lifecycle tests' stand-in views.
+        refused = getattr(getattr(self.view, "video", None), "videoFocusRefused", None)
+        if refused is not None:
+            refused.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
         # ...and a sentence about a state that just ended goes at once (CentralView._hold_status),
         # if it is still the line showing. Guarded: the lifecycle tests' stand-in views.
         retracted = getattr(self.view, "statusRetracted", None)
@@ -3056,7 +3061,7 @@ class StudioWindow(QMainWindow):
 
     def toggle_video_focus(self):
         """Make the video fill the screen, or restore (F) — through the ⤢ button, which compare
-        mode disables."""
+        mode disables; then the status line says so (VideoView.videoFocusRefused)."""
         self._video_do(lambda v: v.request_video_focus())
 
     def slower_playback(self):
