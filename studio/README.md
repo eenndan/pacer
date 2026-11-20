@@ -217,7 +217,7 @@ caches + delegates.
 | Module | Responsibility | Imports | Test |
 |---|---|---|---|
 | [export_video.py](export_video.py) | Offline overlay-video renderer: ffmpeg decode → QPainter → VideoToolbox / libx264 | Qt | `test_export_video` |
-| [export_compare.py](export_compare.py) | The distance-locked two-lap compare export (a `Renderer` subclass) | Qt | `test_export_compare` |
+| [export_compare.py](export_compare.py) | The two-lap compare export, distance-locked or one pass per pane (a `Renderer` subclass) | Qt | `test_export_compare` |
 | [overlay/\_\_init\_\_.py](overlay/__init__.py) | Overlay-element seam: the protocol, the registry, `prepare` once and `paint` per frame | Qt | `test_export_ghost` |
 | [overlay/ghost.py](overlay/ghost.py) | The export minimap's ghost: your best lap at the same lap time, off the Lap Race maths | Qt | `test_export_ghost` |
 | [overlay/corner_cards.py](overlay/corner_cards.py) | Export corner cards: min speed + Δ vs the same corner on the best lap (Corners Δbest), at its exit | Qt | `test_export_corner_cards` |

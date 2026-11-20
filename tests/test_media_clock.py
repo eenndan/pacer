@@ -572,6 +572,8 @@ CROSSINGS = {
     ("studio/export_compare.py", "lock_to_track", "_telemetry_time"): (_P, "pane A's frame"),
     ("studio/export_compare.py", "lock_to_track", "_media_time"):
         (_P, "pane B's frame, on pane B's own recording's map"),
+    ("studio/export_compare.py", "lock_to_clips", "_telemetry_time"):
+        (_P, "a pass compare: each pane's frame of its own clip -> the sample its plate reads"),
     ("studio/session.py", "Session.lap_channels", "to_media"):
         (_P, "the channels CSV's t_video_s: where in the footage each row is"),
     # --- indexing a series stamped on the camera's clock whose content carries the GPS delay

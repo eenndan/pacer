@@ -172,6 +172,9 @@ class ExportController:
     def __init__(self, win, status_ms: int):
         self.win = win
         self._status_ms = status_ms
+        # The compare picker's "This pass" choice (`_ask_compare_options`): the live compare's
+        # `PassAnchor`, or None for the two whole laps.
+        self.compare_pass_chosen = None
 
     # ----------------------------------------------------------- data export (F11)
     # File ▸ Export Qt side (the writers are Qt-free in export_data.py).
@@ -664,7 +667,8 @@ class ExportController:
     _EXPORT_RES_SOURCE = 3
     # The compare export's own two rows. LAYOUT first because it decides the shape of the file:
     # stacked panes make a roughly 8:9 frame a phone shows nearly full-screen, side-by-side an
-    # ultrawide one. There is no scope row (a compare is OF a pair, so the pair IS the scope), no
+    # ultrawide one. There is no scope row (a compare is OF a pair, so the pair IS the scope) but
+    # for a compare at a pass, "This pass" or "Both whole laps" (`_ask_compare_options`), no
     # run-up row (padding is footage outside the lap, where there is no track position to lock to)
     # and no shape/contents row (both panes must be the same shape, and an overlay-only compare has
     # no second picture to lock to) — every row the single-lap picker has that this one lacks is a
@@ -873,7 +877,8 @@ class ExportController:
         and the alpha formats are priced per pixel of overlay."""
         return " Real size follows how much the footage moves." if codec == export_video.SW_H264 else ""
     def _compare_size_hint(self, dur: float, out_height: int, quality: str, layout: str,
-                           source: tuple[int, int, float] | None = None) -> str:
+                           source: tuple[int, int, float] | None = None,
+                           ends_on_finish: bool = True) -> str:
         """The compare picker's size-and-time line, from the COMPARE'S OWN frame: two panes, side
         by side (twice as wide) or stacked (twice as tall), sized by `compare_geometry`, the
         renderer's own rule. The bytes come from the one size model every export reads; the time
@@ -884,7 +889,8 @@ class ExportController:
         The frames are the render's own: lap A's window plus its FINISH FRAME, the one that shows
         both lap times (`with_finish_frame`), which a compare always ends on. The size is priced on
         the frame the cap leaves (`compare_geometry`), which is also the frame VideoToolbox's
-        hardware encoder takes and `VT_H264_YIELD` was measured on."""
+        hardware encoder takes and `VT_H264_YIELD` was measured on. A compare at one pass
+        (`ends_on_finish` False) is cut on no line: its frames are its longer clip's."""
         if not (dur > 0):
             return ""
         if source is None and out_height >= 99999:
@@ -895,7 +901,7 @@ class ExportController:
         # frame is `compare_geometry`'s own 16:9 guess.
         geo = export_compare.compare_geometry((src_w, src_h), (src_w, src_h), cfg)
         fps = export_video.resolve_fps(cfg, src_fps)
-        frames = export_video.planned_frames(dur, fps, ends_on_finish=True)
+        frames = export_video.planned_frames(dur, fps, ends_on_finish=ends_on_finish)
         codec = export_video.resolve_encoder("auto")
         size = export_video.fmt_bytes(export_video.estimate_output_bytes(
             geo.out_w, geo.out_h, fps, frames / fps, quality, codec))
@@ -1591,14 +1597,45 @@ class ExportController:
             return None
         return a, b, compare.session_b, bool(compare.cross)
 
+    def compare_pass(self):
+        """The pass the live compare is anchored at (`compare_controller.PassAnchor`: "Compare
+        with my typical pass", a Coaching row's Compare), when it names one to export, or None.
+        The compare picker offers "This pass" only then."""
+        view = getattr(self.win, "view", None)
+        compare = getattr(view, "compare", None) if view is not None else None
+        anchor = getattr(compare, "anchor", None) if compare is not None else None
+        if (anchor is None or not getattr(compare, "active", False) or compare.cross
+                or getattr(anchor, "key", None) is None or getattr(anchor, "pass_s", None) is None):
+            return None
+        return anchor
+
+    # The compare picker's two descriptions, one per scope.
+    _COMPARE_LAPS_DESC = ("Both laps play locked to the same point on TRACK, not the same time on "
+                          "the clock — so as one pulls ahead the two frames stay at the same "
+                          "corner and the gap between the clocks is the delta.")
+    _COMPARE_PASS_DESC = ("Both passes through {label}, each from its own lead-in to 1 s after "
+                          "its exit, started together. The gap shows no "
+                          "number before the entry, the gap since the entry through {label}, and "
+                          "after the exit the two passes' gap as timed, held.")
+
+    def _compare_pass_seconds(self, lap_a: int, lap_b: int, key: int) -> float:
+        """How long a compare at one pass runs: the longer of its two pass clips
+        (`export_compare.PassPair`), each the window the render resolves. NaN without both."""
+        spans = [self._pass_seconds(lap, key) for lap in (lap_a, lap_b)]
+        return max(spans) if all(math.isfinite(s) for s in spans) else float("nan")
+
     def _ask_compare_options(self):
         """Layout + resolution + quality for a compare export, or None on cancel. Every row
         persists, like the single-lap picker's; the resolution under its OWN key
-        (`_PREF_COMPARE_RES`), so neither picker opens on the other's choice."""
+        (`_PREF_COMPARE_RES`), so neither picker opens on the other's choice.
+
+        A compare at a pass (`compare_pass`) adds an Export row first: "This pass — C3, lap 13
+        against lap 1", opened on (the compare he is looking at), or "Both whole laps". Like the
+        single-lap picker's pass row it is never remembered. The choice is left in
+        `self.compare_pass_chosen` (the anchor, or None for the whole laps)."""
+        self.compare_pass_chosen = None
         dlg, col = self._export_dialog("Export comparison video")
-        desc = QLabel("Both laps play locked to the same point on TRACK, not the same time on the "
-                      "clock — so as one pulls ahead the two frames stay at the same corner and "
-                      "the gap between the clocks is the delta.")
+        desc = QLabel(self._COMPARE_LAPS_DESC)
         desc.setWordWrap(True)
         desc.setProperty("role", "Note")
         col.addWidget(desc)
@@ -1606,6 +1643,18 @@ class ExportController:
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(theme.SPACE_M)
         form.setVerticalSpacing(theme.SPACE_S)
+        pair = self.compare_pair()
+        anchor = self.compare_pass() if pair is not None else None
+        scope_combo = None
+        if anchor is not None:
+            pair_text = f"lap {lap_label(pair[0])} against lap {lap_label(pair[1])}"
+            scope_combo = QComboBox(dlg)
+            scope_combo.addItem(f"This pass — {anchor.label}, {pair_text}")
+            scope_combo.addItem(f"Both whole laps — {pair_text}")
+            form.addRow("Export", scope_combo)
+
+        def _pass_scope() -> bool:
+            return scope_combo is not None and scope_combo.currentIndex() == 0
 
         def _combo(options, pref_key, default):
             box = QComboBox(dlg)
@@ -1631,26 +1680,37 @@ class ExportController:
         col.addWidget(buttons)
         # EXP-8: the single-lap picker has always said what an export costs; this one said
         # nothing, and a compare costs more than a lap of the same length. The clip is lap A's
-        # window, as `build_compare_spec` resolves it (no run-up: a compare is locked lap to lap).
-        pair = self.compare_pair()
+        # window, as `build_compare_spec` resolves it (no run-up: a compare is locked lap to lap);
+        # at one pass, the longer of the two pass clips (`build_pass_compare_spec`).
         clip = self._export_clip_seconds(pair[0], 0.0) if pair is not None else float("nan")
+        pass_clip = (self._compare_pass_seconds(pair[0], pair[1], int(anchor.key))
+                     if anchor is not None else float("nan"))
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
 
         def _update_hint():
-            lines = ["The clip is as long as the first lap, and carries that lap's audio — the "
-                     "second pane is time-warped by the lock, so its sound would be too."]
+            at_pass = _pass_scope()
+            desc.setText(self._COMPARE_PASS_DESC.format(label=anchor.label) if at_pass
+                         else self._COMPARE_LAPS_DESC)
+            if at_pass:
+                lines = [f"The shorter pass holds its last frame until the longer one ends. The "
+                         f"clip carries lap {lap_label(pair[0])}'s sound."]
+            else:
+                lines = ["The clip is as long as the first lap, and carries that lap's audio — "
+                         "the second pane is time-warped by the lock, so its sound would be too."]
             size = self._compare_size_hint(
-                clip, self._COMPARE_RES_OPTIONS[res_combo.currentIndex()][1],
+                pass_clip if at_pass else clip,
+                self._COMPARE_RES_OPTIONS[res_combo.currentIndex()][1],
                 self._EXPORT_QUALITY_OPTIONS[q_combo.currentIndex()][1],
                 self._COMPARE_LAYOUT_OPTIONS[layout_combo.currentIndex()][1],
-                export_video.known_video_size(src))
+                export_video.known_video_size(src), ends_on_finish=not at_pass)
             if size:
                 lines.append(size)
             elif self._measuring_line(src):
                 lines.append(self._measuring_line(src))
             hint.setText("  ".join(lines))
-        for combo in (layout_combo, res_combo, q_combo):
-            combo.currentIndexChanged.connect(_update_hint)
+        for combo in (layout_combo, res_combo, q_combo, scope_combo):
+            if combo is not None:
+                combo.currentIndexChanged.connect(_update_hint)
         probe_poll = self._redraw_once_probed(dlg, src, _update_hint)
         _update_hint()
         accepted = dlg.exec() == QDialog.Accepted
@@ -1658,6 +1718,7 @@ class ExportController:
             probe_poll.stop()
         if not accepted:
             return None
+        self.compare_pass_chosen = anchor if _pass_scope() else None
         self._remember_export_prefs({
             self._PREF_COMPARE_LAYOUT: layout_combo.currentIndex(),
             self._PREF_COMPARE_RES: res_combo.currentIndex(),
@@ -1695,22 +1756,32 @@ class ExportController:
         if self.win._share_card_blocked() and not self.win._confirm_provisional_video():
             self.win.statusBar().showMessage("video export cancelled", self._status_ms)
             return
+        self.compare_pass_chosen = None
         config = self._ask_compare_options()
         if config is None:
             return
-        # Named for the PAIR, in the lap table's numbers: `GX010067_lap14_vs_lap15_compare.mp4`.
+        anchor = self.compare_pass_chosen       # "This pass" (`_ask_compare_options`), or None
+        # Named for the PAIR, in the lap table's numbers: `GX010067_lap14_vs_lap15_compare.mp4`,
+        # and for the pass when it is one: `GX010067_lap13_vs_lap1_C3_compare.mp4`.
+        at = f"_{anchor.label}" if anchor is not None else ""
         out = self._export_save_path(
             "Export comparison video",
-            f"_lap{lap_label(lap_a)}_vs_lap{lap_label(lap_b)}_compare.mp4", "MP4 video (*.mp4)")
+            f"_lap{lap_label(lap_a)}_vs_lap{lap_label(lap_b)}{at}_compare.mp4",
+            "MP4 video (*.mp4)")
         if not out:
             return
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else None
         try:
-            spec = export_compare.build_compare_spec(
-                self.win.session, out, lap_a, lap_b, session_b=session_b, config=config,
-                src_path_a=src,
-                label_a=f"LAP {lap_label(lap_a)}",
-                label_b=f"REF LAP {lap_label(lap_b)}" if cross else f"LAP {lap_label(lap_b)}")
+            if anchor is not None:
+                spec = export_compare.build_pass_compare_spec(
+                    self.win.session, out, lap_a, lap_b, anchor, config=config, src_path=src,
+                    label_a=f"LAP {lap_label(lap_a)}", label_b=f"LAP {lap_label(lap_b)}")
+            else:
+                spec = export_compare.build_compare_spec(
+                    self.win.session, out, lap_a, lap_b, session_b=session_b, config=config,
+                    src_path_a=src,
+                    label_a=f"LAP {lap_label(lap_a)}",
+                    label_b=f"REF LAP {lap_label(lap_b)}" if cross else f"LAP {lap_label(lap_b)}")
         except ValueError as exc:
             QMessageBox.warning(self.win, self._COMPARE_FAIL_TITLE,
                                 f"{APP_NAME} can't export this comparison:\n{exc}")
@@ -1739,7 +1810,9 @@ class ExportController:
             # A cross-recording pane B is a lap of ANOTHER recording, and the clip burns it in as
             # "REF LAP n"; "against lap 23" alone reads as this recording's lap 23.
             ref = "reference " if getattr(spec, "cross", False) else ""
-            return f"lap {lap_label(lap_id)} against {ref}lap {lap_label(lap_b)}"
+            pair = getattr(spec, "pass_pair", None)
+            at = f" through {pair.label}" if pair is not None else ""
+            return f"lap {lap_label(lap_id)} against {ref}lap {lap_label(lap_b)}{at}"
         return f"lap {lap_label(lap_id)}" if lap_id is not None else "an overlay video"
 
     @staticmethod
