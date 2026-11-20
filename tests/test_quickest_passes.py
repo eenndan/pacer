@@ -2565,6 +2565,47 @@ def test_a_key_on_a_disabled_transport_button_says_its_reason():
         _close(win)
 
 
+def test_f_and_its_command_while_comparing_say_why_the_video_cannot_fill_the_screen():
+    """F (and ⌘K "Make the video fill the screen") while comparing two laps did nothing and said
+    nothing: the ⤢ button is disabled then (compare owns the two-pane stage) and the reason lived
+    only on its tooltip. Both now put that tooltip on the status line, as C and G do — one
+    sentence, one source — and neither enters video focus."""
+    from studio import help_dialog
+    win = _window()
+    try:
+        view, bar = win.view, win.statusBar()
+        v = view.video
+        v.compare_btn.click()
+        _settle()
+        assert view._comparing() and not v.fullscreen_btn.isEnabled()
+        reason = v.fullscreen_btn.toolTip()
+        assert reason == "Make the video fill the screen (F) — not while comparing two laps"
+        bar.clearMessage()
+        QTest.keyClick(win, Qt.Key_F)
+        _settle()
+        assert bar.currentMessage() == reason, repr(bar.currentMessage())
+        assert not view.is_video_focused() and view._comparing()
+        bar.clearMessage()
+        row = next(c for c in help_dialog.COMMANDS if c.run == "toggle_video_focus")
+        getattr(win, row.run)()                     # what the ⌘K row runs
+        _settle()
+        assert bar.currentMessage() == reason, repr(bar.currentMessage())
+        assert not view.is_video_focused()
+        # ...and out of compare F does what it always did, saying nothing
+        v.compare_btn.click()
+        _settle()
+        assert not view._comparing() and v.fullscreen_btn.isEnabled()
+        bar.clearMessage()
+        QTest.keyClick(win, Qt.Key_F)
+        _settle()
+        assert view.is_video_focused() and bar.currentMessage() == ""
+        QTest.keyClick(win, Qt.Key_F)
+        _settle()
+        assert not view.is_video_focused()
+    finally:
+        _close(win)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

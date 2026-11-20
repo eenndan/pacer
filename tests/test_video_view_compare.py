@@ -1058,8 +1058,13 @@ def test_u9_04_f_key_reaches_the_video_focus_gesture():
     # In compare the button is disabled, so the key is a no-op rather than a silent refusal.
     view.set_compare(_spec(0, (0.0, 10.0), "A", [0]), _spec(0, (20.0, 30.0), "B", [0]))
     intents.clear()
+    refused = []
+    view.videoFocusRefused.connect(refused.append)
     keys[0].activated.emit()
     assert intents == [], "F must be inert while the gesture is unavailable"
+    # ...but not silent: it says the disabled button's own reason, for the status line
+    assert refused == [view.fullscreen_btn.toolTip()], refused
+    assert "not while comparing" in refused[0], refused
     _ALIVE.append(view)
     print("test_u9_04_f_key_reaches_the_video_focus_gesture OK")
 
