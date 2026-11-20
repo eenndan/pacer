@@ -749,6 +749,9 @@ def test_a_row_reopens_through_the_library_windows_door():
                 def exec(self):
                     return 0
 
+                def deleteLater(self):      # open_library frees the real dialog after exec
+                    pass
+
             real = library_controller.LibraryDialog
             library_controller.LibraryDialog = _Dialog
             try:
@@ -988,6 +991,9 @@ class _StubLibraryWindow:
         if _StubLibraryWindow.act is not None:
             _StubLibraryWindow.act(self)
         return 0
+
+    def deleteLater(self):          # open_library frees the real dialog after exec
+        pass
 
 
 @_offline

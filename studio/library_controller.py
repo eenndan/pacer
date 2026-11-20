@@ -752,6 +752,9 @@ class LibraryController:
                             # The whole privacy account, one click from the note's one line.
                             show_privacy=self.win._show_privacy)
         dlg.exec()
+        # Nothing below reads the dialog. Parented to the window and held alive by its own
+        # lambdas, it was never freed: every open left ~113 widgets (7 menus among them) behind.
+        dlg.deleteLater()
         # Every record write in there already refreshed both readers (`_records_changed`); this
         # re-read is for a callback that raised part-way, which the dialog swallows.
         self._records_changed()
@@ -1460,6 +1463,7 @@ class LibraryController:
             restore_tracks=self._restore_tracks, backup_info=track_db.backup_summary,
             reverts_to_builtin=track_db.reverts_to_builtin)
         dlg.exec()
+        dlg.deleteLater()     # as open_library's: parented, so never freed by Python alone
 
     def _rename_track(self, old: str, new: str) -> list[dict]:
         """Rename a saved circuit EVERYWHERE its name is an identity key, and return the fresh rows.

@@ -543,6 +543,9 @@ def test_the_app_wires_the_way_back_from_clear_library():
         def exec(self):
             return 0
 
+        def deleteLater(self):      # open_library frees the real dialog after exec
+            pass
+
     real = library_controller.LibraryDialog
     library_controller.LibraryDialog = _Dlg
     try:

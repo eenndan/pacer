@@ -1725,6 +1725,7 @@ class LibraryDialog(QDialog):
             "Remove this recording from the library index and delete its .pacer.json timing-line "
             "sidecar and its session record. Your video file is not touched.")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        menu.deleteLater()    # parented to the dialog: left alone, one QMenu per right-click stays
         if chosen is act:
             self._forget_row(date_item)
         elif record_act is not None and chosen is record_act:
