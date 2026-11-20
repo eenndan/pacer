@@ -835,6 +835,30 @@ def _h2s(text):
     return ["".join(h.itertext()) for h in ET.fromstring(text).iter("h2")]
 
 
+def _css_rules(css):
+    """Every style rule of `css` as `(enclosing @-rules, [selectors], body)`, comments dropped:
+    a rule's media context is read from the braces, not from where a line happens to sit."""
+    import re
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    rules, stack, pos = [], [], 0
+    while True:
+        m = re.compile(r"[{}]").search(css, pos)
+        if m is None:
+            return rules
+        prelude = " ".join(css[pos:m.start()].split())
+        if m.group() == "}":
+            stack.pop()
+            pos = m.end()
+        elif prelude.startswith("@"):
+            stack.append(prelude)
+            pos = m.end()
+        else:   # a style rule: its body holds no braces
+            end = css.index("}", m.end())
+            rules.append((tuple(stack), [s.strip() for s in prelude.split(",")],
+                          css[m.end():end]))
+            pos = end + 1
+
+
 def test_the_report_tells_the_apps_story_in_its_order_and_words():
     """MOMENTS, CORNERS, SLOW LAPS and the lap strip are on the page, in the Stats page's order
     then the Laps tab's, and every sentence is the app function's own string: `story.moment_row`,
@@ -845,8 +869,9 @@ def test_the_report_tells_the_apps_story_in_its_order_and_words():
     s = _with_story(make_session(), moments, notes, report)
     text = _report_text(s, images=[("Track map", PNG_1PX)], lapstrip=PNG_1PX)
     heads = _h2s(text)
-    want = ["SESSION", "PACE", "MOMENTS", "SPEED · G", "CORNERS · speeds in km/h", "SLOW LAPS",
-            "LAP STRIP", f"Laps ({len(s.valid_lap_ids())})", "Track map"]
+    # The passed figure comes first, right under the front page (cool/report-pictures-up).
+    want = ["Track map", "SESSION", "PACE", "MOMENTS", "SPEED · G", "CORNERS · speeds in km/h",
+            "SLOW LAPS", "LAP STRIP", f"Laps ({len(s.valid_lap_ids())})"]
     assert [h for h in heads if h in want] == want, heads
     body = "".join(ET.fromstring(text).itertext())
     shown = story.shown_moments(moments)
@@ -1007,8 +1032,19 @@ def test_print_puts_every_laps_column_on_paper():
     screen, paper = export_data._REPORT_CSS.split("@media print {")
     assert "overflow-x: auto" in screen and "section.wide" in screen
     assert "overflow: visible" in paper and "break-inside: auto" in paper
-    avoid = [line for line in paper.splitlines() if "break-inside: avoid" in line]
-    assert avoid and not any(line.lstrip().startswith("section") for line in avoid), avoid
+    # Kept whole: small blocks only — a figure with its caption and a Stats group are (each well
+    # under a page, cool/report-pictures-up); a bare `section` or `section.wide` (COACHING,
+    # CORNERS, the laps table) never is. Every rule that reaches paper counts — the print block
+    # AND the rules outside any `@media screen` one (a global `section { break-inside: avoid }`
+    # prints too); only a screen-only rule may keep more whole.
+    on_paper = [sels for media, sels, body in _css_rules(export_data._REPORT_CSS)
+                if "break-inside: avoid" in body
+                and not any(m.startswith("@media screen") for m in media)]
+    selectors = [sel for sels in on_paper for sel in sels]
+    assert on_paper and not {"section", "section.wide"} & set(selectors), selectors
+    assert all(sel in {"tr", "li", "p.note", "img", "table.kv", "table.meta", "table.moments",
+                       "section.figure", ".groups > section", "figure.hero"}
+               for sel in selectors), selectors
     assert "table.laps" in paper and "img.card" in paper
     s = make_session()
     text = _report_text(s, lapstrip=PNG_1PX)

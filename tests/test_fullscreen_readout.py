@@ -419,6 +419,43 @@ def test_the_pass_line_goes_when_the_pass_ends_while_paused():
         _close(win)
 
 
+def test_the_pass_line_follows_the_one_pass_subject():
+    """The pass line reads `CentralView.pass_subject()` — the one source of truth (play-every-pass):
+    a per-lap pass (a Corners row, a Stats cell, the ▼ cue) names that lap's own time, the corner
+    walk moves it, the clip's own auto-pause keeps it, and leaving the pass (Esc, a lap pick)
+    takes it away."""
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        _focus(win)
+        corners = s.corners
+        idx = next(i for i, c in enumerate(corners.corner_list()) if c.cid == 5)
+        took = corners.lap_corner_stats(5)[idx].time            # lap 6's own C5 time
+        assert view.play_lap_pass(5, 5)
+        c0, c1 = view.video.pane.pass_clip()
+        _at(view, (c0 + c1) / 2)
+        assert _readout(view).lines().pass_ == f"C5 · lap 6 ({took:.2f})"
+        assert view.pass_subject()[:2] == (5, 5)
+        view.video.pane._on_position(int(c1 * 1000))           # the clip's own end: auto-pause
+        _at(view, c1)
+        assert view.pass_subject() is not None
+        assert _readout(view).lines().pass_ == f"C5 · lap 6 ({took:.2f})", "kept after the pause"
+        assert view.step_corner_pass(+1)                         # ⌥→: C6 on the same lap
+        c0, c1 = view.video.pane.pass_clip()
+        _at(view, (c0 + c1) / 2)
+        assert _readout(view).lines().pass_.startswith("C6 · lap 6 ("), _readout(view).lines()
+        assert view.escape_pass()                                # Esc on a zoomed pass leaves it
+        _at(view, (c0 + c1) / 2)
+        assert view.pass_subject() is None and _readout(view).lines().pass_ == ""
+        assert view.play_lap_pass(5, 5)                          # ...and a lap pick leaves it
+        view.table.laps_selected.emit([3])
+        _settle()
+        _at(view, sum(s.lap_window(3)) / 2)
+        assert view.pass_subject() is None and _readout(view).lines().pass_ == ""
+    finally:
+        _close(win)
+
+
 def test_a_degraded_clock_mutes_the_lap_clock_as_the_table_mutes_lap_times():
     from studio import lap_table
     win = _window()

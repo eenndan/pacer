@@ -154,9 +154,15 @@ def _close(win):
 
 
 def _record_plays(view):
-    """Replace the player's clip call with a recorder: (start, end) per play."""
+    """Replace the player's clip call with a recorder: (start, end) per play. The pane still TAKES
+    the pass (`set_clip`, what play_clip ends with), so the pass is the player's subject as it is
+    after a real play — the inert player just never moves."""
     plays = []
-    view.video.play_clip = lambda start, end: plays.append((start, end))
+
+    def record(start, end):
+        plays.append((start, end))
+        view.video.pane.set_clip(start, end)
+    view.video.play_clip = record
     return plays
 
 
@@ -905,6 +911,498 @@ def test_the_tick_inside_a_zoomed_pass_moves_neither_view():
     finally:
         _close(win)
         prefs.set_corners_view("lap")
+
+
+# ------------------------------------------------------------------ every corner time plays its pass
+# (cool/play-every-pass) A Corners lap row, a Stats ▸ CORNERS BY LAP cell and the Laps table's
+# "▼ C5" cue PLAY that lap's pass through the corner, exactly as a Quickest row plays its own —
+# the lead-in, the pause after the exit, the zoom, one status builder — and ⌥← / ⌥→ walk the
+# corners one pass per press. One "pass being studied" behind all of them: the zoom, ⌘K's export
+# row and the walk follow a pass started anywhere.
+
+
+def _cell(win, lap, cid):
+    m = win.session.corner_matrix()
+    return m.cells[m.lap_ids.index(lap)][m.cids.index(cid)]
+
+
+def _export_rows(win):
+    return [t for t, _c in win.quickest_pass_commands() if t.startswith("Export the")]
+
+
+def _patched_matrix(win, *, unresolved=None, drop_lap=None):
+    """The session's grid with one cell unmatched on track, or one lap not a row (⊘ / ⚠)."""
+    import dataclasses
+    real = win.session.corner_matrix
+
+    def patched():
+        m = real()
+        resolved = [list(row) for row in m.resolved]
+        if unresolved is not None:
+            lap, cid = unresolved
+            resolved[m.lap_ids.index(lap)][m.cids.index(cid)] = False
+        m = dataclasses.replace(m, resolved=resolved)
+        if drop_lap is not None:
+            k = m.lap_ids.index(drop_lap)
+            m = dataclasses.replace(
+                m, lap_ids=[i for i in m.lap_ids if i != drop_lap],
+                cells=[row for i, row in enumerate(m.cells) if i != k],
+                resolved=[row for i, row in enumerate(m.resolved) if i != k])
+        return m
+    win.session.corner_matrix = patched
+    return real
+
+
+def test_a_corners_lap_row_plays_that_laps_own_pass():
+    prefs.set_corners_view("lap")
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+        view.table.laps_selected.emit([5])           # the driver picks lap 6 (the slow one)
+        view.select_lap_tab(1)
+        _settle()
+        assert view.corners_page.view() == "lap"
+        row = [view.corner_table.cid_at(r) for r in range(7)].index(5)
+        view.corner_table.table.cellClicked.emit(row, 1)
+        _settle()
+        assert plays[-1] == s.corners.pass_clip(5, 5), plays
+        assert view.map.pinned_corner() == "C5", "the ring the row click always made stays"
+        assert _corner_framed(view, 5) and view.pass_zoomed()
+        msg = win.statusBar().currentMessage()
+        assert msg == (f"Playing lap 6 through C5 ({_cell(win, 5, 5):.2f}) · Esc: whole lap · "
+                       "⌘K: export this pass"), msg
+        assert "quickest" not in msg.lower()
+        # the lap's own time, as the Corners row and the grid print it (6.45, the spin)
+        assert f"({_cell(win, 5, 5):.2f})" == "(6.45)"
+        assert view.pass_subject() == (5, 5, "C5")
+        assert _export_rows(win) == ["Export the C5 pass — lap 6…"]
+        assert view.corners_page.quickest.playing() is None, "no Quickest row names this pass"
+    finally:
+        _close(win)
+
+
+def test_a_corners_by_lap_cell_plays_its_pass_and_a_cell_it_cannot_play_says_why():
+    prefs.set_corners_view("lap")
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+        view.show_stats_maximized() if hasattr(view, "show_stats_maximized") else None
+        _settle()
+        stats = view.stats_view
+        grid = stats.corner_grid_table     # (the hand over playable cells: its own test below)
+        m = s.corner_matrix()
+        lead = len(stats_panel_lead())
+        r, c = m.lap_ids.index(8), m.cids.index(3)          # lap 9, C3
+        assert "Click to play this lap's pass" in grid.item(r, c + lead).toolTip()
+        grid.cellClicked.emit(r, c + lead)
+        _settle()
+        assert plays[-1] == s.corners.pass_clip(8, 3)
+        assert getattr(view, "_maximized_panel", None) is None, "the grid came back to show it"
+        assert win.statusBar().currentMessage().startswith(
+            f"Playing lap 9 through C3 ({_cell(win, 8, 3):.2f})")
+        assert view.pass_zoomed() and view.pass_subject() == (8, 3, "C3")
+        assert _export_rows(win) == ["Export the C3 pass — lap 9…"]
+        # the lead columns (the lap, its time) play nothing
+        n = len(plays)
+        grid.cellClicked.emit(r, 0)
+        assert len(plays) == n
+        # a cell matched on track at one edge only: not played, and the status line says why
+        _patched_matrix(win, unresolved=(8, 4))
+        grid.cellClicked.emit(r, m.cids.index(4) + lead)
+        assert len(plays) == n
+        assert "not matched on track at both edges" in win.statusBar().currentMessage()
+        # a lap that is no row of the grid (⊘ excluded / ⚠ dropout): not played either
+        _patched_matrix(win, drop_lap=2)
+        assert not view.play_lap_pass(2, 1) and len(plays) == n
+        assert "not counted in the corner times" in win.statusBar().currentMessage()
+    finally:
+        _close(win)
+
+
+def stats_panel_lead():
+    from studio.stats_panel import CORNER_GRID_LEAD_COLUMNS
+    return CORNER_GRID_LEAD_COLUMNS
+
+
+def test_the_slow_lap_cue_plays_its_corner_and_a_plain_row_click_goes_to_the_lap_start():
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+        seeks = []
+        view.video.seek = lambda t: seeks.append(t)
+        view.select_lap_tab(0)
+        _settle()
+        t = view.table.table
+        row = next(r for r in range(t.rowCount()) if view.table._lap_id(r) == 5)
+        assert "▼ C5" in t.item(row, 0).text()
+        # a plain click on another column: the lap's start, nothing played
+        t.selectRow(row)
+        view.table.laps_selected.emit([5])
+        t.cellClicked.emit(row, 1)
+        _settle()
+        assert plays == [] and seeks and abs(seeks[-1] - s.lap_window(5)[0]) < 0.1
+        # the cue: lap 6's C5, from its lead-in (27.6 s after the lap's start on the demo)
+        t.cellClicked.emit(row, 0)
+        _settle()
+        assert plays == [s.corners.pass_clip(5, 5)], plays
+        assert s.corners.corner_entry_media_time(5, 5) - s.lap_window(5)[0] > 20
+        assert view.map.pinned_corner() == "C5"
+        assert win.statusBar().currentMessage().startswith("Playing lap 6 through C5 (6.45)")
+        assert view.pass_zoomed() and _export_rows(win) == ["Export the C5 pass — lap 6…"]
+    finally:
+        _close(win)
+
+
+def test_the_corner_walk_plays_one_pass_per_press():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+        # from a per-lap pass: the same lap, the next / previous corner
+        assert view.play_lap_pass(3, 3)
+        win._next_corner_action.trigger()
+        assert plays[-1] == s.corners.pass_clip(3, 4) and view.pass_subject() == (3, 4, "C4")
+        win._prev_corner_action.trigger()
+        win._prev_corner_action.trigger()
+        assert plays[-1] == s.corners.pass_clip(3, 2) and len(plays) == 4
+        assert win.statusBar().currentMessage().startswith("Playing lap 4 through C2 (")
+        # at the lap's last corner it stops and says so — no reel, no wrap
+        assert view.play_lap_pass(3, 7)
+        n = len(plays)
+        assert not view.step_corner_pass(+1) and len(plays) == n
+        assert "the last one with a pass on lap 4" in win.statusBar().currentMessage()
+        # from a Quickest row: the next corner's QUICKEST pass (C4 → lap 8), the row's own status
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        q.activate(q.row_of(3))
+        win._next_corner_action.trigger()
+        assert plays[-1] == s.corners.pass_clip(7, 4) and q.playing() == (4, 7)
+        assert win.statusBar().currentMessage().startswith("Playing lap 8 (3.02) through C4")
+        # with nothing being studied: the corner after the playhead, on its lap
+        view._forget_quickest_cycle()
+        assert view.pass_subject() is None
+        c2_exit = s.corners.corner_edge_media_time(10, 2, "exit")
+        view._playback.applied_t = c2_exit + 0.5
+        win._next_corner_action.trigger()
+        assert plays[-1] == s.corners.pass_clip(10, 3), plays[-1]
+        # the keys are the menu actions ⌘K harvests, and the card names them
+        assert win._next_corner_action.shortcut().toString() == "Alt+Right"
+        assert win._prev_corner_action.shortcut().toString() == "Alt+Left"
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_right_click_offers_play_and_export_for_the_pass_a_row_or_cell_names():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+        assert view.passExportRequested.disconnect(win.exports.export_pass_video), \
+            "the window wires the menu's export to the ⌘K row's own export path"
+        exported = []
+        view.passExportRequested.connect(lambda *a: exported.append(a))
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        pos = q.table.visualRect(q.table.model().index(4, 1)).center()   # C5's row
+        menu = view.pass_menu(view._quickest_menu_pass(q.table, pos))
+        names = [a.text() for a in menu.actions()]
+        assert names == ["Play this pass", "Export this pass…"], names
+        menu.actions()[0].trigger()
+        assert plays[-1] == s.corners.pass_clip(9, 5) and q.playing() == (5, 9)
+        menu.actions()[1].trigger()
+        assert exported == [(9, 5, "C5")]
+        # the CORNERS BY LAP cell's menu, and a cell it cannot play greys both out with the reason
+        grid = view.stats_view.corner_grid_table
+        lead = len(stats_panel_lead())
+        m = s.corner_matrix()
+        pos = grid.visualRect(grid.model().index(m.lap_ids.index(4), m.cids.index(2) + lead)).center()
+        menu = view.pass_menu(view._grid_menu_pass(grid, pos))
+        menu.actions()[1].trigger()
+        assert exported[-1] == (4, 2, "C2")
+        _patched_matrix(win, unresolved=(4, 2))
+        menu = view.pass_menu(view._grid_menu_pass(grid, pos))
+        assert not any(a.isEnabled() for a in menu.actions())
+        assert "not matched on track" in menu.actions()[0].toolTip()
+        # a Corners lap row's menu names its lap's pass
+        view.corners_page.set_view("lap", remember=False)
+        view.table.laps_selected.emit([6])
+        _settle()
+        ct = view.corner_table.table
+        menu = view.pass_menu(view._corner_row_menu_pass(ct, ct.visualRect(
+            ct.model().index(0, 0)).center()))
+        menu.actions()[0].trigger()
+        assert plays[-1] == s.corners.pass_clip(6, 1)
+        # nothing under the pointer: no menu
+        assert view.pass_menu(view._grid_menu_pass(grid, grid.viewport().rect().bottomRight()
+                                                   + grid.viewport().rect().bottomRight())) is None
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+# ------------------------------------------------------------------ review round 1 (#624)
+
+
+def _click(table, row, col, button=Qt.LeftButton, mods=Qt.NoModifier):
+    """A REAL click on a table cell: the viewport's mouse events, as the driver's would arrive."""
+    pos = table.visualRect(table.model().index(row, col)).center()
+    QTest.mouseClick(table.viewport(), button, mods, pos)
+    _settle(0.05)
+
+
+def test_a_held_corner_walk_key_plays_one_pass_not_the_lap():
+    """§31: one press, one pass. A held ⌥→ is one press and a train of auto-repeats; before this
+    round the six repeats walked C2 → C7 in a third of a second."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    win = _window()
+    try:
+        view = win.view
+        plays = _record_plays(view)
+        assert not win._next_corner_action.autoRepeat() and not win._prev_corner_action.autoRepeat()
+        assert view.play_lap_pass(3, 1)
+        view.select_lap_tab(0)
+        view.table.table.setFocus()
+        _settle()
+        w = QApplication.focusWidget()
+        n = len(plays)
+        QTest.keyPress(w, Qt.Key_Right, Qt.AltModifier)
+        _settle(0.03)
+        for _ in range(6):
+            QApplication.sendEvent(w, QKeyEvent(QEvent.KeyPress, Qt.Key_Right, Qt.AltModifier,
+                                                "", True))
+            _settle(0.03)
+        QTest.keyRelease(w, Qt.Key_Right, Qt.AltModifier)
+        assert len(plays) == n + 1 and view.pass_subject() == (3, 2, "C2"), (len(plays) - n,
+                                                                            view.pass_subject())
+    finally:
+        _close(win)
+
+
+def test_the_corner_walk_keys_leave_a_text_field_its_word_moves():
+    """⌥← / ⌥→ in a focused text field (the Marks note, the palette's search) move a word, as on
+    every Mac text field — they do not walk the corners from under the caret."""
+    from PySide6.QtWidgets import QLineEdit
+    win = _window()
+    try:
+        view = win.view
+        plays = _record_plays(view)
+        assert view.play_lap_pass(3, 3)
+        edit = QLineEdit(view)
+        edit.setText("hello world")
+        edit.show()
+        edit.setFocus()
+        _settle()
+        edit.setCursorPosition(11)
+        QTest.keyClick(edit, Qt.Key_Left, Qt.AltModifier)
+        _settle()
+        assert edit.cursorPosition() == 6 and len(plays) == 1, (edit.cursorPosition(), plays)
+        QTest.keyClick(edit, Qt.Key_Right, Qt.AltModifier)
+        _settle()
+        assert edit.cursorPosition() == 11 and len(plays) == 1
+        edit.hide()
+        edit.deleteLater()
+    finally:
+        _close(win)
+
+
+def test_a_command_or_shift_click_is_a_selection_never_a_play():
+    """⌘-click and ⇧-click are SELECTION gestures on every surface that plays a pass: they must
+    not throw away the driver's multi-lap selection to play something. On the cue the ⌘-click
+    still adds the lap and rings its corner, as before this PR."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+        view.select_lap_tab(0)
+        _settle()
+        t = view.table.table
+        row_of = {view.table._lap_id(r): r for r in range(t.rowCount())}
+        _click(t, row_of[2], 1)                              # lap 3 picked plainly
+        _click(t, row_of[5], 0, mods=Qt.ControlModifier)     # ⌘-click lap 6's "▼ C5" cue
+        assert plays == [] and sorted(view.table.selected_lap_ids()) == [2, 5], (
+            plays, view.table.selected_lap_ids())
+        assert view.map.pinned_corner() == "C5", "the cue's ring, as before"
+        _click(t, row_of[5], 0, mods=Qt.ShiftModifier)
+        assert plays == []
+        # ...and the cue's plain click still plays
+        _click(t, row_of[5], 0)
+        assert plays == [s.corners.pass_clip(5, 5)]
+        n = len(plays)
+        # a Quickest row, a Corners lap row, a CORNERS BY LAP cell
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        for mods in (Qt.ControlModifier, Qt.ShiftModifier):
+            _click(q.table, 2, 1, mods=mods)
+        view.corners_page.set_view("lap", remember=False)
+        _settle()
+        for mods in (Qt.ControlModifier, Qt.ShiftModifier):
+            _click(view.corner_table.table, 0, 1, mods=mods)
+        view.select_lap_tab(2)
+        _settle()
+        grid = view.stats_view.corner_grid_table
+        lead = len(stats_panel_lead())
+        for mods in (Qt.ControlModifier, Qt.ShiftModifier):
+            _click(grid, 3, lead + 1, mods=mods)
+        assert len(plays) == n, plays[n:]
+        _click(grid, 3, lead + 1)                            # the plain click plays
+        assert len(plays) == n + 1
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_right_click_shows_the_menu_and_plays_nothing():
+    """A REAL right-click (the press and the context-menu event) on a Quickest row, a Corners row
+    and a grid cell opens the menu and plays nothing by itself."""
+    from PySide6.QtGui import QContextMenuEvent
+    prefs.set_corners_view("quickest")
+    win = _window()
+    shown = []
+    try:
+        view = win.view
+        view._run_menu = lambda menu, _at: shown.append([a.text() for a in menu.actions()])
+        plays = _record_plays(view)
+        view.table.laps_selected.emit([4])
+        view.select_lap_tab(1)
+        _settle()
+
+        def right_click(table, row, col):
+            pos = table.visualRect(table.model().index(row, col)).center()
+            QTest.mouseClick(table.viewport(), Qt.RightButton, Qt.NoModifier, pos)
+            QApplication.sendEvent(table.viewport(), QContextMenuEvent(
+                QContextMenuEvent.Mouse, pos, table.viewport().mapToGlobal(pos)))
+            _settle(0.05)
+        right_click(view.corners_page.quickest.table, 2, 1)
+        view.corners_page.set_view("lap", remember=False)
+        _settle()
+        right_click(view.corner_table.table, 1, 1)
+        view.select_lap_tab(2)
+        _settle()
+        right_click(view.stats_view.corner_grid_table, 3, len(stats_panel_lead()) + 2)
+        assert plays == [], plays
+        assert shown == [["Play this pass", "Export this pass…"]] * 3, shown
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_cycled_quickest_rows_menu_exports_the_lap_it_names():
+    """The row reads "playing lap 7 (2.35) · 2 of 6": its menu's pass is lap 7's, the same one
+    ⌘K's export row names — not the quickest lap 13 beside it."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        plays = _record_plays(view)
+        view.passExportRequested.disconnect(win.exports.export_pass_video)
+        exported = []
+        view.passExportRequested.connect(lambda *a: exported.append(a))
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        q.activate(2)
+        q.activate(2)                                        # → lap 7, 2 of 6
+        assert q.table.item(2, 3).text().endswith("lap 7 (2.35) · 2 of 6")
+        pos = q.table.visualRect(q.table.model().index(2, 1)).center()
+        menu = view.pass_menu(view._quickest_menu_pass(q.table, pos))
+        menu.actions()[1].trigger()
+        assert exported == [(6, 3, "C3")], exported
+        assert _export_rows(win) == ["Export the C3 pass — lap 7…"]
+        menu.actions()[0].trigger()                          # "Play this pass": lap 7 again
+        assert plays[-1] == win.session.corners.pass_clip(6, 3) and q.playing() == (3, 6)
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_pass_being_studied_lives_until_it_is_left_not_until_its_clip_ends():
+    """THE RULE (`CentralView.pass_subject`): from play until the pass is LEFT. The auto-pause at
+    the clip's end keeps it (export, walk on); Esc, Compare, a Lap race, a lap pick and ▶ playing
+    on leave it, and then ⌘K offers no export and the walk steps from the playhead."""
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        plays = _record_plays(view)
+
+        def studied():
+            assert view.play_lap_pass(3, 3)
+            _settle()
+            assert view.pass_subject() == (3, 3, "C3")
+
+        # the clip ends by itself (the auto-pause 1 s after the exit): still the subject
+        studied()
+        view.video.pane.pause()
+        view.video.clipEnded.emit()
+        _settle()
+        assert view.pass_subject() == (3, 3, "C3")
+        assert _export_rows(win) == ["Export the C3 pass — lap 4…"]
+        win._next_corner_action.trigger()
+        assert plays[-1] == s.corners.pass_clip(3, 4), "the walk goes on from the pass he watched"
+
+        leaves = {
+            "Esc": lambda: QTest.keyClick(win, Qt.Key_Escape),
+            "Compare": lambda: view.video.compare_btn.click(),
+            "a Lap race": lambda: view.start_lap_race(),
+            "a lap pick": lambda: view.table.laps_selected.emit([9]),
+            "▶ playing on": lambda: view.video.pane.play(),
+        }
+        for name, leave in leaves.items():
+            studied()
+            leave()
+            _settle()
+            assert view.pass_subject() is None, name
+            assert _export_rows(win) == [], (name, _export_rows(win))
+            if view.is_racing():
+                view.end_lap_race()
+            if view._comparing():
+                view.video.compare_btn.click()
+            _settle()
+        # after Esc the walk steps from the playhead, not back to lap 4
+        studied()
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        view._playback.applied_t = s.corners.corner_edge_media_time(10, 2, "exit") + 0.5
+        win._next_corner_action.trigger()
+        assert plays[-1] == s.corners.pass_clip(10, 3), plays[-1]
+    finally:
+        _close(win)
+
+
+def test_the_hand_shows_only_over_cells_that_play():
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    win = _window()
+    try:
+        view = win.view
+        view.select_lap_tab(2)
+        _settle()
+        grid = view.stats_view.corner_grid_table
+        lead = len(stats_panel_lead())
+
+        def hover(row, col):
+            pos = QPointF(grid.visualRect(grid.model().index(row, col)).center())
+            QApplication.sendEvent(grid.viewport(), QMouseEvent(
+                QEvent.MouseMove, pos, grid.viewport().mapToGlobal(pos), Qt.NoButton,
+                Qt.NoButton, Qt.NoModifier))
+            return grid.viewport().cursor().shape()
+        assert hover(3, lead + 1) == Qt.PointingHandCursor
+        assert hover(3, 0) == Qt.ArrowCursor and hover(3, 1) == Qt.ArrowCursor
+        _patched_matrix(win, unresolved=(3, 2))
+        view.stats_view._corner_matrix = win.session.corner_matrix()
+        assert hover(3, lead + 1) == Qt.ArrowCursor, "an unmatched cell does not play"
+    finally:
+        _close(win)
 
 
 if __name__ == "__main__":
