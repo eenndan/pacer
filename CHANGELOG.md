@@ -8,16 +8,20 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.18.0] — 2026-11-20
 
-A minor release: 8 pull requests from #629 to #636, Wave 13 of the campaign. Its theme: the
-driver's own sectors join the pass family, and a session that is not the demo reads true.
+A minor release: 10 pull requests, #629 to #636, #638 and #640, Wave 13 of the campaign. Its
+theme: the driver's own sectors join the pass family, and a session that is not the demo reads
+true.
 
 ### Highlights
 
+- **The File menu's export works again.** File ▸ Export overlay video… and its ⌘K row open the
+  export options again; both had crashed since 0.17.0 (#638)
 - **Your own sectors in Quickest passes.** Draw sector lines on the map and S1, S2… list under the
   corners: the quickest split, its lap and the laps level with it within 0.30 s, twice a split's
   noise. A sector row plays, loops, slows and walks (⌥← / ⌥→) like a corner row (#631)
-- **A refusal says why.** C and G on a disabled button, ⌥→ on a session too short for corner times
-  and a sector's export or compare ("not for sectors yet") put the reason on the status line (#635)
+- **A refusal says why.** C and G on a disabled button, F while comparing, ⌥→ on a session too
+  short for corner times and a sector's export or compare put the reason on the status line (#635,
+  #640)
 - **No Stats claim from nothing.** No empty IDEAL LAP table, no STRAIGHTS slow exit the timing step
   cannot tell from level, no COASTING place too small to list, "—" for one lap's spreads (#634)
 - **A short session reads true.** A clean GPS trace that crosses the start/finish line only once
@@ -38,6 +42,10 @@ driver's own sectors join the pass family, and a session that is not the demo re
 
 ### Fixed
 
+- File ▸ Export overlay video… and its ⌘K command open the export options again (broken since
+  0.17.0). (#638)
+- F and ⌘K "Make the video fill the screen" while comparing two laps now say why they do nothing
+  on the status line, as C and G already do, instead of staying silent. (#640)
 - A clean GPS trace that crosses the start/finish line only once now says so on every no-laps panel,
   instead of guessing that the GPS did not lock or the recording is too short. (#636)
 - Coaching's "Start with …" tie reads "at +0.01 s each" when its two ends round to the same figure.

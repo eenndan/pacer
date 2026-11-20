@@ -1146,9 +1146,9 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 
 ## 20. Recorded at the 0.18.0 release, 2026-11-20
 
-- **v0.18.0 is a minor release**: 8 pull requests from #629 to #636, Wave 13 of the campaign
-  section 8 records, its theme "the driver's own sectors join the pass family, and a session that
-  is not the demo reads true".
+- **v0.18.0 is a minor release**: 10 pull requests, #629 to #636, #638 and #640, Wave 13 of the
+  campaign section 8 records, its theme "the driver's own sectors join the pass family, and a
+  session that is not the demo reads true".
   - #629: six fixes from the 0.17.0 QA: a pass's status line goes when the pass is left, a walk
     from Quickest passes ends on the last corner rather than on a lap, Esc leaves a Coaching
     Compare, a slow lap narrower than its ▼ shows as a tick on the lap ruler, the map key folds
@@ -1165,6 +1165,9 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - #635: ⌥← / ⌥→, C and G say why when they cannot act.
   - #636: the few-laps wording: a tie "each", a cause for a trace that crosses the start/finish
     line only once, no "reload".
+  - #638: File ▸ Export overlay video… and its ⌘K command open the export options again; since
+    0.17.0 the action's `triggered(bool)` landed in the export's pass argument and crashed it.
+  - #640: F and ⌘K "Make the video fill the screen" while comparing say why they do nothing.
 - **No new owner ruling.** The wave ran under section 19's of 2026-11-19 ("continue and don't come
   back to me"), with the design delegated to "very logical and simple".
 - **What was decided for him**, each open to his overrule:
@@ -1186,8 +1189,8 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - **"The GPS trace crosses the start/finish line only once" is said only on a trace whose GPS
     quality is known and not low**: dropped fixes hide real crossings, so a low- or unknown-quality
     trace keeps the plain "The GPS may not have locked…" body.
-  - **A disabled button's key says the button's own reason** (C, G), rather than a second wording
-    of it.
+  - **A disabled button's key says the button's own reason** (C, G, and F while comparing),
+    rather than a second wording of it.
 - **Refused this wave, with the numbers** (§36, §37, #630). Early or late apex: the rule is safe
   (0 to 1 of 48 null cells fire) but blind to what a driver would call early or late: a 2 m shift
   never reliably fires, and on the demo it fires once, at its last corner, a constant-radius arc
@@ -1203,7 +1206,11 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   passes, the widget census across menus, compares and ⌘K), synthetic sessions of zero, one, two
   and ten level laps (the no-laps body beside the Stats empty states, the keys' refusals), and the
   one real recording on this machine, read-only. A demo render of the ideal-lap and data-trust
-  shots from v0.17.0's `studio/` and from 0.18.0 is byte-identical.
+  shots from v0.17.0's `studio/` and from 0.18.0 is byte-identical. The QA's first reading that
+  the export dialogs are never freed was a probe artefact (its stand-in for `QDialog.exec()`; a
+  parented dialog is freed only after the real one): with the real `exec()` every export door
+  measures +0 widgets per open. The QA did not fire the File menu's export action; its crash
+  (#638) was found afterwards by the lane that re-measured the dialog.
 - **The media.** Re-captured on the synthetic demo at 0.18.0: `quickest.png` (the map key folds
   while the pass is zoomed, #629) and `report.png` (347 anti-aliased pixels along the drawn line
   differ from 0.17.0's; the same words and figures). `hero.png`, `og.png`, `map.png`,
@@ -1212,7 +1219,9 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   `data-trust.png` and `ideal-lap.png` are renewed: #634 changed Stats page code, in branches the
   captured session does not reach (its IDEAL LAP lists nine segments), and the demo A/B above is
   byte-identical. Those of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed: 0.18.0
-  changed no export-video code.
+  changed no rendering code (`export_video.py`, `studio/overlay/` and `theme.py` are untouched);
+  `export_controller.py` gained a guard that refuses a sector pass's export (#631) and made the
+  overlay export's pass argument keyword-only (#638), both before any render.
 - **What could not run for it.** The real-footage checks whose recordings are not on this machine
   report Skipped by name. Real macOS fullscreen Spaces, a second monitor and hover could not be
   checked offscreen. The full gate, the soak and the smoke run on the release branch, not in the
@@ -1220,10 +1229,10 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 - **Resolved from section 19**: drawn sector lines in the pass family (#631); early or late apex
   and a line offset (refused, #630); the compare re-entry widgets (a counting artefact, #632); the
   strip's hover on a tie, the ruler's ▼ on narrow laps, the status line after leaving a pass, the
-  end of a walk from Quickest passes and Esc on a Coaching Compare (#629).
+  end of a walk from Quickest passes and Esc on a Coaching Compare (#629). Found and shipped
+  during this release: F while comparing says why (#640).
 - **Open for the owner** (new).
   - A sector pass's export and its compare with the typical pass say "not for sectors yet".
-  - F (fill the screen) while comparing does nothing and says nothing.
   - On a session with no complete lap the map's empty-state card sits over the middle of the
     trace.
   - Section 13's question (should Coaching rank corners that lose under 0.07 s, and name a habit
@@ -1233,9 +1242,7 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - With sector rows shown and the scrollbar hidden, the last sector row is cut at 1280×800
     docked (on the demo with three lines, 11 px of S4), and a session whose Quickest view carries
     its "laps not counted" line loses whole rows; there the strip is hidden anyway, so the hidden
-    scrollbar buys nothing.
-  - The overlay export dialog, "Export this pass…" included, is not freed when closed: each open
-    leaves 9 top-level and 101 widgets behind on the demo (pre-existing; not one of #633's doors).
+    scrollbar buys nothing. A fix is in review (#639), not in this release.
 - **Open for the owner** (carried from section 19, each still true on 0.18.0's code): Quickest
   passes is still not the Corners tab's default view; exporting a compare started at a corner
   renders the two whole laps; the readout and the overlays on real macOS fullscreen Spaces and a
