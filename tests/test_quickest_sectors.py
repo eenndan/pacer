@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, Qt, QTimer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox, QScrollBar  # noqa: E402
 
@@ -181,6 +181,28 @@ def _settle(seconds=0.1):
         time.sleep(0.005)
 
 
+# A deferred layout pass is an owned single-shot QTimer of a few ms (the grid restores, the legend
+# placement, the debrief hero's settle, a table's re-stretch: 0-120 ms); status lines and toasts
+# run for seconds and are not layout. The app never uses the static QTimer.singleShot (§3.9), so
+# every deferred pass is a child of the window.
+_LAYOUT_TIMER_MS = 500
+
+
+def _settle_until(win, done, what, timeout=60.0):
+    """Process events until `done()` holds AND no deferred layout pass is still queued — the
+    condition `_window`'s old fixed 0.2 s + 0.1 s + 0.1 s sleeps stood for, which a fast machine
+    overpaid and a slow runner could outrun. Fails loudly, naming what it waited for."""
+    deadline = time.monotonic() + timeout
+    while True:
+        _APP.processEvents()
+        if done() and not any(t.isActive() and t.isSingleShot() and t.interval() < _LAYOUT_TIMER_MS
+                              for t in win.findChildren(QTimer)):
+            _APP.processEvents()   # what the last pass posted
+            return
+        assert time.monotonic() < deadline, f"waited {timeout:.0f} s for {what}"
+        time.sleep(0.005)
+
+
 def _window(n_lines, size=(1440, 900)):
     from studio.app import StudioWindow
     for k in ("critical", "warning", "information"):
@@ -195,11 +217,15 @@ def _window(n_lines, size=(1440, 900)):
         win.view.rebuild_derived_views()
     win.resize(*size)
     win.show()
-    _settle(0.2)
+    # The view's first show maximizes the debrief landing (CentralView.showEvent) — only then does
+    # Esc have a landing to leave — and its deferred layout passes are queued behind it.
+    _settle_until(win, lambda: not getattr(win.view, "_debrief_pending", False),
+                  "the view's first show (the debrief landing maximized)")
     QTest.keyClick(win, Qt.Key_Escape)   # leave the debrief landing
-    _settle(0.1)
+    _settle_until(win, lambda: not win.view.is_debrief() and win.view._maximized_panel is None,
+                  "Esc to leave the debrief landing for the grid")
     win.view.select_lap_tab(1)
-    _settle()
+    _settle_until(win, lambda: win.view.tab_bar.currentIndex() == 1, "the Corners tab")
     return win
 
 
