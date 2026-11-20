@@ -3246,7 +3246,7 @@ QUICKEST_BTN_TIP = ("Your quickest pass through each corner (and each sector you
                     "Return) to play that pass; click it again for the next level lap.")
 LAP_VIEW_TIP = "This lap's time, speeds and grip through each corner."
 QUICKEST_NEEDS_LAPS = "Needs more laps"
-QUICKEST_PLAY_TIP = "Play this pass, from just before the corner to just after it (Return)"
+QUICKEST_PLAY_TIP = "Play this pass, from just before the {what} to just after it (Return)"
 QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap took this {what} within "
                      "{step:.2f} s of it.")
 QUICKEST_COL_TIPS = [
@@ -3378,17 +3378,26 @@ def strip_words(label: str, qp, strip, level_s: float, piled: int = 0) -> str:
     return words + "."
 
 
-def strip_mark_tip(mark, qp, pile=()) -> str:
+def strip_mark_tip(mark, qp, pile=(), level_s: float = PB_PRECISION_S) -> str:
     """A hovered dot: its lap and its own time, what it is on the strip, and the other laps drawn
     in the same place (`pile`, when the cell is too narrow to part them). "The quickest" only for
-    a lone one: on a tie the timing cannot tell which pass is quicker, so each is "level"."""
-    what = ("the quickest" if mark.lap_id == qp.lap_id and qp.alone
-            else "▼ off the scale" if mark.behind
-            else "level with the quickest" if mark.level
-            else "slower than the band")
+    a lone one: on a tie the timing cannot tell which pass is quicker, so each is "level" — and
+    each mark says what is true of IT: the lap the Quickest column names says so and how many
+    more are level, every other level lap is level with that one (within `level_s`)."""
+    named = mark.lap_id == qp.lap_id
+    if named and qp.alone:
+        what = "the quickest"
+    elif mark.behind:
+        what = "▼ off the scale"
+    elif named and mark.level:
+        what = "the lap the Quickest column names"
+        if qp.level_laps:
+            what += f"; {len(qp.level_laps)} more {'is' if len(qp.level_laps) == 1 else 'are'} level"
+    elif mark.level:
+        what = f"level with lap {lap_label(qp.lap_id)} (within {level_s:.2f} s)"
+    else:
+        what = "slower than the band"
     tip = f"Lap {lap_label(mark.lap_id)}: {mark.time_s:.{PRINT_DECIMALS}f} · {what}"
-    if mark.level and mark.lap_id == qp.lap_id and not qp.alone:
-        tip += " (the Quickest column names this lap)"
     if pile:
         tip += (f"\n{plural(len(pile) + 1, 'lap')} here: "
                 + ", ".join(lap_label(lap) for lap in (mark.lap_id, *pile)))
@@ -3647,7 +3656,8 @@ class QuickestPassTable(QWidget):
         lay = strip_geometry(data[0], QRectF(self.table.visualRect(index)))
         p = QPointF(event.pos())
         mark, c = min(lay.marks, key=lambda mc: (mc[1] - p).manhattanLength())
-        tip = strip_mark_tip(mark, passes[index.row()], lay.pile_at(c, mark.lap_id))
+        qp = passes[index.row()]
+        tip = strip_mark_tip(mark, qp, lay.pile_at(c, mark.lap_id), self.row_level_s(qp))
         QToolTip.showText(event.globalPos(), f"{tip}\n{index.data(Qt.ToolTipRole)}",
                           self.table.viewport())
         return True
@@ -3937,7 +3947,8 @@ class QuickestPassTable(QWidget):
                     item.setToolTip(QUICKEST_STAR_TIP.format(step=level_s, what=stretch_noun(qp)))
                 self.table.setItem(r, col, item)
             self.table.setItem(r, QUICKEST_STRIP_COL, self._strip_item(label, qp, star))
-            btn = icon_button("ph.play-fill", tooltip=QUICKEST_PLAY_TIP)
+            btn = icon_button("ph.play-fill",
+                              tooltip=QUICKEST_PLAY_TIP.format(what=stretch_noun(qp)))
             btn.setFocusPolicy(Qt.NoFocus)
             btn.setEnabled(qp.lap_id is not None)
             btn.setAccessibleName(f"Play the quickest pass through {label}")

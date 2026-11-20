@@ -654,11 +654,17 @@ class _MapLegend(QWidget):
     _TIP_COLLAPSED = "Map key — what the marks on the track mean. Click it to expand."
     _TIP_NO_ROOM = ("Map key — collapsed because the map panel is too short to show it. Drag the "
                     "splitter under the map down (or maximize the panel) to open it.")
+    _TIP_FOLDED = ("Map key — folded while a pass is zoomed, so it covers none of the corners "
+                   "around it. Click it to open.")
 
     def __init__(self, on_resize=None, on_toggle=None, collapsed: bool = False):
         super().__init__()
         self._collapsed = bool(collapsed)   # the USER's choice — the value that persists
         self._fits = True                   # room on the canvas for the full plate (set by MapView)
+        # A THIRD input, the pass zoom's (MapView.zoom_to_pass): folded to the title while a pass
+        # is zoomed, so the plate covers none of its neighbours' labels. Like `_fits` it is a
+        # display state: the user's own choice is never touched, and comes back with the zoom's end.
+        self._folded = False
         # A still picture of the plate (the report's map, app._grab_report_map_png): no caret, as a
         # disclosure control in an image is one a click can never open. The title keeps its column.
         self._document = False
@@ -693,7 +699,16 @@ class _MapLegend(QWidget):
 
     def painted_collapsed(self) -> bool:
         """What is actually on screen right now — the user's choice OR a canvas with no room."""
-        return self._collapsed or not self._fits
+        return self._collapsed or not self._fits or self._folded
+
+    def set_folded(self, on: bool) -> bool:
+        """Fold the plate to its title for a pass zoom (True) or give back the user's own state
+        (False). Returns True when that changed the plate's height (the caller re-pins it)."""
+        was = self.painted_collapsed()
+        self._folded = bool(on)
+        self._relayout()
+        self.update()
+        return was != self.painted_collapsed()
 
     def set_available_height(self, avail: int) -> bool:
         """Tell the plate how much canvas height it may occupy (the canvas minus both insets), so
@@ -729,7 +744,8 @@ class _MapLegend(QWidget):
         # depends on whether it has room to open.
         self.setCursor(Qt.PointingHandCursor if self._fits else Qt.ArrowCursor)
         self.setToolTip(self._TIP_NO_ROOM if not self._fits
-                        else self._TIP_COLLAPSED if self._collapsed else self._TIP_EXPANDED)
+                        else self._TIP_COLLAPSED if self._collapsed
+                        else self._TIP_FOLDED if self._folded else self._TIP_EXPANDED)
 
     def set_brake_glyphs(self, glyphs):
         """Tell the key which brake glyphs the map is drawing right now, [(symbol, colour)].
@@ -754,6 +770,14 @@ class _MapLegend(QWidget):
         event.accept()
         if not self._fits:
             return
+        if self._folded:
+            self._folded = False            # the click opens what the zoom folded, for this zoom
+            if not self._collapsed:         # ...and changes nothing he chose
+                self._relayout()
+                if self._on_resize is not None:
+                    self._on_resize()
+                self.update()
+                return
         self._collapsed = not self._collapsed
         self._relayout()
         if self._on_resize is not None:  # the plate changed height — re-pin it to the corner
@@ -2287,6 +2311,7 @@ class MapView(QWidget):
             self._pass_restore = (self.plot.getViewBox().viewRange(), self._view_fitted)
         self._pass_box = (cx - half, cx + half, cy - half, cy + half)
         self._view_fitted = False
+        self._fold_key(True)           # the key's plate off the neighbours' labels
         self._sync_fit_btn()           # Fit is the map's way back to the whole track
         self._pass_apply()
         return True
@@ -2336,7 +2361,13 @@ class MapView(QWidget):
         self._pass_box = None
         self._pass_restore = None
         self._scale_bar.hide()
+        self._fold_key(False)
         return True
+
+    def _fold_key(self, on: bool) -> None:
+        key = getattr(self, "_map_key", None)
+        if key is not None and key.set_folded(on):
+            self._reposition_key()
 
     def unzoom_pass(self) -> bool:
         """Put back the view the pass zoom put aside: our fit (re-run at today's size) or the

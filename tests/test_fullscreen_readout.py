@@ -354,6 +354,99 @@ def test_a_mark_is_never_painted_over_the_handle():
         _close(win)
 
 
+def test_a_slow_lap_narrower_than_its_glyph_still_shows_as_a_tick():
+    """The 0.17.0 QA: on 30-40-lap sessions docked at 1280x800 / 1440x900 a lap is 10-13 px, the ▼
+    needs more, and the slow lap the Laps table marks had no presence on the bar at all. Now it is
+    a reduced mark — a tick in the ▼'s ink on the same plate — under the same handle rule, within
+    the bar's own height; the ★ and a wide lap's ▼ are unchanged."""
+    from PySide6.QtGui import QColor
+
+    from studio import theme
+    from studio.video_view import RULER_SLOW_TICK, ruler_mark_colour
+    for size in ((1280, 800), (1440, 900)):
+        win = _window(size)
+        try:
+            slider = win.view.video.slider
+            lo, hi = slider.minimum(), slider.maximum()
+            n = 40
+            edges = [lo + (hi - lo) * k // n for k in range(n + 1)]
+            segs = [(edges[k], edges[k + 1], "", f"Lap {k + 1}") for k in range(n)]
+            segs[3] = (*segs[3][:2], "★", "Lap 4 · ★")
+            segs[30] = (*segs[30][:2], "▼ C5", "Lap 31 · ▼ slow lap")
+            slider.set_lap_segments(segs)
+            slider.setValue(lo)
+            _APP.processEvents()
+            width = slider._x_for(edges[31]) - slider._x_for(edges[30])
+            assert width < 14, (size, width)     # narrower than the ▼'s plate needs
+            plan = dict((g, x) for x, g in slider.mark_plan())
+            assert set(plan) == {"★", RULER_SLOW_TICK}, (size, plan)
+            assert slider.painted_marks() == slider.mark_plan(), "the handle is at the start"
+            x = plan[RULER_SLOW_TICK]
+            r = slider._mark_rect(x, RULER_SLOW_TICK)
+            assert 0 <= r.top() and r.bottom() <= slider.height(), (r, slider.height())
+            assert r.width() <= width, "the plate stays inside its lap"
+            # the hover is the lap's own, unchanged
+            assert slider.segment_at(x)[3] == "Lap 31 · ▼ slow lap"
+            # it is painted: the tick's ink at its centre
+            img = slider.grab().toImage()
+            dpr = img.devicePixelRatio()
+            cy = slider._groove_rect().center().y()
+            ink = QColor(img.pixel(round(x * dpr), round(cy * dpr))).name()
+            assert ink.lower() == QColor(ruler_mark_colour(RULER_SLOW_TICK)).name().lower(), ink
+            assert ruler_mark_colour(RULER_SLOW_TICK) == ruler_mark_colour("▼") == theme.C.text
+            # the handle rule: on the slow lap, the tick is not drawn under or beside it
+            slider.setValue(_value_with_handle_at(slider, x))
+            _APP.processEvents()
+            handle = slider._handle_rect()
+            assert RULER_SLOW_TICK not in [g for _x, g in slider.painted_marks()]
+            for px, g in slider.painted_marks():
+                pr = slider._mark_rect(px, g)
+                assert pr.right() < handle.left() or pr.left() > handle.right() + 1, (px, g)
+            # a lap wide enough for the glyph keeps the glyph
+            wide = [(lo, edges[20], "", "a"), (edges[20], hi, "▼ C2", "b")]
+            slider.set_lap_segments(wide)
+            assert [g for _x, g in slider.mark_plan()] == ["▼"]
+            # a slow lap beside the best lap: the tick never meets the ★'s plate. Sixty laps (8 px):
+            # the ★'s 16 px plate reaches into both neighbours, so their ticks are left out, and a
+            # slow lap further on keeps its own
+            e60 = [lo + (hi - lo) * k // 60 for k in range(61)]
+            s60 = [(e60[k], e60[k + 1], "", f"Lap {k + 1}") for k in range(60)]
+            s60[10] = (*s60[10][:2], "★", "best")
+            for k in (9, 11, 40):
+                s60[k] = (*s60[k][:2], "▼ C1", f"slow {k}")
+            slider.set_lap_segments(s60)
+            plan = slider.mark_plan()
+            star = next(slider._mark_rect(x, g) for x, g in plan if g == "★")
+            ticks = [x for x, g in plan if g == RULER_SLOW_TICK]
+            assert len(ticks) == 1, (size, plan)
+            assert slider.segment_at(ticks[0])[3] == "slow 40"
+            assert not slider._mark_rect(ticks[0], RULER_SLOW_TICK).intersects(
+                star.adjusted(-1, 0, 1, 0))
+            # 80 and 120 laps (review of #629): a tick's plate stays inside its own lap and a pixel
+            # clear of the next one's, so two slow laps side by side never merge; a lap narrower
+            # than the plate + 2 px gets none
+            for n in (80, 120):
+                edges = [lo + (hi - lo) * k // n for k in range(n + 1)]
+                segs = [(edges[k], edges[k + 1], "▼ C3" if k % 2 else "", f"Lap {k + 1}")
+                        for k in range(n)]
+                slider.set_lap_segments(segs)
+                spans = {(slider._x_for(a) + slider._x_for(b)) // 2:
+                         (slider._x_for(a), slider._x_for(b)) for a, b, m, _t in segs if m}
+                plates = []
+                for x, g in slider.mark_plan():
+                    assert g == RULER_SLOW_TICK, g
+                    r, (xa, xb) = slider._mark_rect(x, g), spans[x]
+                    assert xa <= r.left() and r.right() <= xb, (n, size, r, xa, xb)
+                    plates.append(r)
+                for r1, r2 in zip(plates, plates[1:], strict=False):
+                    assert r2.left() - r1.right() >= 1, (n, size, r1, r2)
+                narrow = min(xb - xa for xa, xb in spans.values())
+                if n == 120:
+                    assert narrow < 7 and slider.mark_plan() == [], (size, narrow)
+        finally:
+            _close(win)
+
+
 def test_a_hidden_or_closed_window_takes_both_overlays_with_it():
     """Review P2: the readout and the g-meter are top-level windows; one tick after the app window
     was hidden, the re-pin showed both again over the desktop."""

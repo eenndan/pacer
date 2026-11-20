@@ -107,6 +107,11 @@ _PLOTS_BASELINE_LABELS = {
     plots_view.DELTA_BASELINE_REFERENCE: _PLOTS_LABEL_REF,
 }
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
+# What a Coaching row's Compare line ends with: C or Esc leaves it as one video (both laps stay
+# on the charts, as C has always left it).
+COACHING_COMPARE_KEYS = " · C or Esc: back to one video"
+
+
 def typical_compare_status(v, label: str) -> str:
     """The status line of "compare this pass with my typical pass": both laps with their own
     printed times, and the gap between those two printed times (`PassVsTypical.gap_s`), quicker or
@@ -127,6 +132,10 @@ PASS_FROM_QUICKEST = "quickest"
 # are corner-shaped), so their menu items are greyed out with this said rather than half-working.
 SECTOR_EXPORT_NOT_YET = "Not for sectors yet: a pass export is for a corner's pass"
 SECTOR_COMPARE_NOT_YET = "Not for sectors yet: compare with the typical pass is for a corner's pass"
+# What a held status line depends on (`CentralView._hold_status`): the pass being studied, or a
+# compare at one corner.
+_HELD_PASS = "pass"
+_HELD_CORNER = "corner"
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
 # The two constants that used to live here (_HDR_ICON_PX 15, _HDR_ICON_BTN 26x24) are gone: an
 # icon button's size is theme.ICON_BTN and its glyph theme.ICON_PX, applied by widgets.icon_button.
@@ -598,6 +607,9 @@ class CentralView(QWidget):
     # A one-line, just-happened fact for the WINDOW's status bar, from a panel that has no channel
     # to it (U2: LapTable.selection_capped — a multi-select trimmed to the charts' lap cap).
     statusNotice = Signal(str)
+    # ...and its retraction: a sentence posted by `_hold_status` that stopped being true (the pass
+    # or the corner compare it named was left). The window clears it only if it is still showing.
+    statusRetracted = Signal(str)
     # A pass's right-click "Export this pass…": (lap, cid, label) -> the window's overlay export,
     # opened on that pass (ExportController.export_pass_video, the ⌘K row's own door).
     passExportRequested = Signal(int, int, str)
@@ -769,6 +781,8 @@ class CentralView(QWidget):
     def dispose(self):
         """Stop decoder(s) + close the g-meter overlay before this view is dropped on reload. Called
         by StudioWindow on the outgoing view. No-op if no video."""
+        for kind in (_HELD_PASS, _HELD_CORNER):
+            self._release_status(kind)    # a reload: nothing this view said about its state holds
         self.end_lap_race()
         self._finish_diff_roll()          # no readout frame from a view on its way out
         video = getattr(self, "video", None)
@@ -1435,6 +1449,9 @@ class CentralView(QWidget):
         self.video.set_compare_seek_fanout(self.compare.fanout_seek_b)
         # FIRST: a played pass's zoom ends before compare draws its pair (either way the toggle goes).
         self.video.compareToggled.connect(lambda _on: self.end_pass_zoom())
+        # The player says when the pass stops being its subject (a seek away, a lap pick, Compare,
+        # a Lap race, Esc): the sentence that named the pass goes with it (`_hold_status`).
+        self.video.pane.passChanged.connect(self._on_pass_maybe_left)
         self.video.compareToggled.connect(self._on_corner_compare_left)
         self.compare.on_anchor_dropped = self._on_anchor_dropped
         self.video.compareToggled.connect(self.compare.on_toggled)
@@ -1939,14 +1956,39 @@ class CentralView(QWidget):
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.refresh_quickest()
+        self._on_pass_maybe_left()   # a re-segment can take the studied pass's corner away
 
     def _forget_quickest_cycle(self):
         """The driver went somewhere else (another lap, a Jump): the pass being studied is
         forgotten everywhere — the Quickest row's count, ⌘K's export row, the corner walk."""
         self._pass_subject = None
+        self._release_status(_HELD_PASS)
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.forget_cycle()
+
+    # ------------------------------------------------------------- sentences true for a while
+    # A status line that describes a STATE — "Playing lap 13 through C3 … · Esc: whole lap · ⌘K:
+    # export this pass", "Comparing lap 13 … · C or Esc: back to lap 13" — is true only while that
+    # state holds; the 6 s timer would leave it naming keys that no longer do what it says. ONE
+    # mechanism for both: the sentence is posted through `_hold_status` with what it depends on,
+    # and the place that sees the state end calls `_release_status`, which takes it down at once
+    # (only if it is still the line showing: a newer message is never wiped).
+    def _hold_status(self, kind: str, text: str) -> None:
+        self._held_status = (kind, text)
+        self.statusNotice.emit(text)
+
+    def _release_status(self, kind: str) -> None:
+        held = getattr(self, "_held_status", None)
+        if held is not None and held[0] == kind:
+            self._held_status = None
+            self.statusRetracted.emit(held[1])
+
+    def _on_pass_maybe_left(self, on: bool = False) -> None:
+        """The player dropped (or swapped) its pass: if no pass is being studied any more, the
+        sentence that named it is no longer true."""
+        if not on and self.pass_subject() is None:
+            self._release_status(_HELD_PASS)
 
     def _on_clip_ended(self):
         page = getattr(self, "corners_page", None)
@@ -2166,8 +2208,8 @@ class CentralView(QWidget):
             self.statusNotice.emit("No corners on this track yet")
             return False
         if subject is not None:
-            lap, cid, origin = subject
-            k = order.index(cid) + step
+            lap, here, origin = subject
+            k = order.index(here) + step
             candidates = ([] if not 0 <= k < len(order) else
                           order[k:] if step > 0 else order[k::-1])
         else:
@@ -2191,9 +2233,15 @@ class CentralView(QWidget):
             for cid in candidates:
                 if self.lap_pass_refusal(lap, cid) is None:
                     return self.play_lap_pass(lap, cid)
-        edge = "first" if step < 0 else "last"
-        self.statusNotice.emit(f"No {'earlier' if step < 0 else 'later'} {noun} to play: this is "
-                               f"the {edge} one with a pass on lap {lap_label(lap)}")
+        edge, way = ("first", "earlier") if step < 0 else ("last", "later")
+        if origin == PASS_FROM_QUICKEST:
+            # This walk crosses laps (each corner's quickest pass), so "on lap N" would be untrue.
+            label = self._corner_label(here)
+            said = (f"{label} is the {edge} {noun}" if not candidates else
+                    f"{label} is the {edge} {noun} with a quickest pass to play")
+        else:
+            said = f"this is the {edge} one with a pass on lap {lap_label(lap)}"
+        self.statusNotice.emit(f"No {way} {noun} to play: {said}")
         return False
 
     def play_corner_pass(self, lap_id: int, cid: int, status: str = "", *,
@@ -2229,8 +2277,8 @@ class CentralView(QWidget):
         self._pass_subject = (int(lap_id), int(cid), origin, (float(clip[0]), float(clip[1])))
         self._on_live_readout_shown()   # the fullscreen readout names the new subject at once
         if status:
-            self.statusNotice.emit(self._pass_status(status,
-                                                     export_hint and sector_col(cid) is None))
+            self._hold_status(_HELD_PASS, self._pass_status(
+                status, export_hint and sector_col(cid) is None))
         return True
 
     def _pass_status(self, status: str, export_hint: bool) -> str:
@@ -2342,8 +2390,9 @@ class CentralView(QWidget):
         window = self.session.corner_plot_window(cid, self.plots.axis_mode())
         if window is not None:
             self.plots.frame_span(*window)
-        self._corner_status = True
-        self.statusNotice.emit(compare_status(tp, lost))
+        # The keys that leave it, as the typical-pass compare names them (measured at 1280x800 on
+        # the demo: the longest of the seven rows is 1003 px of the bar's 1263).
+        self._hold_status(_HELD_CORNER, compare_status(tp, lost) + COACHING_COMPARE_KEYS)
         return True
 
     def _enter_corner_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
@@ -2459,8 +2508,7 @@ class CentralView(QWidget):
             self.video.secondary.set_clip_end(clip_b[1])
         self._zoom_to_pass(lap_id, cid, clip_a)
         self._corner_compare = (int(lap_id), int(v.typical_lap_id))
-        self._corner_status = True
-        self.statusNotice.emit(typical_compare_status(v, label))
+        self._hold_status(_HELD_CORNER, typical_compare_status(v, label))
         return True
 
     def _on_anchor_dropped(self):
@@ -2469,9 +2517,7 @@ class CentralView(QWidget):
         of its clip. ONE place for every way: the corner-compare state goes, and the status line
         that named the pair is cleared at once rather than lingering its 6 s over a new view."""
         self._corner_compare = None
-        if getattr(self, "_corner_status", False):
-            self._corner_status = False
-            self.statusNotice.emit("")
+        self._release_status(_HELD_CORNER)
 
     def _on_corner_compare_left(self, on: bool):
         """compareToggled: a compare of this pass with the typical one was left (C, the button,
@@ -2487,10 +2533,10 @@ class CentralView(QWidget):
             self._set_corner_lap(pair[0])
 
     def leave_corner_compare(self) -> bool:
-        """Esc on a compare of this pass with the typical one: leave it. False when none is on —
-        including a later plain compare, whose pair is not this one (the anchor says which)."""
-        if (getattr(self, "_corner_compare", None) is None or not self._comparing()
-                or self.compare.corner_anchor() is None):
+        """Esc on a compare AT A CORNER — this pass beside the typical one, or a Coaching row's
+        Compare — leaves it, as C does. False when none is on: a plain whole-lap compare (C, the
+        button) has no corner anchor, and Esc there keeps its meaning (nothing to back out of)."""
+        if not self._comparing() or self.compare.corner_anchor() is None:
             return False
         self.video.compare_btn.click()      # compareToggled(False): the exit, then the restore
         return True

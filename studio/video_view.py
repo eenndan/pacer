@@ -108,8 +108,17 @@ _SLOW_TOOLTIP = (f"Slow motion: play the pass at {_RATE_LABELS[0]}.\n"
                  "Stays on for the next pass you pick; leaving the pass gives back your speed.")
 
 
+# A slow lap narrower than the ▼ glyph (a 40-lap session docked at 1280x800: 10-12 px laps) still
+# shows on the ruler, as a short tick in the ▼'s ink on the same plate: the Laps table marks it, so
+# the bar does too. The hover is the lap's own, as for ▼.
+RULER_SLOW_TICK = "tick"
+_SLOW_TICK_W = 3          # px: the tick's width ...
+_SLOW_TICK_H = 8          # ... and height (the groove's), on a plate 1 px wider each side
+
+
 def ruler_mark_colour(glyph: str) -> str:
-    """The ink of a lap-ruler mark: ★ the best-lap colour (palette-aware, the Laps table's), ▼ text."""
+    """The ink of a lap-ruler mark: ★ the best-lap colour (palette-aware, the Laps table's), ▼ and
+    its reduced tick (RULER_SLOW_TICK) text."""
     return theme.best_lap_colour() if glyph == "★" else theme.C.text
 
 
@@ -235,7 +244,11 @@ class _LapRulerSlider(QSlider):
 
     def mark_plan(self) -> list[tuple[int, str]]:
         """(x, glyph) for every mark paintEvent draws: ★ always (one lap, the one that matters), ▼
-        only where its lap is wider than the glyph (a 65-lap session's 7 px laps would smear)."""
+        where its lap is wider than the glyph, and where it is not (a 65-lap session's 7 px laps
+        would smear the glyph) the reduced tick, RULER_SLOW_TICK — down to a lap of the tick's
+        plate + 2 px. Narrower still (~120 laps docked) the plate would spill into its neighbours
+        and two slow laps merge into one bar, so nothing is drawn there, as before; nor where the
+        tick's plate would meet the ★'s."""
         if not self._segments or self.maximum() <= self.minimum():
             return []
         fm = QFontMetrics(self._mark_font)
@@ -246,15 +259,22 @@ class _LapRulerSlider(QSlider):
             glyph = mark.split()[0]
             xa, xb = self._x_for(a), self._x_for(b)
             if glyph != "★" and xb - xa < fm.horizontalAdvance(glyph) + 2:
-                continue
+                if xb - xa < _SLOW_TICK_W + 2 + 2:
+                    continue
+                glyph = RULER_SLOW_TICK
             out.append(((xa + xb) // 2, glyph))
-        return out
+        stars = [self._mark_rect(x, g) for x, g in out if g == "★"]
+        return [(x, g) for x, g in out if g != RULER_SLOW_TICK
+                or not any(self._mark_rect(x, g).intersects(s.adjusted(-1, 0, 1, 0)) for s in stars)]
 
     def _mark_rect(self, x: int, glyph: str, cy: int | None = None):
         """The plate a mark is painted on, centred on (x, groove centre)."""
         fm = QFontMetrics(self._mark_font)
         if cy is None:
             cy = self._groove_rect().center().y()
+        if glyph == RULER_SLOW_TICK:
+            h = _SLOW_TICK_H + 2
+            return QRectF(x - _SLOW_TICK_W / 2 - 1, cy - h / 2, _SLOW_TICK_W + 2, h)
         h = fm.height()
         w = max(fm.horizontalAdvance(glyph) + 4, h)
         return QRectF(x - w / 2, cy - h / 2, w, h)
@@ -413,6 +433,10 @@ class _LapRulerSlider(QSlider):
                 plate = self._mark_rect(x, glyph, cy)
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QColor(ruler_mark_plate()))
+                if glyph == RULER_SLOW_TICK:     # the reduced ▼: a tick on a square-ended plate
+                    painter.drawRect(plate)
+                    painter.fillRect(plate.adjusted(1, 1, -1, -1), QColor(ruler_mark_colour(glyph)))
+                    continue
                 painter.drawRoundedRect(plate, plate.height() / 2, plate.height() / 2)
                 painter.setPen(QColor(ruler_mark_colour(glyph)))
                 w = fm.horizontalAdvance(glyph)
