@@ -469,8 +469,8 @@ SPLITS_TOOLTIP = (
     "percentile becoming a rank: where every lap is within a tenth, nothing is marked. Hover any "
     "cell for both numbers.")
 #: The line under the SPLITS grid — the sample it is over, stated where the grid is read.
-SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best to the hundredth (Corners ▸ "
-               "Quickest passes says how many laps are level with it); ▼ is {scale} or more "
+SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best to the hundredth (Quickest "
+               "passes, on the Corners tab, says how many laps are level with it); ▼ is {scale} or more "
                "slower than that sector's own typical lap, each sector scaled by its own spread.")
 #: CORNERS BY LAP's lead columns, the lap and its time — frozen at the left edge while the corner
 #: columns scroll under them (LOOK-8, QA 2026-09-26: at the owner's 683 px pane the lap time and

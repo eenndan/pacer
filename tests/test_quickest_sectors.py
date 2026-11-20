@@ -563,7 +563,7 @@ def test_a_sector_under_the_fold_is_scrolled_into_view_when_it_plays():
 def test_the_splits_note_points_to_where_the_level_laps_are_counted():
     from studio.stats_panel import SPLITS_NOTE
     note = SPLITS_NOTE.format(n=14, c=3, scale="0.30 s")
-    assert "Quickest passes says how many laps are level" in note, note
+    assert "Quickest passes, on the Corners tab, says how many laps are level" in note, note
 
 
 if __name__ == "__main__":
