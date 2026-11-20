@@ -663,14 +663,61 @@ def test_every_export_opens_on_the_frame_showing_at_its_start():
             if frac == 0.0 and not moved.source.concat_list_path:
                 old, _ = _decoded(_accurate_seek(argv, FPS_SRC, scale))
                 assert raw == old, f"{name}: a start on a source frame no longer decodes as it did"
+    assert all(ev.picks_the_frame_showing(ev.source_tick(k[1].source.probe_path)) for k in kinds)
     for _name, spec in kinds:
         spec.source.cleanup()
     compare.cleanup()
+    wrong += _clock_sweep(tmp.name, n)
     tmp.cleanup()
     assert not wrong, ("output frames that are not the source frame showing at their instant "
                        "(by how many source frames):\n  " + "\n  ".join(wrong))
     print(f"ok the first frame: {len(kinds)} export kinds x {len(START_FRACS)} starts, every "
-          f"frame the source frame showing at its instant")
+          f"frame the source frame showing at its instant; 30 and 25 fps on a fine clock too, "
+          f"and on a frame-coarse one the decode it always had")
+
+
+def _coded_file(path, rate, timescale, frames=900):
+    """One file of `_coded_picture`'s flat coded frames at a whole `rate`, its track on `timescale`
+    (`rate` itself is a clock no finer than a frame; ffmpeg's default for mp4 is far finer)."""
+    raw = np.concatenate([np.full((SH, SW), _level(i), np.uint8).ravel() for i in range(CYCLE)])
+    raw.tofile(path + ".gray")
+    subprocess.run([ev.FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-stream_loop",
+                    "-1", "-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{SW}x{SH}",
+                    "-framerate", str(rate), "-i", path + ".gray", "-frames:v", str(frames),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-x264-params", f"keyint={rate}:min-keyint={rate}:scenecut=0",
+                    *(["-video_track_timescale", str(timescale)] if timescale else []),
+                    "-an", "-n", path], check=True, capture_output=True, timeout=120)
+
+
+def _clock_sweep(folder, n):
+    """THE CLOCK DECIDES THE PICK (#647 review, P3-1). A non-accurate seek snaps its offset to the
+    stream's tick, which on a 1/25 or 1/30 clock is a whole frame: the pick put such a clip one or
+    two frames ahead where the accurate seek had been exact. So a 30 and a 25 fps file on ffmpeg's
+    own fine clock must be exact at every start, and the same pictures on a frame-coarse clock
+    must decode with the very argv (and bytes) the accurate seek gave."""
+    wrong = []
+    for rate in (30, 25):
+        for timescale in (None, rate):
+            path = os.path.join(folder, f"coded_{rate}_{timescale or 'fine'}.mp4")
+            _coded_file(path, rate, timescale)
+            fine = ev.picks_the_frame_showing(ev.source_tick(path))
+            assert fine == (timescale is None), (path, ev.source_tick(path))
+            scale = f"scale={_TW}:{_TH}"
+            for frac in START_FRACS:
+                t0 = (400 + frac) / rate
+                spec = ev.ExportSpec(src_path=path, out_path="x.mp4", lap_id=0, t0=t0,
+                                     t1=t0 + n / rate)
+                argv = ev.build_decode_cmd(spec, _TW, _TH, float(rate), False, scale)
+                raw, got = _decoded(argv)
+                if fine:
+                    off = _off(got, np.floor((t0 + np.arange(n) / rate) * rate + 1e-6))
+                    if len(got) != n or np.any(off):
+                        wrong.append(f"{rate} fps, fine clock, from {frac:.2f} of a frame in: "
+                                     f"{off.tolist()}")
+                else:
+                    assert argv == _accurate_seek(argv, float(rate), scale), argv
+    return wrong
 
 
 def test_a_pass_that_straddles_the_chapter_seam_stays_in_sync():

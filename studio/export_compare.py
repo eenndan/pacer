@@ -37,7 +37,7 @@ THE 765 ms DUAL-SEEK FINDING DOES NOT APPLY HERE, AND THAT WAS MEASURED RATHER T
 distance-lock was rejected in 2026-06 because seeking to a PRESENTED frame with two QMediaPlayer
 decoders alive costs ~765 ms, so holding the lock during playback would have meant a corrective
 seek per frame and the picture would strobe. An export never seeks per frame: it opens each pane
-ONCE with an accurate `-ss` and then decodes LINEARLY, and the lock is applied by choosing which
+ONCE with one `-ss` (`build_decode_cmd`'s) and then decodes LINEARLY, and the lock is applied by choosing which
 already-decoded frame to use — dropping one when B is running slow against A, repeating one when it
 is running fast. Two seeks for the whole render, not two per frame, and both of them before the
 first frame is composited.
@@ -609,7 +609,7 @@ class CompareSpec(ExportSpec):
 
     def spec_b(self, tail: float = 0.0) -> ExportSpec:
         """Pane B's window as a plain `ExportSpec`, so B's decode is built by exactly the same
-        `build_decode_cmd` (accurate `-ss`, concat span across a chapter seam, hwaccel) and
+        `build_decode_cmd` (its `-ss` and frame pick, concat span across a seam, hwaccel) and
         refused by exactly the same `guard_validate_window` as pane A's.
 
         `tail` extends the decode a couple of frames past the finish line. `frame_times` emits
@@ -1065,7 +1065,7 @@ class CompareRenderer(Renderer):
     and a painter for two panes.
 
     TWO DECODERS, TWO SEEKS, FOR THE WHOLE RENDER. Pane A is the inherited decode; pane B is a
-    `_PaneStream`, opened once with the same accurate `-ss` and then read strictly forward. The
+    `_PaneStream`, opened once with the same `-ss` (`build_decode_cmd`) and read strictly forward. The
     live compare mode could not work this way — holding the lock during PLAYBACK means a corrective
     seek per frame, measured at ~765 ms with two decoders alive — but an export does not play, it
     streams, and a stream can be resampled for free."""

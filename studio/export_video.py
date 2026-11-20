@@ -433,8 +433,8 @@ class OverlayConfig:
 # EVERY LIST ENTRY CARRIES ITS `duration`, AND THAT IS LOAD-BEARING — IT IS WHAT MAKES THE CONCAT
 # STREAM SEEKABLE AT ALL. Without a declared duration for every file the concat demuxer refuses to
 # seek (`concat_seek` bails; ffmpeg logs "could not seek to position ..."), and an `-ss` before the
-# input degrades into decoding the whole span from its start. The picture is still RIGHT — ffmpeg's
-# accurate seek discards its way there — but on the real 3x1729 s D24 recording half a second of
+# input degrades into decoding the whole span from its start. The picture is still RIGHT — the
+# decode discards its way there (`build_decode_cmd`) — but on the real 3x1729 s D24 recording half a second of
 # picture out of lap 22's window cost 663 s undeclared against 1.2 s declared. Correct and
 # unshippable is still unshippable.
 #
@@ -456,9 +456,9 @@ class OverlayConfig:
 # of 34.8-44.9): lap 22 started -0.956 s early with no run-up and -0.950 s with 10 s of it; lap 47,
 # whose start sat closer to a keyframe, -0.193 s and -0.186 s. The audio came out with it (-0.977 /
 # -0.200 s), so the clip was internally in sync and only the OVERLAY was wrong. With the durations
-# declared, ffmpeg's ordinary accurate `-ss` lands on the same frame the single-chapter branch
-# lands on: +0.005..+0.031 s, which is the render's own fps grid and is what a single-chapter lap
-# has always returned.
+# declared, the decode's ordinary `-ss` lands on the same frame the single-chapter branch lands
+# on: +0.005..+0.031 s then, on the fps filter's nearest-slot grid; since cool/export-first-frame
+# both land on the frame SHOWING at t0 (`_pick_showing_frames`).
 #
 # `time_offset` is the global->local shift (local = global - time_offset): the first spanned
 # chapter's offset for BOTH chaptered branches, 0 for a plain single file (global == local).
@@ -500,7 +500,7 @@ def resolve_video_source(chapter_map, t0: float, t1: float,
       * spans a seam   -> the concat demuxer over chapters [i0..i1], every entry carrying its
                           `duration` (what makes the span seekable — see the section comment above);
                           time_offset = chapters[i0].offset, exactly as for a single chapter, so the
-                          same accurate `-ss local` seeks both branches. The concat list is written
+                          same `-ss local` seeks both branches. The concat list is written
                           under `tmp_dir`; the caller frees it via cleanup().
     Raises ValueError if `chapter_map` has no chapters.
 
@@ -1314,7 +1314,9 @@ def output_size(src_w: int, src_h: int, cfg: OverlayConfig) -> tuple[int, int]:
 # but the concat demuxer over a chapter seam reports the AAC priming as its start (-0.021333 s on
 # the synthetic recording, one 1024-sample frame at 48 kHz): every seam-crossing export then cut
 # picture and sound from 21 ms before its window, two thirds of a 30 fps frame behind its overlay
-# (measured on the synthetic span). A single file starting at 0: nothing changes.
+# (measured on the synthetic span). A single file starting at 0: nothing changes. It seeks on the
+# RAW timestamps, so a file whose first frame is not at 0 (B-frames without an edit list) would be
+# offset against the old convention by that first timestamp; GoPro chapters start at 0.
 _SEEK_ON_THE_SOURCE_CLOCK = ("-seek_timestamp", "1")
 
 # A source frame that starts this little after an output frame's instant counts as showing at it.
@@ -1334,9 +1336,47 @@ def _pick_showing_frames(fps: float) -> str:
     frame whose start, rounded UP to the output's frame grid, is at most i, i.e. that starts no
     later than the slot itself. `start_time=0` puts slot 0 at the seek and lets the frame already
     showing there (a negative timestamp, so it must survive the seek: `-noaccurate_seek`) fill it;
-    everything before it is dropped. The `setpts` ahead of it is the tolerance."""
-    return (f"setpts=PTS-{_SHOWING_TOLERANCE_S:g}/TB,"
+    everything before it is dropped. The `setpts` ahead of it is the tolerance, in WHOLE ticks of
+    the stream's time base (`floor`), so it can never round up to more than the tolerance."""
+    return (f"setpts=PTS-floor({_SHOWING_TOLERANCE_S:g}/TB),"
             f"fps={fps:.6f}:start_time=0:round=up")
+
+
+# THE PICK NEEDS A FINE CLOCK. A non-accurate seek offsets the timestamps by the seek rounded to the
+# stream's own tick, so on a time base no finer than a frame (1/25, 1/30, 1/50: a frame per tick)
+# the offset snaps to a whole frame and the clip came out one or two frames AHEAD, every frame,
+# where the accurate seek had been exact (measured by the #647 review on synthetic 25/30/50 fps
+# files). A source whose tick is coarser than `_SHOWING_TOLERANCE_S` therefore keeps the decode it
+# always had: ffmpeg's accurate seek and the fps filter's own rounding. GoPro chapters run on
+# 1/60000 (17 us), ffmpeg's own mp4s on 1/15360 or finer, and so does every fixture here.
+_TIME_BASE_CACHE: dict[tuple[str, int, int], float | None] = {}
+
+
+def source_tick(path: str | None) -> float | None:
+    """One tick of the first video stream's time base, in seconds (ffprobe, cached per file as
+    `_video_size_key` keys it); None when it cannot be asked — and then the decode keeps the
+    accurate seek, which is never worse than it was."""
+    key = _video_size_key(path) if path else None
+    if key is None:
+        return None
+    if key not in _TIME_BASE_CACHE:
+        tick = None
+        try:
+            out = subprocess.run(
+                [FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream=time_base", "-of", "default=noprint_wrappers=1:nokey=1", path],
+                capture_output=True, text=True, timeout=30).stdout.strip()
+            tick = float(Fraction(out)) if out else None
+        except (OSError, ValueError, ZeroDivisionError, subprocess.SubprocessError):
+            tick = None
+        _TIME_BASE_CACHE[key] = tick if tick and tick > 0 else None
+    return _TIME_BASE_CACHE[key]
+
+
+def picks_the_frame_showing(tick: float | None) -> bool:
+    """Whether a source on this time base takes `_pick_showing_frames` (a tick no coarser than the
+    tolerance) or keeps the accurate seek (unknown, or a coarse clock)."""
+    return tick is not None and tick <= _SHOWING_TOLERANCE_S + 1e-12
 
 
 def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
@@ -1365,7 +1405,8 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     rendered at 30 or 29.97 led by one source frame (16.7 ms) on nearly every frame whatever the
     start. Only a same-rate start exactly on a source frame of a single chapter was right, and
     those renders are unchanged byte for byte: the same frames are picked
-    (`tests/test_export_pass.py` decodes the old argv alongside).
+    (`tests/test_export_pass.py` decodes the old argv alongside). A source on a clock no finer
+    than a frame keeps that old argv outright (`source_tick`).
 
     THE FULL-RANGE TRAP CANNOT REACH THE ENCODER FROM HERE, AND THAT IS ARCHITECTURE RATHER THAN
     LUCK. A hardware encoder refuses full-range `yuvj420p` input, and the D24 fixture IS exactly
@@ -1404,18 +1445,24 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
         seek = f"{us // 1_000_000}.{us % 1_000_000:06d}"
         n -= start_frame
         length = n / float(fps)
+    if picks_the_frame_showing(source_tick(spec.source.probe_path)):
+        # No accurate seek: its trim would drop the frame SHOWING at t0 (`_pick_showing_frames`).
+        # And the seek is a timestamp of the source's own clock (`_SEEK_ON_THE_SOURCE_CLOCK`).
+        seeking = ["-noaccurate_seek", *_SEEK_ON_THE_SOURCE_CLOCK, "-ss", seek]
+        picking = _pick_showing_frames(fps)
+    else:
+        # A coarse (or unknown) clock keeps the accurate seek it always had (`source_tick`).
+        seeking, picking = ["-ss", seek], f"fps={fps:.6f}"
     return [
         FFMPEG, "-nostdin", "-loglevel", "error",
         *hw,
-        # No accurate seek: its trim would drop the frame SHOWING at t0 (`_pick_showing_frames`).
-        # And the seek is a timestamp of the source's own clock (`_SEEK_ON_THE_SOURCE_CLOCK`).
-        "-noaccurate_seek", *_SEEK_ON_THE_SOURCE_CLOCK, "-ss", seek, *spec.source.input_args(),
+        *seeking, *spec.source.input_args(),
         # THE PLAN'S OWN LENGTH, not the raw window — see `clip_seconds`. Asking for the window's
         # 68.2286 s made ffmpeg's output trim round 2046.86 frames to 2046 and the render ran dry
         # one frame early; asking for 2047/30 s lands on the frame boundary. `-frames:v` then pins
         # the count from the other side, so the decode can never overrun the plan either.
         "-t", f"{length:.6f}",
-        "-vf", f"{_pick_showing_frames(fps)},{scale}",
+        "-vf", f"{picking},{scale}",
         "-frames:v", str(n),
         "-an", "-sn", "-dn",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
