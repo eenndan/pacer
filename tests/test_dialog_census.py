@@ -7,6 +7,9 @@ its Python name, so each open left its whole tree behind for the rest of the ses
 synthetic demo, in the real window, per open: palette +1 top-level / +23 widgets, Library +11 / +113
 (the dialog, its 7 menus, 2 combo popups), track manager +1 / +13, each context menu +1 QMenu. The
 help cards, the export pickers and the message boxes measured +0 and are not repeated here.
+The video export's progress modal was the seventh (0.19.0 QA, re-measured on 5 real renders of
+the demo: +1 top-level / +4 widgets per export, never levelling off; its "export finished" box was
+freed all along).
 
 THE CHECK. Each door is opened once to warm up (lazy imports, first-build caches), the census taken
 — top-level widgets by class, plus every widget — then opened three more times; after the loop is
@@ -36,8 +39,13 @@ from _qtapp import themed_app  # noqa: E402
 
 _APP = themed_app()            # module scope, BEFORE any widget: the SHIPPING theme
 
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QTimer  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDialog, QMainWindow  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QThread, QTimer, Signal  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialog,
+    QMainWindow,
+    QProgressDialog,
+)
 
 from studio import library, prefs, units  # noqa: E402
 
@@ -66,8 +74,11 @@ class _Closer:
     """Closes the modal or popup on screen, from the event loop that `exec()` runs. Counts what it
     closed, so a door that opened nothing modal cannot pass by default."""
 
-    def __init__(self):
+    def __init__(self, progress: str = "reject"):
+        # `progress`: what a QProgressDialog gets — "reject" like any modal, "wait" (it is left to
+        # the render it reports on, and not counted), or "cancel" (its Cancel, as a user presses it).
         self.closed = 0
+        self._progress = progress
         self._timer = QTimer()
         self._timer.setInterval(20)
         self._timer.timeout.connect(self._tick)
@@ -75,6 +86,11 @@ class _Closer:
     def _tick(self):
         w = QApplication.activePopupWidget() or QApplication.activeModalWidget()
         if w is None:
+            return
+        if isinstance(w, QProgressDialog) and self._progress != "reject":
+            if self._progress == "cancel" and w.isVisible():
+                self.closed += 1
+                w.cancel()
             return
         self.closed += 1
         w.reject() if isinstance(w, QDialog) else w.close()
@@ -87,8 +103,9 @@ class _Closer:
         self._timer.stop()
 
 
-def _assert_gives_back(name: str, open_once, modals_per_open: int = 1) -> None:
-    with _Closer() as closer:
+def _assert_gives_back(name: str, open_once, modals_per_open: int = 1,
+                       progress: str = "reject") -> None:
+    with _Closer(progress) as closer:
         open_once()                                    # warm-up
         before = _census()
         for _ in range(_OPENS):
@@ -208,6 +225,59 @@ def test_the_library_row_menu_gives_back_its_menu():
             _assert_gives_back("Library row right-click", lambda: dlg._on_context_menu(at))
         finally:
             _dispose(dlg)
+
+
+class _Render(QThread):
+    """VideoExportWorker's signal surface with no thread and no ffmpeg: started, it finishes from
+    the progress modal's own loop (where a real worker's queued signal lands); cancelled, it
+    reports "cancelled" the same way."""
+
+    progress = Signal(int, int)
+    finished_export = Signal(bool, str)
+
+    def __init__(self, _session, _spec, _make_renderer=None):
+        super().__init__()
+
+    def start(self):
+        QTimer.singleShot(0, lambda: self.finished_export.emit(True, ""))
+
+    def cancel(self):
+        QTimer.singleShot(0, lambda: self.finished_export.emit(False, "cancelled"))
+
+    def wait(self, *_a, **_k):
+        return True
+
+
+class _Spec:
+    """The fields the export queue reads off a spec: where it wrote and its source's cleanup."""
+
+    def __init__(self, out_path):
+        self.out_path, self.lap_id = out_path, 0
+        self.source = type("_Src", (), {"cleanup": lambda _self: None})()
+
+
+def test_the_video_export_gives_back_its_progress_dialog():
+    """Each export's progress modal stayed parented to the window after its render: one
+    QProgressDialog and its 3 children per export, every export (the demo, 5 real renders: +5
+    top-level, +20 widgets; 0.19.0 QA). The REAL queue, its progress modal and its "export
+    finished" box running their real `exec()`, the worker stood in for. Finished (the box is
+    closed, the progress modal left to its render) and cancelled (its Cancel pressed)."""
+    from studio import export_controller
+
+    win = _window()
+    win.session, win._load_workers, win._video_worker = None, set(), None
+    real = export_controller.VideoExportWorker
+    export_controller.VideoExportWorker = _Render
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            spec = _Spec(os.path.join(d, "lap.mp4"))
+            _assert_gives_back("video export, finished",
+                               lambda: win.exports._run_video_export([spec], 0), progress="wait")
+            _assert_gives_back("video export, cancelled",
+                               lambda: win.exports._run_video_export([spec], 0), progress="cancel")
+    finally:
+        export_controller.VideoExportWorker = real
+        _dispose(win)
 
 
 if __name__ == "__main__":
