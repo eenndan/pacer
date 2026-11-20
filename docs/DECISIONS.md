@@ -1401,3 +1401,135 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
   real display; pull request #582's commit list comment; the published real-footage Coaching
   tables cannot be re-verified offline.
+
+## 22. Recorded at the 0.20.0 release, 2026-11-20
+
+- **v0.20.0 is a minor release**: 6 pull requests, #647, #648 and #650 to #653, Wave 15 of the
+  campaign section 8 records, its theme "every exported frame is the frame showing at its
+  overlay's instant, and 0.19.0's loose ends are tied".
+  - #647: every video export (a lap, a corner or sector pass, the whole recording, both panes of
+    a compare) makes output frame i the source frame showing at the clip's start plus i frames:
+    the latest source frame that starts at or before that instant. Before, on synthetic sources,
+    a clip starting less than half a source frame in opened on a repeat of its second frame, one
+    starting past half a frame ran one frame (33 ms) ahead on every frame, a clip across a chapter
+    seam ran one frame behind or opened on the next frame, depending on its start, and a 59.94
+    fps source exported at 30 fps ran one source frame (16.7 ms) ahead on nearly every frame.
+    The decode and the sound now seek on the source's own clock, so a chapter span that reports its audio priming as its start (-21.3 ms on the
+    synthetic chapters) no longer starts picture and sound early.
+  - #648: Corners ▸ Quickest passes lays each Every lap strip out once per strip and cell size,
+    not on every paint; on a 70-lap synthetic session a full repaint of the table went from 77 to
+    12 ms, a splitter drag step from 180 to 95 ms and the first Quickest view from 423 to 125 ms.
+    The pixels are identical at every strip width.
+  - #650: each video export's progress window is freed when its queue ends (it was 1 more
+    top-level window and 4 more widgets per export, for the rest of the session).
+  - #651: while a pass is compared with the typical pass, the highlighted Quickest row is that
+    pass's row, also for a compare started from ⌘K after the arrow keys moved the highlight.
+  - #652: a double-click on the video while comparing, on either pane, puts on the status line
+    the sentence F and ⌘K give: "Make the video fill the screen (F) — not while comparing two laps".
+  - #653: a Coaching row's Compare holds the gap after the corner's exit as timed, neutral, on the
+    seam, both pane badges and the exported Δ plate, as "Compare with my typical pass" has since
+    #643. On eight synthetic sessions with no planted habit, 12 of the 36 Compares offered held a
+    coloured gap; 8 of those 12 had a true gap under the 0.07 s step and 1 had the wrong sign.
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19 ("continue and don't come
+  back to me").
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **An export's frame is the latest source frame at or before its instant**, with 0.1 ms of
+    tolerance for the seek's own rounding (#647). A source whose time base is no finer than a
+    frame (1/25, 1/30, 1/50) keeps the old decode, ffmpeg's accurate seek and the fps filter's
+    nearest-frame rounding, because the new seek snaps to a whole frame on such a clock; GoPro
+    chapters and ffmpeg's own files run on fine clocks. The old decode comes back by reverting
+    `build_decode_cmd`'s branch.
+  - **A Coaching row's Compare holds its gap neutral after the exit, as the typical-pass compare
+    does** (#653): the best lap's pass, on a row ranked by its loss, is partly a lucky one. The
+    live gap inside the corner keeps the step's colour rule; a plain C compare is unchanged.
+    Reverting is the flag `CentralView.compare_at_corner` passes (`PassAnchor.held_neutral`).
+  - **The highlighted Quickest row follows the pass being compared** (#651), and stays on it when
+    the compare ends; a compared lap that is no row's quickest or level lap leaves no row
+    highlighted.
+- **Measured and not shipped.**
+  - #649 (the first export click opens at once: ~0.6 s to 23 ms on this machine, by probing the
+    H.264 encoder in the background) is parked, open and unmerged. Its CI run timed out
+    `test_export_pass` at 480 s once; the hang did not reproduce locally and the log could not
+    place it. It waits for hang diagnostics in the test harness.
+  - The wave's timing round on synthetic sessions found nothing a driver repeats that reaches
+    100 ms. A sector-line edit takes ~0.45 s at 70 laps; it is deferred because the work is in the
+    core's caches. Holding ↓ in a table does not coalesce its steps; left as it is.
+- **Process.** The QA pass drove the merged tree in the real window, offscreen and jailed, at
+  1280×800 and 1440×900, every dialog, menu and the ⌘K palette through its real `exec()` closed by
+  a timer, every menu action through `.trigger()`, on the demo with three sector lines placed
+  mid-straight (not the even split "Add sector" makes, so its figures differ from the changelog's).
+  ⌘K's "Compare lap 13 through S1 with typical lap 4", fired after S1 was played and ↓ ↓ moved the
+  highlight to S3, highlighted S1 with the rows' overlay scrollbar showing (1280×800); a
+  double-click on each pane's video then gave the F sentence; the rows were scrolled and both
+  splitters dragged under the compare, and after a sector line was moved through the map's own
+  signal the Every lap strips matched, pixel for pixel, a fresh window's in the same state. Three
+  demo exports in a row, the sector pass, a lap export cancelled through its progress window's
+  real Cancel button (no file left) and the S1 pass compare, left the widget census level, with no
+  progress window alive. A Coaching row's Compare at the demo's first corner (lap 4's 3.39 s against
+  lap 13's 3.02 s) was exported on its "This pass" row: the seam and the exported Δ plate read
+  the same at five instants, "Δ —" in the lead-in, "+0.20 ▼" coloured inside the corner, "+0.37"
+  neutral at the exit frame and after it. Each demo render was checked frame by frame against the
+  source decoded on its own timestamps: the S4 pass (491 frames, starting 0.53 of a source frame
+  in), both panes of the S1 pass compare (335 frames, pane A holding its last frame from frame
+  321) and both panes of that corner compare (192 frames) show the source frame showing at every
+  instant checked, and the S4 plate's time appears on the first frame at or after the last line.
+  The coded-picture renders of `test_export_pass`, `test_export_pass_compare`, `test_export_seam`
+  and `test_export_e2e` passed, exact from frame 0 with no steady +1 allowed.
+- **The media.** Re-captured on the synthetic demo at 0.20.0: `hero.png`, `og.png`, `map.png`,
+  `accuracy.png`, `debrief.png`, `moments.png`, `report.png`, `quickest.png` and `lapstrip.png`
+  (its own run) are byte-identical to the files already committed, so the social card did not
+  change; no captured shot shows a compare, so #651 and #653 reach none of them. The waivers of
+  `data-trust.png` and `ideal-lap.png` are renewed: 0.20.0 changed no Stats page code. Those of
+  `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed with a new sentence: #647 changed
+  which source frame every export shows, so they come from exports made before the frame fix; a
+  current export's picture can differ from theirs by at most one source frame, and the overlay
+  drawn over it is unchanged. Re-shooting them needs the Sandown 3h recording, not on this machine.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. The QA renders decoded in software: hardware-decode exports were checked
+  by #647's own sweep and by the release gate, not by an independent reviewer. Real macOS
+  fullscreen Spaces, a second monitor and hover could not be checked offscreen. The full gate, the
+  soak and the smoke run on the release branch, not in the QA pass.
+- **Resolved from section 21**: the first frame of an export repeating (#647); each video export
+  leaving its progress window behind (#650; the "export finished" box was already freed); the
+  stale row highlight during a compare started from a Quickest row's menu or ⌘K (#651); the silent
+  double-click on the video while comparing (#652); a Coaching row's Compare colouring its held
+  gap (#653).
+- **Open for the owner** (new).
+  - Sound after a chapter seam on the synthetic chapters still runs 16.7 ms early (38 ms before
+    #647).
+  - At a 30.000 fps output over a 59.94 source, about 3 frames in 300 show the next source frame:
+    a source frame starting within the 0.1 ms tolerance after the output's instant.
+  - Hardware-decode exports were verified by the author's sweep and the release gate, not by an
+    independent reviewer.
+  - #649, the background encoder probe, is parked until the test harness can say where a hang is.
+- **Open for the owner** (carried from section 21, each re-checked against 0.20.0's changes): the
+  selection effect is not corrected (rows are still offered on a lucky quickest pass; only the held
+  gap's colour is withheld); the free-space estimate sizes a pass comparison by pane A's clip, up
+  to 6.5 % low on the demo (`guard_free_space` is untouched); section 13's question (should
+  Coaching rank corners that lose under 0.07 s, and name a habit there?); Quickest passes is still
+  not the Corners tab's default view; the readout and the overlays on real macOS fullscreen Spaces
+  and a second monitor are unverified offscreen; the strip hides at 1280×800 docked for sessions
+  of about 60 laps or more and for the real recording here (#648 kept its minimum width and hide
+  rule); at 1440×900 docked the Stats page's even gaps put three tile labels below the fold.
+- **Open for the owner** (carried from sections 18 to 21, untouched by this wave's changes): the
+  strip under the video stays available as a later option; a corner straight after another starts
+  its clip at the previous exit; a long corner window plays a long clip; the ★'s two meanings on
+  one tab; the rows scroll at the window's minimum size; the status line clears after 6 s while
+  the row keeps saying "playing"; the first time costs three clicks from the debrief; with verdicts
+  on the list, the docked chip says "3 of 3 re-measured"; a session with no laps is left out of the
+  welcome's list, and an unreadable library shows the first-visit screen; the overlays use the
+  0.07 s step even on an estimated clock; a re-profiled corner that keeps its direction is still
+  compared; focus items and Library rows stored before 0.15.0 carry no direction until reopened; a
+  one-corner shortlist's theme reads oddly; after the docked pair's Jump its Compare is one tab
+  away; a missing file's name in the welcome is cut; `overlay.jpg` needs real footage to re-shoot;
+  13 planted defects no test catches; two slow product paths; a marginal corner near the 30°
+  detection limit; the mixed headline's count of refusals; a Compare started from the maximised
+  page stays in the grid; the focus verdict's medians to two decimals; FIRST_LAP's loop paragraph
+  and step 8; the report's Laps card scroll with sector lines; `fmt_time` negatives; Broadcast as
+  the default Style; a ranked corner under the display floor; one lap drawn in two colours in a
+  race over a pick; a session reload stranding widgets; the capture tool's `lapstrip.png` bytes;
+  consistency on the middle half rather than σ; the apex and braking reasons' noise floor; the demo
+  habit ranked only on its own seed; the overlay's ★/Δ under provisional timing; Extras on in
+  Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
+  real display; pull request #582's commit list comment; the published real-footage Coaching
+  tables cannot be re-verified offline.
