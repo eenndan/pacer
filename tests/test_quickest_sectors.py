@@ -31,9 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox, QScrollBar  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -545,6 +545,7 @@ def test_a_sector_under_the_fold_is_scrolled_into_view_when_it_plays():
         q = view.corners_page.quickest
         t = q.table
         # 4 lines at 1280×800 docked overflow; no bar takes the strip's width, the rows scroll
+        # (the overlaid bar says so: test_every_row_is_reachable_and_a_bar_says_when_some_are_below)
         assert t.verticalScrollBar().maximum() > 0 and not t.verticalScrollBar().isVisible()
         t.scrollToTop()
         last = t.rowCount() - 1
@@ -557,6 +558,85 @@ def test_a_sector_under_the_fold_is_scrolled_into_view_when_it_plays():
         assert btn.isVisible() and port.contains(btn.geometry().center())
     finally:
         _close(win)
+        prefs.set_corners_view("lap")
+
+
+def _shown_vertical_bars(table):
+    """Every vertical scrollbar the driver can SEE on the table: its own, or one laid over it."""
+    return [b for b in table.findChildren(QScrollBar)
+            if b.orientation() == Qt.Vertical and b.isVisible()]
+
+
+def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
+    """0.18.0 QA: with the table's bar hidden for the strip (#631), 3 lines at 1280×800 docked cut
+    the last sector row to a sliver with nothing saying there was more. Now, at both sizes and
+    0/2/3/4 lines: a scrollbar shows exactly when the rows overflow, it takes no width from the
+    columns (the strip and the words keep the widths they have with no line), its grip runs clear
+    of every ▶, and dragging it to the end brings the last row and its ▶ fully into view."""
+    prefs.set_corners_view("quickest")
+    try:
+        for size in ((1280, 800), (1440, 900)):
+            base = None
+            for n in (0, 2, 3, 4):
+                win = _window(n, size)
+                try:
+                    t = win.view.corners_page.quickest.table
+                    over = t.verticalScrollBar().maximum() > 0
+                    bars = _shown_vertical_bars(t)
+                    print("rows overflow / bars shown", size, n, over, len(bars))
+                    assert len(bars) == int(over), (size, n, over, bars)
+                    cols = (t.viewport().width(), _strip_state(win), t.columnWidth(3))
+                    base = base or cols
+                    assert cols == base, (size, n, cols, base)
+                    if not over:
+                        continue
+                    bar = bars[0]
+                    # no ▶ pixel under the bar's HIT AREA (it would take that pixel's click), not
+                    # merely under its painted grip: the region the bar takes input on, and the
+                    # widget Qt's own hit test finds at every ▶ edge pixel, which is the ▶
+                    hit = bar.mask().boundingRect() if not bar.mask().isEmpty() else bar.rect()
+                    hit_x = t.viewport().mapFrom(t, bar.pos() + hit.topLeft()).x()   # bar: a table child
+                    # ...and the grip keeps the theme's SPACE_S, all of it inside the hit area
+                    img = bar.grab().toImage()
+                    grip = [x for x in range(img.width())
+                            if img.pixelColor(x, theme.CTRL_H // 2).alpha() > 0]
+                    assert len(grip) >= theme.SPACE_S and grip[0] >= hit.left(), (grip, hit)
+                    for r in range(t.rowCount()):
+                        btn = t.cellWidget(r, QUICKEST_PLAY_COL)
+                        if not t.viewport().rect().intersects(btn.geometry()):
+                            continue
+                        assert btn.geometry().right() < hit_x, (size, n, r, btn.geometry(), hit_x)
+                        edge = btn.geometry().topRight() + QPoint(0, btn.height() // 2)
+                        at = t.childAt(t.viewport().mapTo(t, edge))
+                        assert at is btn or btn.isAncestorOf(at), (size, n, r, at)
+                    assert bar.geometry().right() < t.width()
+                    own = t.verticalScrollBar()
+                    assert bar.pageStep() == own.pageStep(), (size, n, bar.pageStep(),
+                                                              own.pageStep())
+                    bar.setValue(bar.maximum())
+                    _settle()
+                    last = t.rowCount() - 1
+                    port = t.viewport().rect()
+                    assert port.contains(t.visualRect(t.model().index(last, 0))), (size, n)
+                    btn = t.cellWidget(last, QUICKEST_PLAY_COL)
+                    assert port.contains(btn.geometry()), (size, n, btn.geometry(), port)
+                    t.scrollToTop()                   # ...and the bar follows the table back
+                    _settle()
+                    assert bar.value() == 0
+                    # the page follows the table's after a resize and a rebuild (it was copied
+                    # one layout behind: 12 for 8 after a resize, 7 for 10 after a rebuild)
+                    w, h = size
+                    for change in ((win.resize, w, h - 60), (win.resize, w, h),
+                                   (win.view.rebuild_derived_views,)):
+                        change[0](*change[1:])
+                        _settle(0.2)
+                        assert bar.pageStep() == own.pageStep(), (size, n, bar.pageStep(),
+                                                                  own.pageStep())
+                finally:
+                    _close(win)
+            # the demo's corner strip, which the bar may not narrow (75 has 3 px over STRIP_MIN_PX)
+            assert base[1] == (False, {(1280, 800): 75, (1440, 900): 92}[size]), (size, base)
+    finally:
         prefs.set_corners_view("lap")
 
 
