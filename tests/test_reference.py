@@ -193,6 +193,91 @@ def test_the_donor_list_drops_the_reference_on_a_foreign_track():
     print("test_the_donor_list_drops_the_reference_on_a_foreign_track OK")
 
 
+def _counting_cache(loop, laps, gap=None, all_laps=None):
+    """A LapRenderCache over `laps` copies of `loop` (lap 0 loses samples gap[0]:gap[1]) and a
+    counter of reference-centerline fits; `all_laps` adds drawn laps beyond the valid ones."""
+    from studio import gapfill, render_cache  # noqa: PLC0415 — test-local, like the app's own
+
+    xyt = {}
+    for i in range(all_laps or laps):
+        xs, ys, ts = loop[:, 0], loop[:, 1], np.arange(len(loop)) * 0.1
+        if i == (laps if all_laps else 0) and gap is not None:
+            keep = np.ones(len(xs), bool)
+            keep[gap[0]:gap[1]] = False
+            xs, ys, ts = xs[keep], ys[keep], ts[keep]
+        xyt[i] = (xs, ys, ts)
+    extra = {"all_lap_ids": lambda: sorted(xyt)} if all_laps else {}
+    cache = render_cache.LapRenderCache(
+        lap_xyt=lambda i: xyt[i], valid_lap_ids=lambda: list(range(laps)),
+        lap_has_dropout=lambda i: bool(gapfill.find_gaps(xyt[i][2])),
+        lap_time=lambda i: 60.0 + i, trace_times=np.arange(len(loop) * laps) * 0.1, **extra)
+    return cache, sorted(xyt)
+
+
+class _CountFits:
+    """Counts `reference.centerline_local` calls (the ~0.2 s fit) while active."""
+
+    def __enter__(self):
+        self.n, self._orig = 0, ref.centerline_local
+
+        def counted(loop_xy):
+            self.n += 1
+            return self._orig(loop_xy)
+        ref.centerline_local = counted
+        return self
+
+    def __exit__(self, *exc):
+        ref.centerline_local = self._orig
+
+
+def test_a_session_without_a_long_gap_never_fits_the_reference():
+    """W16: the map's first draw ran the reference fit (~0.2 s) on EVERY session, though only a
+    lap with a gap too long for the spline bridge ever reads a donor — the demo has none. Drawing
+    every lap of a gap-free session, or of one whose only gap is short, must not fit at all."""
+    for loop in (_mk_lap(), _foreign_lap()):
+        for gap in (None, (300, 303)):          # clean; a 3-sample gap the spline bridges
+            cache, ids = _counting_cache(loop, laps=2, gap=gap)
+            with _CountFits() as fits:
+                for lap in ids:
+                    cache.lap_trace_segments(lap)
+            assert fits.n == 0, f"drew a session with gap={gap} and fitted the reference {fits.n}x"
+    print("test_a_session_without_a_long_gap_never_fits_the_reference OK")
+
+
+def test_a_long_gap_fits_once_at_the_first_draw_and_draws_the_same_segments():
+    """A session WITH a long gap fits exactly once, at its FIRST draw (even when that draw is a
+    clean lap: the fit must not wait for the 30 Hz tick to cross into the gapped lap), reuses the
+    result for every later draw and after a re-segmentation, and draws the very segments the eager
+    donor list gives — on the circuit the fit accepts (the reference fills the gap) and on one it
+    rejects (spline fallback). An out-lap counts: a gap there is drawn too."""
+    from studio import gapfill  # noqa: PLC0415
+
+    cases = ((_mk_lap(), 1, None, "reference"), (_foreign_lap(), 1, None, "spline-fallback"),
+             (_mk_lap(), 2, None, "borrow:1"), (_mk_lap(), 2, 3, "borrow:0"))
+    for loop, laps, all_laps, source in cases:
+        cache, ids = _counting_cache(loop, laps=laps, gap=(300, 360), all_laps=all_laps)
+        gapped = laps if all_laps else 0
+        first = next(i for i in ids if i != gapped) if len(ids) > 1 else gapped
+        with _CountFits() as fits:
+            cache.lap_trace_segments(first)
+            assert fits.n == 1, f"{source}: the first draw fitted {fits.n}x, not once"
+            segs = {lap: cache.lap_trace_segments(lap) for lap in ids}
+            cache.donors_for(gapped)
+            cache.invalidate()                   # a timing-line edit: segments redrawn
+            for lap in ids:
+                cache.lap_trace_segments(lap)
+            assert fits.n == 1, f"{source}: the cached fit was redone ({fits.n} fits)"
+        xs, ys, ts = cache._lap_xyt(gapped)
+        want, fills = gapfill.reconstruct_lap(xs, ys, ts, cache.donors_for(gapped),
+                                              med_dt=cache.median_sample_dt())
+        assert [f["source"] for f in fills] == [source], (source, fills)
+        got = segs[gapped]
+        assert len(got) == len(want) and all(
+            g.measured == w.measured and np.array_equal(g.xs, w.xs) and np.array_equal(g.ys, w.ys)
+            for g, w in zip(got, want, strict=True)), f"{source}: the drawn segments moved"
+    print("test_a_long_gap_fits_once_at_the_first_draw_and_draws_the_same_segments OK")
+
+
 if __name__ == "__main__":
     test_recovers_known_transform()
     test_cyclic_offset_reverse_reflect()
@@ -202,4 +287,6 @@ if __name__ == "__main__":
     test_centerline_local_refuses_a_foreign_loop()
     test_the_gate_judges_shape_and_deliberately_not_size()
     test_the_donor_list_drops_the_reference_on_a_foreign_track()
+    test_a_session_without_a_long_gap_never_fits_the_reference()
+    test_a_long_gap_fits_once_at_the_first_draw_and_draws_the_same_segments()
     print("ALL OK")
