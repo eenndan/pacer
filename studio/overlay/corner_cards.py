@@ -232,6 +232,9 @@ def place(size_w: float, size_h: float, plates, safe: QRectF, k: float) -> QRect
 
 
 SKIPPED_TOO_SMALL = "Corner cards did not fit this frame size, so this export has none."
+# A sector's pass clip (export_video.PassSubject with a stats.sector_key) keeps to its own stretch
+# and its own time, as a corner's keeps to its own card: the checkbox is off with this said.
+SECTOR_PASS_REASON = "A sector clip shows the sector's time; corner cards are for a corner's pass."
 
 
 class CornerCardsElement:
@@ -247,6 +250,7 @@ class CornerCardsElement:
         self.cards = card_rows(ctx.session, int(spec.lap_id), cfg.speed_unit, cfg.palette)
         # A pass clip (export_video.PassSubject) shows its own corner's card only: the previous
         # corner's exit is at or before the clip's first frame, and its card would open the clip.
+        # A sector's pass (a negative key) matches no card: SECTOR_PASS_REASON.
         subject = getattr(spec, "pass_subject", None)
         if subject is not None:
             self.cards = [c for c in self.cards if c.cid == subject.cid]

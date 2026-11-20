@@ -57,6 +57,11 @@ from .workers import VideoExportWorker
 _log = logging.getLogger(__name__)
 
 
+def _pass_noun(cid: int) -> str:
+    """What a pass goes through, for a sentence: "corner", or "sector" for a `stats.sector_key`."""
+    return "corner" if sector_col(cid) is None else "sector"
+
+
 def report_tokens() -> dict[str, str]:
     """The app's colours the HTML report is drawn in (`export_data.REPORT_TOKENS`), read off
     theme — the one source; the Qt-free writer cannot import it. The semantic two follow the
@@ -113,7 +118,7 @@ class ExportChoice(NamedTuple):
     config: object
     lead: float
     scope: str = export_video.SCOPE_THIS_LAP
-    cid: int | None = None        # SCOPE_PASS: the corner whose pass is rendered
+    cid: int | None = None        # SCOPE_PASS: the corner (or sector key) whose pass is rendered
 
 
 class SteadyHint(QLabel):
@@ -608,12 +613,13 @@ class ExportController:
                                    "corners.",
     }
     # ...and with the pass row chosen: what a pass clip burns (no lap clock, no Δ: PassSubject).
+    # `{noun}` is what the pass goes through, "corner" or "sector" (`_pass_noun`).
     _PASS_STYLE_DESC = {
         broadcast.STYLE_CLASSIC: "Burns the overlays into your footage: g-meter, speed, map inset "
-                                 "and a strip naming the lap and the corner, with the corner's "
+                                 "and a strip naming the lap and the {noun}, with the {noun}'s "
                                  "time from its exit.",
         broadcast.STYLE_BROADCAST: "Burns the overlays into your footage: a tower naming the lap "
-                                   "and the corner, with the corner's time from its exit, a big "
+                                   "and the {noun}, with the {noun}'s time from its exit, a big "
                                    "speed, the g-meter and a bigger minimap that names its corners.",
     }
     # The Run-up row's reason while it is greyed for the pass row.
@@ -725,10 +731,13 @@ class ExportController:
             _log.warning("ghost availability unknown", exc_info=True)
             return "The ghost is not available for this session."
 
-    def _cards_reason(self, scope: str, lap: int) -> str | None:
+    def _cards_reason(self, scope: str, lap: int, cid: int | None = None) -> str | None:
         """Why this scope can show no corner card (the checkbox's disabled tooltip), or None. All
-        laps asks only the session-wide rules: each lap's file then answers for itself."""
+        laps asks only the session-wide rules: each lap's file then answers for itself. A sector's
+        pass (`cid` a `stats.sector_key`) shows none: a pass clip keeps to its own stretch."""
         session = getattr(self.win, "session", None)
+        if scope == export_video.SCOPE_PASS and cid is not None and sector_col(cid) is not None:
+            return corner_cards.SECTOR_PASS_REASON
         try:
             if scope == export_video.SCOPE_SESSION:
                 return corner_cards.unavailable_reason(session, None, follow_laps=True)
@@ -934,8 +943,6 @@ class ExportController:
         if got is None:
             return None
         lap, cid, label = got
-        if sector_col(cid) is not None:   # a sector pass: not exportable yet (its menu says so)
-            return None
         return int(lap), int(cid), label
 
     def _scope_plan(self, scope: str, lap: int, lead: float,
@@ -951,7 +958,7 @@ class ExportController:
         if scope == export_video.SCOPE_PASS and pass_ is not None:
             return self._pass_seconds(lap, pass_[0]), 1, (
                 f"lap {lap_label(lap)}'s pass through {pass_[1]}, from its lead-in to 1 s after "
-                "the exit, with the corner's time and no lap clock")
+                f"the exit, with the {_pass_noun(pass_[0])}'s time and no lap clock")
         try:
             ids = export_video.scope_lap_ids(session, scope, lap)
         except Exception:  # noqa: BLE001 — a hint must never take down the dialog it annotates
@@ -1052,8 +1059,8 @@ class ExportController:
         the frame contains and how big it lands. The hint underneath re-reads every one of them,
         so the consequences of a choice are visible before it is confirmed rather than after.
 
-        `pass_` = (cid, label) of lap `lap`'s corner pass: the Export row then ends in "This pass
-        — C3, lap 13" (`SCOPE_PASS`), opened on when `preset_pass` (the pass's own command). That
+        `pass_` = (cid, label) of lap `lap`'s corner (or sector) pass: the Export row then ends in
+        "This pass — C3, lap 13" (`SCOPE_PASS`), opened on when `preset_pass` (the pass's own command). That
         row is never remembered: a pass is the subject of one export, and the next dialog opens on
         the scope remembered before it."""
         dlg, col = self._export_dialog("Export overlay video")
@@ -1247,7 +1254,7 @@ class ExportController:
             no_ghost = self._ghost_reason(scope, lap)
             ghost_box.setEnabled(no_ghost is None)
             ghost_box.setToolTip(self._GHOST_TIP if no_ghost is None else f"Off here: {no_ghost}")
-            no_cards = self._cards_reason(scope, lap)
+            no_cards = self._cards_reason(scope, lap, pass_[0] if pass_ is not None else None)
             cards_box.setEnabled(no_cards is None)
             want_ghost, want_cards = ticks[_style()]
             for box, on in ((ghost_box, want_ghost and no_ghost is None),
@@ -1255,7 +1262,8 @@ class ExportController:
                 box.blockSignals(True)
                 box.setChecked(on)
                 box.blockSignals(False)
-            desc.setText((self._PASS_STYLE_DESC if pass_scope else self._EXPORT_STYLE_DESC)[_style()])
+            desc.setText(self._PASS_STYLE_DESC[_style()].format(noun=_pass_noun(pass_[0]))
+                         if pass_scope else self._EXPORT_STYLE_DESC[_style()])
             lap_line.setText(pass_text if pass_scope else lap_text)
             provisional = not bool(getattr(getattr(self.win, "session", None),
                                            "timing_verified", True))
@@ -1400,7 +1408,7 @@ class ExportController:
     _SCOPE_LOG_WORDS = {
         export_video.SCOPE_THIS_LAP: "this lap", export_video.SCOPE_BEST_LAP: "best lap",
         export_video.SCOPE_ALL_LAPS: "all laps", export_video.SCOPE_SESSION: "full session",
-        export_video.SCOPE_PASS: "corner pass",
+        export_video.SCOPE_PASS: "pass",
     }
     @staticmethod
     def _overlay_suffix(choice, lap: int | None, corner: str | None = None) -> str:
@@ -1463,9 +1471,9 @@ class ExportController:
                 export_video.remove_png_frames(spec.out_path)
         return True
     def export_pass_video(self, lap: int, cid: int, label: str) -> None:
-        """Export lap `lap`'s pass through corner `cid` (`label`, "C3"): the overlay picker,
-        opened on "This pass" (⌘K "Export the C3 pass — lap 13…", offered while Corners ▸
-        Quickest passes names that pass)."""
+        """Export lap `lap`'s pass through corner `cid` (`label`, "C3"), or through a sector (`cid`
+        a `stats.sector_key`, "S2"): the overlay picker, opened on "This pass" (⌘K "Export the C3
+        pass — lap 13…", offered while Corners ▸ Quickest passes names that pass)."""
         self.export_overlay_video(pass_=(int(lap), int(cid), label), preset_pass=True)
 
     def export_overlay_video(self, *, pass_: tuple[int, int, str] | None = None,
