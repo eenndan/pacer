@@ -1581,6 +1581,13 @@ class ActionCell(QWidget):
         return hint
 
 
+# A row's Compare holds the gap after the exit neutral (`compare_controller.PassAnchor.held_neutral`):
+# on synthetic seeds with no planted habit, 8 of the 12 held gaps past the step were truly under it
+# (studio/dev/probes/coaching_compare_held_gap). Its hover says so, in the words of the seam's tip.
+COMPARE_HELD_AS_TIMED = ("After the corner's exit both videos hold the gap between these two "
+                         "passes as timed, uncoloured: your best lap's pass is partly a lucky one.")
+
+
 def compare_status(tp: stats_service.TypicalPass, lost: str) -> str:
     """What the window says when a row's Compare lands: the two passes on screen, the corner's
     typical, and `lost` — the ROW'S OWN Time lost string (`coaching.lost_text`), passed through,
@@ -1592,11 +1599,12 @@ def compare_status(tp: stats_service.TypicalPass, lost: str) -> str:
 
     HONEST ABOUT WHICH LAP. Pane A's lap is the one whose pass at THIS corner is the typical one
     (`stats.typical_pass_lap`), not the session's median lap, and the typical itself is printed:
-    over an even count no lap prints it (the demo's C1: lap 4 3.39 s, typical 3.38 s)."""
+    over an even count no lap prints it (the demo's C1: lap 4 3.39 s, typical 3.38 s). The two
+    passes are "as timed": their gap is a measurement, held neutral (`COMPARE_HELD_AS_TIMED`)."""
     a, b = lap_label(tp.lap_id), lap_label(tp.best_lap_id)
     d = stats_service.MATRIX_DECIMALS
     return (f"C{tp.cid} · lap {a} {tp.pass_s:.{d}f} s vs lap {b} {tp.best_pass_s:.{d}f} s "
-            f"(best lap) — lap {a}'s is your {stats_service.TYPICAL_PASS} here (median of {tp.n}: "
+            f"(best lap) as timed — lap {a}'s is your {stats_service.TYPICAL_PASS} here (median of {tp.n}: "
             f"{tp.typical_s:.{d}f} s); typical loss through C{tp.cid}: {lost}")
 
 
@@ -1613,6 +1621,7 @@ def compare_tooltip(cid: int, tp: stats_service.TypicalPass | None) -> str:
             "corner's entry and the charts on the corner.\n"
             f"Lap {a} is the lap whose pass here is nearest the median of {tp.n} "
             f"({tp.typical_s:.{d}f} s) — not your median lap.\n"
+            f"{COMPARE_HELD_AS_TIMED}\n"
             "Like C, it ends a Lap race; C again, or picking a lap, ends the compare.")
 
 

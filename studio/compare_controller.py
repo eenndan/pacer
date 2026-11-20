@@ -68,7 +68,10 @@ class PassAnchor:
     a ▲/▼. It is the difference between these two passes as timed, not a verdict on them: the
     quickest of 14 noisy times is partly a lucky one, so the true gap behind an offered pair is
     under the step on 5 of 11 corner rows and 3 of 6 sector rows at GPS noise 2
-    (studio/dev/probes/corner_typical_compare, sector_typical_compare).
+    (studio/dev/probes/corner_typical_compare, sector_typical_compare). A Coaching row's Compare
+    (the typical pass against the BEST LAP's, on a row ranked by that loss) holds it neutral too:
+    on synthetic seeds 1-8 with no planted habit, 8 of the 12 held gaps that would be coloured are
+    truly under the step and 1 has the wrong sign (studio/dev/probes/coaching_compare_held_gap).
 
     `sides` holds per pane (entry, exit, clip start, clip end, Δ at the entry, held gap). `key` is
     the stretch's id (a corner's cid, a sector's `stats.sector_key`) and `pass_s` the two passes'
@@ -431,12 +434,14 @@ class CompareController:
                      "start line. ")
         step = PB_PRECISION_S if self._anchor is None else self._anchor.level_s
         if self._anchor is not None and self._anchor.held_neutral:
-            # A typical-pass compare: the colour of the live gap is the timing step's, and the held
-            # figure is a measurement of two passes, never a verdict (`PassAnchor.held_neutral`).
+            # A typical-pass compare or a Coaching row's: the colour of the live gap is the timing
+            # step's, and the held figure is a measurement of two passes, never a verdict
+            # (`PassAnchor.held_neutral`).
             noun = self._anchor.noun
             colour = (f"Inside the {noun} the gap is coloured only beyond ±{step:.2f} s. After "
                       f"the exit it holds the difference between these two passes as timed, "
-                      "neutral, because the quickest of many passes is partly luck.")
+                      "neutral, because a pass picked out of many (the quickest, or your best "
+                      "lap's) is partly luck.")
         else:
             colour = (f"Coloured only beyond timing precision (±{step:.2f} s); inside it the "
                       "two laps are level and the number stays neutral.")
