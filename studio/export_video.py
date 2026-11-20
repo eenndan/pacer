@@ -3172,7 +3172,8 @@ def readout_pill_width(pill_h: float, speed_texts, unit_label: str) -> float:
     k = pill_h / 44.0
     fm_big = QFontMetricsF(_font(pill_h * 0.74, bold=True))
     fm_unit = QFontMetricsF(_font(pill_h * 0.34, bold=True))
-    hero = max((fm_big.horizontalAdvance(t) for t in speed_texts), default=0.0)
+    # each distinct string once: `_burned_runs` hands one per frame, and the widest is the same
+    hero = max((fm_big.horizontalAdvance(t) for t in set(speed_texts)), default=0.0)
     return (2.0 * pill_h * _READOUT_PAD_FRAC + hero + _READOUT_GAP_K * k
             + fm_unit.horizontalAdvance(unit_label))
 
@@ -3188,8 +3189,8 @@ def strip_pill_width(pill_h: float, labels, tails) -> float:
     same frame, and summing the two maxima is the conservative direction."""
     k = pill_h / 44.0
     fm = QFontMetricsF(_font(pill_h * 0.54, bold=True))
-    label_w = max((fm.horizontalAdvance(t) for t in labels), default=0.0)
-    tail_w = max((fm.horizontalAdvance(t) for t in tails if t), default=0.0)
+    label_w = max((fm.horizontalAdvance(t) for t in set(labels)), default=0.0)   # each once
+    tail_w = max((fm.horizontalAdvance(t) for t in set(tails) if t), default=0.0)
     gap = _RUN_GAP_K * k if tail_w else 0.0
     return pill_h * _STRIP_PAD_L_FRAC + label_w + gap + tail_w + pill_h * _STRIP_PAD_R_FRAC
 
