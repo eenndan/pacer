@@ -1984,6 +1984,12 @@ class QuickestPass:
     next_gap_s: float | None
     n_counted: int
     level_times: tuple[float, ...] = ()   # each level lap's own pass, aligned with level_laps
+    # Every COUNTED pass (lap_id, time_s) in the grid's lap order, the corner's typical (the grid
+    # column's median: the typical a Coaching row's Time lost is measured from), and the laps whose
+    # cell CORNERS BY LAP marks ▼. The strip beside the row draws these (`pass_strip`).
+    marks: tuple[tuple[int, float], ...] = ()
+    typical_s: float | None = None
+    behind_laps: tuple[int, ...] = ()
 
     @property
     def alone(self) -> bool:
@@ -2033,9 +2039,10 @@ def quickest_passes(matrix: CornerMatrix | None, *, clock_estimated: bool = Fals
     partial |= set(lap_ids) - set(rows)
     out: list[QuickestPass] = []
     for col, cid in enumerate(matrix.cids):
-        counted = sorted((val, int(lap))
-                         for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
-                         if (val := row[col]) is not None and res[col])
+        marks = tuple((int(lap), float(val))
+                      for lap, row, res in zip(rows, matrix.cells, matrix.resolved, strict=True)
+                      if (val := row[col]) is not None and res[col])
+        counted = sorted((t, lap) for lap, t in marks)
         if not counted:
             out.append(QuickestPass(cid, None, None, (), None, 0, ()))
             continue
@@ -2043,10 +2050,72 @@ def quickest_passes(matrix: CornerMatrix | None, *, clock_estimated: bool = Fals
         gaps = [(_ms(t) - _ms(best)) / 1000 for t, _ in counted[1:]]
         level = [(lp, t) for (t, lp), g in zip(counted[1:], gaps, strict=True)
                  if is_level(g, level_s)]
+        behind = tuple(int(rows[r]) for r in range(len(rows)) if matrix.is_behind(r, col))
         out.append(QuickestPass(cid, best, lap, tuple(lp for lp, _ in level),
                                 round(gaps[0], 3) if gaps else None, len(counted),
-                                tuple(t for _, t in level)))
+                                tuple(t for _, t in level), marks, matrix.medians[col], behind))
     return QuickestPasses(out, level_s, tuple(sorted(partial)))
+
+
+# The Quickest passes row's strip: every counted pass through the corner as a dot on a time axis,
+# quickest at the left. ONE ROW, ONE SCALE: a scale shared by the seven rows would squash a tight
+# corner (the demo's C2 spans 0.11 s, its C1 0.44 s) into a few pixels, so each row runs from its
+# quickest to its slowest pass and says so by drawing the LEVEL BAND at its true width, quickest →
+# quickest + the timing step: a wide band is a tight corner. The span is floored at two steps, so
+# the band never fills more than half the strip and can always be told from the whole range. A
+# cell CORNERS BY LAP marks ▼ (the lap that spun) sits off the scale at its right edge rather than
+# squashing the rest: the strip's only "far slower" is the grid's own ▼ rule, no new threshold.
+STRIP_MIN_SPAN_STEPS = 2
+
+
+@dataclass(frozen=True)
+class StripMark:
+    """One counted pass on a row's strip: `x` is its place on the row's scale, 0 (the quickest) to
+    1 (the slowest on-scale pass); `level` whether it is level with the quickest (the row's
+    `play_order`, the `is_level` rule — never the pixel); `behind` a ▼ cell drawn off the scale."""
+
+    lap_id: int
+    time_s: float
+    x: float
+    level: bool
+    behind: bool
+
+
+@dataclass(frozen=True)
+class PassStrip:
+    """`pass_strip`'s result: the row's scale (`lo` → `hi` seconds), the level band's right edge
+    (`band_x`, as a fraction of the scale; it starts at 0), the typical's place (`typical_x`, None
+    without a typical), and one StripMark per counted pass in lap order."""
+
+    lo: float
+    hi: float
+    band_x: float
+    typical_x: float | None
+    marks: tuple[StripMark, ...]
+
+    def nearest(self, x: float) -> StripMark | None:
+        """The mark nearest scale position `x` (a hover), the earlier lap on a tie."""
+        return min(self.marks, key=lambda m: abs(m.x - x), default=None)
+
+
+def pass_strip(qp: QuickestPass, level_s: float) -> PassStrip | None:
+    """Row `qp`'s strip (see the block above). None with no counted pass."""
+    if qp.time_s is None or not qp.marks:
+        return None
+    lo = float(qp.time_s)
+    behind = set(qp.behind_laps)
+    on_scale = [t for lap, t in qp.marks if lap not in behind]
+    hi = max([lo + STRIP_MIN_SPAN_STEPS * level_s, *on_scale])
+    span = hi - lo
+
+    def frac(t: float) -> float:
+        return min(max((t - lo) / span, 0.0), 1.0)
+
+    level = set(qp.play_order())
+    marks = tuple(StripMark(lap, t, 1.0 if lap in behind else frac(t), lap in level, lap in behind)
+                  for lap, t in qp.marks)
+    typical = None if qp.typical_s is None else frac(float(qp.typical_s))
+    return PassStrip(lo, hi, level_s / span, typical, marks)
 
 
 def within_pct_of_best(values, pct: float) -> int | None:
