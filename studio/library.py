@@ -1524,6 +1524,24 @@ def pb_points(index: dict, track: str) -> list[tuple[str, int | None, float]]:
     return pts
 
 
+def pb_steps(bests: list[float]) -> list[int]:
+    """The positions in `bests` (one track's best laps, in the order the sessions were driven:
+    ``pb_points``) that set a personal best: each one faster than every earlier best by at least
+    timing precision. The first seeds the bar and is not a step (it had nothing to beat).
+
+    THE DEBRIEF'S RULE, NOT A STRICTER ONE (cool/library-level-pb). The debrief's PB line reads a
+    best within ``PB_PRECISION_S`` of the earlier PB, either side, as "level with your personal
+    best"; the Library counted any faster best as a PB, so one session read "level" in the debrief
+    and "1 PB · improving" in the Library. The bar a later session is held to is still the fastest
+    earlier best, level steps included — the PB the debrief compares against (``prior_best``)."""
+    steps = []
+    for i in range(1, len(bests)):
+        prior = min(bests[:i])
+        if bests[i] < prior and not within_timing_precision(prior - bests[i]):
+            steps.append(i)
+    return steps
+
+
 def track_summary(index: dict, track: str) -> dict | None:
     """A compact cross-session progress read for one `track`, for the library header line. Reuses
     the index + ``pb_points`` (no new cross-session corner analytics). Returns None when `track` is
@@ -1531,16 +1549,17 @@ def track_summary(index: dict, track: str) -> dict | None:
 
         {"track", "sessions",     # total library rows for this track (all, trustworthy or not)
          "best", "best_date",     # the fastest TRUSTWORTHY dated best + its date (None if none)
-         "pb_count",              # count of LATER sessions that BEAT the running best
-         "trend"}                 # "improving" | "stalled" | "single" | "none"
+         "pb_count",              # count of LATER sessions that set a PB (``pb_steps``)
+         "trend"}                 # "improving" | "level" | "stalled" | "single" | "none"
 
     ``best``/``pb_count``/``trend`` come from the TRUSTWORTHY dated series only (``pb_points``), so a
     provisional/degraded/dropout "best" never inflates the read; ``sessions`` counts every row so the
     header is honest about the whole library ("12 sessions · best … · 3 PBs"). ``pb_count`` is the
-    number of times a LATER session beat the running best — the FIRST session seeds the baseline and
-    is not itself a PB (there was no prior best to beat), the same first/beat split ``pb_moment``
-    makes — and ``trend`` is a light "improving" (the latest session is at/within the running best)
-    vs "stalled" verdict — the 2nd/3rd-visit hook, not an analytics engine."""
+    number of times a LATER session beat the running best by at least timing precision — the FIRST
+    session seeds the baseline and is not itself a PB (there was no prior best to beat), the same
+    first/beat split ``pb_moment`` makes — and ``trend`` is a light "improving" / "level" /
+    "stalled" read of the latest session against the earlier best, by the debrief's PB-line rule
+    (``within_timing_precision``) — the 2nd/3rd-visit hook, not an analytics engine."""
     if not track:
         return None
     sessions = sum(1 for e in index.get("entries", []) if e.get("track") == track)
@@ -1555,21 +1574,20 @@ def track_summary(index: dict, track: str) -> dict | None:
                 "pb_count": 0, "trend": "none"}
     # Fastest trustworthy dated best + the date it was set (earliest date on a tie).
     best_date, best = min(series, key=lambda p: (p[1], p[0]))
-    # Count improving steps: each time the running best drops, that session set a new PB. The first
-    # session SEEDS the running best rather than counting — it had nothing to beat, so calling it a
-    # PB would report "1 session · 1 PB" on a brand-new track.
-    pb_count = 0
-    running = series[0][1]
-    for _date, b in series[1:]:
-        if b < running:
-            pb_count += 1
-            running = b
+    # Count the sessions that set a PB (`pb_steps`): beat every earlier best by at least timing
+    # precision. The first session SEEDS the bar rather than counting — it had nothing to beat, so
+    # calling it a PB would report "1 session · 1 PB" on a brand-new track.
+    bests = [b for _date, b in series]
+    pb_count = len(pb_steps(bests))
     if len(series) == 1:
         trend = "single"
     else:
-        # Improving iff the most-recent session's best equals the overall best (it holds/renewed
-        # the record); otherwise the track has stalled off its PB.
-        trend = "improving" if series[-1][1] <= best else "stalled"
+        # The latest session against the fastest EARLIER best, by the debrief's one rule: inside
+        # timing precision either side it is "level", faster by more is "improving", slower by
+        # more "stalled" — so the Library and the debrief say the same thing of the same session.
+        gap = bests[-1] - min(bests[:-1])
+        trend = ("level" if within_timing_precision(gap)
+                 else "improving" if gap < 0 else "stalled")
     return {"track": track, "sessions": sessions, "best": float(best), "best_date": best_date,
             "pb_count": pb_count, "trend": trend}
 

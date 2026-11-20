@@ -1753,6 +1753,45 @@ def test_the_race_day_summary_reads_in_driven_order():
     assert (s["trend"], s["pb_count"]) == ("stalled", 0), s
 
 
+def test_the_library_summary_reads_a_level_day_as_the_debrief_does():
+    """cool/library-level-pb (disc9). The debrief said "level with your personal best … (under 0.07
+    s apart)" while the Library's summary line said "1 PB · improving" for the SAME session:
+    `track_summary` counted any faster best as a PB. It now follows the debrief's PB-line rule
+    (`library.within_timing_precision`) for the PB count and the trend word, in both directions."""
+    def summary(bests):
+        idx = library.empty_index()
+        for i, best in enumerate(bests):
+            library.upsert(idx, _entry(f"S{i}", track="MK", date=f"2026-06-{i + 1:02d}",
+                                       best=best, paths=[]))
+        return idx, library.track_summary(idx, "MK")
+
+    step = library.PB_PRECISION_S
+    # 0.05 s under the earlier best: the debrief's "level" — no PB, and "level with your PB".
+    idx, s = summary([44.868, 44.818])
+    assert (s["pb_count"], s["trend"], s["best"]) == (0, "level", 44.818), s
+    # …which is what the PB toast says of that session against the earlier day alone.
+    moment = library.pb_moment(summary([44.868])[0], "MK", 44.818)
+    assert library.pb_moment_text(moment, str)[0] == "Level with your personal best", moment
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_summary("MK")
+    line = dlg._summary.text()
+    dlg.deleteLater()
+    assert "level with your PB" in line and "1 PB" not in line and "improving" not in line, line
+    # A few hundredths SLOWER is level too, not "off your PB" (the debrief's other direction).
+    assert summary([44.818, 44.86])[1]["trend"] == "level"
+    # Clear of the step either way, the words are unchanged.
+    s = summary([45.0, 45.0 - step - 0.01])[1]
+    assert (s["pb_count"], s["trend"]) == (1, "improving"), s
+    assert summary([45.0, 45.0 + step + 0.01])[1]["trend"] == "stalled"
+    # A season: a real PB (0.60 s), a slower day, then a day 0.03 s under the PB → 1 PB, level.
+    s = summary([45.62, 45.02, 45.41, 44.99])[1]
+    assert (s["pb_count"], s["trend"]) == (1, "level"), s
+    # Level steps never add up to a PB on their own, but the bar is the fastest earlier best.
+    assert library.pb_steps([45.00, 44.95, 44.90, 44.85]) == []
+    assert library.pb_steps([45.00, 44.95, 44.80]) == [2]
+    assert library.pb_steps([45.00]) == []
+
+
 def test_pb_points_are_in_driven_order():
     """`library.pb_points`: by date, then by the first fix's clock within a date (rows with none
     after, by best); `pb_series` keeps its own (date, best) order for the summary's PB count."""
