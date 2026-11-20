@@ -127,10 +127,8 @@ def typical_compare_status(v, label: str) -> str:
 # Where the pass being studied was played from (`CentralView.pass_subject`): the corner walk from a
 # Quickest passes row steps to the next corner's QUICKEST pass, from anywhere else along the lap.
 PASS_FROM_QUICKEST = "quickest"
-# A sector pass plays, zooms, loops, walks and compares with its typical pass like a corner pass;
-# its export is not built yet (the clip's corner-time readout is corner-shaped), so that menu item
-# is greyed out with this said rather than half-working.
-SECTOR_EXPORT_NOT_YET = "Not for sectors yet: a pass export is for a corner's pass"
+# A sector pass plays, zooms, loops, walks, exports and compares with its typical pass like a
+# corner pass.
 # What a held status line depends on (`CentralView._hold_status`): the pass being studied, or a
 # compare at one corner.
 _HELD_PASS = "pass"
@@ -2170,9 +2168,6 @@ class CentralView(QWidget):
             for action in (play_action, export_action):
                 action.setEnabled(False)
                 action.setToolTip(why)
-        elif sector_col(cid) is not None:
-            export_action.setEnabled(False)
-            export_action.setToolTip(SECTOR_EXPORT_NOT_YET)
         # Greyed out with its own reason: level with the typical pass, or it IS the typical pass.
         why_not = self.typical_compare_refusal(lap, cid)
         if why_not is not None:
@@ -2296,8 +2291,7 @@ class CentralView(QWidget):
         self._pass_subject = (int(lap_id), int(cid), origin, (float(clip[0]), float(clip[1])))
         self._on_live_readout_shown()   # the fullscreen readout names the new subject at once
         if status:
-            self._hold_status(_HELD_PASS, self._pass_status(
-                status, export_hint and sector_col(cid) is None))
+            self._hold_status(_HELD_PASS, self._pass_status(status, export_hint))
         return True
 
     def _pass_status(self, status: str, export_hint: bool) -> str:

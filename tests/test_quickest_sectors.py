@@ -13,8 +13,9 @@ through the same pass path a corner row takes. These tests pin:
   * the view on the real window over the demo (PACER_NO_MEDIA) with 0, 2 and 4 lines: no line
     leaves the table exactly as it was; the rows, the legend, the clip and zoom windows, the
     subject, the fullscreen readout's pass line, the walk staying among the sectors, the menu
-    (export greyed out, "not for sectors yet"), ⌘K, and a line edit refreshing the rows and
-    dropping a studied sector that no longer exists;
+    (export opens the overlay picker on the sector's pass through the real action and dialog;
+    compare greyed out with its own reason where level), ⌘K, and a line edit refreshing the rows
+    and dropping a studied sector that no longer exists;
   * "Compare with my typical pass" on a sector row: the corners' rule over the SPLITS grid
     (`stats.pass_vs_typical_of`, one code path), offered only where the typical split beats the
     quickest by the split's step — on the demo with 2, 3 and 4 lines, S1 alone — both panes at
@@ -315,11 +316,11 @@ def test_a_sector_row_plays_its_split_framed_with_its_subject_and_readout():
         assert view.pass_subject() == (lap, key, "S2")
         msg = win.statusBar().currentMessage()
         assert msg.startswith(f"Playing lap {lap + 1} (") and "through S2" in msg, msg
-        assert "⌘K: export" not in msg              # a sector pass is not exportable yet
+        assert msg.endswith(" · ⌘K: export this pass"), msg    # exported as a corner's is
         t = s.stretch_time(lap, key)
         assert view._live_pass_line() == f"S2 · lap {lap + 1} ({t:.2f})"
-        # the export picker is not offered this pass
-        assert win.exports.pass_subject() is None
+        # the export picker offers this pass
+        assert win.exports.pass_subject() == (lap, key, "S2")
         # Esc: back to the whole lap, and the pass is left
         QTest.keyClick(win, Qt.Key_Escape)
         _settle()
@@ -361,9 +362,8 @@ def test_the_walk_stays_among_the_sectors_and_says_where_it_ends():
         prefs.set_corners_view("lap")
 
 
-def test_the_menu_plays_a_sector_and_greys_out_export_and_a_level_compare_and_cmd_k_lists_it():
+def test_the_menu_plays_and_exports_a_sector_and_greys_out_a_level_compare_and_cmd_k_lists_it():
     from studio import command_palette
-    from studio.central_view import SECTOR_EXPORT_NOT_YET
     prefs.set_corners_view("quickest")
     win = _window(3)
     try:
@@ -373,8 +373,7 @@ def test_the_menu_plays_a_sector_and_greys_out_export_and_a_level_compare_and_cm
         pos = q.table.visualRect(q.table.model().index(9, 1)).center()   # S3
         menu = view.pass_menu(view._quickest_menu_pass(q.table, pos))
         play, export, compare = menu.actions()
-        assert play.isEnabled() and not export.isEnabled() and not compare.isEnabled()
-        assert export.toolTip() == SECTOR_EXPORT_NOT_YET
+        assert play.isEnabled() and export.isEnabled() and not compare.isEnabled()
         # S3's quickest is level with its typical split under the split's step: the true reason
         lap = s.split_matrix().best_lap[2]
         assert compare.toolTip() == (f"Lap {lap + 1}'s pass through S3 is level with your typical "
@@ -386,7 +385,10 @@ def test_the_menu_plays_a_sector_and_greys_out_export_and_a_level_compare_and_cm
         quick = [t for t in titles if t.startswith("Quickest ")]
         assert quick[7:] == [f"Quickest S{c + 1} — lap {s.split_matrix().best_lap[c] + 1}"
                              for c in range(4)], quick
-        assert not any(t.startswith("Export the S") or " through S" in t for t in titles), titles
+        # ⌘K exports the sector pass being studied, as it does a corner's; no compare row for it,
+        # S3's quickest being level with its typical split (S1's is listed: the compare test)
+        assert f"Export the S3 pass — lap {lap + 1}…" in titles, titles
+        assert not any(" through S" in t for t in titles), titles
         # a lap the SPLITS grid does not count (a blank row) is refused, with the reason
         m = s.split_matrix()
         lap = m.lap_ids[3]
@@ -551,7 +553,98 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         _settle()
         assert not view._comparing() and view.table.selected_lap_ids() == [a]
         assert view.compare.pass_anchor() is None and win.statusBar().currentMessage() == ""
+        # ⌘K: with S1's quickest pass studied, the compare is a row beside its export, and runs
+        q.activate(q.row_of(key))
+        _settle()
+        rows = {t: c for t, c in win.quickest_pass_commands() if t.startswith("Compare")}
+        title = f"Compare lap {a + 1} through S1 with typical lap {b + 1}"
+        assert list(rows) == [title], list(rows)
+        rows[title]()
+        _settle()
+        assert view._comparing() and view.compare.pass_anchor() == "S1"
+        assert (view.compare.lap_a, view.compare.lap_b) == (a, b)
     finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_export_this_pass_on_a_sector_row_opens_the_picker_on_that_sector_and_exports_it():
+    """The S3 row's right-click "Export this pass…", fired as the real QAction: the overlay picker
+    opens under its real exec() (a timer reads it, then accepts), on "This pass — S3, lap N", with
+    the sector's own words and no corner cards; the save panel proposes `_lapN_S3_overlay.mp4` and
+    the render is handed the sector's pass (captured, not run)."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QCheckBox, QDialog, QFormLayout, QLabel
+
+    from studio import export_video as ev
+    from studio.overlay import corner_cards
+    prefs.set_corners_view("quickest")
+    win = _window(3)
+    ctl = win.exports
+    orig = ctl._export_save_path, ctl._run_video_export
+    try:
+        view, s = win.view, win.session
+        win._share_card_blocked = lambda: False    # the trust prompt is not what is under test
+        q = view.corners_page.quickest
+        pos = q.table.visualRect(q.table.model().index(9, 1)).center()   # S3
+        target = view._quickest_menu_pass(q.table, pos)
+        lap, key = target[0], target[1]
+        assert key == stats.sector_key(2)
+        export = view.pass_menu(target).actions()[1]
+        assert export.text() == "Export this pass…" and export.isEnabled(), export.toolTip()
+        seen, opened = {}, []
+
+        def read_and_accept():
+            dlg = QApplication.activeModalWidget()
+            if not isinstance(dlg, QDialog) or opened:
+                return
+            form = dlg.findChild(QFormLayout)
+            rows = {form.itemAt(r, QFormLayout.ItemRole.LabelRole).widget().text():
+                    form.itemAt(r, QFormLayout.ItemRole.FieldRole).widget()
+                    for r in range(form.rowCount())
+                    if form.itemAt(r, QFormLayout.ItemRole.LabelRole) is not None}
+            cards = next(b for b in rows["Extras"].findChildren(QCheckBox)
+                         if b.text() == ctl._CARDS_LABEL)
+            opened.append({
+                "title": dlg.windowTitle(), "scope": rows["Export"].currentText(),
+                "notes": [w.text() for w in dlg.findChildren(QLabel) if w.property("role") == "Note"],
+                "hint": " ".join(w.text() for w in dlg.findChildren(QLabel)
+                                 if w.property("role") == "Hint"),
+                "cards": (cards.isEnabled(), cards.toolTip())})
+            dlg.accept()
+
+        def save(_title, suffix, _filt):
+            seen["save"] = suffix
+            return os.path.join(_DEMO["dir"].name, "out" + suffix)
+
+        def run(specs, **_kw):
+            seen["specs"] = specs
+            for spec in specs:
+                spec.source.cleanup()
+        ctl._export_save_path, ctl._run_video_export = save, run
+        timer = QTimer()
+        timer.setInterval(20)
+        timer.timeout.connect(read_and_accept)
+        timer.start()
+        try:
+            export.trigger()
+            _settle(0.1)
+        finally:
+            timer.stop()
+        (got,) = opened
+        split = s.stretch_time(lap, key)
+        assert got["title"] == "Export overlay video" and \
+            got["scope"] == f"This pass — S3, lap {lap + 1}", got
+        assert f"Lap {lap + 1}  ·  S3  ·  {split:.2f} s" in got["notes"], got["notes"]
+        assert any("the lap and the sector, with the sector's time" in n for n in got["notes"])
+        assert f"lap {lap + 1}'s pass through S3" in got["hint"] and "sector's time" in got["hint"]
+        assert got["cards"] == (False, f"Off here: {corner_cards.SECTOR_PASS_REASON}"), got["cards"]
+        assert seen["save"] == f"_lap{lap + 1}_S3_overlay.mp4", seen
+        (spec,) = seen["specs"]
+        assert spec.pass_subject == ev.PassSubject(key, "S3", split), spec.pass_subject
+        assert (spec.t0, spec.t1) == ev.pass_window_for_export(s, lap, key)[::3]
+    finally:
+        ctl._export_save_path, ctl._run_video_export = orig
         _close(win)
         prefs.set_corners_view("lap")
 

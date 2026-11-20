@@ -24,7 +24,13 @@ and session scopes only (discovery 6: market #25, workflow candidate 8). What is
     seam (synth_gopro, a picture that codes its own source frame): every output frame is the
     source frame at its media time, across the seam; the corner time appears on exactly the
     planned exit frame; the file's frame count and duration are the plan's and its sound starts
-    with its picture.
+    with its picture;
+  * A SECTOR'S PASS (cool/export-sector-pass): the same scope over `Session.stretch_clip`, the
+    clip a sector row plays — 2 s before its first line to 1 s after its last, the instants its
+    SPLITS cell is timed between — "LAP 13   S2 · 5.93 s" from the last line's frame,
+    `…_lap13_S2_overlay.mp4`, no corner card; a split the grid does not count refuses with the
+    sector's name; a real render of one on the demo is its plan frame for frame, and one that
+    straddles the synthetic seam (closing on the finish line) passes the seam checks above.
 
 Run: python tests/test_export_pass.py
 """
@@ -70,7 +76,7 @@ def _demo_path() -> str:
         from studio.dev import make_demo as md
         _DEMO["dir"] = tempfile.TemporaryDirectory(prefix="pass_export_demo_")
         _DEMO["path"] = os.path.join(_DEMO["dir"].name, "GX019000.MP4")
-        md.make(_DEMO["path"], render=False)
+        _DEMO["truth"] = md.make(_DEMO["path"], render=False)
     return _DEMO["path"]
 
 
@@ -546,7 +552,14 @@ def test_a_pass_that_straddles_the_chapter_seam_stays_in_sync():
              if (w := ev.pass_window_for_export(s, lap, c.cid)) and w[0] < seam < w[3]]
     assert found, "no pass of the synthetic recording straddles its chapter seam"
     lap, cid = found[0]
-    out = os.path.join(tmp.name, "pass.mp4")
+    _render_through_the_seam(s, lap, cid, tmp.name, seam)
+    tmp.cleanup()
+
+
+def _render_through_the_seam(s, lap, cid, folder, seam):
+    """Render lap `lap`'s pass through `cid` (a corner's or a sector's), whose window holds the
+    two-chapter recording's `seam`, over `_coded_picture`, and check it frame by frame."""
+    out = os.path.join(folder, "pass.mp4")
     cfg = ev.OverlayConfig(out_height=SH, encoder="libx264", hwaccel_decode=False)
     spec = ev.build_pass_spec(s, out, lap, cid, config=cfg)
     assert spec.source.concat_list_path, "the pass's source is not the two-chapter span"
@@ -596,6 +609,164 @@ def test_a_pass_that_straddles_the_chapter_seam_stays_in_sync():
     i_exit = int(np.searchsorted(times, spec.lap_t1 - ev.ON_LINE_S))
     jump = int(np.argmax(np.diff(ink))) + 1
     assert jump == i_exit, (jump, i_exit, ink[i_exit - 3:i_exit + 3].tolist())
+
+
+# ------------------------------------------------------------------ a SECTOR's pass
+# The demo's four mid-straight lines (tests/test_quickest_sectors.py's four-line case): five
+# sectors of 6-13 s, S1 opening on the start/finish line and S5 closing on it.
+SECTOR_STRAIGHTS = (1, 2, 4, 5)
+
+
+def _sector_lines(truth, straights):
+    return [truth.line_at(sum(truth.circuit.straights[j]) / 2.0) for j in straights]
+
+
+def _sector_session():
+    if "sectors" not in _DEMO:
+        from studio.session import Session
+        s = Session.load([_demo_path()])
+        start, _ = s.timing_lines_latlon()
+        assert s.apply_timing_lines_latlon(start, _sector_lines(_DEMO["truth"], SECTOR_STRAIGHTS),
+                                           confirmed=True)
+        _DEMO["sectors"] = s
+    return _DEMO["sectors"]
+
+
+def test_a_sector_pass_exports_the_clip_its_row_plays():
+    from studio import stats
+    s = _sector_session()
+    qs = s.quickest_sectors()
+    assert [qp.cid for qp in qs.passes] == [stats.sector_key(c) for c in range(5)]
+    for qp in qs.passes:
+        for lap in qp.play_order():
+            clip = s.stretch_clip(lap, qp.cid)
+            t0, t_in, t_out, t1 = ev.pass_window_for_export(s, lap, qp.cid)
+            assert (t0, t1) == (ev._media_time(s, clip[0]), ev._media_time(s, clip[1])), lap
+            # the lines: 2 s in from the clip's start, 1 s in from its end, the split between them
+            # (on the media clock, whose rate differs from the telemetry's by parts per million)
+            assert abs((t_in - t0) - 2.0) < 1e-3 and abs((t1 - t_out) - 1.0) < 1e-3, (t0, t_in)
+            assert abs((t_out - t_in) - s.stretch_time(lap, qp.cid)) < 1e-3, (lap, qp.cid)
+    qp = qs.passes[1]
+    spec = ev.build_pass_spec(s, "s.mp4", qp.lap_id, qp.cid)
+    assert spec.pass_subject == ev.PassSubject(qp.cid, "S2", qp.time_s), spec.pass_subject
+    assert (spec.lead_in, spec.lead_out) == (spec.lap_t0 - spec.t0, spec.t1 - spec.lap_t1)
+    (built,) = ev.build_scope_specs(s, "s.mp4", ev.SCOPE_PASS, lap_id=qp.lap_id, cid=qp.cid,
+                                    lead=5.0)
+    assert (built.t0, built.t1, built.pass_subject) == (spec.t0, spec.t1, spec.pass_subject)
+    assert ev.overlay_output_name("GX019000", qp.lap_id, None, "S2") == \
+        f"GX019000_lap{qp.lap_id + 1}_S2_overlay.mp4"
+    for x in (spec, built):
+        x.source.cleanup()
+
+
+def test_a_sector_clip_names_the_sector_and_its_split_from_the_last_line_only():
+    s = _sector_session()
+    qs = s.quickest_sectors()
+    for qp, name in ((qs.passes[0], "S1"), (qs.passes[1], "S2")):
+        spec = ev.build_pass_spec(s, "s.mp4", qp.lap_id, qp.cid, config=ev.OverlayConfig(
+            out_height=720, elements=(corner_cards.CornerCardsElement.name,)))
+        head, text = f"LAP {qp.lap_id + 1}   {name}", f"{qp.time_s:.2f} s"
+        m = _marks(spec)
+        runs = {k: ev._frame_strip_runs(s, ev.overlay_values_at(s, t, spec), spec, None)
+                for k, t in m.items()}
+        # S1's lead-in is the previous lap's last 2 s: the plate still names the exported lap
+        assert runs["before"] == (head, "", "", 0.0), runs["before"]
+        assert runs["in"][0] == head and 0.0 < runs["in"][3] < 1.0, runs["in"]
+        assert runs["last_in"][0] == head, runs["last_in"]
+        assert runs["exit"] == (f"{head} · {text}", "", "", 1.0), runs["exit"]
+        for t in ev.frame_times(spec.t0, spec.t1, FPS):
+            vals = ev.overlay_values_at(s, float(t), spec)
+            label, tail, _c, _f = ev._frame_strip_runs(s, vals, spec, None)
+            # no lap clock, Δ or ★, and a tie (every demo sector is one) is never "quickest"
+            assert ":" not in label and "Δ" not in label + tail and "★" not in label + tail, label
+            assert not {"fastest", "quickest"} & set(label.lower().split()), label
+        assert broadcast.tower_texts(runs["exit"][0], "", "Δbest") == (
+            f"LAP {qp.lap_id + 1}", f"{name} · {text}", "")
+        # a sector clip carries no corner card, though one was asked for
+        painter = ev.OverlayPainter(s, spec, 1280, 720, FPS)
+        assert corner_cards.CornerCardsElement.name not in [e.name for e in painter.elements]
+        spec.source.cleanup()
+
+
+def test_a_sector_pass_with_no_counted_split_says_why():
+    from studio import stats
+    s = _sector_session()
+    lap, key = s.split_matrix().lap_ids[3], stats.sector_key(1)
+    real = s.stretch_time
+    s.stretch_time = lambda i, k: None if (i, k) == (lap, key) else real(i, k)
+    try:
+        assert ev.pass_subject(s, lap, key) is None
+        try:
+            ev.build_pass_spec(s, "s.mp4", lap, key)
+        except ValueError as exc:
+            assert str(exc) == f"lap {lap + 1} has no timed pass through S2 to export", exc
+        else:
+            raise AssertionError("a sector pass with no counted split was exported")
+    finally:
+        del s.stretch_time
+    # a sector that is not there has no window
+    assert ev.pass_window_for_export(s, lap, stats.sector_key(9)) is None
+
+
+def _probe_streams(path):
+    return json.loads(subprocess.run(
+        [ev.FFPROBE, "-v", "error", "-show_entries",
+         "stream=codec_type,start_time,duration,nb_frames,r_frame_rate", "-of", "json", path],
+        capture_output=True, text=True, check=True).stdout)["streams"]
+
+
+def test_a_sector_clip_renders_its_window_frame_for_frame():
+    """A real render of the demo's shortest sector pass (S2, a 9 s clip) at 360p: the file holds
+    exactly the planned frames, for exactly the window's duration."""
+    if not ev.ffmpeg_available():
+        assert os.path.join(".pixi", "envs") not in os.environ.get("CONDA_PREFIX", ""), \
+            "ffmpeg is a locked dependency inside the pixi env"
+        return
+    s = _sector_session()
+    qp = s.quickest_sectors().passes[1]
+    out = os.path.join(_DEMO["dir"].name, "sector.mp4")
+    cfg = ev.OverlayConfig(out_height=360, encoder="libx264", hwaccel_decode=False)
+    spec = ev.build_pass_spec(s, out, qp.lap_id, qp.cid, config=cfg)
+    try:
+        res = ev.Renderer(s, spec).run()
+    finally:
+        spec.source.cleanup()
+    video = next(x for x in _probe_streams(res.out_path) if x["codec_type"] == "video")
+    num, den = (int(v) for v in video["r_frame_rate"].split("/"))
+    times = ev.frame_times(spec.t0, spec.t1, num / den)
+    frame = den / num
+    assert int(video["nb_frames"]) == len(times) == res.frames, (video, len(times), res.frames)
+    assert abs(float(video["duration"]) - (spec.t1 - spec.t0)) < frame, (video, spec.t1 - spec.t0)
+
+
+def test_a_sector_pass_that_straddles_the_chapter_seam_stays_in_sync():
+    """The synthetic two-chapter recording with three sector lines: the shortest sector pass whose
+    window holds the seam (the last sector, closing on the finish line) renders in sync."""
+    if not ev.ffmpeg_available():
+        assert os.path.join(".pixi", "envs") not in os.environ.get("CONDA_PREFIX", ""), \
+            "ffmpeg is a locked dependency inside the pixi env"
+        return
+    from studio import stats
+    from studio.dev import synth_gopro as sg
+    from studio.session import Session
+    tmp = tempfile.TemporaryDirectory(prefix="sector_export_seam_")
+    rec = sg.generate(os.path.join(tmp.name, "rec"), laps=6, chapters=2, video=_coded_picture,
+                      audio=True)
+    s = Session.load(chapters.discover_siblings(rec.paths[0]))
+    length = rec.truth.circuit.length
+    start, _ = s.timing_lines_latlon()
+    assert s.apply_timing_lines_latlon(
+        start, [rec.truth.line_at(length * f) for f in (1 / 3, 2 / 3, 0.85)], confirmed=True)
+    seam = s.chapters.chapters[1].offset
+    m = s.split_matrix()
+    assert m is not None, "the synthetic recording has no SPLITS grid"
+    found = sorted((w[3] - w[0], lap, stats.sector_key(c))
+                   for lap in m.lap_ids for c in range(m.columns)
+                   if (w := ev.pass_window_for_export(s, lap, stats.sector_key(c)))
+                   and w[0] < seam < w[3])
+    assert found, "no sector pass of the synthetic recording straddles its chapter seam"
+    _span, lap, key = found[0]
+    _render_through_the_seam(s, lap, key, tmp.name, seam)
     tmp.cleanup()
 
 
