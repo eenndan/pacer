@@ -83,28 +83,12 @@ set(_ctest test_app_support_jail test_footage_checks test_parallel_suite)
 # (test_debrief_landing, test_design_system, test_plan_in_reach; 11-12 s in that run). Their values
 # are that run's seconds over its median ratio to the costed suites it also timed (0.78, range
 # 0.40-1.54), so they rank on the 09-25 scale rather than a loaded run's.
-# Re-measured 2026-11-20 IN CI, where the order costs the most: the mean of two green pull-request
-# runs (44789101729, 44780873904; 206 registrations, -j4 on the 3-core runner), every registration
-# of 20 s or more. The table had gone stale: the four slowest suites (test_coaching 322 s,
-# test_quickest_passes 277, test_export_broadcast 237, test_quickest_sectors 202) had no COST, so
-# test_quickest_passes started 162nd of 206 and finished 31 s after every other test. Replaying
-# both runs' own durations through ctest's order on 4 lanes reproduces their totals to the second
-# (1031 and 969 s); this table gives 1012 and 946 s. The scale is CI seconds; the footage checks
-# (400) and the soak (500) stay above it on purpose, as their functions below say.
 set(_cost
-    test_coaching 322  test_quickest_passes 277  test_export_broadcast 237
-    test_quickest_sectors 202  test_central_view_realqt 154  test_race_controller 123
-    test_measured_figures 108  test_export_gates 107  test_export_ghost 98
-    test_fullscreen_readout 91  test_export_pass 81  test_coaching_panel_layout 81
-    test_debrief_landing 78  test_stats 78  test_pb_toast 77  test_export_level_gap 70
-    test_pass_loop 62  test_focus_list 61  test_export_corner_cards 57  test_export_e2e 57
-    test_video_view_compare 56  test_first_run_path 52  test_debrief_lands_right 51
-    test_export_pipeline 50  test_export_video 50  test_export_pass_compare 47
-    test_export_pill_budget 42  test_welcome_first_touch 41  test_quality_chip_trust 37
-    test_footage_checks 35  test_charts_header_budget 32  test_load_lifecycle 31
-    test_design_system 29  test_chart_axis_legibility 27  test_whole_recording_doors 26
-    test_contrast 26  test_copy_cluster 23  test_inline_styles 22  test_golden_synthetic 21
-    test_truth_matrix 21  test_degraded_first_open 20)
+    test_export_pipeline 58  test_central_view_realqt 55  test_pb_toast 55  test_export_e2e 40
+    test_export_video 38  test_charts_header_budget 33  test_debrief_lands_right 29
+    test_load_lifecycle 29  test_export_pill_budget 27  test_first_run_path 19
+    test_quality_chip_trust 18  test_debrief_landing 16  test_stats 16  test_design_system 15
+    test_plan_in_reach 14  test_truth_matrix 8)
 # ==========================================================================================
 
 # A name in the table that is not a tests/test_*.py would silently configure nothing: fail instead.
@@ -158,7 +142,7 @@ function(add_footage_test file check)
                          LABELS footage
                          RESOURCE_LOCK footage
                          TIMEOUT 3600
-                         COST 400
+                         COST 100
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endfunction()
 
@@ -192,7 +176,7 @@ function(add_soak_test file check)
                          SKIP_RETURN_CODE 77
                          LABELS soak
                          TIMEOUT 900
-                         COST 500
+                         COST 200
                          ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PYTHONPATH=${CMAKE_SOURCE_DIR}/bindings/pacer")
 endfunction()
 
