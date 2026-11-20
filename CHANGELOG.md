@@ -14,11 +14,11 @@ sector pass does everything a corner pass does, and a compare at one pass export
 ### Highlights
 
 - **Export a sector's pass.** Right-click a sector row ▸ "Export this pass…" renders its clip with
-  "LAP 2   S4" on the plate and the split from the last line on, "· 13.36 s" on the demo (#642)
-- **Compare a sector with your typical pass.** On the demo with three sector lines, S1's quickest,
-  lap 13 (7.69), plays beside the typical lap 4 (8.16): 0.47 s quicker as timed (#641)
+  "LAP 2   S4" on the plate and the split from the last line on, "· 11.12 s" on the demo (#642)
+- **Compare a sector with your typical pass.** With "Add sector" clicked three times on the demo,
+  S1's quickest, lap 13 (11.20), plays beside the typical lap 5 (11.75): 0.55 s quicker (#641)
 - **Export the pass you are comparing.** Export comparison video opens on "This pass — S1, lap 13
-  against lap 4": both pass clips side by side, the shorter one holding its last frame (#645)
+  against lap 5": both pass clips side by side, the shorter one holding its last frame (#645)
 - **The held gap is a measurement, not a verdict.** After the exit the compare holds the two
   passes' gap as timed, with no colour or arrow: the quickest of many passes is partly luck (#643)
 - **Every sector row in reach.** A scrollbar beside the ▶ buttons appears when the rows run past

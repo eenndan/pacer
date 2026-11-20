@@ -1282,12 +1282,12 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - #641: "Compare with my typical pass" on a sector row, past the split's 0.30 s step; corners and
     sectors share one rule (`stats.pass_vs_typical_of`, `PassAnchor`).
   - #642: "Export this pass…" and its ⌘K row on a sector row: the clip from 2 s before the first
-    line to 1 s after the last, its plate "LAP 2   S4", then "· 13.36 s" from the last line on (the
-    demo with three lines).
+    line to 1 s after the last, its plate "LAP 2   S4", then "· 11.12 s" from the last line on (the
+    demo after three clicks of "Add sector").
   - #643: the gap held after the exit in a typical-pass compare is printed as timed, neutral; the
     status line says "as timed", and a refused row "within 0.07 s of your typical pass as timed".
   - #644: on a session with no complete lap, the map's card sits beside the track, not on it.
-  - #645: Export comparison video… offers "This pass — S1, lap 13 against lap 4" when the compare
+  - #645: Export comparison video… offers "This pass — S1, lap 13 against lap 5" when the compare
     was started from a pass: the two pass clips side by side, the shorter holding its last frame,
     the Δ plate blank, then live, then held.
 - **No new owner ruling.** The wave ran under section 19's of 2026-11-19 ("continue and don't come
@@ -1328,7 +1328,8 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 - **Process.** The QA pass drove the merged tree in the real window, offscreen and jailed, at
   1280×800 and 1440×900, with every dialog and menu through its real `exec()` closed by a timer
   and every File-menu export fired through `.trigger()` after the menu's own `aboutToShow`: on the
-  demo with three sector lines, the right-click menu on the last sector row scrolled to under the
+  demo with three sector lines placed mid-straight (not the even split "Add sector" makes, so its
+  figures below differ from the changelog's), the right-click menu on the last sector row scrolled to under the
   overlaid bar (Play, Export this pass…, Compare with my typical pass), File ▸ Export overlay
   video… and Export comparison video… in five states (no pass, a corner pass, a sector pass, a
   lap compare, a pass compare), the ⌘K rows in each, and a zero-lap synthetic session (the map
