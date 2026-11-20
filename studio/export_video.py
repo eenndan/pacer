@@ -165,33 +165,30 @@ def videotoolbox_encoder_available() -> bool:
     return ok
 
 
-def _h264_session_probe() -> bool:
-    """One H.264 VideoToolbox probe: a tiny real encode of a synthetic clip through
-    `h264_videotoolbox`. Always a fact (True / False), so its first answer is kept for the run."""
-    if not videotoolbox_encoder_available():
-        return False
-    try:
-        # 64x64, 2 frames — minimal but real; -f null discards the muxed output.
-        r = subprocess.run(
-            [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
-             "-f", "lavfi", "-i", "testsrc=size=64x64:rate=2:duration=1",
-             "-c:v", VT_H264, "-pix_fmt", "yuv420p", "-frames:v", "2",
-             "-f", "null", "-"],
-            capture_output=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0
-
-
 def videotoolbox_usable() -> bool:
     """Confirm a VideoToolbox H.264 hardware session ACTUALLY opens on this machine by running a
     tiny real encode of a synthetic clip through `h264_videotoolbox`. Static encoder presence
     (videotoolbox_encoder_available) does not guarantee a session opens — it can fail on pixel
-    format / size / a busy media engine — so this runtime probe gates auto-selection. Kept for the
-    run (a fixed machine capability), one probe in flight: a caller that arrives while the dialog's
-    warm-up probes (`warm_export_probes`) waits for it and takes its answer. Two ffmpeg runs
-    (~0.5 s), so the UI thread never calls it: it reads `videotoolbox_state`."""
-    return _ask_probe(_H264, _h264_session_probe)
+    format / size / a busy media engine — so this runtime probe gates auto-selection. Cached (a
+    fixed machine capability)."""
+    cached = getattr(videotoolbox_usable, "_cached", None)
+    if cached is not None:
+        return cached
+    ok = False
+    if videotoolbox_encoder_available():
+        try:
+            # 64x64, 2 frames — minimal but real; -f null discards the muxed output.
+            r = subprocess.run(
+                [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin",
+                 "-f", "lavfi", "-i", "testsrc=size=64x64:rate=2:duration=1",
+                 "-c:v", VT_H264, "-pix_fmt", "yuv420p", "-frames:v", "2",
+                 "-f", "null", "-"],
+                capture_output=True, timeout=30)
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+    videotoolbox_usable._cached = ok  # type: ignore[attr-defined]
+    return ok
 
 
 def resolve_encoder(choice: str) -> str:
@@ -210,17 +207,6 @@ def resolve_encoder(choice: str) -> str:
     if c in ("videotoolbox", "h264_videotoolbox", "vt", "hw", "gpu"):
         return VT_H264 if videotoolbox_encoder_available() else SW_H264
     return VT_H264 if videotoolbox_usable() else SW_H264
-
-
-def known_encoder(choice: str = "auto") -> str | None:
-    """`resolve_encoder(choice)` once the H.264 probe has answered, else None: what the picker's
-    hint may name without waiting (`videotoolbox_state`). The software words never need it."""
-    c = (choice or "auto").lower()
-    if c in ("libx264", "software", "sw", "x264", "cpu"):
-        return SW_H264
-    if videotoolbox_state() not in ("yes", "no"):
-        return None
-    return resolve_encoder(choice)
 
 
 def videotoolbox_decode_available() -> bool:
@@ -1747,100 +1733,17 @@ def _alpha_round_trip_unguarded(encoder: str) -> bool | None:
 #     action, not one per file.
 
 
-#
-# THE H.264 PROBE RIDES THE SAME MECHANISM (`videotoolbox_usable`). It used to be a bare cache that
-# the dialog's hint filled ON THE GUI THREAD: the first export click of a session froze the window
-# 520-635 ms (an encoder listing and a 64x64 encode) before the dialog appeared. It is now warmed
-# behind the dialog with the ProRes one, the hint says it is measuring until it answers, and a
-# render that starts first waits on the lock for the same answer. Its probe never misses: a session
-# that does not open is kept as False for the run, as it always was.
+class _ProResProbe:
+    """The probe's state for this process (tests swap in a fresh one)."""
 
-
-#
-# A WAITER IS BOUNDED, AND SO IS A PROBE THAT RAISES. A caller that finds a probe in flight waits
-# for it at most `wait_s`: the probe's own ffmpeg timeouts end to end, plus 5 s to kill and reap
-# (H.264: the listing's 20 s + the encode's 30 s; ProRes: 20 + 30 + the decode's 30). Past that the
-# probe is wedged beyond anything its timeouts can end (a child that does not die), and its answer
-# could only have been the timeout's False: the waiter takes False — software — for now, not kept.
-# A caller with no probe in flight never waits on nothing: it runs the probe itself. A probe that
-# RAISES is a miss (False for now, asked again), never an exception out of a render.
-
-
-class _EncoderProbe:
-    """One encoder probe's state for this process (tests swap in a fresh one)."""
-
-    def __init__(self, wait_s: float) -> None:
+    def __init__(self) -> None:
         self.lock = threading.Lock()     # held for the length of one probe
         self.answer: bool | None = None  # settled for the rest of the process
         self.last = False                # what the latest probe said, for the callers who waited
         self.probes = 0                  # probes finished
-        self.wait_s = wait_s             # the longest a caller waits for a probe in flight
 
 
-_PROBE_REAP_S = 5.0
-_PRORES = _EncoderProbe(wait_s=20 + 30 + 30 + _PROBE_REAP_S)
-_H264 = _EncoderProbe(wait_s=20 + 30 + _PROBE_REAP_S)
-
-
-def _ask_probe(probe: _EncoderProbe, run) -> bool:
-    """`probe`'s answer: settled, or the one a probe running now gives, or `run()`'s (True /
-    False kept; None = a miss, answered False and asked again next time). Never waits longer than
-    `probe.wait_s` (the block above)."""
-    seen = probe.probes
-    deadline = time.monotonic() + probe.wait_s
-    if not probe.lock.acquire(timeout=probe.wait_s):
-        return _probe_overdue(probe)
-    if probe.answer is not None:
-        probe.lock.release()
-        return probe.answer
-    if probe.probes != seen:             # a probe finished while we waited for it: its answer
-        probe.lock.release()
-        return probe.last
-
-    def probing() -> None:
-        # Holds the lock until the probe ends, however long that is: no second probe starts
-        # beside a wedged one. The caller below waits for it only until its deadline.
-        try:
-            try:
-                outcome = run()
-            except Exception:  # noqa: BLE001 — a probe that breaks is a miss, never a failed render
-                _log.warning("an encoder probe failed; using software for now", exc_info=True)
-                outcome = None
-            probe.last = bool(outcome)
-            if outcome is not None:
-                probe.answer = outcome
-            probe.probes += 1
-        finally:
-            probe.lock.release()
-    worker = threading.Thread(target=probing, daemon=True, name="export-encoder-probe")
-    worker.start()
-    worker.join(max(0.0, deadline - time.monotonic()))
-    if worker.is_alive():
-        return _probe_overdue(probe)
-    return probe.last
-
-
-def _probe_overdue(probe: _EncoderProbe) -> bool:
-    """What a caller takes from a probe still running at its `wait_s`: software, for now."""
-    _log.warning("an encoder probe has been running for over %.0f s; using software for now",
-                 probe.wait_s)
-    return probe.answer if probe.answer is not None else False
-
-
-def _probe_state(probe: _EncoderProbe) -> str:
-    """What is known about `probe` WITHOUT waiting for it: "yes" / "no" once settled, "probing"
-    while a probe runs, "missed" when the latest probe could not tell (the next asks again),
-    "unasked" before the first."""
-    if probe.answer is not None:
-        return "yes" if probe.answer else "no"
-    if probe.lock.locked():
-        return "probing"
-    return "missed" if probe.probes else "unasked"
-
-
-def videotoolbox_state() -> str:
-    """`_probe_state` of the H.264 VideoToolbox probe (`videotoolbox_usable`); never waits."""
-    return _probe_state(_H264)
+_PRORES = _ProResProbe()
 
 
 def _prores_session_probe() -> bool | None:
@@ -1865,12 +1768,31 @@ def prores_videotoolbox_usable() -> bool:
     alpha (`prores_alpha_round_trip`). One probe in flight per process, and a miss is never kept
     (the block above). Costs one tiny encode + decode (~0.3 s) when it probes, so never call it on
     the UI thread."""
-    return _ask_probe(_PRORES, _prores_session_probe)
+    probe = _PRORES
+    seen = probe.probes
+    with probe.lock:
+        if probe.answer is not None:
+            return probe.answer
+        if probe.probes != seen:         # a probe finished while we waited for it: its answer
+            return probe.last
+        outcome = _prores_session_probe()
+        probe.probes += 1
+        probe.last = bool(outcome)
+        if outcome is not None:
+            probe.answer = outcome
+        return probe.last
 
 
 def prores_videotoolbox_state() -> str:
-    """`_probe_state` of the ProRes probe (`prores_videotoolbox_usable`); never waits."""
-    return _probe_state(_PRORES)
+    """What is known about `prores_videotoolbox_usable` WITHOUT waiting for it: "yes" / "no" once
+    settled, "probing" while a probe runs, "missed" when the latest probe could not tell (the next
+    asks again), "unasked" before the first."""
+    probe = _PRORES
+    if probe.answer is not None:
+        return "yes" if probe.answer else "no"
+    if probe.lock.locked():
+        return "probing"
+    return "missed" if probe.probes else "unasked"
 
 
 def resolve_alpha_encoder(choice: str) -> str:
@@ -2096,13 +2018,6 @@ def known_video_size(path: str | None) -> tuple[int, int, float] | None:
     return _VIDEO_SIZE_CACHE.get(key) if key is not None else None
 
 
-def video_size_asked(path: str | None) -> bool:
-    """True once `remember_video_size` has an outcome for this file — its frame, or None when it
-    could not be read — or when there is no file to ask."""
-    key = _video_size_key(path) if path else None
-    return key is None or key in _VIDEO_SIZE_CACHE
-
-
 def remember_video_size(path: str | None) -> tuple[int, int, float] | None:
     """`probe_video_size`, once per file, into the cache `known_video_size` reads. None when the
     file cannot be asked (missing, unreadable, no ffprobe)."""
@@ -2143,28 +2058,25 @@ _WARM_LOCK = threading.Lock()
 
 def export_probes_ready(src_path: str | None) -> bool:
     """True once there is nothing more the picker's hint can learn for now: the source's frame has
-    been asked (when there is a file to ask), the warm-up is not running, and each encoder probe
-    (H.264 and ProRes) has an answer or MISSED (asked again on the next open,
-    `prores_videotoolbox_usable`)."""
+    been asked (when there is a file to ask), the warm-up is not running, and the ProRes probe has
+    an answer or MISSED (asked again on the next open, `prores_videotoolbox_usable`)."""
     key = _video_size_key(src_path) if src_path else None
     warming = _WARM_THREAD is not None and _WARM_THREAD.is_alive()
-    return (not warming
-            and all(s in ("yes", "no", "missed")
-                    for s in (videotoolbox_state(), prores_videotoolbox_state()))
+    return (not warming and prores_videotoolbox_state() in ("yes", "no", "missed")
             and (key is None or key in _VIDEO_SIZE_CACHE))
 
 
 def warm_export_probes(src_path: str | None) -> threading.Thread | None:
-    """Learn the source's frame and both encoder answers (H.264, then ProRes) on a daemon thread,
-    so the picker never waits on ffprobe or a VideoToolbox session. Returns the warm-up thread (an
-    already running one is shared, whoever started it), or None when nothing is left to learn. A
-    probe that MISSED is asked again here, so each dialog open re-asks it at most once."""
+    """Learn the source's frame and the ProRes answer on a daemon thread, so the picker never waits
+    on ffprobe or a VideoToolbox session. Returns the warm-up thread (an already running one is
+    shared, whoever started it), or None when nothing is left to learn. A probe that MISSED is
+    asked again here, so each dialog open re-asks it at most once."""
     global _WARM_THREAD, _WARM_SRC
     key = _video_size_key(src_path) if src_path else None
     with _WARM_LOCK:
         if _WARM_THREAD is not None and _WARM_THREAD.is_alive() and _WARM_SRC == src_path:
             return _WARM_THREAD
-        if (all(s in ("yes", "no") for s in (videotoolbox_state(), prores_videotoolbox_state()))
+        if (prores_videotoolbox_state() in ("yes", "no")
                 and (key is None or key in _VIDEO_SIZE_CACHE)):
             return None
 
@@ -2172,7 +2084,6 @@ def warm_export_probes(src_path: str | None) -> threading.Thread | None:
             try:
                 if src_path:
                     remember_video_size(src_path)
-                videotoolbox_usable()           # the default contents' encoder first
                 prores_videotoolbox_usable()
             except Exception:  # noqa: BLE001 — a hint that cannot be warmed is simply not refined
                 _log.debug("export probe warm-up failed", exc_info=True)
@@ -3172,7 +3083,8 @@ def readout_pill_width(pill_h: float, speed_texts, unit_label: str) -> float:
     k = pill_h / 44.0
     fm_big = QFontMetricsF(_font(pill_h * 0.74, bold=True))
     fm_unit = QFontMetricsF(_font(pill_h * 0.34, bold=True))
-    hero = max((fm_big.horizontalAdvance(t) for t in speed_texts), default=0.0)
+    # each distinct string once: `_burned_runs` hands one per frame, and the widest is the same
+    hero = max((fm_big.horizontalAdvance(t) for t in set(speed_texts)), default=0.0)
     return (2.0 * pill_h * _READOUT_PAD_FRAC + hero + _READOUT_GAP_K * k
             + fm_unit.horizontalAdvance(unit_label))
 
@@ -3188,8 +3100,8 @@ def strip_pill_width(pill_h: float, labels, tails) -> float:
     same frame, and summing the two maxima is the conservative direction."""
     k = pill_h / 44.0
     fm = QFontMetricsF(_font(pill_h * 0.54, bold=True))
-    label_w = max((fm.horizontalAdvance(t) for t in labels), default=0.0)
-    tail_w = max((fm.horizontalAdvance(t) for t in tails if t), default=0.0)
+    label_w = max((fm.horizontalAdvance(t) for t in set(labels)), default=0.0)   # each once
+    tail_w = max((fm.horizontalAdvance(t) for t in set(tails) if t), default=0.0)
     gap = _RUN_GAP_K * k if tail_w else 0.0
     return pill_h * _STRIP_PAD_L_FRAC + label_w + gap + tail_w + pill_h * _STRIP_PAD_R_FRAC
 

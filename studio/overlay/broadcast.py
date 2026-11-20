@@ -267,9 +267,12 @@ class BroadcastElement:
         self._f_last = ev._font(self._last_h * _LAST_DIGITS, bold=True)
         self._f_last_tag = ev._font(self.last_px, bold=True)
         self._last_sp = 0.012 * u
+        # Each DISTINCT string measured once: a lap's header is the same on every frame and a
+        # printed clock, Δ or speed on several, so the widest is the same and the per-frame lists
+        # measured 8,000 strings per painter (half of test_export_broadcast's layout matrix).
         tower_w = 2 * self._pad + max(
-            [_adv(self._f_head, t) for t in heads] + [_adv(self._f_time, t) for t in clocks]
-            + [_adv(self._f_delta, t) for t in deltas] + [0.18 * u])
+            [_adv(self._f_head, t) for t in set(heads)] + [_adv(self._f_time, t) for t in set(clocks)]
+            + [_adv(self._f_delta, t) for t in set(deltas)] + [0.18 * u])
         # The LAST plate is the tower's width, which may grow for it only as far as the tower's
         # neighbours leave room (the g-meter; in landscape the top-centre Δ bar): a row whose
         # "Δbest +0.215" does not fit is the time alone (an unnamed Δ would read as the tower's
@@ -300,7 +303,7 @@ class BroadcastElement:
         self._f_unit = ev._font(sp_h * 0.26, bold=True)
         self._unit_label = units.speed_label(self._unit)
         self._sp_gap = 0.006 * u
-        self._sp_num_w = max((_adv(self._f_speed, t) for t in speeds), default=0.0)
+        self._sp_num_w = max((_adv(self._f_speed, t) for t in set(speeds)), default=0.0)
         speed_w = 2 * L.SPEED_PAD * u + self._sp_num_w + self._sp_gap + _adv(self._f_unit,
                                                                             self._unit_label)
         # --- the layout (layout.py), clear of the Classic plates this style keeps; every slot has
