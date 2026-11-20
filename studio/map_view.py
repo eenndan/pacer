@@ -624,6 +624,19 @@ _LEGEND_MIN_W = 140       # px
 _CHROME_INSET = theme.SPACE_S
 
 
+def _empty_card_measure() -> int:
+    """The zero-lap card's widest: the app's one prose MEASURE plus the empty state's own SPACE_XL
+    inset on both sides — not a hand-picked 420. Shipped, this pane set the NARROWEST of the
+    sixteen states (372 px ≈ 57 characters) while the charts pane beside it set 869 px ≈ 134 (QA
+    D2-12); deriving both from theme.EMPTY_MEASURE_PX is what makes them the same object."""
+    return theme.EMPTY_MEASURE_PX + 2 * theme.SPACE_XL
+
+
+# The narrowest the zero-lap card is set as a column beside the track (MapView._empty_card_slot):
+# below it the body wraps at ~22 characters, and the old centred card reads better.
+_EMPTY_CARD_MIN_PX = 4 * theme.SPACE_3XL
+
+
 class _MapLegend(QWidget):
     """A small collapsible key for the map's glyphs, anchored over the plot's bottom-left. Click
     the plate to collapse to just the title. The glyph cells are painted to match the real
@@ -2087,10 +2100,10 @@ class MapView(QWidget):
         self._map_key.raise_()
         self._map_key.show()
 
-        # Zero-valid-lap empty state: a centred placeholder floated over the plot (the largest
-        # quadrant), so a load with no complete laps reads as an explained state — with the recovery
-        # action — rather than a black void. Parented to the PlotWidget, re-centred by
-        # _reposition_empty_state, shown/hidden by _refresh_empty_state (called at build + reseg).
+        # Zero-valid-lap empty state: a placeholder floated over the plot (the largest quadrant), so
+        # a load with no complete laps reads as an explained state — with the recovery action —
+        # rather than a black void. Parented to the PlotWidget, pinned in a strip the fit leaves
+        # clear of the track by _reposition_empty_state, shown/hidden by _refresh_empty_state.
         # The wording is data_quality's, not this file's: "No complete laps FOUND in this
         # recording." was the fourth phrasing of one fact in one frame, and the half of the next
         # action it stated was the half that contradicted the lap panel's (QA D2-01).
@@ -2118,7 +2131,7 @@ class MapView(QWidget):
         # sector buttons live in the map header and their effect is on this canvas, but the status
         # bar belongs to the window, which this view has no channel to. So the notice is posted
         # where the change happened — a small auto-dismissing plate over the plot's top-left, clear
-        # of the Fit button (top-right), the map key (bottom-left) and the centred empty state.
+        # of the Fit button (top-right) and the map key (bottom-left).
         self._notice = QLabel("", self.widget)
         self._notice.setWordWrap(True)
         # The card was the app's only whole-widget stylesheet built in a view file (its own 6 px
@@ -2247,22 +2260,48 @@ class MapView(QWidget):
         box = self._content_bbox()
         if box is None:
             return
+        # The zero-lap card's own strip (right column or top band, see _empty_card_slot): the track
+        # is framed in what is left, so the card never sits on the trace it asks you to drag on…
+        slot = self._empty_card_slot()
+        start = getattr(self, "_start", None)
+        if slot is not None and start is not None:
+            # …nor on the line itself: with no lap its handles are the one thing to grab, and an
+            # auto-fitted line pokes past the trace (measured: a handle at y = 0, half off-canvas).
+            (ax, ay), (bx, by) = (start.h1.pos(), start.h2.pos())
+            box = _union_bounds((box, (min(ax, bx), max(ax, bx), min(ay, by), max(ay, by))))
         x_lo, x_hi, y_lo, y_hi = box
         dx, dy = max(x_hi - x_lo, 1.0), max(y_hi - y_lo, 1.0)
         # 2% pad so the aspect-locked track fills the panel without handles flush to the edge, plus
         # FIT_LABEL_ROOM_PX on every side at the scale the aspect lock will settle on.
         vb = self.plot.getViewBox()
         size, room = vb.boundingRect(), FIT_LABEL_ROOM_PX
-        extra = 0.0
-        if size.width() > 4 * room and size.height() > 4 * room:
-            scale = min((size.width() - 2 * room) / (dx * 1.04),
-                        (size.height() - 2 * room) / (dy * 1.04))
+        rx = slot[1] + _CHROME_INSET if slot and slot[0] == "right" else 0.0
+        ry = slot[2] + _CHROME_INSET if slot and slot[0] == "top" else 0.0
+        lx = slot[3] if slot else 0.0       # the map key's width, kept clear beside a column
+        extra, scale = 0.0, None
+        if size.width() > 4 * room + rx + lx and size.height() > 4 * room + ry:
+            scale = min((size.width() - 2 * room - rx - lx) / (dx * 1.04),
+                        (size.height() - 2 * room - ry) / (dy * 1.04))
             extra = room / scale
         px, py = dx * 0.02 + extra, dy * 0.02 + extra
-        vb.setRange(xRange=(x_lo - px, x_hi + px), yRange=(y_lo - py, y_hi + py), padding=0)
+        xr, yr = (x_lo - px, x_hi + px), (y_lo - py, y_hi + py)
+        if slot is not None and scale is not None:
+            # The whole range at the settled scale, so the aspect lock has nothing to widen: the
+            # track hugs the card's strip and the spare room goes to the far side — where the map
+            # key sits (bottom-left), rather than leaving the track centred over the key.
+            vw, vh = size.width() / scale, size.height() / scale
+            if slot[0] == "right":
+                xr = (xr[1] + rx / scale - vw, xr[1] + rx / scale)
+                yr = ((y_lo + y_hi - vh) / 2, (y_lo + y_hi + vh) / 2)
+            else:
+                yr = (yr[1] + ry / scale - vh, yr[1] + ry / scale)
+                xr = ((x_lo + x_hi - vw) / 2, (x_lo + x_hi + vw) / 2)
+        vb.setRange(xRange=xr, yRange=yr, padding=0)
         vb.disableAutoRange()
         self._view_fitted = True
         self._sync_fit_btn()
+        if slot is not None:
+            self._reposition_empty_state()   # measuring the slot resized the card: put it back
 
     def _on_manual_range(self, *_):
         """The user panned or zoomed: stop re-fitting behind their back, and surface the way back.
@@ -2577,23 +2616,96 @@ class MapView(QWidget):
                 self._corner_markers.avoid_point(p.x(), p.y())
 
     def _reposition_empty_state(self):
-        """Keep the zero-lap empty-state placeholder centred over the plot, spanning a comfortable
-        width so the message wraps cleanly. No-op until it's built / while it's hidden. Uses
-        isHidden() (the explicit hide() flag), not isVisible() — the latter is False whenever the
-        top-level window isn't shown yet, which would skip the initial placement."""
+        """Keep the zero-lap empty-state placeholder in its strip clear of the track (see
+        _empty_card_slot), wide enough that the message wraps cleanly. No-op until it's built /
+        while it's hidden. Uses isHidden() (the explicit hide() flag), not isVisible() — the latter
+        is False whenever the top-level window isn't shown yet, which would skip the initial
+        placement."""
         es = getattr(self, "_empty_state", None)
         if es is None or es.isHidden():
             return
         host = self.widget
-        # The card is the app's one prose MEASURE plus the empty state's own SPACE_XL inset on both
-        # sides — not a hand-picked 420. Shipped, this pane set the NARROWEST of the sixteen states
-        # (372 px ≈ 57 characters) while the charts pane beside it set 869 px ≈ 134 (QA D2-12);
-        # deriving both from theme.EMPTY_MEASURE_PX is what makes them the same object on screen.
-        card = theme.EMPTY_MEASURE_PX + 2 * theme.SPACE_XL
-        w = min(host.width() - 2 * theme.SPACE_XL, card)
-        es.setFixedWidth(max(w, theme.SPACE_3XL * 2))
-        es.adjustSize()
-        es.move((host.width() - es.width()) // 2, (host.height() - es.height()) // 2)
+        slot = self._empty_card_slot()
+        if slot is None:          # a canvas too small for a strip: the old centred card
+            w = min(host.width() - 2 * theme.SPACE_XL, _empty_card_measure())
+            self._size_empty_card(max(w, theme.SPACE_3XL * 2))
+            es.move((host.width() - es.width()) // 2, (host.height() - es.height()) // 2)
+            return
+        side, w, _h, _left = slot
+        self._size_empty_card(w)
+        # Pinned to the canvas edge, top-anchored: the card depends only on the panel's size and
+        # the trace's shape, never on the start line, so a drag never moves it (a body that
+        # changes length only grows it downward).
+        if side == "right":
+            es.move(host.width() - w - _CHROME_INSET, _CHROME_INSET)
+        else:
+            es.move((host.width() - w) // 2, _CHROME_INSET)
+        fit = getattr(self, "fit_btn", None)
+        if fit is not None and not fit.isHidden():
+            fit.raise_()          # the way back from a pan stays on top of the card's corner
+
+    def _size_empty_card(self, w: int) -> int:
+        """Set the zero-lap card to width `w` and return the height its wrapped text needs."""
+        es = self._empty_state
+        es.setFixedWidth(int(w))
+        # Asked, not adjustSize(): inside the live window adjustSize() kept the height of the
+        # previous width (measured: 139 px at 295 wide, where the wrapped text needs 190 — clipped).
+        h = es.heightForWidth(int(w))
+        es.resize(int(w), h if h > 0 else es.sizeHint().height())
+        return es.height()
+
+    def _empty_card_slot(self):
+        """Where the zero-lap card goes: ("right", w, h, left) — a column on the canvas's right
+        edge, the track framed between it and `left` px kept for the map key — or ("top", w, h, 0)
+        — a band along the top — whichever leaves the track the larger scale; None while the card
+        is hidden, or when neither strip fits (then it is centred, as before).
+
+        Measured on the zero-lap synthetic (the docked map at 1280x800 is an 815x216 canvas): the
+        centred card covered 57 % of the trace and one start/finish handle, on the one state whose
+        every surface says "drag the start/finish line on the map". _fit_view frames the track in
+        the rest of the canvas, so the card, the trace and the line's handles never share pixels.
+
+        The column is as wide as the measure allows WITHOUT shrinking the track below the scale the
+        canvas height already sets, else the narrowest that still fits the canvas height: on a
+        short docked map that is the difference between a full-height track and one ~30 % smaller.
+        On that same short canvas the map key (bottom-left) is most of the canvas height, so the
+        column also keeps the track right of it."""
+        es = getattr(self, "_empty_state", None)
+        box = self._content_bbox() if es is not None and not es.isHidden() else None
+        if box is None:
+            return None
+        host, m, room = self.widget, _CHROME_INSET, FIT_LABEL_ROOM_PX
+        W, H = host.width(), host.height()
+        dx = max(box[1] - box[0], 1.0) * 1.04
+        dy = max(box[3] - box[2], 1.0) * 1.04
+        key = getattr(self, "_map_key", None)
+        left = key.width() + m if key is not None and not key.isHidden() else 0
+        best = None
+        tall = (H - 2 * room) / dy                  # the track's scale if only the height bounds it
+        room_x = W - left - m - 2 * room - dx * tall  # what the column may take at that scale
+        pick = widest = None
+        for cw in range(min(_empty_card_measure(), W // 2), _EMPTY_CARD_MIN_PX - 1, -theme.SPACE_L):
+            ch = self._size_empty_card(cw)
+            if ch > H - 2 * m:
+                break                               # narrower only wraps taller
+            widest = widest or (cw, ch)
+            if cw <= room_x:
+                pick = (cw, ch)
+                break
+        # Narrowing only pays when it buys back the whole height-bound scale; otherwise the track
+        # shrinks either way and the card keeps its reading measure.
+        pick = pick or widest
+        if pick is not None:
+            cw, ch = pick
+            scale = min((W - left - cw - m - 2 * room) / dx, tall)
+            best = (scale, ("right", cw, ch, left))
+        cw = min(_empty_card_measure(), W - 2 * m)
+        ch = self._size_empty_card(cw)
+        if ch <= (H - 2 * m) // 2:
+            scale = min((W - 2 * room) / dx, (H - ch - m - 2 * room) / dy)
+            if best is None or scale > best[0]:
+                best = (scale, ("top", cw, ch, 0))
+        return best[1] if best is not None and best[0] > 0 else None
 
     def _refresh_empty_state(self):
         """Show the centred placeholder iff the session has zero valid (complete) laps, else hide it
@@ -2603,11 +2715,14 @@ class MapView(QWidget):
         if es is None:
             return
         show = not self.session.valid_lap_ids()
+        flipped = show == es.isHidden()
         es.setVisible(show)
         if show:
             es.set_state(data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body_for(self.session))
             es.raise_()
             self._reposition_empty_state()
+        if flipped and getattr(self, "_view_fitted", False):
+            self._fit_view()              # the card's strip comes (or goes) with the card
         self._sync_timing_chrome()        # no laps = the empty state asks for a drag: show handles
 
     # ----------------------------------------------------------- timing lines
