@@ -3817,7 +3817,8 @@ def _land_compare_at_c1(v, s, button) -> float:
     assert v.map.pinned_corner() == "C1"
     assert notices[-1] == (
         "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
-        "here (median of 14: 3.38 s); typical loss through C1: +0.36 s"), notices
+        "here (median of 14: 3.38 s); typical loss through C1: +0.36 s · C or Esc: back to one "
+        "video"), notices
     assert "median lap" not in notices[-1]
     return took
 
