@@ -2109,16 +2109,20 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 # the walk, ⌘K) carries a sector exactly as it carries a corner.
 #
 # WHY A WIDER LEVEL STEP FOR A SPLIT. A split is timed where the lap crosses two sector lines, and
-# `docs/ACCURACY.md` publishes its σ: SPLIT_SIGMA_S at recording C's GPS noise (truth matrix row 2,
-# `sector.interior_sd` at noise 2), several times a lap time's. Two splits that each carry σ differ
-# by noise of √2·σ, so two splits closer than that are LEVEL: SECTOR_LEVEL_S. Measured
+# `docs/ACCURACY.md` publishes its σ: "0.11 s at recording C's GPS noise", truth matrix row 2
+# (`sector.interior_sd` at noise 2, SPLIT_SIGMA_S unrounded), several times a lap time's. The
+# HOUSE RULE for "level" is 2σ of the difference of two figures that each carry σ, DIFF_2SIGMA_K ×
+# σ: the lap step `library.PB_PRECISION_S` is 2√2 × 0.0247 s, and refused-2026-09 §26 gated sector
+# chips at 2√2 × this same split σ ("The gate is then 0.30 s", `clip_refusals.GATE_K` is this
+# constant). So two splits closer than SECTOR_LEVEL_S (0.30 s) are LEVEL. Measured
 # (studio/dev/probes/sector_quickest.py, the demo and seeds 1 and 2, 2/3/4 sector lines, 84
 # sectors): no sector's TRUE quickest is 0.07 s clear of its next (the largest true margin is
 # 0.055 s), yet at 0.07 s four sectors at noise 2 and ten at noise 4.5 would wear a lone ★, six of
-# those ten on the wrong lap; at SECTOR_LEVEL_S none at noise 1 or 2 and one (the right lap) at
-# 4.5. So on such sessions nearly every sector is a tie, and the view says so.
-SPLIT_SIGMA_S = 0.11
-SECTOR_LEVEL_S = round(math.sqrt(2.0) * SPLIT_SIGMA_S, 2)
+# those ten on the wrong lap; at SECTOR_LEVEL_S none does, at any noise. On such sessions every
+# sector is a tie: the view names the quickest lap, plays each level lap in turn, and says why.
+DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
+SPLIT_SIGMA_S = 0.106567
+SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
 
 
 def sector_key(col: int) -> int:

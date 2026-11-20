@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shutil
 import statistics
@@ -75,6 +74,7 @@ from studio._signal import lap_label  # noqa: E402
 from studio.dev import make_demo  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.session import Session  # noqa: E402
+from studio.stats import DIFF_2SIGMA_K  # noqa: E402
 
 # The truth matrix's grid (tests/test_truth_matrix.py SEEDS, SECTOR_STRAIGHTS): the test holds
 # these equal to it, so the split σ the chips are gated on is measured on these very recordings.
@@ -83,7 +83,7 @@ SECTOR_STRAIGHTS = (2, 5)
 CHIP_NOISES = (2.0, 4.5)
 PREDICT_NOISE = 2.0               # recording C's GPS noise in the truth matrix's calibration
 FRACTIONS = (0.25, 0.5, 0.75)
-GATE_K = 2.0 * math.sqrt(2.0)     # 2σ of the difference of two splits, each with noise σ
+GATE_K = DIFF_2SIGMA_K             # 2σ of the difference of two splits, each with noise σ
 # The Δ-trace band as the design pass drew it: bottom-centre, 0.50 × 0.085 of the short side, an
 # inner inset of 8 × 6 px at 1080p; its scale is the lap's own largest |Δ| × 1.1, floored at 0.3 s.
 BAND_W_U = 0.50

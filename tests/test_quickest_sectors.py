@@ -38,6 +38,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 
 from studio import prefs, stats, theme  # noqa: E402
+from studio.lap_table import GROUP_ROW_ROLE, QUICKEST_PLAY_COL, QUICKEST_STRIP_COL  # noqa: E402
 
 theme.apply_theme(_APP)
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,12 +46,17 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ------------------------------------------------------------------ the rule and the data
 
 
-def test_the_sector_step_is_root_two_times_the_published_split_sigma():
-    """SPLIT_SIGMA_S is the interior split σ ACCURACY.md publishes at recording C's noise, which is
-    truth matrix row 2 at noise 2; the step is the noise of a difference of two such splits."""
-    text = " ".join(open(os.path.join(_ROOT, "docs", "ACCURACY.md"), encoding="utf-8").read().split())
-    got = re.search(r"up to ([0-9.]+) s at recording C's GPS noise", text)
-    assert got and float(got.group(1)) == stats.SPLIT_SIGMA_S, got
+def _flat(*parts):
+    return " ".join(open(os.path.join(_ROOT, *parts), encoding="utf-8").read().split())
+
+
+def test_the_sector_step_is_the_house_two_sigma_of_a_difference_of_the_published_split_sigma():
+    """SPLIT_SIGMA_S is truth matrix row 2 at noise 2, the interior split σ ACCURACY.md publishes
+    (rounded) at recording C's noise. The step is the HOUSE rule for level, 2σ of the difference of
+    two figures each carrying σ (2√2·σ: the lap step's own formula), and it IS refusal §26's
+    sector-chip gate, which its probe computes from the same constant."""
+    got = re.search(r"up to ([0-9.]+) s at recording C's GPS noise", _flat("docs", "ACCURACY.md"))
+    assert got and float(got.group(1)) == round(stats.SPLIT_SIGMA_S, 2), got
     measured = None
     tree = ast.parse(open(os.path.join(_ROOT, "tests", "test_truth_matrix.py"),
                           encoding="utf-8").read())
@@ -62,10 +68,21 @@ def test_the_sector_step_is_root_two_times_the_published_split_sigma():
                 continue
             if stat == "sector.interior_sd" and level == 2.0:
                 measured = value
-    assert measured is not None and round(measured, 2) == stats.SPLIT_SIGMA_S, measured
-    assert stats.SECTOR_LEVEL_S == round(math.sqrt(2) * stats.SPLIT_SIGMA_S, 2) == 0.16
-    # wider than a lap's step, and an estimated clock never narrows it
-    assert stats.sector_level_floor(False) == stats.sector_level_floor(True) == 0.16
+    assert measured == stats.SPLIT_SIGMA_S, measured
+    assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
+    assert stats.SECTOR_LEVEL_S == round(2 * math.sqrt(2) * stats.SPLIT_SIGMA_S, 2) == 0.30
+    # the lap step is the same formula on the lap σ (library.PB_PRECISION_S's comment: 0.0247 s)
+    assert round(stats.DIFF_2SIGMA_K * 0.0247, 2) == stats.PB_PRECISION_S
+    # §26 publishes this gate at noise 2, and its probe gates with this very constant
+    refused = _flat("studio", "docs", "refused-2026-09.md")
+    sec26 = refused.split("## 26.", 1)[1].split("## 27.", 1)[0]
+    assert f"The gate is then {stats.SECTOR_LEVEL_S:.2f} s" in sec26
+    probe = open(os.path.join(_ROOT, "studio", "dev", "probes", "clip_refusals.py"),
+                 encoding="utf-8").read()
+    assert re.search(r"^GATE_K = DIFF_2SIGMA_K\b", probe, re.M), "§26's gate is not this constant"
+    # wider than a lap's step, and an estimated clock never narrows it below the lap step there
+    assert stats.sector_level_floor(False) == 0.30
+    assert stats.sector_level_floor(True) >= stats.rolling_level_floor(True)
 
 
 def test_a_stretch_key_is_a_corner_cid_or_a_negative_sector_key():
@@ -80,14 +97,14 @@ def _splits(rows, ids=None):
 
 
 def test_quickest_sectors_names_ties_under_the_split_step_and_leaves_out_blank_laps():
-    rows = [[10.00, 20.0], [10.10, 20.5], [10.159, 20.6], [10.160, 20.7], [10.5, 20.8],
+    rows = [[10.00, 20.0], [10.10, 20.5], [10.299, 20.6], [10.300, 20.7], [10.5, 20.8],
             [9.9, float("nan")]]
     qs = stats.quickest_sectors(_splits(rows), lap_ids=range(7))
     s1, s2 = qs.passes
-    assert qs.level_s == 0.16 and [p.cid for p in qs.passes] == [-1, -2]
+    assert qs.level_s == 0.30 and [p.cid for p in qs.passes] == [-1, -2]
     # lap 5 has a blank split (a nan): not counted anywhere, never named, though its 9.9 is lowest
     assert (s1.time_s, s1.lap_id, s1.n_counted) == (10.00, 0, 5)
-    # +0.100 and +0.159 are level; +0.160 (exactly the step) is not
+    # +0.100 and +0.299 are level; +0.300 (exactly the step) is not
     assert s1.level_laps == (1, 2) and not s1.alone and s1.next_gap_s == 0.1
     assert s2.lap_id == 0 and s2.level_laps == () and s2.alone and s2.next_gap_s == 0.5
     assert qs.not_counted == (5, 6), qs.not_counted
@@ -252,11 +269,16 @@ def test_two_and_four_lines_list_their_sectors_below_the_corners():
             for c, row in enumerate(rows[7:]):
                 assert row[0] == f"S{c + 1}"
                 assert row[1] == f"{m.bests[c]:.2f}" and row[2] == str(m.best_lap[c] + 1), row
-                assert "★" not in row[1]   # no sector on the demo stands 0.16 s clear
-            assert page.level_label.text() == "Level = within 0.07 s · sectors 0.16 s"
+                assert "★" not in row[1]   # no sector on the demo stands 0.30 s clear
+            assert page.level_label.text() == "Level = within 0.07 s · sectors 0.30 s"
             assert "0.11 s" in page.level_label.toolTip() and "tie" in page.level_label.toolTip()
             tip = q.table.item(8, 3).toolTip()
-            assert "within 0.16 s" in tip and "timing noise" in tip, tip
+            assert "within 0.30 s" in tip and "timing noise" in tip, tip
+            # the group's rule above S1, and ▶ says "sector"
+            assert q.table.item(7, 0).data(GROUP_ROW_ROLE) and not q.table.item(6, 0).data(
+                GROUP_ROW_ROLE)
+            assert "the sector" in q.table.cellWidget(8, QUICKEST_PLAY_COL).toolTip()
+            assert "the corner" in q.table.cellWidget(0, QUICKEST_PLAY_COL).toolTip()
             # every row's ▶ is reachable: no scrollbar at 1440×900 docked
             assert not q.table.verticalScrollBar().isVisible()
         finally:
@@ -409,7 +431,7 @@ def test_provisional_timing_withholds_a_sectors_star():
         s.quickest_sectors = lambda: QuickestPasses([lone, *real.passes[1:]], real.level_s, ())
         q.refresh()
         assert q.table.item(7, 1).text() == "13.00 ★"
-        assert "no other lap took this sector within 0.16 s" in q.table.item(7, 1).toolTip()
+        assert "no other lap took this sector within 0.30 s" in q.table.item(7, 1).toolTip()
         cls = type(s)
         saved = cls.timing_verified
         cls.timing_verified = property(lambda _self: False)
@@ -421,6 +443,127 @@ def test_provisional_timing_withholds_a_sectors_star():
     finally:
         _close(win)
         prefs.set_corners_view("lap")
+
+
+def _strip_state(win):
+    t = win.view.corners_page.quickest.table
+    return t.isColumnHidden(QUICKEST_STRIP_COL), t.columnWidth(QUICKEST_STRIP_COL)
+
+
+def test_drawing_lines_never_takes_the_corner_rows_strip_or_cuts_their_words():
+    """The corners' Every lap strip and their words are measured off the CORNER rows: lines added
+    change neither, at 1280×800 and 1440×900. A sector row too narrow for its cycled lap's time
+    leaves the time out (the status line names it), so no sector word is cut either."""
+    prefs.set_corners_view("quickest")
+    try:
+        for size in ((1280, 800), (1440, 900)):
+            widths = {}
+            for n in (0, 2, 3, 4):
+                win = _window(n, size)
+                try:
+                    q = win.view.corners_page.quickest
+                    widths[n] = _strip_state(win)
+                    _record_plays(win.view)
+                    for row in range(q.table.rowCount()):     # every row, cycled to every lap
+                        for _ in q.passes()[row].play_order():
+                            q.activate(row)
+                            item = q.table.item(row, 3)
+                            need = q._level_px([item.text()])
+                            assert need <= q.table.columnWidth(3), (size, n, row, item.text())
+                    assert _strip_state(win) == widths[n]
+                finally:
+                    _close(win)
+            print("strip (hidden, px)", size, widths)
+            assert len(set(widths.values())) == 1, (size, widths)
+            assert not widths[0][0], "the demo's corner strip shows at this size"
+    finally:
+        prefs.set_corners_view("lap")
+
+
+def test_the_walk_from_s1_backwards_stays_on_s1():
+    """M7: the walk never crosses from the sectors into the corners."""
+    prefs.set_corners_view("quickest")
+    win = _window(3)
+    try:
+        view = win.view
+        _record_plays(view)
+        q = view.corners_page.quickest
+        notices = []
+        view.statusNotice.connect(notices.append)
+        q.activate(7)                              # S1
+        _settle()
+        assert not view.step_corner_pass(-1)
+        assert notices[-1].startswith("No earlier sector to play"), notices
+        assert q.playing()[0] == stats.sector_key(0) and view.pass_subject()[1] == -1
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_moved_line_leaves_the_studied_sector_whose_clip_it_moved():
+    prefs.set_corners_view("quickest")
+    win = _window(3)
+    try:
+        view, s = win.view, win.session
+        _record_plays(view)
+        q = view.corners_page.quickest
+        q.activate(8)                              # S2: between the first and second line
+        _settle()
+        lap, key, _label = view.pass_subject()
+        old = view.video.pane.pass_clip()
+        truth = _DEMO["truth"]
+        mid = truth.circuit.straights[3]
+        lines = _lines(3)
+        lines[1] = truth.line_at(mid[0] + 0.35 * (mid[1] - mid[0]))   # S2's end line, moved
+        start, _ = s.timing_lines_latlon()
+        assert s.apply_timing_lines_latlon(start, lines, confirmed=True)
+        assert s.stretch_clip(lap, key) != old
+        view.rebuild_derived_views()
+        _settle()
+        assert view.pass_subject() is None and view.video.pane.pass_clip() is None
+        assert q.playing() is None
+        # ...while a pass the edit did not move stays the subject (S1 starts and ends where it did)
+        q.activate(7)
+        _settle()
+        held = view.pass_subject()
+        lines[2] = truth.line_at(sum(truth.circuit.straights[5]) / 2.0 + 10.0)  # S3/S4's line
+        assert s.apply_timing_lines_latlon(start, lines, confirmed=True)
+        view.rebuild_derived_views()
+        _settle()
+        assert view.pass_subject() == held
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_sector_under_the_fold_is_scrolled_into_view_when_it_plays():
+    prefs.set_corners_view("quickest")
+    win = _window(4, (1280, 800))
+    try:
+        view = win.view
+        _record_plays(view)
+        q = view.corners_page.quickest
+        t = q.table
+        # 4 lines at 1280×800 docked overflow; no bar takes the strip's width, the rows scroll
+        assert t.verticalScrollBar().maximum() > 0 and not t.verticalScrollBar().isVisible()
+        t.scrollToTop()
+        last = t.rowCount() - 1
+        q.activate(last - 1)                       # S4 …
+        assert view.step_corner_pass(+1)           # … ⌥→ to S5, the last row
+        _settle()
+        rect, port = t.visualRect(t.model().index(last, 0)), t.viewport().rect()
+        assert port.contains(rect), (rect, port)
+        btn = t.cellWidget(last, QUICKEST_PLAY_COL)
+        assert btn.isVisible() and port.contains(btn.geometry().center())
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_the_splits_note_points_to_where_the_level_laps_are_counted():
+    from studio.stats_panel import SPLITS_NOTE
+    note = SPLITS_NOTE.format(n=14, c=3, scale="0.30 s")
+    assert "Quickest passes says how many laps are level" in note, note
 
 
 if __name__ == "__main__":

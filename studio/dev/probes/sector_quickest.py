@@ -43,7 +43,7 @@ from studio.dev.probes.clip_refusals import _true_splits  # noqa: E402
 from studio.session import Session  # noqa: E402
 
 CONFIGS = {2: (2, 5), 3: (1, 3, 5), 4: (1, 2, 4, 5)}
-STEPS = (0.07, 0.11, st.SECTOR_LEVEL_S, 0.30)   # the lap step, σ, √2σ (the app's), 2√2σ (§26)
+STEPS = (0.07, 0.11, 0.16, st.SECTOR_LEVEL_S)   # the lap step, σ, √2σ, 2√2σ (the app's, §26)
 NOISES = (None, 2.0, 4.5)                       # None: the demo as published (noise 1)
 
 

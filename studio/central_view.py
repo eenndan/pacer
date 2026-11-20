@@ -1956,6 +1956,16 @@ class CentralView(QWidget):
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.refresh_quickest()
+        # A line drag or a re-segment can MOVE the studied pass (a sector's lines, a corner's
+        # edges): the player would still hold the old clip while the readout names the new time,
+        # so a pass whose clip is no longer the one held is left, as any other leaving leaves it.
+        live = self._live_subject()
+        if live is not None:
+            held = self._pass_subject[3]
+            now = self.session.stretch_clip(live[0], live[1])
+            if now is None or max(abs(now[0] - held[0]), abs(now[1] - held[1])) > 1e-6:
+                self.video.end_pass()
+                self._forget_quickest_cycle()
         self._on_pass_maybe_left()   # a re-segment can take the studied pass's corner away
 
     def _forget_quickest_cycle(self):

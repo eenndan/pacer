@@ -3273,8 +3273,9 @@ LEVEL_NOTE_TIP = "Two passes closer than this are level: the timing cannot tell 
 # sector is a tie, which the legend says rather than leaving a row of "N more laps" unexplained.
 SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time (σ "
                          "{sigma:.2f} s at a typical GoPro's noise, docs/ACCURACY.md), so two "
-                         "splits are level within {step:.2f} s. Most sectors are then a tie: the "
-                         "row names the quickest lap and plays each level lap in turn.")
+                         "splits are level within {step:.2f} s, twice the noise of their "
+                         "difference, the rule the lap step follows. Most sectors are then a tie: "
+                         "the row names the quickest lap and plays each level lap in turn.")
 
 
 def level_note(level_s: float, sector_s: float | None = None) -> str:
@@ -3342,14 +3343,17 @@ def quickest_status(label: str, qp, k: int) -> str:
             f"click {label} again {again}")
 
 
-def quickest_cycle_text(qp, k: int | None, running: bool, looping: bool) -> str:
+def quickest_cycle_text(qp, k: int | None, running: bool, looping: bool,
+                        with_time: bool = True) -> str:
     """The "Level with" cell: its count, or — for the row last played (`k`, its place in
-    `qp.play_order()`) — which level lap that is, "playing" while its clip runs."""
+    `qp.play_order()`) — which level lap that is, "playing" while its clip runs. `with_time` False
+    leaves out that lap's own time (a sector row too narrow for it: the status line names it)."""
     text = quickest_level_text(qp)
     if k is not None and qp.level_laps:
         order = qp.play_order()
+        took = f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) " if with_time else ""
         text = (f"{'playing ' if running else ''}lap {lap_label(order[k])} "
-                f"({qp.pass_time(k):.{PRINT_DECIMALS}f}) · {k + 1} of {len(order)}")
+                f"{took}· {k + 1} of {len(order)}")
     if k is not None and looping:
         text += LOOPING_SUFFIX
     return text
@@ -3488,6 +3492,30 @@ def strip_geometry(strip, rect: QRectF) -> StripLayout:
                         for i, c in ((i, layout.marks[i][1]) for i in layout.piles)})
 
 
+GROUP_ROW_ROLE = Qt.UserRole + 7   # True on the first sector row: the rule above it is painted
+
+
+def paint_group_rule(painter, option, index) -> None:
+    """A hairline along the top of the first SECTOR row (GROUP_ROW_ROLE), so S1…Sn read as their
+    own group under the corners. Painted, not a header row: every row stays one pass, so the
+    row-indexed paths (menus, the walk, ⌘K, `row_of`) are untouched."""
+    if not index.siblingAtColumn(0).data(GROUP_ROW_ROLE):
+        return
+    painter.save()
+    painter.setPen(QPen(QColor(theme.C.border_strong), theme.BORDER_PX))
+    y = option.rect.top() + theme.BORDER_PX / 2
+    painter.drawLine(QLineF(option.rect.left(), y, option.rect.right() + 1, y))
+    painter.restore()
+
+
+class _GroupRuleDelegate(QStyledItemDelegate):
+    """The table's plain cells: Qt's own paint, then the sector group's rule (paint_group_rule)."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        paint_group_rule(painter, option, index)
+
+
 class _PassStripDelegate(QStyledItemDelegate):
     """Paints the Quickest passes strip (see QUICKEST_STRIP_COL / stats.pass_strip) and nothing
     else: installed on that one column, seven cells. Colours are resolved per paint through the
@@ -3512,6 +3540,7 @@ class _PassStripDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         super().paint(painter, option, index)   # the row's band, selection and alternate fill
+        paint_group_rule(painter, option, index)
         data = index.data(STRIP_ROLE)
         if not data:
             return
@@ -3616,6 +3645,7 @@ class QuickestPassTable(QWidget):
         hdr.setSectionResizeMode(QUICKEST_STRIP_COL, QHeaderView.Fixed)
         hdr.moveSection(hdr.visualIndex(QUICKEST_STRIP_COL), hdr.visualIndex(QUICKEST_PLAY_COL))
         self.table.setColumnHidden(QUICKEST_STRIP_COL, True)
+        self.table.setItemDelegate(_GroupRuleDelegate(self.table))
         self.strip_delegate = _PassStripDelegate(self.table)
         self.table.setItemDelegateForColumn(QUICKEST_STRIP_COL, self.strip_delegate)
         self._level_need_px = 0   # the longest "Level with" text this session can print, boxed
@@ -3697,15 +3727,22 @@ class QuickestPassTable(QWidget):
         """The widest "Level with" cell this session can print beside the strip — any row cycled
         to any of its level laps and playing; not looping, when the strip steps aside — with the
         cell's own box (QSS padding + Qt's text margin)."""
-        t = self.table
-        item = t.item(0, QUICKEST_LEVEL_COL)
-        if item is None:
-            return 0
+        # The CORNER rows only: a sector's split runs to two figures of seconds, and a sector row
+        # whose words would not fit this leaves its lap's time out (`_paint_playing`) rather than
+        # take the corners' strip away (drawing lines must not cost the corners anything).
         texts = [QUICKEST_COLUMNS[QUICKEST_LEVEL_COL]]
-        for qp in self.passes():
+        for qp in self.result.passes if self.result is not None else ():
             texts.append(quickest_level_text(qp))
             texts += [quickest_cycle_text(qp, k, True, False)
                       for k in range(len(qp.play_order()))]
+        return self._level_px(texts)
+
+    def _level_px(self, texts) -> int:
+        """The width a "Level with" cell needs to print the widest of `texts` whole (0: no rows)."""
+        t = self.table
+        item = t.item(0, QUICKEST_LEVEL_COL)
+        if item is None or not texts:
+            return 0
         # Measured the way Qt paints the cell: the text is laid out at its FRACTIONAL advance and
         # elided when that passes the style's text rect less its text margin. An integer
         # QFontMetrics advance (176.25 → 176) and a box read off the size hint left the demo's
@@ -3809,6 +3846,7 @@ class QuickestPassTable(QWidget):
         self._cycle = (qp.cid, k)
         self._running = False   # until the view that plays it says the clip runs
         self.table.selectRow(row)
+        self.table.scrollToItem(self.table.item(row, 0))   # a walk or ⌘K to a row under the fold
         self._paint_playing()
         self.pass_requested.emit(qp.play_order()[k], qp.cid,
                                  quickest_status(self.corner_label(qp.cid), qp, k))
@@ -3868,6 +3906,9 @@ class QuickestPassTable(QWidget):
             mine = self._cycle is not None and self._cycle[0] == qp.cid
             k = self._cycle[1] if mine else None
             text = quickest_cycle_text(qp, k, self._running, self._looping)
+            if (k is not None and stretch_noun(qp) == "sector" and self._level_need_px
+                    and self._level_px([text]) > self._level_need_px):
+                text = quickest_cycle_text(qp, k, self._running, self._looping, with_time=False)
             if item.text() != text:
                 item.setText(text)
             strip = self.table.item(r, QUICKEST_STRIP_COL)
@@ -3892,6 +3933,12 @@ class QuickestPassTable(QWidget):
         # A re-segment can drop the corner or change its level laps: keep k inside the new order.
         self._cycle = (None if row < 0 else
                        (self._cycle[0], self._cycle[1] % len(passes[row].play_order() or (0,))))
+        # With sector rows the table can outgrow a docked panel (3 lines at 1280×800); a scrollbar
+        # there would take its 12 px from the corners' Every lap strip (75 → 63 px, under
+        # STRIP_MIN_PX), so it stays off: the rows still scroll by wheel, trackpad and ↑/↓, the
+        # cut-off last row shows there is more, and a played or walked-to row scrolls into view.
+        self.table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff if self.sectors is not None else Qt.ScrollBarAsNeeded)
         self.table.setVisible(bool(passes))
         self.empty.setVisible(not passes)
         self.not_counted.setVisible(False)
@@ -3930,6 +3977,8 @@ class QuickestPassTable(QWidget):
                 item.setForeground(BASE_COLOR)
                 if col == 0:
                     set_corner_direction(item, direction.get(qp.cid, 0))
+                    if self.sectors is not None and r == len(self.result.passes):
+                        item.setData(GROUP_ROW_ROLE, True)   # the rule above S1
                 elif col == QUICKEST_LEVEL_COL:
                     item.setToolTip(quickest_level_tip(qp, level_s))
                     if not qp.level_laps:
@@ -3959,8 +4008,8 @@ class QuickestPassTable(QWidget):
             btn.setProperty("row", r)
             btn.clicked.connect(self._on_play_clicked)
             self.table.setCellWidget(r, QUICKEST_PLAY_COL, btn)
-        self._paint_playing()
         self._level_need_px = self._measure_level_need()
+        self._paint_playing()
         self._fit_strip()
         if row >= 0:
             self.table.selectRow(row)
