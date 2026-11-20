@@ -376,7 +376,9 @@ class CornersSection:
         menu = QMenu(self.table)
         act = menu.addAction(provenance_panel.MENU_LABEL)
         act.setToolTip("Show the raw GPS fixes, the method and the window this number came from")
-        if menu.exec(self.table.viewport().mapToGlobal(pos)) is act:
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        menu.deleteLater()    # parented to the table: left alone, one QMenu per right-click stays
+        if chosen is act:
             provenance_panel.open_for(prov, self.table.window())
 
     def _on_row_selected(self):

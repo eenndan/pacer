@@ -3161,7 +3161,11 @@ class StudioWindow(QMainWindow):
         """View ▸ Command palette… (⌘K): the type-to-run list over every menu action plus the
         keyboard-only commands (studio/command_palette.py). Built fresh per open, and the palette
         primes each menu's own `aboutToShow` on the way in, so what it lists is live."""
-        CommandPalette(self).exec()
+        palette = CommandPalette(self)
+        palette.exec()
+        # Deleted, not dropped: it is parented to the window and its own lambdas keep its Python
+        # wrapper alive, so every ⌘K left a whole palette (23 widgets) behind for the session.
+        palette.deleteLater()
 
     def _select_lap_tab(self, index: int):
         """Digit shortcut 1-5 → the lap panel's tab, resolved at call time; no-op before the
