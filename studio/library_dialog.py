@@ -308,8 +308,9 @@ def _pb_axis_pen():
     return pg.mkPen(C.border, width=theme.line_width(1))
 
 # The progress-summary trend word per library.track_summary["trend"]. "single"/"none" add nothing
-# (there's no trend to read from one/zero sessions) so they map to no word.
-_TREND_WORD = {"improving": "improving", "stalled": "off your PB"}
+# (there's no trend to read from one/zero sessions) so they map to no word. "level" is the latest
+# session within timing precision of the earlier PB — the debrief's own words for it.
+_TREND_WORD = {"improving": "improving", "level": "level with your PB", "stalled": "off your PB"}
 
 
 # The size the dialog opens at when the user has never resized it. The old 720x600 left the table a
