@@ -285,7 +285,13 @@ def test_decode_cmd_shape():
     # pre-input seek (fast) is BEFORE -i
     assert cmd.index("-ss") < cmd.index("-i")
     assert "/in/src.MP4" in cmd
-    assert any(a == "fps=59.940000,scale=1920:1080" for a in cmd)
+    # output frame i is the source frame SHOWING at its instant: the fps filter's own pick...
+    assert cmd[cmd.index("-vf") + 1] == ("setpts=PTS-0.0001/TB,"
+                                         "fps=59.940000:start_time=0:round=up,scale=1920:1080")
+    # ...of a frame that has to survive the seek, a seek read on the source's own clock
+    assert cmd.index("-noaccurate_seek") < cmd.index("-ss")
+    assert cmd[cmd.index("-seek_timestamp") + 1] == "1"
+    assert cmd.index("-seek_timestamp") < cmd.index("-ss")
     planned = len(ev.frame_times(100.0, 170.0, 59.94))
     asked = float(cmd[cmd.index("-t") + 1])
     assert abs(asked * 59.94 - planned) < 1e-3, (
@@ -325,6 +331,11 @@ def test_encode_window_matches_decode_window():
     # the LAST -ss in each is the source seek; both -t cover the same planned clip
     assert dec[dec.index("-ss") + 1] == f"{12.5:.6f}"
     assert enc[enc.index("-ss") + 1] == f"{12.5:.6f}"
+    # ...and both read it on the source's OWN clock: a concat span's start is its AAC priming
+    # (-21 ms), which ffmpeg would otherwise add to the seek of the picture and the sound alike
+    for cmd in (dec, enc):
+        at = cmd.index("-ss")
+        assert cmd[at - 2:at] == ["-seek_timestamp", "1"], cmd
     assert dec[dec.index("-t") + 1] == enc[enc.index("-t") + 1]
     assert float(enc[enc.index("-t") + 1]) >= 67.5, "the clip may be rounded UP to a frame, never down"
     t_at = enc.index("-t")
@@ -2246,7 +2257,7 @@ def test_crop_cuts_before_it_scales_and_fit_pads_without_a_rounding_edge():
     # (the chain then only ever sees the frames the render keeps)
     spec = ev.ExportSpec(src_path="/x.MP4", out_path="/o.mp4", lap_id=1, t0=10.0, t1=20.0)
     argv = ev.build_decode_cmd(spec, 1080, 1920, 30.0, scale_filter=crop)
-    assert f"fps=30.000000,{crop}" in argv, argv
+    assert argv[argv.index("-vf") + 1].endswith(f"fps=30.000000:start_time=0:round=up,{crop}"), argv
     print("ok frame_geometry: crop cuts before it scales; fit pads")
 
 
@@ -2992,9 +3003,10 @@ def test_the_muxed_audio_stays_on_the_picture_across_a_seam_if_ffmpeg(monkeypatc
     0.3 s from 1.2 s in (after the seam) must each sit where they sit in the file, to 1 ms.
 
     What the concat input ITSELF does at the seam is a separate question and E4 does not touch it:
-    on these ffmpeg-made chapters the fed audio starts 21.3 ms (one AAC packet) before t0, as
-    `test_export_seam` allows, and runs 32.0 ms early after the seam — identically under the old
-    `-shortest` mux. On real GoPro chapters it is exact: an E4 export of MK_18_09_26 lap 13, located
+    on these ffmpeg-made chapters the fed audio starts exactly at t0 (it started 21.3 ms early, one
+    AAC packet, until the seek was read on the source's own clock — `test_export_seam`), and runs
+    10.7 ms early after the seam (32.0 ms before) — identically under the old `-shortest` mux. On
+    real GoPro chapters it is exact: an E4 export of MK_18_09_26 lap 13, located
     in each chapter's own audio, was +0.00 ms off at the start, on both sides of the seam, and
     -0.02 ms at the end."""
     if not _require_ffmpeg("the_muxed_audio_stays_on_the_picture_across_a_seam"):

@@ -30,7 +30,11 @@ and session scopes only (discovery 6: market #25, workflow candidate 8). What is
     SPLITS cell is timed between — "LAP 13   S2 · 5.93 s" from the last line's frame,
     `…_lap13_S2_overlay.mp4`, no corner card; a split the grid does not count refuses with the
     sector's name; a real render of one on the demo is its plan frame for frame, and one that
-    straddles the synthetic seam (closing on the finish line) passes the seam checks above.
+    straddles the synthetic seam (closing on the finish line) passes the seam checks above;
+  * THE FIRST FRAME, EVERY KIND (cool/export-first-frame): a lap, a lap across the seam, a corner
+    pass, a sector pass and both panes of a pass compare, each started across a whole source frame
+    period: output frame i is the source frame SHOWING at clip_start + i/fps from i = 0, and a
+    start on a source frame decodes byte for byte as before.
 
 Run: python tests/test_export_pass.py
 """
@@ -536,6 +540,139 @@ def _coded_picture(path, truth, first_payload, n_payloads, ffmpeg):
                    check=True, capture_output=True)
 
 
+FPS_SRC = 30000 / 1001
+
+
+def _showing(times):
+    """The code of the source frame SHOWING at each media time. Every chapter of the synthetic
+    recording starts on a frame of one 29.97 fps grid (chapter 2 at 187.187 s = frame 5610), so it
+    is the global floor."""
+    return np.floor(np.asarray(times) * FPS_SRC + 1e-6).astype(int) % CYCLE
+
+
+def _off(got, want):
+    off = (np.asarray(got) - np.asarray(want)) % CYCLE
+    return np.where(off > CYCLE // 2, off - CYCLE, off)
+
+
+# ------------------------------------------------------------------ the first frame, every kind
+# Where in a source frame a clip starts: on one (0.0), and across the whole period. Not within
+# `ev._SHOWING_TOLERANCE_S` (0.3 % of a frame) of the next one, which counts as showing.
+START_FRACS = (0.0, 0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95)
+_TW, _TH = 64, 36
+
+
+def _moved(spec, frac, n):
+    """`spec` moved (by less than a frame) to start `frac` of a source frame in, `n` frames long."""
+    import dataclasses
+    k = np.floor(spec.local_t0 * FPS_SRC)
+    d = (k + frac) / FPS_SRC - spec.local_t0
+    return dataclasses.replace(spec, t0=spec.t0 + d, t1=spec.t0 + d + n / FPS_SRC)
+
+
+def _decoded(argv):
+    raw = subprocess.run(argv, capture_output=True, check=True, timeout=60).stdout
+    frames = np.frombuffer(raw, np.uint8).reshape(-1, _TH, _TW, 3)
+    mid = frames[:, _TH // 2, _TW // 2, 1].astype(float)
+    return raw, np.round((mid - 24) / 12).astype(int) % CYCLE
+
+
+def _accurate_seek(argv, fps, scale):
+    """The decode as it was before it picked the frame showing: ffmpeg's accurate seek, the `fps`
+    filter's own (nearest-slot) rounding, the seek offset by the input's start time."""
+    old = [a for a in argv if a != "-noaccurate_seek"]
+    if "-seek_timestamp" in old:
+        at = old.index("-seek_timestamp")
+        del old[at:at + 2]
+    old[old.index("-vf") + 1] = f"fps={fps:.6f},{scale}"
+    return old
+
+
+def test_every_export_opens_on_the_frame_showing_at_its_start():
+    """THE SWEEP (cool/export-first-frame). Every export kind decodes its footage through ONE
+    command, `build_decode_cmd`: a lap, a lap across the chapter seam, a corner pass, a sector
+    pass and both panes of a pass compare, each built by the app's own builder on the synthetic
+    two-chapter recording whose picture codes its own source frame, then moved to start at
+    `START_FRACS` of a source frame in. Output frame i must be the source frame SHOWING at
+    clip_start + i/fps — the instant its overlay is drawn for — for every i from 0, exactly.
+
+    Measured on main before the fix (29.97 fps; software and VideoToolbox decode alike): from a
+    single file, a start under half a frame in opened on a duplicate of the NEXT source frame, and
+    one past half a frame showed the next source frame on every frame of the clip — the picture a
+    whole frame (33 ms) ahead of its telemetry; across the seam the concat input's start time
+    (-21.3 ms of AAC priming) moved the seek too, so a start on a source frame showed the frame
+    BEFORE from its second frame on. Only a single-file start on a source frame was right, and
+    that decode is byte for byte what it was (the pre-fix argv rebuilt and decoded alongside)."""
+    if not ev.ffmpeg_available():
+        assert os.path.join(".pixi", "envs") not in os.environ.get("CONDA_PREFIX", ""), \
+            "ffmpeg is a locked dependency inside the pixi env"
+        return
+    from studio import export_compare as ec
+    from studio import stats
+    from studio.compare_controller import PassAnchor
+    from studio.dev import synth_gopro as sg
+    from studio.session import Session
+    tmp = tempfile.TemporaryDirectory(prefix="pass_export_first_frame_")
+    # with sound: its AAC priming is what the concat input reports as its start time
+    rec = sg.generate(os.path.join(tmp.name, "rec"), laps=6, chapters=2, video=_coded_picture,
+                      audio=True)
+    s = Session.load(chapters.discover_siblings(rec.paths[0]))
+    length = rec.truth.circuit.length
+    start, _ = s.timing_lines_latlon()
+    assert s.apply_timing_lines_latlon(
+        start, [rec.truth.line_at(length * f) for f in (1 / 3, 2 / 3, 0.85)], confirmed=True)
+    seam = s.chapters.chapters[1].offset
+    laps = s.valid_lap_ids()
+    cfg = ev.OverlayConfig(out_height=_TH, encoder="libx264", hwaccel_decode=False)
+    kinds = []
+    lap = next(x for x in laps if ev.lap_window_for_export(s, x)[1] < seam)
+    kinds.append(("lap", ev.build_lap_spec(s, "x.mp4", lap, config=cfg)))
+    lap = next(x for x in laps if ev.lap_window_for_export(s, x)[0] < seam - 2.0
+               < ev.lap_window_for_export(s, x)[1])
+    kinds.append(("lap across the seam", ev.build_lap_spec(s, "x.mp4", lap, config=cfg)))
+    corner = next((x, c.cid) for x in laps for c in s.corners.corner_list()
+                  if ev.pass_subject(s, x, c.cid) and ev.pass_window_for_export(s, x, c.cid)[3] < seam)
+    kinds.append(("corner pass", ev.build_pass_spec(s, "x.mp4", *corner, config=cfg)))
+    sector = next((x, stats.sector_key(c)) for x in laps for c in range(4)
+                  if ev.pass_subject(s, x, stats.sector_key(c))
+                  and ev.pass_window_for_export(s, x, stats.sector_key(c))[3] < seam)
+    kinds.append(("sector pass", ev.build_pass_spec(s, "x.mp4", *sector, config=cfg)))
+    a, b = laps[0], laps[1]
+    cid = next(c.cid for c in s.corners.corner_list()
+               if ev.pass_subject(s, a, c.cid) and ev.pass_subject(s, b, c.cid))
+    sides = [(*s.stretch_edges(x, cid), *s.stretch_clip(x, cid), ev.pass_subject(s, x, cid).time_s)
+             for x in (a, b)]
+    anchor = PassAnchor.between(s, a, b, f"C{cid}", "", *sides, key=cid, held_neutral=True)
+    compare = ec.build_pass_compare_spec(
+        s, "x.mp4", a, b, anchor,
+        config=ec.CompareConfig(out_height=_TH, encoder="libx264", hwaccel_decode=False))
+    kinds += [("pass compare, pane A", compare), ("pass compare, pane B", compare.spec_b())]
+    assert [bool(k[1].source.concat_list_path) for k in kinds] == [False, True] + [False] * 4
+    n = 8
+    scale = f"scale={_TW}:{_TH}"
+    wrong = []
+    for name, spec in kinds:
+        for frac in START_FRACS:
+            moved = _moved(spec, frac, n)
+            argv = ev.build_decode_cmd(moved, _TW, _TH, FPS_SRC, False, scale)
+            raw, got = _decoded(argv)
+            assert len(got) == n, (name, frac, len(got))
+            off = _off(got, _showing(moved.t0 + np.arange(n) / FPS_SRC))
+            if np.any(off):
+                wrong.append(f"{name} from {frac:.2f} of a frame in: {off.tolist()}")
+            if frac == 0.0 and not moved.source.concat_list_path:
+                old, _ = _decoded(_accurate_seek(argv, FPS_SRC, scale))
+                assert raw == old, f"{name}: a start on a source frame no longer decodes as it did"
+    for _name, spec in kinds:
+        spec.source.cleanup()
+    compare.cleanup()
+    tmp.cleanup()
+    assert not wrong, ("output frames that are not the source frame showing at their instant "
+                       "(by how many source frames):\n  " + "\n  ".join(wrong))
+    print(f"ok the first frame: {len(kinds)} export kinds x {len(START_FRACS)} starts, every "
+          f"frame the source frame showing at its instant")
+
+
 def test_a_pass_that_straddles_the_chapter_seam_stays_in_sync():
     if not ev.ffmpeg_available():
         assert os.path.join(".pixi", "envs") not in os.environ.get("CONDA_PREFIX", ""), \
@@ -584,22 +721,22 @@ def _render_through_the_seam(s, lap, cid, folder, seam):
                          capture_output=True, check=True).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, SH, SW, 3)
     assert len(frames) == len(times)
-    # THE PICTURE: each frame is the source frame at its media time — the one showing at it
-    # (floor), or for the very first frame the first one at or after t0, the accurate seek's snap
-    # that every lap export makes too (measured 2026-11-19 on this fixture: a lap whose window
-    # holds the seam reads the same, 0 on every frame but its first, +1) — and on both sides of
-    # the seam the picture advances exactly one source frame per frame: none dropped, none held.
+    # THE PICTURE: every frame, the first one included, is the source frame SHOWING at its media
+    # time (floor) — the instant its overlay is drawn for — and on both sides of the seam the
+    # picture advances exactly one source frame per frame: none dropped, none held. No tolerance:
+    # until cool/export-first-frame the first frame could be the NEXT source frame (or the whole
+    # clip one frame ahead), which this used to allow (`test_every_export_opens_on_the_frame_
+    # showing_at_its_start` has the sweep).
     mid = frames[:, SH // 2 - 20:SH // 2 + 20, SW // 2 - 20:SW // 2 + 20, 1].mean(axis=(1, 2))
     got = np.round((mid - 24) / 12).astype(int) % CYCLE
-    shown = np.floor(times * 30000 / 1001 + 1e-6).astype(int)
-    off = (got - shown) % CYCLE
-    off = np.where(off > CYCLE // 2, off - CYCLE, off)
+    off = _off(got, _showing(times))
     i_seam = int(np.searchsorted(times, seam))
     assert 0 < i_seam < len(times) - 1
-    assert off[0] in (0, 1) and not np.any(off[1:]), (
-        f"frames showing another source frame (seam at frame {i_seam}): "
-        f"{np.flatnonzero(off[1:]) + 1} by {off[np.flatnonzero(off)][:6]}")
-    steps = np.diff(got[1:]) % CYCLE
+    assert not np.any(off), (
+        f"frames showing another source frame (clip start {times[0] * FPS_SRC % 1:.2f} of a "
+        f"frame in, seam at frame {i_seam}): {np.flatnonzero(off)[:6]} by "
+        f"{off[np.flatnonzero(off)][:6]}")
+    steps = np.diff(got) % CYCLE
     assert np.all(steps == 1), f"a source frame dropped or held at {np.flatnonzero(steps != 1) + 1}"
     # THE OVERLAY: the corner time lands on exactly the planned exit frame
     painter = ev.OverlayPainter(s, spec, SW, SH, 30000 / 1001)

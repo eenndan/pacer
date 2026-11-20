@@ -11,7 +11,7 @@ seek `-ss 0`; `inpoint` is KEYFRAME-GRANULAR, so the picture began at the keyfra
 — up to one GOP early. On the real 3-chapter D24 recording that was -0.956 s on lap 22 and
 -0.193 s on lap 47, at 0 s padding and at 10 s alike. The span now declares each file's `duration`
 (which is what makes a concat input seekable at all) and takes `time_offset = chapters[i0].offset`,
-so ffmpeg's ordinary accurate `-ss` lands on the same frame the single-chapter branch lands on.
+so the decode's ordinary `-ss` lands on the same frame the single-chapter branch lands on.
 
 So this file measures the branch against REAL ffmpeg on two synthetic chapters, rather than
 asserting the shape of an argv:
@@ -186,9 +186,10 @@ def _decode_at(seek: float, input_args: list[str], dur: float, n: int,
 
 
 def _audio_at(seek: float, input_args: list[str], dur: float) -> np.ndarray:
+    """The audio `build_encode_cmd` feeds its mux: the same seek, read on the source's own clock."""
     raw = subprocess.run(
         [ev.FFMPEG, "-nostdin", "-loglevel", "error",
-         "-ss", f"{seek:.6f}", *input_args, "-t", f"{dur:.6f}",
+         *ev._SEEK_ON_THE_SOURCE_CLOCK, "-ss", f"{seek:.6f}", *input_args, "-t", f"{dur:.6f}",
          "-vn", "-sn", "-dn", "-f", "s16le", "-ac", "1", "-ar", str(SR), "pipe:1"],
         check=True, capture_output=True).stdout
     return np.frombuffer(raw, dtype=np.int16).astype(np.float64)
@@ -302,11 +303,13 @@ def test_the_span_audio_starts_at_the_same_instant_as_the_picture():
     A's whole audio track and read off where it starts. Deterministic white noise, so the peak is
     unambiguous (a tone is periodic and would match anywhere).
 
-    The span is compared against the SINGLE-FILE branch at the same instant, not against t0 in the
-    abstract, because ffmpeg does not trim a concat input's audio to the sample: the span starts on
-    the AAC packet boundary at or before t0, i.e. up to 1024/48000 = 21.3 ms early. That is what a
-    concat input costs; the assertion is that it costs no MORE than that, and the measured number
-    is printed so a regression reads as a number rather than as a pass."""
+    The span is compared against the SINGLE-FILE branch at the same instant, to the sample. It used
+    to start one AAC packet (1024/48000 = 21.3 ms) early, and that was read as what a concat input
+    costs. It was the seek: the concat demuxer reports these chapters' AAC priming as the input's
+    start time (-21.333 ms) and ffmpeg added it to `-ss`, on two seeks alike, exactly 1024 samples.
+    Read on the source's own clock (`ev._SEEK_ON_THE_SOURCE_CLOCK`, as `build_encode_cmd` now
+    seeks) the span is the single file, sample for sample. The measured number is printed so a
+    regression reads as a number rather than as a pass."""
     if not _require_ffmpeg("seam_audio_starts_where_the_picture_does"):
         return
     tmp = TMP
@@ -330,11 +333,10 @@ def test_the_span_audio_starts_at_the_same_instant_as_the_picture():
             assert min(span_sharp, one_sharp) > 5.0, (
                 f"correlation peak is not distinctive ({span_sharp:.1f}x / {one_sharp:.1f}x median)")
             span_off, one_off = span_lag / SR - t0, one_lag / SR - t0
-            aac_frame = 1024.0 / SR
-            assert abs(span_off - one_off) <= aac_frame + 1e-6, (
+            assert span_lag == one_lag, (
                 f"the span's audio starts {span_off:+.5f}s from the requested {t0:.3f}s against the "
-                f"single file's {one_off:+.5f}s — {span_off - one_off:+.5f}s apart, more than the "
-                f"one AAC packet ({aac_frame * 1000:.1f} ms) a concat input costs")
+                f"single file's {one_off:+.5f}s — {span_lag - one_lag:+d} samples apart "
+                f"(one AAC packet, 1024, is the concat input's start time added to the seek)")
             assert abs(span_off) < 1.0 / FPS, (
                 f"the span's audio is {span_off:+.5f}s from t0 — over a video frame")
             print(f"    audio: span {span_off:+.5f}s, single file {one_off:+.5f}s, "
