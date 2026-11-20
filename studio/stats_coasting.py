@@ -91,6 +91,12 @@ def coast_note(report) -> str:
     places = report.places
     if not places:
         return f"No coasting was detected on the {laps}."
+    if all(p.s_per_lap < COAST_LIST_MIN_S for p in places):
+        # Nothing the table lists (disc7 #3): the heading counted the place as "not listed" while
+        # this line went on to name it, "All the coasting … is in C6: 0.00 s a lap". Say there is
+        # too little to list, which is what the empty table and the heading already mean.
+        return (f"Too little coasting to list on the {laps}: under {COAST_LIST_MIN_S:.2f} s a "
+                "lap in every place.")
     lead = places[0]
     if len(places) == 1:
         return f"All the coasting on the {laps} is in {lead.label}: {lead.s_per_lap:.2f} s a lap."

@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractItemView
 
 from . import coaching, provenance, theme, units
+from . import stats as stats_service
 from ._signal import fmt_signed, plural
 from .lap_table import NUM_ROLE, _NumItem
 from .stats_common import RING_ROLE, ROW_HEIGHT, ReportTable, keep_blanks_last, section_heading
@@ -55,7 +56,8 @@ STRAIGHTS_NOTE_TOOLTIP = (
     "largest (its exit leverage: the one times the other) — measured, not modelled. It leaves "
     "out a straight whose best is the IDEAL LAP's minimum there when that table's row says the "
     "lap that set it gave all of that time back in the corners beside it: a line trade-off or a "
-    "misplaced GPS edge, not time a slow exit costs. \"Usual\" is the median over the clean "
+    "misplaced GPS edge, not time a slow exit costs — and a straight whose median − best the "
+    "timing cannot tell from level, which is no cost at all. \"Usual\" is the median over the clean "
     "laps. It is time down the STRAIGHT after a slow exit, which the Coaching tab's ranking does "
     "not contain: Coaching ranks the time lost inside each corner against your best lap, and the "
     "corner/straight partition keeps the two apart (together they sum to the lap). So the two "
@@ -127,7 +129,14 @@ class StraightsSection:
         "fix first" tile once, it names its own quantity — it named another corner than Coaching's
         #1 on 3 of 4 recordings, and neither is wrong: no corner's window holds the straight."""
         gone = self._given_back(session, report)
-        ranked = sorted((st for st in report if st.leverage > 0 and st.exit_delta_kmh is not None),
+        # A straight whose median − best cannot beat the timing step is not a cost a slow exit
+        # caused (disc7 #2: ten laps of one driver, GPS noise only, named "C4 … takes 0.02 s
+        # longer"). The step is the page's own level rule — `stats.is_level` at the floor the
+        # rolling-best caption reads — not a new threshold.
+        floor = stats_service.rolling_level_floor(
+            bool(getattr(getattr(session, "timing_quality", None), "media_clock", False)))
+        ranked = sorted((st for st in report if st.leverage > 0 and st.exit_delta_kmh is not None
+                         and not stats_service.is_level(st.median_s - st.best_s, floor)),
                         key=lambda st: -st.leverage)
         top = next((st for st in ranked if st.index not in gone), None)
         above = [st.ring_cid for st in ranked[:ranked.index(top) if top else None]]
@@ -207,6 +216,10 @@ class StraightsSection:
         t.clearSelection()
         t.setRowCount(len(report))
         for r, st in enumerate(report):
+            # Exit Δ is a median exit against the best lap's own: over ONE exit that median IS the
+            # best lap's, so the 0.0 it printed was a spread of one sample (disc7 #4) — a dash.
+            n_exit = st.n_exit if st.n_exit is not None else st.n
+            exit_delta = st.exit_delta_kmh if n_exit >= 2 else None
             name = _NumItem(st.label)
             name.setData(NUM_ROLE, st.index)      # sort key: track order
             name.setData(RING_ROLE, st.ring_cid)  # the corner feeding this straight
@@ -218,8 +231,8 @@ class StraightsSection:
                      if st.trap_best_kmh is not None else None, "{:.1f}"),
                 cell(units.convert_speed(st.trap_median_kmh, unit)
                      if st.trap_median_kmh is not None else None, "{:.1f}"),
-                cell(units.convert_speed(st.exit_delta_kmh, unit)
-                     if st.exit_delta_kmh is not None else None, _signed_1dp),
+                cell(units.convert_speed(exit_delta, unit)
+                     if exit_delta is not None else None, _signed_1dp),
             ]
             # How many laps each column counted, where that is not all of them (C4).
             of = getattr(st, "n_laps", None)
