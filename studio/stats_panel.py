@@ -2800,6 +2800,8 @@ class StatsView(QWidget):
         list is actually cut into or the whole grid blanks (see Session.effective_sector_count)."""
         if not hasattr(session, "lap_sector_splits"):
             return None
+        if hasattr(session, "split_matrix"):   # the real Session: its grid is Quickest's too
+            return session.split_matrix()
         n_cols = getattr(session, "effective_sector_count", lambda: 0)() + 1
         if n_cols < 2:
             return None

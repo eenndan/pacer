@@ -3241,13 +3241,13 @@ STRIP_ROLE = Qt.UserRole + 5        # (the row's stats.PassStrip, the lap wearin
 STRIP_PLAYING_ROLE = Qt.UserRole + 6   # the lap the row's cycle names (ringed), or None
 LOOPING_SUFFIX = " · looping"
 QUICKEST_BTN = "Quickest passes"
-QUICKEST_BTN_TIP = ("Your quickest pass through each corner, the lap it was on and the laps level "
-                    "with it. Click a row (or ↑/↓ and Return) to play that pass; click it again "
-                    "for the next level lap.")
+QUICKEST_BTN_TIP = ("Your quickest pass through each corner (and each sector you drew on the map), "
+                    "the lap it was on and the laps level with it. Click a row (or ↑/↓ and "
+                    "Return) to play that pass; click it again for the next level lap.")
 LAP_VIEW_TIP = "This lap's time, speeds and grip through each corner."
 QUICKEST_NEEDS_LAPS = "Needs more laps"
 QUICKEST_PLAY_TIP = "Play this pass, from just before the corner to just after it (Return)"
-QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap took this corner within "
+QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap took this {what} within "
                      "{step:.2f} s of it.")
 QUICKEST_COL_TIPS = [
     "Detected corner in track order, with an arrow for its direction.",
@@ -3262,12 +3262,30 @@ QUICKEST_COL_TIPS = [
     "corner's typical pass. Each row has its own scale, so a wide band is a tight corner. Hover a "
     "dot for its lap.",
 ]
+# ...and what the first two headers add while sector rows are listed.
+QUICKEST_SECTOR_COL_TIPS = {
+    0: " Then your own sectors, S1, S2…, between the sector lines you drew.",
+    1: " For a sector: its quickest split, the same figure as the Stats page's SPLITS best.",
+}
 LEVEL_NOTE_TIP = "Two passes closer than this are level: the timing cannot tell them apart."
+# A split is timed at two sector lines and carries more GPS noise than a lap time (docs/ACCURACY.md):
+# its step is wider (stats.SECTOR_LEVEL_S), and on the sessions it was measured on nearly every
+# sector is a tie, which the legend says rather than leaving a row of "N more laps" unexplained.
+SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time (σ "
+                         "{sigma:.2f} s at a typical GoPro's noise, docs/ACCURACY.md), so two "
+                         "splits are level within {step:.2f} s. Most sectors are then a tie: the "
+                         "row names the quickest lap and plays each level lap in turn.")
 
 
-def level_note(level_s: float) -> str:
-    """The view's one-line legend for "level"."""
-    return f"Level = within {level_s:.2f} s"
+def level_note(level_s: float, sector_s: float | None = None) -> str:
+    """The view's one-line legend for "level" (and the sectors' wider step, when listed)."""
+    note = f"Level = within {level_s:.2f} s"
+    return note if sector_s is None else f"{note} · sectors {sector_s:.2f} s"
+
+
+def stretch_noun(qp) -> str:
+    """"sector" for a sector row (stats.sector_key), else "corner"."""
+    return "corner" if stats_service.sector_col(qp.cid) is None else "sector"
 
 
 def quickest_level_text(qp) -> str:
@@ -3284,11 +3302,13 @@ def quickest_level_text(qp) -> str:
 def quickest_level_tip(qp, level_s: float) -> str:
     """The "Level with" cell's hover: the level laps themselves, quickest first."""
     if qp.lap_id is None:
+        if stretch_noun(qp) == "sector":
+            return "No lap's split through this sector is counted, so there is no time to name."
         return ("No lap's pass through this corner was matched on track at both its entry and "
                 "exit, so there is no time to name.")
     if not qp.level_laps:
         if qp.next_gap_s is None:
-            return "Only this lap's pass through the corner is counted."
+            return f"Only this lap's pass through the {stretch_noun(qp)} is counted."
         return (f"No other lap is within {level_s:.2f} s here: the next quickest is "
                 f"{qp.next_gap_s:.3f} s slower.")
     laps = ", ".join(lap_label(lap) for lap in qp.level_laps)
@@ -3547,6 +3567,7 @@ class QuickestPassTable(QWidget):
         super().__init__()
         self.session = session
         self.result = None          # the last stats.QuickestPasses (None: no grid)
+        self.sectors = None         # ...and its sector rows (Session.quickest_sectors), below them
         self._labels: dict[int, str] = {}
         self._cycle: tuple[int, int] | None = None   # (cid, k) of the pass last played
         self._running = False   # that pass's clip is still playing (set_clip_running)
@@ -3656,7 +3677,7 @@ class QuickestPassTable(QWidget):
             data = item.data(STRIP_ROLE) if item is not None else None
             if not data:
                 continue
-            words = strip_words(self.corner_label(qp.cid), qp, data[0], self.level_s(),
+            words = strip_words(self.corner_label(qp.cid), qp, data[0], self.row_level_s(qp),
                                 strip_geometry(data[0], cell).piled)
             if item.toolTip() != words:
                 item.setToolTip(words)
@@ -3711,11 +3732,23 @@ class QuickestPassTable(QWidget):
     def level_s(self) -> float:
         return self.result.level_s if self.result is not None else PB_PRECISION_S
 
+    def sector_level_s(self) -> float | None:
+        """The sectors' level step while sector rows are listed, else None."""
+        return self.sectors.level_s if self.sectors is not None else None
+
+    def row_level_s(self, qp) -> float:
+        """The level step of row `qp`: a sector's own (stats.SECTOR_LEVEL_S) or the corners'."""
+        sector = self.sector_level_s()
+        return sector if sector is not None and stretch_noun(qp) == "sector" else self.level_s()
+
     def passes(self) -> list:
-        return self.result.passes if self.result is not None else []
+        """The rows: every corner, then every sector (when sector lines are drawn)."""
+        if self.result is None:
+            return []
+        return self.result.passes + (self.sectors.passes if self.sectors is not None else [])
 
     def row_of(self, cid: int) -> int:
-        """The row of corner `cid`, or -1."""
+        """The row of corner `cid` (or sector key, stats.sector_key), or -1."""
         return next((r for r, qp in enumerate(self.passes()) if qp.cid == cid), -1)
 
     def activate(self, row: int) -> bool:
@@ -3837,6 +3870,13 @@ class QuickestPassTable(QWidget):
         corner_list = self.session.corners.corner_list()
         self._labels = {c.cid: c.label for c in corner_list}
         self.result = self.session.quickest_passes() if corner_list else None
+        read = getattr(self.session, "quickest_sectors", None)
+        self.sectors = read() if self.result is not None and read is not None else None
+        for qp in self.sectors.passes if self.sectors is not None else ():
+            self._labels[qp.cid] = f"S{stats_service.sector_col(qp.cid) + 1}"
+        for c, extra in QUICKEST_SECTOR_COL_TIPS.items():
+            self.table.horizontalHeaderItem(c).setToolTip(
+                QUICKEST_COL_TIPS[c] + (extra if self.sectors is not None else ""))
         passes = self.passes()
         row = self.row_of(self._cycle[0]) if self._cycle is not None else -1
         # A re-segment can drop the corner or change its level laps: keep k inside the new order.
@@ -3850,19 +3890,26 @@ class QuickestPassTable(QWidget):
             self.empty.set_state(QUICKEST_NEEDS_LAPS, self._needs_laps_body())
             return
         left = self.result.not_counted
+        if self.sectors is not None:
+            left = tuple(sorted(set(left) | set(self.sectors.not_counted)))
         if left:
             laps = ", ".join(lap_label(i) for i in left)
             self.not_counted.setText(f"{plural(len(left), 'lap')} not counted")
             self.not_counted.setToolTip(
                 f"Not counted at one corner or more: {'lap' if len(left) == 1 else 'laps'} {laps} "
                 "(⊘ excluded, ⚠ GPS dropout, or a corner edge not matched on track), as in "
-                "the Stats page's CORNERS BY LAP.")
+                "the Stats page's CORNERS BY LAP." if self.sectors is None else
+                f"Not counted at one corner or sector or more: "
+                f"{'lap' if len(left) == 1 else 'laps'} {laps} (⊘ excluded, ⚠ GPS dropout, a "
+                "corner edge not matched on track, or a sector split missing), as in the Stats "
+                "page's CORNERS BY LAP and SPLITS.")
             self.not_counted.setVisible(True)
         verified = getattr(self.session, "timing_verified", True)
         direction = {c.cid: c.direction for c in corner_list}
         self.table.setRowCount(len(passes))
         for r, qp in enumerate(passes):
             label = self._labels.get(qp.cid, f"C{qp.cid}")
+            level_s = self.row_level_s(qp)
             star = verified and qp.alone
             time = "–" if qp.time_s is None else f"{qp.time_s:.{PRINT_DECIMALS}f}"
             cells = [label, time + (BEST_SECTOR_MARK if star else ""),
@@ -3874,20 +3921,20 @@ class QuickestPassTable(QWidget):
                 if col == 0:
                     set_corner_direction(item, direction.get(qp.cid, 0))
                 elif col == QUICKEST_LEVEL_COL:
-                    item.setToolTip(quickest_level_tip(qp, self.level_s()))
+                    item.setToolTip(quickest_level_tip(qp, level_s))
                     if not qp.level_laps:
                         item.setForeground(PROVISIONAL_COLOR)
                 else:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     item.setFont(self._num_font)
                 if col == 1 and qp.level_laps:
-                    item.setToolTip(quickest_no_star_tip(qp, self.level_s()))
+                    item.setToolTip(quickest_no_star_tip(qp, level_s))
                 if col == 1 and star:
                     item.setForeground(QColor(theme.best_sector_colour()))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                    item.setToolTip(QUICKEST_STAR_TIP.format(step=self.level_s()))
+                    item.setToolTip(QUICKEST_STAR_TIP.format(step=level_s, what=stretch_noun(qp)))
                 self.table.setItem(r, col, item)
             self.table.setItem(r, QUICKEST_STRIP_COL, self._strip_item(label, qp, star))
             btn = icon_button("ph.play-fill", tooltip=QUICKEST_PLAY_TIP)
@@ -3912,10 +3959,10 @@ class QuickestPassTable(QWidget):
         item = QTableWidgetItem("")
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        strip = stats_service.pass_strip(qp, self.level_s())
+        strip = stats_service.pass_strip(qp, self.row_level_s(qp))
         if strip is not None:
             item.setData(STRIP_ROLE, (strip, qp.lap_id if star else None))
-            words = strip_words(label, qp, strip, self.level_s())
+            words = strip_words(label, qp, strip, self.row_level_s(qp))
             item.setToolTip(words)
             item.setData(Qt.AccessibleTextRole, words)
         return item
@@ -4032,4 +4079,8 @@ class CornersPage(QWidget):
         quick = corners_on and self._view == CORNERS_VIEW_QUICKEST
         self.stack.setCurrentWidget(self.quickest if quick else self.lap_view)
         self.level_label.setVisible(quick and self.quickest.result is not None)
-        self.level_label.setText(level_note(self.quickest.level_s()))
+        sector_s = self.quickest.sector_level_s()
+        self.level_label.setText(level_note(self.quickest.level_s(), sector_s))
+        self.level_label.setToolTip(LEVEL_NOTE_TIP if sector_s is None else (
+            LEVEL_NOTE_TIP + " " + SECTOR_LEVEL_NOTE_TIP.format(
+                sigma=stats_service.SPLIT_SIGMA_S, step=sector_s)))

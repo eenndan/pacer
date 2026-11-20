@@ -64,6 +64,7 @@ from .race_controller import RaceController
 from .race_ladder import RaceCard
 from .scrub_controller import ScrubController
 from .session import fmt_time
+from .stats import sector_col, sector_key
 from .stats_panel import StatsView
 from .stats_trust import TIMING_TERM
 from .video_view import VideoView
@@ -121,6 +122,11 @@ def typical_compare_status(v, label: str) -> str:
 # Where the pass being studied was played from (`CentralView.pass_subject`): the corner walk from a
 # Quickest passes row steps to the next corner's QUICKEST pass, from anywhere else along the lap.
 PASS_FROM_QUICKEST = "quickest"
+# A sector pass plays, zooms, loops and walks like a corner pass; its export and its compare with a
+# typical pass are not built yet (the clip's corner-time readout and the compare's corner anchor
+# are corner-shaped), so their menu items are greyed out with this said rather than half-working.
+SECTOR_EXPORT_NOT_YET = "Not for sectors yet: a pass export is for a corner's pass"
+SECTOR_COMPARE_NOT_YET = "Not for sectors yet: compare with the typical pass is for a corner's pass"
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
 # The two constants that used to live here (_HDR_ICON_PX 15, _HDR_ICON_BTN 26x24) are gone: an
 # icon button's size is theme.ICON_BTN and its glyph theme.ICON_PX, applied by widgets.icon_button.
@@ -1997,21 +2003,30 @@ class CentralView(QWidget):
         held = self.video.pane.pass_clip()
         if held is None or abs(held[0] - clip[0]) > 1e-6:
             return None
-        if cid not in {c.cid for c in self.session.corners.corner_list()}:
+        if not self.session.has_stretch(cid):   # a re-segment or a sector edit took it away
             return None
         return lap, cid, origin
 
     def _corner_label(self, cid: int) -> str:
-        found = [c.label for c in self.session.corners.corner_list() if c.cid == cid]
-        return found[0] if found else f"C{cid}"
+        """"C3", or "S2" for a sector's key (`Session.stretch_label`)."""
+        return self.session.stretch_label(cid)
 
     def lap_pass_refusal(self, lap_id: int, cid: int) -> str | None:
         """Why lap `lap_id`'s pass through corner `cid` cannot be played as a measured pass, or
         None when it can. The rule is the CORNERS BY LAP grid's: a lap that is a row of it (⊘
         excluded and ⚠ dropout laps are not), with a time through the corner, matched on track at
         both edges — the cells the Quickest view counts. A pass is never played on a time the
-        grid itself declines to compare."""
+        grid itself declines to compare. A sector's (`cid` a stats.sector_key) is the SPLITS
+        grid's: a row of it with that split."""
         label, lap = self._corner_label(cid), lap_label(lap_id)
+        if sector_col(cid) is not None:
+            if self.session.split_matrix() is None:
+                return f"No sector splits to play here: {label} needs a few clean laps first"
+            if self.session.stretch_time(lap_id, cid) is None:
+                return f"Lap {lap} has no counted {label} split (⊘ excluded, ⚠ GPS dropout or blank)"
+            if self.session.stretch_clip(lap_id, cid) is None:
+                return f"Lap {lap}'s {label} has no clip"
+            return None
         matrix = self.session.corner_matrix()
         if matrix is None or cid not in matrix.cids:
             return f"No corner times to play here: {label} needs a few clean laps first"
@@ -2037,8 +2052,7 @@ class CentralView(QWidget):
         if why is not None:
             self.statusNotice.emit(why)
             return False
-        matrix = self.session.corner_matrix()
-        t = matrix.cells[matrix.lap_ids.index(lap_id)][matrix.cids.index(cid)]
+        t = self.session.stretch_time(lap_id, cid)
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.forget_cycle()     # a Quickest row no longer names what plays
@@ -2105,6 +2119,9 @@ class CentralView(QWidget):
             for action in (play_action, export_action):
                 action.setEnabled(False)
                 action.setToolTip(why)
+        elif sector_col(cid) is not None:
+            export_action.setEnabled(False)
+            export_action.setToolTip(SECTOR_EXPORT_NOT_YET)
         # Greyed out with its own reason: level with the typical pass, or it IS the typical pass.
         why_not = self.typical_compare_refusal(lap, cid)
         if why_not is not None:
@@ -2137,12 +2154,17 @@ class CentralView(QWidget):
         being studied, the previous / next corner — on the same lap, or, when that pass came from
         Corners ▸ Quickest passes, that corner's quickest pass. With none, the corner before /
         after the playhead on its lap. Corners a lap cannot play are stepped over; at either end of
-        the lap it stops and says so."""
+        the lap it stops and says so. A walk stays in the group it started in: from a SECTOR pass
+        it steps the sectors (S2 → S3), from a corner pass or the playhead the corners."""
+        subject = self._live_subject()   # a pass that was LEFT walks from the playhead instead
+        noun = "corner"
         order = [c.cid for c in self.session.corners.corner_list()]
+        if subject is not None and sector_col(subject[1]) is not None:
+            noun = "sector"
+            order = [sector_key(c) for c in range(self.session.effective_sector_count() + 1)]
         if not order:
             self.statusNotice.emit("No corners on this track yet")
             return False
-        subject = self._live_subject()   # a pass that was LEFT walks from the playhead instead
         if subject is not None:
             lap, cid, origin = subject
             k = order.index(cid) + step
@@ -2170,7 +2192,7 @@ class CentralView(QWidget):
                 if self.lap_pass_refusal(lap, cid) is None:
                     return self.play_lap_pass(lap, cid)
         edge = "first" if step < 0 else "last"
-        self.statusNotice.emit(f"No {'earlier' if step < 0 else 'later'} corner to play: this is "
+        self.statusNotice.emit(f"No {'earlier' if step < 0 else 'later'} {noun} to play: this is "
                                f"the {edge} one with a pass on lap {lap_label(lap)}")
         return False
 
@@ -2184,7 +2206,7 @@ class CentralView(QWidget):
 
         A Lap race in progress ends and a compare is LEFT first: one video, one lap, and the row's
         click means "show me this pass" wherever the panes were. False when the pass has no clip."""
-        clip = self.session.corners.pass_clip(lap_id, cid)
+        clip = self.session.stretch_clip(lap_id, cid)   # a corner's, or a sector's (stats.sector_key)
         if clip is None:
             return False
         if self.is_racing():
@@ -2201,12 +2223,14 @@ class CentralView(QWidget):
         if page is not None:
             page.quickest.set_clip_running(True)
         self._playback.followed_lap = self.session.lap_at_time(clip[0])
-        self._pin_owned_ring(cid)
+        if sector_col(cid) is None:      # a sector has no apex to ring: the map zoom frames it
+            self._pin_owned_ring(cid)
         self._zoom_to_pass(lap_id, cid, clip)
         self._pass_subject = (int(lap_id), int(cid), origin, (float(clip[0]), float(clip[1])))
         self._on_live_readout_shown()   # the fullscreen readout names the new subject at once
         if status:
-            self.statusNotice.emit(self._pass_status(status, export_hint))
+            self.statusNotice.emit(self._pass_status(status,
+                                                     export_hint and sector_col(cid) is None))
         return True
 
     def _pass_status(self, status: str, export_hint: bool) -> str:
@@ -2228,6 +2252,10 @@ class CentralView(QWidget):
     # parked 5-57 ms past the end on the demo; 4K on a loaded Mac can report later. The first
     # position after the clip ended, up to this far past its end, becomes the zoom's end.
     _PASS_PARK_MAX_S = 2.0
+    # A played SECTOR frames its line-to-line window with a tenth of its width either side, not the
+    # corner's whole width: the demo's sectors with 2-4 lines are 6-18 s of a 45 s lap, so a
+    # corner's margin would put most of the lap (or past its ends) on the chart again.
+    _SECTOR_FRAME_CONTEXT = 0.1
 
     # A PLAYED PASS ZOOMS ONTO ITS CORNER: the charts frame the corner's window as `N` and a
     # Coaching Compare do (`PlotsView.frame_span`, one rule) and the map frames the clip's stretch
@@ -2238,9 +2266,10 @@ class CentralView(QWidget):
     # over by hand (a pan, a wheel zoom, `N`, Fit) leaves that view where he put it and gives the
     # other back. Nothing is computed: a window and a box, set once; the tick only compares t.
     def _zoom_to_pass(self, lap_id: int, cid: int, clip: tuple[float, float]):
-        window = self.session.corner_plot_window(cid, self.plots.axis_mode())
+        window = self.session.stretch_plot_window(cid, self.plots.axis_mode())
         if window is not None:
-            self.plots.hold_frame(*window)
+            self.plots.hold_frame(*window, 1.0 if sector_col(cid) is None else
+                                  self._SECTOR_FRAME_CONTEXT)
         self.map.zoom_to_pass(*clip)
         if window is not None or self.map.pass_zoomed():
             self._pass_zoom = (float(clip[0]), float(clip[1]))
@@ -2366,6 +2395,8 @@ class CentralView(QWidget):
         why = self.lap_pass_refusal(lap_id, cid)
         if why is not None:
             return why
+        if sector_col(cid) is not None:
+            return SECTOR_COMPARE_NOT_YET
         label, lap = self._corner_label(cid), lap_label(lap_id)
         v = self.session.pass_vs_typical(lap_id, cid)
         if v is None:
@@ -2831,10 +2862,13 @@ class CentralView(QWidget):
         played = (lap_id, cid)
         cache = getattr(self, "_pass_line_cache", None)
         if cache is None or cache[0] != played:
-            corners = self.session.corners
-            idx = next((i for i, c in enumerate(corners.corner_list()) if c.cid == cid), None)
-            stats = corners.lap_corner_stats(lap_id) if idx is not None else []
-            secs = stats[idx].time if idx is not None and idx < len(stats) else None
+            if sector_col(cid) is not None:
+                secs = self.session.stretch_time(lap_id, cid)   # the lap's SPLITS cell
+            else:
+                corners = self.session.corners
+                idx = next((i for i, c in enumerate(corners.corner_list()) if c.cid == cid), None)
+                stats = corners.lap_corner_stats(lap_id) if idx is not None else []
+                secs = stats[idx].time if idx is not None and idx < len(stats) else None
             took = "" if secs is None or math.isnan(secs) else f" ({secs:.2f})"
             cache = self._pass_line_cache = (played, f"{label} · lap {lap_label(lap_id)}{took}")
         return cache[1] + (" · looping" if self.video.pane.is_looping() else "")

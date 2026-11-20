@@ -220,4 +220,11 @@ and `tests/test_measured_figures.py` re-runs it. Its verdicts are
 `studio/docs/refused-2026-09.md` §33 and §34.
 
     pixi run python -m studio.dev.probes.corner_refusals
+
+`sector_quickest` measures the level step a sector's quickest split is named under in Corners ▸
+Quickest passes, on the demo and two `synth_gopro` seeds with 2, 3 and 4 sector lines at three GPS
+noise levels, against the generator's truth: how many sectors each candidate step gives a lone
+quickest, and how many of those name the wrong lap. Its rule is `stats.SECTOR_LEVEL_S`.
+
+    pixi run python -m studio.dev.probes.sector_quickest
 """
