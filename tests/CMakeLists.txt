@@ -103,11 +103,7 @@ file(GLOB _pytests CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test_*.py)
 foreach(_path IN LISTS _pytests)
     get_filename_component(_name ${_path} NAME_WE)
     add_test(NAME ${_name} COMMAND ${Python_EXECUTABLE} ${_path})
-    # The H.264 VideoToolbox probe answers "no session" without running ffmpeg (studio/export_video.py
-    # H264_PROBE_ENV): every file's encoder is the same on every machine, and no test opens a
-    # session a CI VM can wedge. The `videotoolbox.*` registrations below ask the real machine;
-    # tests/test_export_probe.py drives the real probe through a fake ffmpeg.
-    set(_env "PACER_H264_PROBE=software")
+    set(_env "")
     if(NOT "${_name}" IN_LIST _no_qt)
         list(APPEND _env "QT_QPA_PLATFORM=offscreen")
     endif()

@@ -191,21 +191,7 @@ def videotoolbox_usable() -> bool:
     run (a fixed machine capability), one probe in flight: a caller that arrives while the dialog's
     warm-up probes (`warm_export_probes`) waits for it and takes its answer. Two ffmpeg runs
     (~0.5 s), so the UI thread never calls it: it reads `videotoolbox_state`."""
-    if _h264_probe_stubbed():
-        return False
     return _ask_probe(_H264, _h264_session_probe)
-
-
-#: The test suite's seam (set on every ordinary CTest registration and by tests/conftest.py):
-#: "software" answers the H.264 probe as a Mac whose VideoToolbox opens no H.264 session does —
-#: settled, False — without running ffmpeg, so a test's encoder is the same on every machine and
-#: no VideoToolbox session (which a CI VM can wedge) is opened behind it. The `videotoolbox.*`
-#: registrations do not set it, and tests/test_export_probe.py clears it to drive the real probe.
-H264_PROBE_ENV = "PACER_H264_PROBE"
-
-
-def _h264_probe_stubbed() -> bool:
-    return os.environ.get(H264_PROBE_ENV) == "software"
 
 
 def resolve_encoder(choice: str) -> str:
@@ -1854,8 +1840,6 @@ def _probe_state(probe: _EncoderProbe) -> str:
 
 def videotoolbox_state() -> str:
     """`_probe_state` of the H.264 VideoToolbox probe (`videotoolbox_usable`); never waits."""
-    if _h264_probe_stubbed():
-        return "no"
     return _probe_state(_H264)
 
 

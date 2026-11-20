@@ -60,14 +60,9 @@ from studio import export_video as ev  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 
 _REAL_PROBE = ev._prores_session_probe
-_REAL_H264 = (ev._h264_session_probe, ev._H264)
+_REAL_H264 = (ev._h264_session_probe, ev._H264)       # settled by test_export_gates on import
 _REAL_LISTED = ev.videotoolbox_encoder_available
 _PRORES_WAIT, _H264_WAIT = ev._PRORES.wait_s, ev._H264.wait_s
-# THE ONE FILE THAT DRIVES THE REAL H.264 MACHINERY. Every other test runs with the suite's stub
-# (`ev.H264_PROBE_ENV`, set on every ordinary CTest registration and by conftest.py): settled, no
-# ffmpeg. Here the stub is the baseline too, so a test that does not ask for the probe meets the
-# same answer by hand as under CTest, and `_fresh(h264=...)` lifts it for the tests that do.
-os.environ[ev.H264_PROBE_ENV] = "software"
 
 
 class _FakeProbe:
@@ -94,12 +89,12 @@ class _FakeProbe:
 
 def _fresh(probe, h264=None) -> None:
     """A process that has asked nothing yet, whose ProRes probe is `probe`. The H.264 probe is
-    asked afresh too, its stub lifted, when `h264` is given (its probe); else it stays stubbed."""
+    asked afresh too when `h264` is given (its probe), else it keeps the answer test_export_gates
+    settled on import."""
     _settle_warmup()
     ev._PRORES = ev._EncoderProbe(_PRORES_WAIT)
     ev._prores_session_probe = probe
     if h264 is not None:
-        os.environ.pop(ev.H264_PROBE_ENV, None)
         ev._H264 = ev._EncoderProbe(_H264_WAIT)
         ev._h264_session_probe = h264
 
@@ -117,7 +112,6 @@ def _restore() -> None:
     ev._PRORES = ev._EncoderProbe(_PRORES_WAIT)
     ev._h264_session_probe, ev._H264 = _REAL_H264
     ev.videotoolbox_encoder_available = _REAL_LISTED
-    os.environ[ev.H264_PROBE_ENV] = "software"
 
 
 def _warmups() -> list[threading.Thread]:

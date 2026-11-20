@@ -28,7 +28,6 @@ import pytest
 
 os.environ.setdefault("PACER_APP_SUPPORT_JAIL", "1")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("PACER_H264_PROBE", "software")   # as every registration (tests/CMakeLists.txt)
 _BINDINGS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "bindings", "pacer")
 if _BINDINGS not in sys.path:
