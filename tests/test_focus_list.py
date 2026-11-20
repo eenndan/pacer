@@ -22,6 +22,9 @@ What is asserted here, on inputs whose answer is known by construction:
     spreads is "no change you can act on", using coaching.SPREAD_MARGIN and coaching's own IQR
     statistic rather than a second notion of significance; and so is one under the timing step
     (library.PB_PRECISION_S), whatever the spread, so a verdict reads the same in both directions;
+    and, since cool/focus-cross-session-floor, so is one under the cross-session step
+    (focus.CROSS_SESSION_LEVEL_S, 2√2 × the σ of one session's corner bias that
+    studio/dev/probes/focus_cross_session.py measures), which is the wider of the two;
   * the LAYOUT: a stored corner whose window today lies on a corner turning the other way (the
     demo's circuit driven as its mirror image) is not compared, and the headline says the layout
     looks different; nor is any corner on the same tarmac driven the other way round, whose
@@ -286,38 +289,40 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
     over it the spread test decides, unchanged; on an estimated clock nothing gets that far."""
     from studio import library
     alike = _records(("GX0060", _record()), ("GX0062", _record()))
-    step = library.PB_PRECISION_S
+    # Since cool/focus-cross-session-floor the step a verdict must clear is the cross-session one,
+    # wider than the timing's (`test_the_cross_session_step_…`): under the timing step is under it.
+    step = F.level_step()
+    assert step == F.CROSS_SESSION_LEVEL_S > library.PB_PRECISION_S
     tight = 0.02                      # a spread whose half (0.01 s) every gap below clears
-    for gap in (0.020, 0.0517, step - 1e-4):
+    for gap in (0.020, 0.0517, library.PB_PRECISION_S - 1e-4, step - 1e-4):
         for sign in (1, -1):
             o = F.verdict([_item(median=4.0, iqr=tight)], _now(),
                           [_sample(4.0 + sign * gap, iqr=tight)], alike).outcomes[0]
             assert o.kind == F.OUTCOME_UNCHANGED, (gap, sign, o)
             text = F.outcome_sentence(o)
-            assert text.startswith("C4 — no change you can act on: under 0.07 s apart, within "
-                                   "timing precision ("), text
+            assert text.startswith(f"C4 — no change you can act on: under {step:.2f} s apart, "
+                                   "within what two recordings of the same driving differ by ("), text
             assert "s faster" not in text and "s slower" not in text, text
-    # AT the step is not under it. Around 1.0 s both 1.0 ± 0.07 difference back to ≥ 0.07 in
-    # floating point (around 4.0 s one sign rounds to 0.06999…, which IS under it).
+    # AT the step is not under it. Around 0.25 s both 0.25 ± 0.08 (and ± 0.081) difference back
+    # to at least the gap in floating point (around 1.0 s neither sign of 0.081 does).
     for gap in (step, step + 1e-3, 0.30):
         for sign, kind in ((1, F.OUTCOME_SLOWER), (-1, F.OUTCOME_IMPROVED)):
-            o = F.verdict([_item(median=1.0, iqr=tight)], _now(),
-                          [_sample(1.0 + sign * gap, iqr=tight)], alike).outcomes[0]
+            o = F.verdict([_item(median=0.25, iqr=tight)], _now(),
+                          [_sample(0.25 + sign * gap, iqr=tight)], alike).outcomes[0]
             assert abs(o.delta) >= step and o.kind == kind, (gap, sign, o)
-    # …and the boundary itself, exactly: a delta of PB_PRECISION_S to the last bit is a claim (a
-    # `<=` in the rule would call it level; 1.0 ± 0.07 differences back to 0.07000000000000006).
-    assert library.within_timing_precision(step) is False
+    # …and the boundary itself, exactly: a delta of the step to the last bit is a claim (a `<=` in
+    # the rule would call it level).
     exact = F.verdict([_item(median=0.0, iqr=tight)], _now(), [_sample(step, iqr=tight)],
                       alike).outcomes[0]
     assert exact.delta == step and exact.kind == F.OUTCOME_SLOWER, exact
     # The step-only line prints its medians to the millisecond: at two decimals 2.8448 → 2.9097 s
-    # (0.0649 s apart) read "2.84 → 2.91 s", a 0.07 s difference beside "under 0.07 s apart".
+    # (0.0649 s apart) read "2.84 → 2.91 s", a 0.07 s difference beside a step it is under.
     near = F.verdict([_item(median=2.8448, iqr=tight)], _now(), [_sample(2.9097, iqr=tight)],
                      alike).outcomes[0]
     assert near.kind == F.OUTCOME_UNCHANGED, near
-    assert F.outcome_sentence(near) == ("C4 — no change you can act on: under 0.07 s apart, within "
-                                        "timing precision (2.845 → 2.910 s, 38 → 65 laps)."), \
-        F.outcome_sentence(near)
+    assert F.outcome_sentence(near) == (
+        "C4 — no change you can act on: under 0.08 s apart, within what two recordings of the same "
+        "driving differ by (2.845 → 2.910 s, 38 → 65 laps)."), F.outcome_sentence(near)
     # Under the step AND inside the spread: the spread sentence, as before (its number is the why).
     inside = F.verdict([_item(median=4.0, iqr=0.13)], _now(), [_sample(4.05, iqr=0.13)],
                        alike).outcomes[0]
@@ -332,6 +337,74 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
                       [_sample(4.0 + gap, iqr=tight)], alike).outcomes[0]
         assert o.blocker == F.BLOCK_DEGRADED and o.delta is None, (gap, o)
     print(f"ok timing step: {text}")
+
+
+def test_the_cross_session_step_is_the_house_rule_on_the_measured_sigma():
+    """`focus.CROSS_SESSION_LEVEL_S` is derived, not picked: 2·√2 (`stats.DIFF_2SIGMA_K`, the lap
+    step's and the sector step's own factor) × the sd of ONE session's corner-typical bias that
+    `studio/dev/probes/focus_cross_session.py` measures at GPS noise 2.5. That σ is published in
+    docs/ACCURACY.md with the step; the probe prints the step it measures beside the app's and
+    measures at the noise the constant's comment names."""
+    import math
+    import re
+
+    from studio import library, stats
+    assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
+    assert F.CROSS_SESSION_LEVEL_S == round(stats.DIFF_2SIGMA_K * F.CORNER_DAY_SIGMA_S, 2) == 0.08
+    # wider than the timing step, so the timing step is never the one a verdict reads
+    assert F.level_step() == F.CROSS_SESSION_LEVEL_S > library.PB_PRECISION_S
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs", "ACCURACY.md"), encoding="utf-8") as f:
+        accuracy = " ".join(f.read().split())
+    m = re.search(r"at GPS noise ([0-9.]+), whose per-lap σ is ([0-9.]+) s, one session's corner "
+                  r"typical carries a bias of σ ([0-9.]+) s .*? closer than ([0-9.]+) s \(2√2σ\)",
+                  accuracy)
+    assert m, "docs/ACCURACY.md no longer publishes the cross-session step"
+    assert float(m.group(3)) == F.CORNER_DAY_SIGMA_S, m.groups()
+    assert float(m.group(4)) == F.CROSS_SESSION_LEVEL_S, m.groups()
+    # …measured at a per-lap σ inside the band the same page publishes against official timing
+    assert 0.025 <= float(m.group(2)) <= 0.087, m.groups()
+    with open(os.path.join(root, "studio", "dev", "probes", "focus_cross_session.py"),
+              encoding="utf-8") as f:
+        probe = f.read()
+    assert re.search(rf"^REALISTIC_NOISE = {re.escape(m.group(1))}$", probe, re.M), m.group(1)
+    assert "from studio.stats import DIFF_2SIGMA_K" in probe
+    assert '"step": round(DIFF_2SIGMA_K * sigma_one, 2)' in probe
+    assert 'out["step"] == focus.CROSS_SESSION_LEVEL_S' in probe
+    print(f"ok cross-session step: 2√2 × {F.CORNER_DAY_SIGMA_S} s = {F.CROSS_SESSION_LEVEL_S} s")
+
+
+def test_an_unchanged_day_between_the_old_bar_and_the_step_is_no_change():
+    """The probe's unchanged pairs at GPS noise 2.5 (one driver, nothing changed): the bar before
+    called 22 of 315 corners "faster"/"slower", every one 0.07-0.11 s on a true change of
+    0.00-0.05 s. Two of them, C5 at +0.072 s and C6 at −0.077 s, with spreads whose half sits under
+    that: a claim on main, level now, and the line keeps both days' figures and says why once.
+    (Seven of the 22 are under the step; the 15 at 0.08-0.11 s still read as calls, the 2σ rule's
+    share of 315.)"""
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    for then, now, iqr in ((3.452, 3.524, 0.09), (2.861, 2.784, 0.06)):
+        o = F.verdict([_item(median=then, iqr=iqr)], _now(), [_sample(now, iqr=iqr)],
+                      alike).outcomes[0]
+        assert abs(o.delta) >= _spread_half(iqr) and abs(o.delta) >= 0.07, o
+        assert o.kind == F.OUTCOME_UNCHANGED, (then, now, o.kind)
+        text = F.outcome_sentence(o)
+        assert text == (f"C4 — no change you can act on: under 0.08 s apart, within what two "
+                        f"recordings of the same driving differ by ({then:.3f} → {now:.3f} s, "
+                        f"38 → 65 laps)."), text
+        assert text.count("recordings") == 1 and "faster" not in text and "slower" not in text
+    # …and a true change past the step still reads as one, with its sign and both figures.
+    for then, now, word in ((3.140, 3.040, "0.10 s faster"), (3.140, 2.990, "0.15 s faster"),
+                            (3.140, 3.340, "0.20 s slower")):
+        o = F.verdict([_item(median=then, iqr=0.06)], _now(), [_sample(now, iqr=0.06)],
+                      alike).outcomes[0]
+        assert o.kind == (F.OUTCOME_IMPROVED if now < then else F.OUTCOME_SLOWER), o
+        assert F.outcome_sentence(o) == (f"C4 — {word} than 23 May ({then:.2f} → {now:.2f} s, "
+                                         f"38 → 65 laps)."), F.outcome_sentence(o)
+    print("ok cross-session step: unchanged days level, true changes still called")
+
+
+def _spread_half(iqr: float) -> float:
+    return K.SPREAD_MARGIN * iqr
 
 
 def _layout_item(cid, direction, enter, exit_) -> F.FocusItem:
@@ -712,8 +785,8 @@ def test_same_layout_sessions_are_never_refused_and_claim_only_past_the_step():
     refuses none of their corners; no "faster"/"slower" stands on a difference under the timing
     step (on main, 0.020-0.052 s claims at s4, s6 and s7 among these); A → B "faster" exactly when
     B → A "slower" (on main C5 read "0.05 s slower" demo → s6 and "no change" back); and the
-    demo's planted habit still reads as before on s7."""
-    from studio import library
+    demo's planted habit still reads as before on s7. The step is the verdict's own, the
+    cross-session one since cool/focus-cross-session-floor (`F.level_step`)."""
     flip = {F.OUTCOME_IMPROVED: F.OUTCOME_SLOWER, F.OUTCOME_SLOWER: F.OUTCOME_IMPROVED}
     claims = 0
     for k in _SWEEP_SEEDS:
@@ -723,7 +796,7 @@ def test_same_layout_sessions_are_never_refused_and_claim_only_past_the_step():
             assert o.has_verdict, (k, o.item.label, o.blocker, F.outcome_sentence(o))
             if o.kind != F.OUTCOME_UNCHANGED:
                 claims += 1
-                assert abs(o.delta) >= library.PB_PRECISION_S, (k, F.outcome_sentence(o))
+                assert abs(o.delta) >= F.level_step(), (k, F.outcome_sentence(o))
         for o in there.outcomes:
             r = back.get(o.item.cid)
             if r is not None and (o.kind in flip or r.kind in flip):

@@ -102,6 +102,7 @@ import numpy as np
 from . import _jsonstore, app_support, library, session_record
 from ._signal import plural
 from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
+from .stats import DIFF_2SIGMA_K
 
 _log = logging.getLogger(__name__)
 
@@ -134,6 +135,37 @@ MAX_ITEMS = 3
 # leaves the lap total where it was: that is BLOCK_UNVERIFIED's case, and the same pair showed it,
 # ~10 m, until Q2 put both on Sandown Park's built-in line.)
 MAX_LAP_TOTAL_DRIFT = 0.02
+
+# THE CROSS-SESSION STEP (cool/focus-cross-session-floor). A verdict differences two SESSION
+# figures, and each carries a bias of its own: one recording's receiver noise moves its corner
+# typical, and more laps of that recording do not average it away. Neither half of the bar before
+# covered it — half the wider lap-to-lap spread is a within-session width, and 0.07 s
+# (`library.PB_PRECISION_S`) is two LAP times on the best instrument. MEASURED
+# (studio/dev/probes/focus_cross_session.py: ten habit-free days of one driver on the demo
+# circuit, every corner, at GPS noise 2.5, whose per-lap timing σ of 0.036 s sits inside the
+# 0.025-0.087 s docs/ACCURACY.md publishes): one session's corner typical, app minus truth over a
+# fixed stored window, scatters by CORNER_DAY_SIGMA_S. The step is the house rule for a difference
+# of two figures that each carry σ, `stats.DIFF_2SIGMA_K` × σ (the lap step's and the sector
+# step's own formula): 2√2 × 0.0272 = 0.077 → 0.08 s, and two days' corner typicals closer than
+# it read "no change you can act on". Read off the pairs instead, 2 × the sd of the app's
+# unchanged-day difference (0.0395 s) is 0.079 s: the same step. On those days the bar before
+# called 22 of 315 unchanged corners "faster"/"slower"; with the step, 15 — the 2σ rule's share —
+# while a true 0.15 s gain is still found on 53 of 60 pairs and 0.20 s on 60 of 60.
+# ONE CONSTANT, not a step scaled by each session's quality: the two quality facts the app has —
+# an estimated clock, and a GPS gate that dropped a concerning share of fixes — already refuse the
+# verdict whole (BLOCK_DEGRADED), so every pair that reaches this step is of the good class, and
+# the one continuous figure left (the median DOP on the provenance card) has no measured map to a
+# corner bias. A flat step is `library.PB_PRECISION_S`'s choice too. What it leaves uncovered,
+# said: on days at GPS noise 4.5 (per-lap σ 0.064 s, between recordings B and A) the same rule
+# gives 0.11 s, and 0.08 s still calls 58 of 315 unchanged corners (refused-2026-09 §38's table).
+CORNER_DAY_SIGMA_S = 0.0272
+CROSS_SESSION_LEVEL_S = round(DIFF_2SIGMA_K * CORNER_DAY_SIGMA_S, 2)
+
+
+def level_step() -> float:
+    """The step under which a verdict's two corner typicals are level: the cross-session step, or
+    the timing step should that ever be the wider."""
+    return max(CROSS_SESSION_LEVEL_S, library.PB_PRECISION_S)
 
 
 # ----------------------------------------------------------------------------- outcome vocabulary
@@ -799,8 +831,11 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # tight, and four corners read "slower" one way and "no change" the other. An estimated
         # clock never gets here (BLOCK_DEGRADED), so its wider tie (`lap_race.ESTIMATED_CLOCK_TIE_S`)
         # has no case to apply to.
+        # …AND THE SESSIONS (cool/focus-cross-session-floor): under CROSS_SESSION_LEVEL_S two
+        # recordings of the same driving read apart that much on their own, so it is level too;
+        # that step is wider than the timing's, and `level_step` keeps the wider of the two.
         spread = max(item.iqr_s, now.iqr)
-        if abs(delta) < SPREAD_MARGIN * spread or library.within_timing_precision(delta):
+        if abs(delta) < SPREAD_MARGIN * spread or abs(delta) < level_step():
             kind = OUTCOME_UNCHANGED
         else:
             kind = OUTCOME_IMPROVED if delta < 0 else OUTCOME_SLOWER
@@ -903,9 +938,9 @@ def outcome_sentence(o: Outcome) -> str:
         return f"{label} — can't say: {_BLOCK_SENTENCE.get(o.blocker, 'not comparable')}{tail}."
     assert o.now is not None and o.delta is not None  # has_verdict implies both
     spread = max(o.item.iqr_s, o.now.iqr)
-    # Level by the timing step alone (`verdict`): its line says so, and prints its two medians to
-    # the millisecond — at two decimals 2.8448 → 2.9097 s (0.0649 s apart) read "2.84 → 2.91 s", a
-    # 0.07 s difference beside "under 0.07 s apart".
+    # Level by the step alone (`verdict`, `level_step`): its line says so, and prints its two
+    # medians to the millisecond — at two decimals 2.8448 → 2.9097 s (0.0649 s apart) read
+    # "2.84 → 2.91 s", a 0.07 s difference beside "under 0.07 s apart".
     step_only = o.kind == OUTCOME_UNCHANGED and abs(o.delta) >= SPREAD_MARGIN * spread
     digits = 3 if step_only else 2
     # Both halves of the comparison, in the order they happened, with the sample each median came
@@ -919,8 +954,10 @@ def outcome_sentence(o: Outcome) -> str:
     if step_only:
         # The FLOOR, never the gap, as the PB line words it (`library._precision_clause`): "0.07 s
         # apart, inside 0.07 s" would print a 0.0699 s gap as the very size it is said to be under.
-        return (f"{label} — no change you can act on: under {library.PB_PRECISION_S:.2f} s apart, "
-                f"within timing precision ({body}).")
+        # The why in a driver's words, once: two recordings of the same driving differ that much
+        # (CROSS_SESSION_LEVEL_S) — the two figures stay in the bracket, so he can see both.
+        return (f"{label} — no change you can act on: under {level_step():.2f} s apart, within "
+                f"what two recordings of the same driving differ by ({body}).")
     if o.kind == OUTCOME_UNCHANGED:
         return (f"{label} — no change you can act on: {abs(o.delta):.2f} s apart, inside the "
                 f"corner's own {spread:.2f} s spread ({body}).")

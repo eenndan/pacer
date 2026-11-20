@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirty-seven features were built far enough to **measure**, and the measurement said not to ship
+Thirty-eight features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -748,8 +748,9 @@ line for corners, along with the fix (File ▸ Session record…). A second surf
 | 0065 → 0068 | −0.131 | 0.388 | 0.34 | 0.143 | 0.9 | −0.104 | −0.4 km/h |
 
 The bar is the one the focus list applies to a corner, `coaching.SPREAD_MARGIN` × the wider of the
-two IQRs. The standard error (SE) uses the normal approximation that `focus.verdict`'s comment
-uses, 1.2533 × IQR / 1.349 / √laps, for each median.
+two IQRs. Since §38 a focus verdict also needs 0.08 s, what two recordings of the same driving
+differ by on a corner; every bar here is wider than that, so the three verdicts stand. The
+standard error (SE) uses the normal approximation that `focus.verdict`'s comment uses, 1.2533 × IQR / 1.349 / √laps, for each median.
 
 - **Every change is inside the bar,** at 0.34 to 0.54 of it.
 - **The one pair with the same shape of day cannot be told from zero.** 0065 → 0068 is two runs
@@ -2740,6 +2741,50 @@ the compare draws two. Neither prints a lateral figure.
 1 m noise-free, and an outcome split that does not read a line from the same fixes that time the
 pass. For example, laps grouped by a decision made before the session, or by the video, with a
 group null under 0.5 m at noise 4.5.
+
+---
+
+## 38. "Which corners moved since last time", read over every corner — refused (cool/focus-cross-session-floor)
+
+**The idea.** The focus list re-measures the one to three corners a driver chose. Extend it to the
+whole lap: on every later session at a track, list each corner that got faster or slower against
+the previous one, with no list to choose first.
+
+**How it was measured.** `studio/dev/probes/focus_cross_session.py`, on synthetic race days of
+one driver on the demo circuit with known truth. Ten habit-free days at seeds 401 to 410 give 45
+ordered pairs × 7 corners of nothing changed. Days with C4 planted quicker (true gains 0.10, 0.15
+and 0.20 s over the stored window) are each paired with the ten. Every corner of the earlier day
+is promoted and re-measured on the later one through the app's own `focus.verdict`, both days
+recorded dry. The step is the verdict's own since this package, `focus.CROSS_SESSION_LEVEL_S`:
+2√2 × the σ of one session's corner-typical bias (0.0272 s at GPS noise 2.5) = 0.08 s.
+
+| | noise 1 | noise 2.5 | noise 4.5 |
+|---|---|---|---|
+| per-lap timing σ | 0.015 s | 0.036 s | 0.064 s |
+| one session's corner bias σ → its step | 0.011 → 0.03 s | 0.027 → 0.08 s | 0.040 → 0.11 s |
+| unchanged corners read faster or slower, bar before / with the step | 1 / 0 of 315 | 22 / 15 of 315 | 68 / 58 of 315 |
+| a day's top three with a false call on it, before / with the step | 0 / 0 of 45 | 10 / 4 of 45 | 23 / 22 of 45 |
+| **every corner read: unchanged days with at least one false call** | 0 of 45 | **15 of 45** | 31 of 45 |
+| planted C4 found, 0.10 / 0.15 / 0.20 s | 49 / 60 / 60 of 60 | 39 / 53 / 60 of 60 | 34 / 45 / 60 of 60 |
+| **…found with no other corner falsely called beside it** | 47 / 58 / 59 of 60 | **21 / 31 / 43 of 60** | 5 / 9 / 19 of 60 |
+
+**What stops it.** A list of seven verdicts multiplies the step's 5 % false share by seven. At the
+noise the step is measured at, one unchanged day in three (15 of 45) would say some corner moved
+when none did. A real 0.10 s gain would be named alone, with nothing false beside it, on 21 of 60
+pairs. Even a 0.20 s gain would be named alone on only 43 of 60. A wider step trades one for the
+other, fewer false reads for fewer gains found. On a noisier recording it is worse in both directions. The chosen list works because the
+driver picks one to three corners BEFORE the session, so the reading is not a search.
+
+**What moves because of this refusal: nothing in the app.** The focus list keeps its one to three
+chosen corners, behind the same step.
+
+**Re-run it:** `pixi run python -m studio.dev.probes.focus_cross_session` (`--noises 4.5` for the
+last column).
+
+**What would be new evidence:** a per-session corner bias σ under 0.01 s at a per-lap σ inside
+docs/ACCURACY.md's band, so that a step near 0.03 s keeps every-corner false reads under 1 in 20
+while finding a 0.10 s gain alone on most pairs. Or a rule over seven corners that holds the
+whole read's false-call share to 5 %, measured on these days.
 
 ---
 
