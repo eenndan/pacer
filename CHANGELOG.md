@@ -6,6 +6,93 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-11-20
+
+A minor release: 12 pull requests from #616 to #627, Wave 12 of the campaign, built to the
+owner's request of 19 November to research and build the next features on his own authority,
+with the design left to us. Its theme: every number that names a moment plays it.
+
+### Highlights
+
+- **Every corner time plays its pass.** A Corners lap row, a Stats CORNERS BY LAP cell and the
+  Laps table's "▼ C5" cue play that lap's pass, not the lap's start: on the demo the cue plays lap
+  6 through C5 (6.45). Right-click a pass to play, export or compare it (#624)
+- **A played pass zooms onto its corner.** The charts frame the corner as a third of their width
+  and the map frames that stretch of track; one Esc brings back the whole lap (#618)
+- **Loop it, slow it, walk on.** While a pass plays, L loops it and Slow plays it at 0.25×; both
+  stay on for the next pass you pick. ⌥← / ⌥→ step to the previous / next corner, one pass per
+  press, even held (#621, #624)
+- **This pass beside your typical pass.** On the demo, lap 13's C3 (2.32) beside the typical lap 1
+  (2.40): "0.08 s quicker through C3". The seam shows no number before the corner and holds
+  −0.08 s after it; offered at the 4 of 7 demo corners where the two are not level (#626)
+- **Every lap at a glance.** Each Quickest passes row draws every lap's time through the corner,
+  the 0.07 s level band at its true width: the demo's C1 shows two clusters, C5 one lone quickest
+  dot (#627)
+- **Export one corner pass.** "Export this pass…" opens the overlay export on that pass; the clip
+  runs from the lead-in to 1 s after the exit and names its corner time, with no lap clock (#619)
+- **Numbers in fullscreen.** With the video filling the screen (F), a readout shows the lap, its
+  clock, Δ, speed and the pass playing; I hides it. The lap ruler marks the best lap ★ and the
+  slow laps ▼ (#625)
+- **Pictures first.** The debrief opens on the best lap's card, and the session report's track
+  map now starts 1,115 px down at 1100 px wide instead of 4,777, its Stats in two columns (#616,
+  #622)
+
+### Added
+
+- Quickest passes: each row draws every lap's time through the corner as a dot, the level band at
+  its true width and the typical pass dashed; the lap a click plays is ringed. Hover a dot for it.
+  (#627)
+- Compare a pass with your typical pass through the same corner (right-click a pass, or ⌘K): both
+  panes from the lead-in, zoomed; offered where the two are not level within the timing step. (#626)
+- A compare at a corner names its pair on the seam and counts Δ through the corner only, holding the
+  corner's gap after the exit; Jump says how the best lap's pass stands. (#626)
+- With the video filling the screen (F), a live readout sits over it: lap, lap clock, Δ and speed as
+  the hero shows them, and the corner pass playing. I hides it. (#625)
+- The video's lap ruler marks the best lap ★ and the slow laps ▼, as the Laps table does; hover a
+  lap for its number and time. (#625)
+- A Corners lap row, a Stats CORNERS BY LAP cell and the Laps table's "▼ C5" cue play that lap's
+  pass through the corner, zoomed; a pass not matched on track says why instead. (#624)
+- ⌥← / ⌥→ walk the corners, one pass per press (held, still one); right-click a pass to play or
+  export it. A ⌘- or ⇧-click selects as before and plays nothing. (#624)
+- While a Quickest passes row plays, the video bar shows Loop (L) and Slow (0.25×): the pass replays
+  from its lead-in, slower; its row says "looping". (#621)
+- Both stay on for the next row you pick; Esc, a seek, lap pick, Compare or Lap race turns them off
+  and gives back your speed. (#621)
+- Export one corner pass as a clip, the one Quickest passes plays (lead-in to 1 s after the exit):
+  ⌘K "Export the C3 pass — lap 13…" (the status line says so), or the export dialog's "This pass"
+  (#619)
+- A pass clip names its lap and corner, and from the exit the corner time ("C3 · 2.32 s"); it shows
+  no lap clock, no lap Δ and no ghost, and its corner cards keep to that corner (#619)
+
+### Changed
+
+- The session report shows its track map and chart right after the lap card and COACHING, then the
+  Stats groups, in two columns on a wide screen; printed, no group or figure splits across pages.
+  (#622)
+- A pass played from Corners ▸ Quickest passes zooms the speed and Δ charts onto its corner and the
+  map onto that stretch of track; leaving the pass, a lap pick or Esc shows the whole lap again.
+  (#618)
+- The big Δ readout over the charts stays neutral, without ▲/▼, while the printed gap is under the
+  0.07 s timing step, like the compare seam and the exports; the speed beside it is now secondary.
+  (#617)
+- The first-open debrief leads with its picture: the best lap's time and speed-coloured track sit at
+  the top of the page, above the headline, the lead, the focus list and the ranked corners. (#616)
+
+### Fixed
+
+- Stats: every section heading sits the same gap under the block above it; SPEED · G, DRIVING and
+  the sections after a table no longer sit flush under the previous section's note. (#623)
+- The overlay export dialog says it is measuring the footage instead of quoting a guessed size that
+  later changed, and its rows no longer shift when the measured size arrives. (#623)
+- The export dialog stops measuring a recording ffprobe cannot answer within 30 s, and shows its
+  estimate instead of "Measuring…" for as long as it stays open. (#623)
+- Shortcuts card: key caps sit on their description's baseline, "," and "." read Comma and Period,
+  and the card opens with whole rows rather than one cut through at its foot. (#623)
+- Library: sessions on the same day no longer stack on one line in the PB chart; a day's heats
+  spread across it in the order driven, and the date axis ticks whole days, never hours. (#620)
+- Library: on a race day the progress line beside the PB chart ("improving", "off your PB") reads
+  the heats in the order they were driven, as the chart does. (#620)
+
 ## [0.16.0] — 2026-11-19
 
 A minor release: one pull request, #614, Wave 11 of the campaign, built to the owner's request of
@@ -2370,7 +2457,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/eenndan/pacer/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/eenndan/pacer/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/eenndan/pacer/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/eenndan/pacer/compare/v0.13.1...v0.14.0

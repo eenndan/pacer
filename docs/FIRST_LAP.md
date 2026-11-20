@@ -68,7 +68,7 @@ saying the two days were alike.
 The demo lands here on every open, and keeps nothing: no Library row, no personal best, and a focus
 list that lasts only while the demo is open.
 
-![The synthetic demo's debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time beside its speed-coloured line with the focus corners ringed](media/debrief.png)
+![The synthetic demo's debrief: the Coaching page full-window, led by the best lap's time beside its speed-coloured line with the focus corners ringed; under it a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, and the ranked corners with their reasons and a Jump to the video](media/debrief.png)
 
 ## 4 · Read the lap
 
