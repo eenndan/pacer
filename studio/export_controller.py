@@ -810,7 +810,8 @@ class ExportController:
                           aspect: str = export_video.ASPECT_SOURCE,
                           content: str = _EXPORT_CONTENT_COMPOSITE, files: int = 1,
                           source: tuple[int, int, float] | None = None,
-                          fit: str = export_video.FIT_CROP, on_line: bool = False) -> str:
+                          fit: str = export_video.FIT_CROP, on_line: bool = False,
+                          h264: str | None = None) -> str:
         """The second line of the picker's hint: about how big this export lands, how many frames
         it has to render, WHICH encoder will do it and about how long that takes. Derived (see
         X264_BPP and `export_video.RENDER_FPS`) — never a stored megabyte figure, because the
@@ -836,7 +837,10 @@ class ExportController:
         THE TIME IS ABOUT, AND SAYS WHOSE. It comes from throughput measured per path on the
         development Mac, and the progress dialog's live ETA, timed on the real render, is the one
         to trust. Until the ProRes probe has run (behind the dialog) the line names the format
-        rather than an encoder and leaves the time out."""
+        rather than an encoder and leaves the time out. Until the H.264 one has, a burned-in
+        export has neither a size nor a time to state (VideoToolbox is priced by bitrate, libx264
+        by the picture), so the line is "" and the hint says it is measuring; `h264` prices it
+        with that encoder instead, for the room the hint keeps for the figure."""
         if not (dur > 0):
             return ""
         fps = export_video.OverlayConfig.fps_cap or 30.0
@@ -862,7 +866,9 @@ class ExportController:
         elif content == export_video.ALPHA_PNG:
             codec, encoder = content, "a PNG sequence"
         else:
-            codec = encoder = export_video.resolve_encoder("auto")
+            codec = encoder = h264 or export_video.known_encoder()   # None until the probe answers
+            if codec is None:
+                return ""
         size = export_video.fmt_bytes(export_video.estimate_output_bytes(
             out_w, out_h, fps, dur, quality, codec or content) * files)
         took = export_video.estimate_render_seconds(out_w, out_h, frames, codec) if codec else None
@@ -884,7 +890,8 @@ class ExportController:
         renderer's own rule. The bytes come from the one size model every export reads; the time
         from `export_compare.estimate_compare_seconds`, which costs the second decode every
         frame pays. "" when there is nothing honest to say: an unknown lap A, or "Source" before
-        pane A's footage frame is known (`source`, filled behind the dialog).
+        pane A's footage frame is known (`source`, filled behind the dialog), or before the H.264
+        probe has answered (`export_video.known_encoder`).
 
         The frames are the render's own: lap A's window plus its FINISH FRAME, the one that shows
         both lap times (`with_finish_frame`), which a compare always ends on. The size is priced on
@@ -902,8 +909,10 @@ class ExportController:
         geo = export_compare.compare_geometry((src_w, src_h), (src_w, src_h), cfg)
         fps = export_video.resolve_fps(cfg, src_fps)
         frames = export_video.planned_frames(dur, fps, ends_on_finish=ends_on_finish)
-        codec = export_video.resolve_encoder("auto")
-        size = export_video.fmt_bytes(export_video.estimate_output_bytes(
+        codec = export_video.known_encoder()     # None until the H.264 probe answers: measuring
+        if codec is None:
+            return ""
+        size =export_video.fmt_bytes(export_video.estimate_output_bytes(
             geo.out_w, geo.out_h, fps, frames / fps, quality, codec))
         took = export_compare.estimate_compare_seconds(geo.out_w, geo.out_h, frames, codec)
         timing = f", about {fmt_hms(took)} to render" if took else ""
@@ -1012,11 +1021,11 @@ class ExportController:
 
     @staticmethod
     def _redraw_once_probed(dlg: QDialog, src: str, redraw) -> QTimer | None:
-        """Learn the footage's frame and the ProRes encoder BEHIND a picker (an ffprobe and a
-        VideoToolbox session: ~45 ms and ~0.3 s here) and call `redraw` once they are in. Until
-        then its hint says what it can, and that it is measuring (`_measuring_line`). Returns the
-        poll timer for the caller to stop when the dialog closes, or None when everything was
-        already known.
+        """Learn the footage's frame and the H.264 and ProRes encoders BEHIND a picker (an
+        ffprobe and two VideoToolbox sessions: ~45 ms, ~0.5 s and ~0.3 s here) and call `redraw`
+        as each answer lands, the last one included. Until then its hint says what it can, and
+        that it is measuring (`_measuring_line`). Returns the poll timer for the caller to stop
+        when the dialog closes, or None when everything was already known.
 
         IT WAITS AS LONG AS THE DIALOG IS OPEN. It used to stop waiting after 10 s, redrawing the
         hint as it stood — and a probe that answered after that was never shown. On a loaded Mac
@@ -1029,9 +1038,19 @@ class ExportController:
         poll = QTimer(dlg)
         poll.setInterval(50)
 
+        def _known():
+            return (export_video.known_video_size(src) is not None,
+                    export_video.videotoolbox_state(), export_video.prores_videotoolbox_state())
+        seen = [_known()]
+
         def _probes_in():
+            # Each answer as it lands: the burned-in figure needs only the frame and H.264, and
+            # should not wait for the ProRes session behind them.
             if export_video.export_probes_ready(src):
                 poll.stop()
+                redraw()
+            elif _known() != seen[0]:
+                seen[0] = _known()
                 redraw()
         poll.timeout.connect(_probes_in)
         poll.start()
@@ -1048,11 +1067,14 @@ class ExportController:
     @staticmethod
     def _measuring_line(src: str) -> str:
         """What the hint says in place of a size and a time it is still measuring: the footage's
-        frame (`export_video.warm_export_probes`) is not in yet. "" once it is, or when there is no
-        footage to ask; the hint then says what it knows, or nothing."""
+        frame or this Mac's encoders (`export_video.warm_export_probes`) are not in yet. "" once
+        they are, or when there is no footage to ask; the hint then says what it knows, or
+        nothing."""
         if not src or export_video.export_probes_ready(src):
             return ""
-        return "Measuring the footage for the size and the time to render…"
+        if export_video.known_video_size(src) is None and os.path.isfile(src):
+            return "Measuring the footage for the size and the time to render…"
+        return "Measuring this Mac's video encoder for the size and the time to render…"
 
     def _ask_export_options(self, lap: int, pass_: tuple[int, str] | None = None,
                             preset_pass: bool = False):
@@ -1330,8 +1352,9 @@ class ExportController:
                 lines.append(f"Overlay only: {where} on a transparent background, no footage and "
                              "no audio — for compositing over the original in Resolve or "
                              f"Premiere{player}.")
+            on_line = not (session_scope or pass_scope or lead)
             size = self._export_size_hint(clip, h, quality, aspect, content, files, source, fit,
-                                          on_line=not (session_scope or pass_scope or lead))
+                                          on_line=on_line)
             # Until the footage's FRAME is measured the size is a 16:9 guess at the row's
             # resolution (on the demo "About 26 MB … 30 fps" for a clip that lands at 9 MB, 29.97
             # fps), stated as if final: the line says it is measuring instead, and the number
@@ -1341,7 +1364,13 @@ class ExportController:
             # Only while there IS a frame to wait for: a file the probe cannot read keeps the
             # guess, the one size there will ever be.
             guessed = bool(measuring) and source is None and os.path.isfile(src)
-            reserve = "  ".join([*lines, size]) if guessed and size else ""
+            # A burned-in export before the H.264 probe has answered has no figure at all; the
+            # room kept for it is libx264's, the longer line of the two.
+            unpriced = bool(measuring) and not size and not overlay_only
+            priced = size or (self._export_size_hint(
+                clip, h, quality, aspect, content, files, source, fit, on_line=on_line,
+                h264=export_video.SW_H264) if unpriced else "")
+            reserve = "  ".join([*lines, priced]) if (guessed or unpriced) and priced else ""
             if size and not guessed:
                 lines.append(size)
             if measuring and (guessed or "to render" not in size):

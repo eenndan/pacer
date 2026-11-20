@@ -111,6 +111,11 @@ from studio.app import APP_NAME, StudioWindow  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 from studio.workers import VideoExportWorker as _RealVideoExportWorker  # noqa: E402
 
+# The H.264 encoder is known, as it is from a session's second export dialog on: these tests (and
+# the pickers', polish's and probe's, which import this file) read a picker's hint the moment it
+# opens. The first dialog's wait for it is test_export_probe's. One real probe, ~0.5 s, the work
+# the first dialog of this process used to do on the GUI thread.
+export_video.videotoolbox_usable()
 # The File ▸ Export data actions L1-03 is about, by the attribute the window keeps them on.
 # "Copy stats summary" (N13) joined them: it publishes the same numbers the HTML report does, so
 # it takes the same has_laps gate and the same REASON tooltip — L1-03's finding was that a new
