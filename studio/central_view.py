@@ -1430,6 +1430,7 @@ class CentralView(QWidget):
         # FIRST: a played pass's zoom ends before compare draws its pair (either way the toggle goes).
         self.video.compareToggled.connect(lambda _on: self.end_pass_zoom())
         self.video.compareToggled.connect(self._on_corner_compare_left)
+        self.compare.on_anchor_dropped = self._on_anchor_dropped
         self.video.compareToggled.connect(self.compare.on_toggled)
         # Compare owns the two-pane stage, which the video-focus maximize can't sensibly frame, so a
         # compare-ON exits video focus first (wired AFTER on_toggled so compare has already entered
@@ -2299,7 +2300,10 @@ class CentralView(QWidget):
         A compare already on is left first, and Esc or a lap pick leaves this one as any other.
         False when nothing changed."""
         cid, a, b = tp.cid, tp.lap_id, tp.best_lap_id
-        if not self._enter_corner_pair(cid, a, b):
+        d = PRINT_DECIMALS
+        caption = (f"lap {lap_label(a)} ({tp.pass_s:.{d}f}) vs best lap {lap_label(b)} "
+                   f"({tp.best_pass_s:.{d}f}) · {self._corner_label(cid)}")
+        if not self._enter_corner_pair(cid, a, b, tp.pass_s, tp.best_pass_s, caption):
             return False
         corners = self.session.corners
         for side, lap in ((0, a), (1, b)):
@@ -2309,15 +2313,19 @@ class CentralView(QWidget):
         window = self.session.corner_plot_window(cid, self.plots.axis_mode())
         if window is not None:
             self.plots.frame_span(*window)
+        self._corner_status = True
         self.statusNotice.emit(compare_status(tp, lost))
         return True
 
-    def _enter_corner_pair(self, cid: int, a: int, b: int) -> bool:
+    def _enter_corner_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
+                           caption: str) -> bool:
         """Compare lap `a` (pane A, the charts' cursor) with lap `b` AT corner `cid`: C's gates (two
         valid laps; a Lap race ends first), the grid restored, any compare or pass zoom left, the
-        pair entered, the corner ringed, and both Δ badges and the seam counted from the corner's
-        entry (`CompareController.set_corner_anchor`) — the panes start there, and the laps' Δ since
-        the start line would read as the gap through the corner. False when nothing changed."""
+        pair entered, the corner ringed, and both Δ badges and the seam anchored at the corner
+        (`compare_controller.CornerAnchor`: nothing in the lead-in, the gap since the entry inside
+        it, the passes' printed gap held after the exit) under `caption`, the pair named for the
+        whole comparison. `pass_a` / `pass_b` are the two passes' times through the corner. False
+        when nothing changed."""
         if not self.video.compare_btn.isEnabled():
             return False
         if self.is_racing():
@@ -2330,10 +2338,15 @@ class CentralView(QWidget):
         if not self.compare.enter_pair(a, b):
             return False
         corners = self.session.corners
-        entry_a = corners.corner_entry_media_time(a, cid)
-        entry_b = corners.corner_entry_media_time(b, cid)
-        if entry_a is not None and entry_b is not None:
-            self.compare.set_corner_anchor(self._corner_label(cid), entry_a, entry_b)
+        sides = []
+        for lap, pass_s in ((a, pass_a), (b, pass_b)):
+            entry = corners.corner_edge_media_time(lap, cid, "enter")
+            leave = corners.corner_edge_media_time(lap, cid, "exit")
+            clip = corners.pass_clip(lap, cid)
+            sides.append(None if None in (entry, leave, clip) else
+                         (entry, leave, clip[0], clip[1], pass_s))
+        if None not in sides:
+            self.compare.set_corner_anchor(self._corner_label(cid), caption, *sides)
         self._ring_corner(cid)
         return True
 
@@ -2356,7 +2369,16 @@ class CentralView(QWidget):
         label, lap = self._corner_label(cid), lap_label(lap_id)
         v = self.session.pass_vs_typical(lap_id, cid)
         if v is None:
-            return f"{label} has no typical pass to compare with yet"
+            matrix = self.session.corner_matrix()
+            col = matrix.cids.index(cid) if matrix is not None and cid in matrix.cids else None
+            if col is not None and lap_id in matrix.lap_ids:
+                row = matrix.lap_ids.index(lap_id)
+                if matrix.cells[row][col] is None or not matrix.resolved[row][col]:
+                    return (f"Lap {lap}'s pass through {label} is not counted in the corner "
+                            "times (not matched on track), so there is no typical pass to set "
+                            "beside it")
+            return (f"{label} has too few counted passes for a typical one (it needs "
+                    "a median of several laps matched on track)")
         if v.is_typical:
             return (f"Lap {lap}'s pass ({v.pass_s:.{PRINT_DECIMALS}f}) is your typical pass "
                     f"through {label}: there is nothing typical to set beside it")
@@ -2391,7 +2413,11 @@ class CentralView(QWidget):
             self.statusNotice.emit(f"Lap {lap_label(v.typical_lap_id)}'s pass has no clip")
             return False
         self._forget_quickest_cycle()          # the pass being studied is left for the pair
-        if not self._enter_corner_pair(cid, lap_id, v.typical_lap_id):
+        d, label = PRINT_DECIMALS, self._corner_label(cid)
+        caption = (f"lap {lap_label(lap_id)} ({v.pass_s:.{d}f}) vs typical lap "
+                   f"{lap_label(v.typical_lap_id)} ({v.typical_pass_s:.{d}f}) · {label}")
+        if not self._enter_corner_pair(cid, lap_id, v.typical_lap_id, v.pass_s,
+                                       v.typical_pass_s, caption):
             return False
         self.video.seek_pane(0, clip_a[0])
         self.video.seek_pane(1, clip_b[0])
@@ -2402,8 +2428,19 @@ class CentralView(QWidget):
             self.video.secondary.set_clip_end(clip_b[1])
         self._zoom_to_pass(lap_id, cid, clip_a)
         self._corner_compare = (int(lap_id), int(v.typical_lap_id))
-        self.statusNotice.emit(typical_compare_status(v, self._corner_label(cid)))
+        self._corner_status = True
+        self.statusNotice.emit(typical_compare_status(v, label))
         return True
+
+    def _on_anchor_dropped(self):
+        """The compare stopped being "this corner" — left (C, Esc, the button, a lap pick, a
+        Quickest row, ⌥→, a Coaching Compare), a pane repointed, or a pane played or scrubbed out
+        of its clip. ONE place for every way: the corner-compare state goes, and the status line
+        that named the pair is cleared at once rather than lingering its 6 s over a new view."""
+        self._corner_compare = None
+        if getattr(self, "_corner_status", False):
+            self._corner_status = False
+            self.statusNotice.emit("")
 
     def _on_corner_compare_left(self, on: bool):
         """compareToggled: a compare of this pass with the typical one was left (C, the button,
@@ -2419,8 +2456,10 @@ class CentralView(QWidget):
             self._set_corner_lap(pair[0])
 
     def leave_corner_compare(self) -> bool:
-        """Esc on a compare of this pass with the typical one: leave it. False when none is on."""
-        if getattr(self, "_corner_compare", None) is None or not self._comparing():
+        """Esc on a compare of this pass with the typical one: leave it. False when none is on —
+        including a later plain compare, whose pair is not this one (the anchor says which)."""
+        if (getattr(self, "_corner_compare", None) is None or not self._comparing()
+                or self.compare.corner_anchor() is None):
             return False
         self.video.compare_btn.click()      # compareToggled(False): the exit, then the restore
         return True

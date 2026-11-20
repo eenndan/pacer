@@ -1472,7 +1472,8 @@ def test_compare_this_pass_with_the_typical_pass_at_the_corner():
         assert view.pass_zoomed() and _corner_framed(view, 3) and not view.map._view_fitted
         # the readouts count from the corner's entry, and the seam says so
         assert view.compare.corner_anchor() == "C3"
-        assert view.video.seam.caption.text() == "lap 13 vs lap 1 · from C3 entry"
+        # the pair named for the whole comparison (the status line expires in 6 s)
+        assert view.video.seam.caption.text() == "lap 13 (2.32) vs typical lap 1 (2.40) · C3"
         msg = win.statusBar().currentMessage()
         assert msg == (f"Comparing lap 13 ({v.pass_s:.2f}) with your typical pass, lap 1 "
                        f"({v.typical_pass_s:.2f}): 0.08 s quicker through C3 · C or Esc: back to "
@@ -1543,7 +1544,8 @@ def test_a_coaching_compare_counts_from_the_corner_and_jump_says_how_its_pass_st
         assert view.compare_at_corner(tp, "+0.36 s")
         _settle()
         assert view.compare.corner_anchor() == "C1"
-        assert view.video.seam.caption.text().endswith("· from C1 entry")
+        assert view.video.seam.caption.text() == (
+            f"lap 4 ({tp.pass_s:.2f}) vs best lap 13 ({tp.best_pass_s:.2f}) · C1")
         view.video.compare_btn.click()
         _settle()
         # Jump shows the BEST lap's pass, which is not always a good one there: it says how it
@@ -1562,6 +1564,188 @@ def test_a_coaching_compare_counts_from_the_corner_and_jump_says_how_its_pass_st
             f"; its C1 pass ({s.pass_vs_typical(3, 1).pass_s:.2f}) is your typical pass there")
     finally:
         _close(win)
+
+
+# ---------------------------------------------- review round 1 (#626): the corner readout rule
+
+
+def _panes_at(view, t_a, t_b):
+    """Put the two compare panes at telemetry times (t_a, t_b), as playing panes report them, and
+    run the compare tick: (seam text, pane A badge, pane B badge, seam caption)."""
+    view.video.pane.current_global_time = lambda: t_a
+    view.video.secondary.current_global_time = lambda: t_b
+    view.compare._compare_last_t = None
+    view.compare.tick()
+    v = view.video
+    return (v.seam.value.text(), v._cell_a.badge.text(), v._cell_b.badge.text(),
+            v.seam.caption.text())
+
+
+def _edges(s, lap, cid):
+    c = s.corners
+    return (c.corner_edge_media_time(lap, cid, "enter"), c.corner_edge_media_time(lap, cid, "exit"),
+            c.pass_clip(lap, cid))
+
+
+def _check_corner_readout(view, s, a, b, cid, held, caption):
+    """The readout rule through one corner compare of lap `a` (pane A) with lap `b` (pane B)."""
+    from studio import theme
+    from studio.library import within_timing_precision
+    ea, xa, ca = _edges(s, a, cid)
+    eb, xb, cb = _edges(s, b, cid)
+    # the lead-in: no number, the corner still named
+    seam, ba, bb, cap = _panes_at(view, ca[0] + 0.05, cb[0] + 0.05)
+    assert (seam, ba, bb) == ("Δ —", "Δ —", "Δ —"), (seam, ba, bb)
+    assert cap == caption, cap
+    # the entry: zero, neutral
+    seam, ba, bb, _ = _panes_at(view, ea, eb)
+    assert "0.00" in seam and "0.00" in ba and "0.00" in bb, (seam, ba, bb)
+    # inside: a number
+    seam, ba, bb, _ = _panes_at(view, (ea + xa) / 2, (eb + xb) / 2)
+    assert "—" not in seam and "—" not in ba, (seam, ba)
+    # after the exit (the tail, then both paused at their clip ends): HELD at the passes' printed
+    # gap, the gap the status line names; pane B mirrors it
+    for ta, tb in ((xa + 0.2, xb + 0.2), (ca[1] + 0.03, cb[1] + 0.05)):
+        seam, ba, bb, _ = _panes_at(view, ta, tb)
+        assert ba == theme.format_delta_run(held), (ba, held)
+        assert bb == theme.format_delta_run(-held), (bb, held)
+        arrow = not within_timing_precision(held)
+        assert seam == theme.format_delta_run(held, arrow=arrow), (seam, held)
+    assert view.compare.corner_anchor() == f"C{cid}"
+    # a pane scrubbed out of its clip: the whole lap's Δ again, under the plain caption
+    t_out = ca[1] + 10.0                         # ten seconds on, still on lap a, far past C#
+    seam, ba, _bb, cap = _panes_at(view, t_out, xb + 0.2)
+    assert view.compare.corner_anchor() is None
+    assert cap == f"lap {a + 1} vs lap {b + 1}", cap
+    assert ba == theme.format_delta_run(s.delta_between(a, b, t_out)), ba
+
+
+def test_the_corner_readout_is_blank_before_the_entry_live_inside_and_held_after():
+    """#626 review P1: the anchored readout was subtracted everywhere — before the corner, after
+    it, and after a scrub to the other end of the lap ("lap 6 vs lap 9 · from C5 entry −0.67 s ▲"
+    in green for a pass 2.84 s SLOWER). The rule (`compare_controller.CornerAnchor`), for this
+    compare and for Coaching's Compare, which share it."""
+    from studio.stats import printed_gap_s
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        _record_plays(view)
+        assert view.compare_pass_with_typical(5, 5)                   # lap 6's spin at C5
+        _settle()
+        v = s.pass_vs_typical(5, 5)
+        assert -v.gap_s == printed_gap_s(v.pass_s, v.typical_pass_s) == 2.84
+        _check_corner_readout(view, s, 5, 8, 5, 2.84,
+                              "lap 6 (6.45) vs typical lap 9 (3.61) · C5")
+        assert not view._comparing() or view.compare.corner_anchor() is None
+        view.video.compare_btn.click() if view._comparing() else None
+        _settle()
+        # the Coaching Compare: the typical lap (pane A) against the best lap (pane B) at C1
+        tp = s.typical_passes()[1]
+        assert view.compare_at_corner(tp, "+0.36 s")
+        _settle()
+        held = printed_gap_s(tp.pass_s, tp.best_pass_s)
+        _check_corner_readout(view, s, tp.lap_id, tp.best_lap_id, 1, held,
+                              f"lap 4 ({tp.pass_s:.2f}) vs best lap 13 ({tp.best_pass_s:.2f}) · C1")
+    finally:
+        _close(win)
+
+
+def test_the_held_gap_is_the_status_lines_gap_for_every_offered_pair():
+    from studio.stats import printed_gap_s
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        _record_plays(view)
+        m = s.corner_matrix()
+        offered = 0
+        for lap in m.lap_ids:
+            for cid in m.cids:
+                if view.typical_compare_refusal(lap, cid) is not None:
+                    continue
+                v = s.pass_vs_typical(lap, cid)
+                assert view.compare_pass_with_typical(lap, cid)
+                held = view.compare._anchor.sides[0][5]
+                said = win.statusBar().currentMessage()
+                way = "slower" if held > 0 else "quicker"
+                assert f": {abs(held):.2f} s {way} through C{cid}" in said, (lap, cid, held, said)
+                assert held == printed_gap_s(v.pass_s, v.typical_pass_s) == -v.gap_s
+                offered += 1
+        assert offered >= 17, offered
+    finally:
+        _close(win)
+
+
+def test_leaving_a_corner_compare_any_way_clears_it_and_its_status():
+    from studio.app import LOOP_OFF_IN_COMPARE
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        bar = win.statusBar()
+        # Esc: the status line goes at once, not 6 s later
+        assert view.compare_pass_with_typical(12, 3)
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view._comparing() and bar.currentMessage() == ""
+        # L in a corner compare says Loop is off in a compare
+        assert view.compare_pass_with_typical(12, 3)
+        win.toggle_pass_loop()
+        assert bar.currentMessage() == LOOP_OFF_IN_COMPARE
+        # a pane repoint is not "this corner" any more (M4): the anchor and the state go
+        view.compare.on_pane_repoint(1, 6)
+        _settle()
+        assert view.compare.corner_anchor() is None and view._corner_compare is None
+        assert view.video.seam.caption.text() == "lap 13 vs lap 7"
+        view.video.compare_btn.click()
+        _settle()
+        # left through a Quickest row (compare.exit, no compareToggled): nothing stale stays, so
+        # Esc in a LATER plain compare does not "restore" the old lap
+        assert view.compare_pass_with_typical(12, 3)
+        view.select_lap_tab(1)
+        _settle()
+        view.corners_page.quickest.activate(4)
+        _settle()
+        assert not view._comparing() and view._corner_compare is None
+        view.table.laps_selected.emit([3])
+        _settle()
+        win.toggle_compare()
+        _settle()
+        pair = (view.compare.lap_a, view.compare.lap_b)
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert view._comparing() and (view.compare.lap_a, view.compare.lap_b) == pair
+        win.toggle_compare()
+        _settle()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_c_keeps_its_whole_lap_meaning_while_a_pass_is_studied():
+    """C and the Compare button are one action: a whole-lap compare from the start line, whatever
+    is being studied (#626 review: mutant M8 survived)."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        view.select_lap_tab(1)
+        _settle()
+        view.corners_page.quickest.activate(2)            # lap 13's C3: offered against typical
+        _settle()
+        assert view.pass_subject() == (12, 3, "C3")
+        win.toggle_compare()
+        _settle()
+        assert view._comparing() and view.compare.corner_anchor() is None
+        assert getattr(view, "_corner_compare", None) is None
+        assert view.video.seam.caption.text() == (
+            f"lap {view.compare.lap_a + 1} vs lap {view.compare.lap_b + 1}")
+        win.toggle_compare()
+        _settle()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
 
 
 if __name__ == "__main__":

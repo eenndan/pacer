@@ -112,6 +112,9 @@ READOUT_ON = "Live readout on: lap, lap clock, Δ and speed over the video when 
 READOUT_OFF = "Live readout off: the video fills the screen (F) with the picture alone"
 # L with no pass playing: where a pass to loop comes from.
 NO_PASS_TO_LOOP = "Loop needs a pass playing: play one from the Corners tab's Quickest passes"
+# ...and in a compare, where two passes can be on screen: Loop is off there on purpose.
+LOOP_OFF_IN_COMPARE = ("Loop is off in a compare: two passes of different lengths would drift "
+                       "apart. C goes back to one lap, where L loops a pass")
 # How long a RELOAD may run before the working UI is replaced by the "Loading telemetry…" card
 # (ms). The load runs off the UI thread, so a live session stays usable while its successor is
 # read; blanking it instantly meant even a 0.36 s reload flashed the whole window to an
@@ -2952,7 +2955,9 @@ class StudioWindow(QMainWindow):
         playing it says where one comes from instead of doing nothing."""
         view = getattr(self, "view", None)
         if view is not None and not view.video.toggle_pass_loop():
-            self.statusBar().showMessage(NO_PASS_TO_LOOP, STATUS_MS)
+            comparing = getattr(view, "_comparing", lambda: False)()
+            self.statusBar().showMessage(LOOP_OFF_IN_COMPARE if comparing else NO_PASS_TO_LOOP,
+                                         STATUS_MS)
 
     def toggle_live_readout(self):
         """The live readout over the fullscreen video, off / on (I). It only ever shows while the

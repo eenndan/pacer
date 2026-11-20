@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from . import theme
 from ._signal import fmt_time, lap_label
 from .library import PB_PRECISION_S, within_timing_precision
+from .stats import printed_gap_s
 from .video_view import PaneSpec
 
 if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported at runtime
@@ -32,6 +33,50 @@ if TYPE_CHECKING:  # injected collaborators — typed for readers, not imported 
 def _printed(d: float) -> float:
     """The Δ as the seam prints it (2 dp, through the app's one Δ formatter)."""
     return float(theme.format_delta_value(d).replace("\u2212", "-"))
+
+
+# How far outside its clip a pane may report and still be "at this corner": the clip's own pause
+# lands up to ~50 ms past its end on the real player (cool/compare-this-pass), a seek to the clip
+# start can quantise just before it.
+ANCHOR_SLACK_S = 0.5
+
+
+class CornerAnchor:
+    """A compare AT ONE CORNER: what the seam and both pane badges show while both panes are on
+    that corner's passes. THE READOUT RULE, per pane, at that pane's own time t:
+
+      * BEFORE the corner's entry (the lead-in): no number — "Δ —", neutral. The caption still
+        names the corner. A gap before the corner is not the gap through it.
+      * INSIDE the corner: the gap since the entry — this lap's Δ against the other at t, less its
+        Δ at the entry (`Session.delta_between`, both warps off the best lap).
+      * AFTER the exit: HELD at the gap through the corner, the two passes' printed times apart
+        (`stats.printed_gap_s`; pane B's the same, negated) — so the frame both panes pause on
+        shows exactly the gap the status line names.
+      * A pane OUTSIDE its clip ([start, end], `ANCHOR_SLACK_S` either side), once both have been
+        inside: the comparison is no longer "this corner". The anchor is dropped and the readout
+        goes back to the whole lap's Δ under the plain caption. So does a pane repoint, a reset to
+        the start line, or the exit.
+
+    `sides` holds per pane (entry, exit, clip start, clip end, Δ at the entry, held gap)."""
+
+    def __init__(self, label: str, caption: str, sides: tuple[tuple, tuple]):
+        self.label = label
+        self.caption = caption
+        self.sides = sides
+        self.armed = False     # both panes have been inside their clips (the seeks landed)
+
+    def inside(self, side: int, t: float) -> bool:
+        _e, _x, start, end, _d0, _held = self.sides[side]
+        return start - ANCHOR_SLACK_S <= t <= end + ANCHOR_SLACK_S
+
+    def value(self, side: int, t: float, live: float | None) -> float | None:
+        """The pane's readout at time `t` (`live` = its whole-lap Δ there), per the rule above."""
+        entry, exit_, _s, _e, d0, held = self.sides[side]
+        if t < entry:
+            return None
+        if t > exit_:
+            return held
+        return None if live is None else live - d0
 
 
 class CompareController:
@@ -65,11 +110,12 @@ class CompareController:
         # Last (t_a, t_b) the badges/g were computed for; lets tick() early-out when neither pane
         # moved. Sentinel that no real (float, float) equals, so the first tick always applies.
         self._compare_last_t: object = None
-        # A compare AT A CORNER (`set_corner_anchor`): (label, Δ of A vs B at A's entry, Δ of B vs
-        # A at B's entry). Both badges and the seam then read the gap SINCE the corner's entry —
-        # the panes start at the corner, and a lap's Δ since the start line there would read as
-        # the pass's gap. None for a compare of whole laps; any pair change drops it.
-        self._anchor: tuple[str, float, float] | None = None
+        # A compare AT A CORNER (`set_corner_anchor`, `CornerAnchor`'s readout rule). None for a
+        # compare of whole laps; any pair change, a reset to the line or a pane leaving its clip
+        # drops it, and `on_anchor_dropped` tells the view (the one place it hears "not this
+        # corner any more", whichever way it happened).
+        self._anchor: CornerAnchor | None = None
+        self.on_anchor_dropped: Callable[[], None] | None = None
         # Cross-recording compare: when _cross, pane B's g / lap window / lap id / video source all
         # resolve against _session_b (the reference Session), not self.session. Dormant otherwise
         # (_session_b is self.session, byte-identical to same-recording compare).
@@ -209,10 +255,18 @@ class CompareController:
         else:
             d_a = self.session.delta_between(a, b, t_a)
             d_b = self.session.delta_between(b, a, t_b)
-            if self._anchor is not None:   # a corner compare: the gap since the corner's entry
-                _label, d0_a, d0_b = self._anchor
-                d_a = None if d_a is None else d_a - d0_a
-                d_b = None if d_b is None else d_b - d0_b
+            anchor = self._anchor
+            if anchor is not None:   # a corner compare: `CornerAnchor`'s readout rule
+                both_in = anchor.inside(0, t_a) and anchor.inside(1, t_b)
+                if both_in:
+                    anchor.armed = True
+                if anchor.armed and not both_in:
+                    self._drop_anchor()          # a pane left the corner: the whole-lap Δ again
+                elif not anchor.armed:
+                    d_a = d_b = None             # the seeks to the lead-in have not landed yet
+                else:
+                    d_a = anchor.value(0, t_a, d_a)
+                    d_b = anchor.value(1, t_b, d_b)
             self._set_pane_badge(0, d_a)
             self._set_pane_badge(1, d_b)
             self._set_seam(d_a)
@@ -302,9 +356,12 @@ class CompareController:
             caption, other = f"lap {lap_label(a)} vs lap {lap_label(b)}", f"lap {lap_label(b)}"
         since = ""
         if self._anchor is not None:
-            caption += f" · from {self._anchor[0]} entry"
-            since = (f"Counted from {self._anchor[0]}'s entry, where both panes start: the gap "
-                     "through the corner, not the laps' gap since the start line. ")
+            label = self._anchor.label
+            caption = self._anchor.caption
+            since = (f"Counted from {label}'s entry: no number in the lead-in, the gap since the "
+                     f"entry through {label}, and after its exit the gap through the whole corner, "
+                     "held. A pane leaving the corner's clip goes back to the laps' gap since the "
+                     "start line. ")
         tip = (f"Lap {lap_label(a)} against {other} at the same place on track: − is ahead. "
                + since +
                f"Coloured only beyond timing precision (±{PB_PRECISION_S:.2f} s); inside it the "
@@ -549,29 +606,43 @@ class CompareController:
         status chip, which is the same call the charts header's `Δ TO REF` label already makes."""
         return f"lap {lap_label(ref_lap)}  ({fmt_time(ref_sess.lap_time(ref_lap))})"
 
-    def set_corner_anchor(self, label: str, t_a: float, t_b: float) -> bool:
-        """Read both Δ badges and the seam from corner `label`'s ENTRY (pane A's at `t_a`, pane B's
-        at `t_b`): each badge's Δ there is subtracted, so at the corner's exit they read the gap
-        through the corner, not the laps' gap since the start line. Same-recording pairs only; False
-        (whole-lap Δ kept) when either Δ cannot be read there."""
+    def set_corner_anchor(self, label: str, caption: str, side_a: tuple, side_b: tuple) -> bool:
+        """Anchor both Δ badges and the seam at corner `label` (`CornerAnchor`'s readout rule),
+        under the seam `caption` that names the pair for the whole comparison. Each side is that
+        pane's (entry, exit, clip start, clip end, pass time) on the telemetry clock. Same-recording
+        pairs only; False (whole-lap Δ kept) when either entry Δ cannot be read."""
         a, b = self._compare_a, self._compare_b
         if not self._compare or self._cross or a is None or b is None:
             return False
-        d_a = self.session.delta_between(a, b, t_a)
-        d_b = self.session.delta_between(b, a, t_b)
+        d_a = self.session.delta_between(a, b, side_a[0])
+        d_b = self.session.delta_between(b, a, side_b[0])
         if d_a is None or d_b is None:
             return False
-        self._anchor = (label, float(d_a), float(d_b))
+        held = printed_gap_s(side_a[4], side_b[4])   # + = pane A's pass the slower
+        self._anchor = CornerAnchor(label, caption, (
+            (*map(float, side_a[:4]), float(d_a), held),
+            (*map(float, side_b[:4]), float(d_b), -held)))
         self._compare_last_t = None
         self._sync_seam_pair()
         return True
 
     def corner_anchor(self) -> str | None:
         """The corner the Δ readouts are anchored at ("C3"), or None for a whole-lap compare."""
-        return None if self._anchor is None else self._anchor[0]
+        return None if self._anchor is None else self._anchor.label
+
+    def _drop_anchor(self) -> None:
+        """Not "this corner" any more: back to the whole-lap Δ under the plain caption, and the
+        view told (`on_anchor_dropped`) so its own corner-compare state goes with it."""
+        if self._anchor is None:
+            return
+        self._anchor = None
+        self._compare_last_t = None
+        self._sync_seam_pair()
+        if self.on_anchor_dropped is not None:
+            self.on_anchor_dropped()
 
     def exit(self) -> None:
-        self._anchor = None
+        self._drop_anchor()
         self._cross = False
         self._session_b = self.session
         self._compare = False
@@ -685,9 +756,7 @@ class CompareController:
         Only the PLAYING pane is paused here; each pane's own seek shows its lap-start frame paused,
         pane B's once its fresh source has loaded (PlayerPane.seek, QA VIEW-2). The old warning that
         pause() on a never-played pane makes play() restart from 0 was measured false on Qt 6.11."""
-        if self._anchor is not None:   # back at the line: the Δ is the lap's again
-            self._anchor = None
-            self._sync_seam_pair()
+        self._drop_anchor()   # back at the line (a repoint, a new pair): the Δ is the lap's again
         a, b = self._compare_a, self._compare_b
         if a is None or b is None:
             return
