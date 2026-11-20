@@ -37,9 +37,17 @@ jobs:
     name: build + test + lint (macos-14 / arm64)
     # macos-15 is Apple-silicon (arm64) — matches the project's only pixi platform (osx-arm64).
     runs-on: macos-15
-    # Hard ceiling for the whole job: a clean run finishes in a few minutes (cold pixi cache
-    # included), so anything past this is a hang — fail fast, never burn the 6-hour default.
-    timeout-minutes: 20
+    # Hard ceiling for the whole job, so a hang never burns the 6-hour default. It is NOT the hang
+    # detector: ctest's --timeout 480 kills a hung test first and prints its stack (pyproject.toml),
+    # so the limit must clear a GREEN run plus one such hang. Measured over 29 runs of 2026-11-20:
+    # the whole job took 839-1184 s when green; the ctest step alone 773-1141 s (the same suite,
+    # 1.5x apart between runner VMs); a push with the soak was still in ctest at 1141 s when the
+    # old 20-min limit cancelled it; setup reached 77 s. That day 5 runs were cancelled by the old
+    # limit, two of them after every step had passed (the cancel landed in "Complete job"), and
+    # read as flaky runners. 35 min = the worst measured job (1226 s, a lower bound) + one test
+    # running out its 480 s + ~6 min of margin. When green runs approach it, cut the suite's
+    # time (tests/README.md), do not raise this again.
+    timeout-minutes: 35
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v5
