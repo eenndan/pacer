@@ -12,7 +12,10 @@ second click on the same row plays the next level lap. These tests pin:
     remembered view, the tab title, the rows, a row's activation reaching the play path with the
     right lap / corner / clip, again → the next level lap, wrapping, the edge states, ★ withheld on
     provisional timing, ⌘K's per-corner rows;
-  * the player's one-shot clip end: it pauses there, and any seek / play / pause drops it.
+  * the player's one-shot clip end: it pauses there, and any seek / play / pause drops it;
+  * each row's strip of every counted pass (`stats.pass_strip`): the row's own cells, the level
+    band at its true width, the typical, the ▼ off the scale, the ring on the lap playing, the
+    room it may take beside the words, and no repaint on a playback tick.
 """
 import os
 import sys
@@ -1464,7 +1467,7 @@ def test_the_demo_strips_show_the_lone_quickest_the_habit_and_the_ties():
     others = [m.x for m in c5.marks if m.lap_id != 9]
     assert qp.passes[4].alone and min(others) > c5.band_x, "C5's quickest stands alone"
     xs = sorted(m.x for m in strips[1].marks)
-    gaps = [b - a for a, b in zip(xs, xs[1:])]
+    gaps = [b - a for a, b in zip(xs, xs[1:], strict=False)]
     big = max(gaps)
     assert big > 0.7 and gaps.index(big) == 5, ("C1: six quick passes, a gap of most of the "
                                                 f"scale, eight slow ones: {xs}")
@@ -1497,8 +1500,13 @@ def test_the_strip_shows_only_where_the_words_keep_their_room():
     leave. Never a scrollbar, never an elided word, even on the widest words a row prints beside it
     (C2 cycled to its 11th level lap, playing); while Loop runs it steps aside and the longer
     "· looping" words fit too. The words never move when it shows or hides."""
-    from studio.lap_table import (QUICKEST_LEVEL_COL, QUICKEST_PLAY_COL, QUICKEST_STRIP_COL,
-                                  STRIP_MAX_PX, STRIP_MIN_PX)
+    from studio.lap_table import (
+        QUICKEST_LEVEL_COL,
+        QUICKEST_PLAY_COL,
+        QUICKEST_STRIP_COL,
+        STRIP_MAX_PX,
+        STRIP_MIN_PX,
+    )
     prefs.set_corners_view("quickest")
     win = _window()
     try:
@@ -1564,8 +1572,14 @@ def test_the_strip_paints_each_mark_where_its_time_is_and_nothing_outside_its_ce
     from PySide6.QtCore import QPointF, QRectF
     from PySide6.QtGui import QColor
 
-    from studio.lap_table import (QUICKEST_STRIP_COL, STRIP_DOT_R, STRIP_PLAYING_ROLE,
-                                  STRIP_RING_PX, STRIP_ROLE, strip_geometry)
+    from studio.lap_table import (
+        QUICKEST_STRIP_COL,
+        STRIP_DOT_R,
+        STRIP_PLAYING_ROLE,
+        STRIP_RING_PX,
+        STRIP_ROLE,
+        strip_geometry,
+    )
     prefs.set_corners_view("quickest")
     win = _window()
     try:
