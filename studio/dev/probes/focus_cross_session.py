@@ -9,33 +9,43 @@ typical carries its own bias from its own receiver noise, and that bias does not
 with more laps of the same recording. This measures it on synthetic race days with known truth.
 
 THE GRID. The demo circuit (its built-in track, so every start line is trusted and the verdict's
-gates pass), habit-free days at `synth_gopro` seeds 401.. — one driver, nothing changed, each day
-its own realisation of the laps and of the receiver — at GPS noise 1 and at REALISTIC_NOISE, plus
-days with C4 planted quicker by a grip factor (true gains of about 0.10 / 0.15 / 0.20 s,
-`PLANTS`). Every ordered pair of days (earlier → later) runs the app's own path: the earlier day
-promotes each corner (`Session.focus_items`), the later re-measures it over the stored window
-(`Session.focus_report`, both days recorded "dry"). Each day's corner typical is also timed on its
-TRUTH, the same laps between the window's two edges mapped to the truth's arc length.
+gates pass). Per GPS noise level (NOISES, chosen so their per-lap timing σ spans the 0.025-0.087 s
+docs/ACCURACY.md publishes against official timing) and per SEED SET (`--sets`, set j starts at
+seed 401 + 100·j): `--days` habit-free days of one driver — nothing changed, each day its own
+realisation of the laps and of the receiver — and `--plant-days` days per gain with C4 planted
+quicker by a grip factor (true gains of about 0.10 / 0.15 / 0.20 s, `PLANTS`). Every ordered pair
+of a set's days (earlier → later) runs the app's own path: the earlier day promotes each corner
+(`Session.focus_items`), the later re-measures it over the stored window (`Session.focus_report`,
+both days recorded "dry"). Each day's corner typical is also timed on its TRUTH, the same laps
+between the window's two edges mapped to the truth's arc length.
 
-  * sigma_one — the sd of ONE session's corner-typical bias (app − truth, per corner, the corner's
-    mean bias removed: a constant offset cancels between two days), pooled over corners and days;
-  * diff_sd   — the sd of the app's unchanged-day difference over every pair and corner, which
-    also carries the driver's own day-to-day scatter;
+  * sigma_one — the sd of ONE session's corner-typical bias: app − truth of every day of the set
+    over one stored window, the window's own mean removed (a constant offset cancels between two
+    days), pooled over windows and over seed sets (sums of squares over degrees of freedom);
   * the step is the house rule for a difference of two figures that each carry σ, DIFF_2SIGMA_K
-    (2·√2) × sigma_one; 2 × diff_sd is the same quantity read off the pairs (Var(a − b) = 2σ²),
-    and both are printed so they can be seen to agree.
-Then, per noise, the false calls (unchanged pairs read "faster"/"slower") and the power (planted
-C4 read "faster") under the bar before this probe and with the step added.
+    (2·√2) × sigma_one, at REFERENCE_NOISE (why that level: `focus.CORNER_DAY_SIGMA_S`);
+  * diff_sd — the sd of the app's unchanged-day difference over every pair and corner. It carries
+    the bias of both days AND the driver's own day-to-day scatter (true_diff_sd, ~0.015 s at every
+    noise), so 2 × diff_sd is not the step: it is larger, by most at low noise, where the scatter
+    is a larger share.
+Then, per noise, pooled over the sets: the false calls (unchanged corners read "faster"/"slower";
+the day's top three; a top-three list with any; an every-corner read with any) and the power
+(planted C4 read "faster"; and with no other corner of the pair falsely called) under the bar
+before (0.07 s), under the shipped step (`focus.level_step`), and under the rule's own step at
+that noise.
 
-MEASURED (first run, defaults): at noise 2.5 sigma_one 0.0272 s → step 0.077 → 0.08 s, and
-2 × diff_sd = 2 × 0.0395 = 0.079 s; false calls 22 → 15 of 315; planted 0.10 / 0.15 / 0.20 s
-found on 46 → 39, 55 → 53, 60 → 60 of 60 pairs. At noise 1: false 1 → 0 of 315; found 57 → 49,
-60 → 60, 60 → 60. The whole table is in refused-2026-09 §38.
+MEASURED (defaults, 4 sets × 10 days = 40 habit-free days per noise, about six minutes as four
+processes, one per `--set-index`): at REFERENCE_NOISE per-lap σ 0.0532 s, sigma_one 0.0351 s
+(sets 0.0342-0.0361) → 2√2σ = 0.099 → 0.10 s. The table across the noises is in
+`focus.CORNER_DAY_SIGMA_S`'s comment, and false calls and power in refused-2026-09 §38.
 
-ARGV CONTRACT: optional `--days N` (habit-free days per noise, default 10) and `--plant-days N`
-(days per planted gain, default 6). Every recording is generated into ONE `mkdtemp` under $TMPDIR
-and removed before exit; the app-support store is jailed and the sidecar write stubbed. Output is
-stdout, its last line the JSON summary.
+ARGV CONTRACT: named flags only. `--noises 1.9,4.0` (default NOISES), `--sets N` (default 4),
+`--set-index J` (run only set J of them), `--days N` (default 10), `--plant-days N` (per gain, per
+set, default 3). Every recording is generated into ONE `mkdtemp` under $TMPDIR and removed before
+exit; the app-support store is jailed and the sidecar write stubbed. Output is stdout: one
+`{"set": …}` line per noise and seed set, then the pooled summary as the last line.
+`--summarize FILE[,FILE…]` instead READS such stdout logs (several partial runs, say) and prints
+the same pooled summary; it writes nothing.
 
     pixi run python -m studio.dev.probes.focus_cross_session
 """
@@ -68,32 +78,40 @@ from studio.stats import DIFF_2SIGMA_K  # noqa: E402
 
 sidecar.save = lambda *a, **k: None   # nothing is ever written beside a recording here
 
-NOISES = (1.0, 2.5)
-# The GPS noise the step is measured at: its per-lap timing σ (printed as lap_sigma) sits inside
-# the 0.025-0.087 s docs/ACCURACY.md publishes against official timing, between recording C's and
-# recording B's.
-REALISTIC_NOISE = 2.5
+# Per-lap timing σ 0.025 (recording C), 0.036, 0.053 (B), 0.064 and 0.086 s (A's 0.087), measured.
+NOISES = (1.9, 2.7, 4.0, 4.8, 6.5)
+# The level the shipped step is measured at: per-lap σ REFERENCE_LAP_SIGMA_S, recording B's.
+REFERENCE_NOISE = 4.0
+REFERENCE_LAP_SIGMA_S = 0.0532
 BASE_SEED = 401
-PLANT_SEED = 611
+PLANT_SEED = 2011
+SET_STRIDE = 100
 PLANT_CID = 4
 # Target true gain (s) → C4 grip factor, set so the planted days read about that gain on truth
 # over the stored window against the habit-free days (printed as true_gain@).
-PLANTS = {0.10: 1.08, 0.15: 1.132, 0.20: 1.185}
+PLANTS = {0.10: 1.094, 0.15: 1.146, 0.20: 1.198}
+# The small fixed set tests/test_focus_list.py re-measures (`measure_sigma`): seeds and noise.
+CHECK_SEEDS = (401, 402, 403, 404)
 
 
-def old_bar(item_iqr: float, now_iqr: float, delta: float) -> bool:
-    """True when the bar before this probe read `delta` as a change (`focus.verdict` before)."""
-    spread = max(item_iqr, now_iqr)
-    return not (abs(delta) < SPREAD_MARGIN * spread or library.within_timing_precision(delta))
+def _called(delta: float, bar: float, floor: float) -> bool:
+    """`focus.verdict`'s rule with its step set to `floor`: a claim when |Δ| clears both."""
+    return not (abs(delta) < bar or abs(delta) < max(floor, library.PB_PRECISION_S))
 
 
 def _generate(work: str, noise: float, seed: int, day: int, habit) -> str:
-    """One race day: a distinct date and recording number, so the two sides order and key apart."""
+    """One race day: a distinct date and recording number, so the two sides order and key apart.
+    The generator's two module globals are put back after, so a test that runs this probe leaves
+    every later synthetic recording of its process dated as before."""
+    keep = sg.START_UTC, sg.RECORDING_NUMBER
     sg.START_UTC = dt.datetime(2026, 3, 1, 10, tzinfo=dt.UTC) + dt.timedelta(days=day)
     sg.RECORDING_NUMBER = 8000 + day
-    out = os.path.join(work, f"n{noise:g}_d{day}")
-    rec = sg.generate(out, seed, 14, chapters=1, gps_noise=noise, origin=make_demo.DEMO_ORIGIN,
-                      habit=habit)
+    try:
+        out = os.path.join(work, f"n{noise:g}_d{day}")
+        rec = sg.generate(out, seed, 14, chapters=1, gps_noise=noise,
+                          origin=make_demo.DEMO_ORIGIN, habit=habit)
+    finally:
+        sg.START_UTC, sg.RECORDING_NUMBER = keep
     return rec.paths[0]
 
 
@@ -153,11 +171,11 @@ def _day(work: str, noise: float, seed: int, day: int, habit=None) -> dict:
     return d
 
 
-def _bias_groups(days: list[dict]) -> list[list[float]]:
-    """Per stored window (each day's every corner): app − truth of every day's corner typical over
-    that ONE window. Within a group the window is fixed, so what varies is each session's own bias;
-    where the window itself sits (one noisy reference lap) is common to the group and drops out,
-    exactly as it drops out of a difference of two days over the same stored window."""
+def _bias_groups(days: list[dict]) -> list[tuple[int, list[float]]]:
+    """Per stored window (each day's every corner): (cid, app − truth of every day's corner typical
+    over that ONE window). Within a group the window is fixed, so what varies is each session's own
+    bias; where the window itself sits (one noisy reference lap) is common to the group and drops
+    out, exactly as it drops out of a difference of two days over the same stored window."""
     groups = []
     for x in days:
         windows = [(i.enter_frac, i.exit_frac) for i in x["items"]]
@@ -168,16 +186,14 @@ def _bias_groups(days: list[dict]) -> list[list[float]]:
                 tm = true_median(d, *x["true_s"][item.cid])
                 if samples[k] is not None and tm is not None:
                     group.append(samples[k].median - tm)
-            groups.append(group)
+            groups.append((item.cid, group))
     return groups
 
 
-def _pooled_sd(groups: list[list[float]]) -> float:
-    """The within-group sd, pooled: each group's own mean removed (a constant offset of a window
-    cancels between two days), the squares summed over every group on its own degrees of freedom."""
+def _ss(groups) -> tuple[float, int]:
+    """(sum of squares about each group's own mean, degrees of freedom) over `groups`."""
     ss = sum(float(np.sum((np.asarray(g) - np.mean(g)) ** 2)) for g in groups if len(g) > 1)
-    dof = sum(len(g) - 1 for g in groups if len(g) > 1)
-    return math.sqrt(ss / dof)
+    return ss, sum(len(g) - 1 for g in groups if len(g) > 1)
 
 
 def _pairs(x: dict, y: dict) -> list[dict]:
@@ -193,99 +209,149 @@ def _pairs(x: dict, y: dict) -> list[dict]:
     rows = []
     for item, o in zip(items, outcomes, strict=True):
         if o.now is None or o.delta is None:
-            rows.append({"cid": item.cid, "kind": o.kind, "blocker": o.blocker})
             continue
         tx, ty = (true_median(side, *x["true_s"][item.cid]) for side in (x, y))
-        rows.append({"cid": item.cid, "kind": o.kind, "delta": round(o.delta, 4),
-                     "old_call": old_bar(item.iqr_s, o.now.iqr, o.delta),
-                     "true": None if tx is None or ty is None else round(ty - tx, 4),
+        rows.append({"cid": item.cid, "delta": round(o.delta, 5),
+                     "bar": round(SPREAD_MARGIN * max(item.iqr_s, o.now.iqr), 5),
+                     "true": None if tx is None or ty is None else round(ty - tx, 5),
                      "top3": item.cid in x["top3"]})
     return rows
 
 
-def _called_now(r: dict) -> bool:
-    return r["kind"] in (focus.OUTCOME_IMPROVED, focus.OUTCOME_SLOWER)
+def measure_sigma(work: str, noise: float, seeds) -> tuple[float, float]:
+    """(sigma_one, per-lap σ) over habit-free days at `seeds` — the test's small fixed check."""
+    days = [_day(work, noise, seed, k + 1) for k, seed in enumerate(seeds)]
+    ss, dof = _ss([g for _cid, g in _bias_groups(days)])
+    lap_err = np.concatenate([d["lap_err"] for d in days])
+    return math.sqrt(ss / dof), float(np.std(lap_err, ddof=1))
 
 
-def _rates(null: list[list[dict]], power: dict, called) -> dict:
-    """False calls and power under one rule `called` (a row → bool)."""
-    rows = [r for pair in null for r in pair if "delta" in r]
+def measure_set(work: str, noise: float, j: int, n_days: int, n_plant: int) -> dict:
+    """One seed set at one noise: the sums the summary pools, and every pair's rows."""
+    day_no = 1000 * j
+    base = []
+    for k in range(n_days):
+        day_no += 1
+        base.append(_day(work, noise, BASE_SEED + SET_STRIDE * j + k, day_no))
+    groups = _bias_groups(base)
+    by_cid: dict[int, list] = {}
+    for cid, g in groups:
+        by_cid.setdefault(cid, []).append(g)
+    rec = {"noise": noise, "set": j, "days": n_days,
+           "lap_err": [e for d in base for e in d["lap_err"]],
+           "ss_dof": _ss([g for _cid, g in groups]),
+           "ss_dof_by_cid": {str(cid): _ss(gs) for cid, gs in by_cid.items()},
+           "top3_days": {str(cid): sum(cid in d["top3"] for d in base) for cid in by_cid},
+           "null": [_pairs(x, y) for x, y in itertools.combinations(base, 2)], "power": {}}
+    for gain, grip in PLANTS.items():
+        habit = sg.Habit(cid=PLANT_CID, grip=grip, brake=1.0)
+        plants = []
+        for k in range(n_plant):     # dated after every habit-free day of the set
+            day_no += 1
+            plants.append(_day(work, noise, PLANT_SEED + SET_STRIDE * j + k, day_no, habit))
+        rec["power"][f"{gain:.2f}"] = [_pairs(x, y) for x in base for y in plants]
+    return rec
+
+
+def _rates(recs: list[dict], floor: float) -> dict:
+    """False calls and power under `floor`, pooled over the seed sets in `recs`."""
+    def hit(r):
+        return _called(r["delta"], r["bar"], floor)
+    null = [pair for rec in recs for pair in rec["null"]]
+    rows = [r for pair in null for r in pair]
     top = [r for r in rows if r["top3"]]
-    out = {"false": [sum(map(called, rows)), len(rows)],
-           "false_top3": [sum(map(called, top)), len(top)],
-           # a 3-corner list (the day's top three) with at least one false call on it
-           "lists_with_a_false_call": [sum(any(called(r) for r in pair if "delta" in r and r["top3"])
-                                           for pair in null), len(null)],
-           # every corner read at once ("which corners moved since last time")
+    out = {"false": [sum(map(hit, rows)), len(rows)], "false_top3": [sum(map(hit, top)), len(top)],
+           "top3_lists_with_a_false_call": [
+               sum(any(hit(r) for r in pair if r["top3"]) for pair in null), len(null)],
            "all_corner_reads_with_a_false_call": [
-               sum(any(called(r) for r in pair if "delta" in r) for pair in null), len(null)]}
-    for g, pairs in power.items():
-        c4 = [r for pair in pairs for r in pair if "delta" in r and r["cid"] == PLANT_CID]
-        out[f"found@{g:.2f}"] = [sum(1 for r in c4 if called(r) and r["delta"] < 0), len(c4)]
-        # …and found with no other corner of the same pair falsely called beside it
-        clean = sum(1 for pair in pairs
-                    if any(r["cid"] == PLANT_CID and "delta" in r and called(r) and r["delta"] < 0
-                           for r in pair)
-                    and not any(r["cid"] != PLANT_CID and "delta" in r and called(r) for r in pair))
-        out[f"found_alone_all_corners@{g:.2f}"] = [clean, len(pairs)]
+               sum(any(hit(r) for r in pair) for pair in null), len(null)]}
+    for g in PLANTS:
+        pairs = [pair for rec in recs for pair in rec["power"][f"{g:.2f}"]]
+        c4 = [r for pair in pairs for r in pair if r["cid"] == PLANT_CID]
+        out[f"found@{g:.2f}"] = [sum(1 for r in c4 if hit(r) and r["delta"] < 0), len(c4)]
+        out[f"found_alone@{g:.2f}"] = [
+            sum(1 for pair in pairs
+                if any(r["cid"] == PLANT_CID and hit(r) and r["delta"] < 0 for r in pair)
+                and not any(r["cid"] != PLANT_CID and hit(r) for r in pair)), len(pairs)]
+    return out
+
+
+def summarize(recs: list[dict]) -> dict:
+    """The pooled table, per noise."""
+    out = {}
+    for noise in sorted({r["noise"] for r in recs}):
+        mine = sorted((r for r in recs if r["noise"] == noise), key=lambda r: r["set"])
+        ss = sum(r["ss_dof"][0] for r in mine)
+        dof = sum(r["ss_dof"][1] for r in mine)
+        sigma = math.sqrt(ss / dof)
+        per_set = [round(math.sqrt(r["ss_dof"][0] / r["ss_dof"][1]), 4) for r in mine]
+        cids = sorted({c for r in mine for c in r["ss_dof_by_cid"]}, key=int)
+        by_cid = {c: round(math.sqrt(sum(r["ss_dof_by_cid"][c][0] for r in mine
+                                         if c in r["ss_dof_by_cid"])
+                                     / sum(r["ss_dof_by_cid"][c][1] for r in mine
+                                           if c in r["ss_dof_by_cid"])), 4) for c in cids}
+        c1_ratio = [round(math.sqrt(r["ss_dof_by_cid"]["1"][0] / r["ss_dof_by_cid"]["1"][1])
+                          / math.sqrt(r["ss_dof"][0] / r["ss_dof"][1]), 2)
+                    for r in mine if "1" in r["ss_dof_by_cid"]]
+        top3 = {c: sum(r["top3_days"].get(c, 0) for r in mine) for c in cids}
+        deltas = [x["delta"] for r in mine for pair in r["null"] for x in pair]
+        trues = [x["true"] for r in mine for pair in r["null"] for x in pair
+                 if x["true"] is not None]
+        lap = np.concatenate([np.asarray(r["lap_err"], float) for r in mine])
+        rule = round(DIFF_2SIGMA_K * sigma, 2)
+        tv = {g: [-x["true"] for r in mine for pair in r["power"][f"{g:.2f}"] for x in pair
+                  if x["cid"] == PLANT_CID and x["true"] is not None] for g in PLANTS}
+        out[f"noise {noise:g}"] = {
+            "habit_free_days": sum(r["days"] for r in mine),
+            "sets": len(mine), "lap_sigma": round(float(np.std(lap, ddof=1)), 4),
+            "sigma_one": round(sigma, 4), "sigma_one_per_set": per_set,
+            "step_rule": round(DIFF_2SIGMA_K * sigma, 4), "step_rule_rounded": rule,
+            "sigma_by_cid": by_cid, "c1_over_pooled_per_set": c1_ratio, "top3_days_by_cid": top3,
+            "diff_sd": round(float(np.std(deltas, ddof=1)), 4),
+            "true_diff_sd": round(float(np.std(trues, ddof=1)), 4),
+            **{f"true_gain@{g:.2f}": round(float(np.median(v)), 3) for g, v in tv.items() if v},
+            "before_0.07": _rates(mine, library.PB_PRECISION_S),
+            f"shipped_{focus.level_step():.2f}": _rates(mine, focus.level_step()),
+            f"rule_here_{rule:.2f}": _rates(mine, rule),
+        }
+        if noise == REFERENCE_NOISE:
+            # The constant the app ships must be this probe's pooled σ at the reference noise.
+            out[f"noise {noise:g}"]["app_sigma_is_this_sigma"] = (
+                round(sigma, 4) == focus.CORNER_DAY_SIGMA_S)
+            out[f"noise {noise:g}"]["app_step_is_this_step"] = rule == focus.CROSS_SESSION_LEVEL_S
     return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=10)
-    ap.add_argument("--plant-days", type=int, default=6)
     ap.add_argument("--noises", default=",".join(f"{n:g}" for n in NOISES))
+    ap.add_argument("--sets", type=int, default=4)
+    ap.add_argument("--set-index", type=int)
+    ap.add_argument("--days", type=int, default=10)
+    ap.add_argument("--plant-days", type=int, default=3)
+    ap.add_argument("--summarize", default="")
     a = ap.parse_args()
+    if a.summarize:
+        recs = []
+        for path in a.summarize.split(","):
+            with open(path, encoding="utf-8") as f:
+                recs += [json.loads(ln)["set"] for ln in f if ln.startswith('{"set"')]
+        print(json.dumps(summarize(recs)))
+        return 0
+    sets = [a.set_index] if a.set_index is not None else list(range(a.sets))
     work = tempfile.mkdtemp(prefix="focus_cross_session_")
-    summary: dict = {}
+    recs = []
     try:
-        day_no = 0
         for noise in (float(n) for n in a.noises.split(",")):
-            base, plants = [], {g: [] for g in PLANTS}
-            for k in range(a.days):
-                day_no += 1
-                base.append(_day(work, noise, BASE_SEED + k, day_no))
-            for gain, grip in PLANTS.items():
-                habit = sg.Habit(cid=PLANT_CID, grip=grip, brake=1.0)
-                for k in range(a.plant_days):
-                    day_no += 1
-                    plants[gain].append(_day(work, noise, PLANT_SEED + k, day_no, habit))
-            null = [_pairs(x, y) for x, y in itertools.combinations(base, 2)]
-            power = {g: [_pairs(x, y) for x in base for y in plants[g]] for g in PLANTS}
-            for pair in null:
-                for r in pair:
-                    print(json.dumps({"noise": noise, "null": r}), flush=True)
-            sigma_one = _pooled_sd(_bias_groups(base))
-            deltas = np.array([r["delta"] for pair in null for r in pair if "delta" in r])
-            diff_sd = float(np.std(deltas, ddof=1))
-            lap_err = np.concatenate([d["lap_err"] for d in base])
-            tv = {g: [r["true"] for pair in pairs for r in pair
-                      if r["cid"] == PLANT_CID and r.get("true") is not None]
-                  for g, pairs in power.items()}
-            out = {
-                "lap_sigma": round(float(np.std(lap_err, ddof=1)), 4),
-                "sigma_one": round(sigma_one, 4),
-                "step_2sqrt2_sigma_one": round(DIFF_2SIGMA_K * sigma_one, 4),
-                "diff_sd": round(diff_sd, 4), "step_2_diff_sd": round(2 * diff_sd, 4),
-                "diff_p95": round(float(np.percentile(np.abs(deltas), 95)), 4),
-                "true_diff_sd": round(float(np.std([r["true"] for pair in null for r in pair
-                                                    if r.get("true") is not None], ddof=1)), 4),
-                "step": round(DIFF_2SIGMA_K * sigma_one, 2),
-                **{f"true_gain@{g:.2f}": round(-float(np.median(v)), 3) for g, v in tv.items()},
-                # the bar before the step (`old_bar`), and the app's verdict as it stands
-                "before": _rates(null, power, lambda r: r["old_call"]),
-                "after": _rates(null, power, _called_now),
-            }
-            if noise == REALISTIC_NOISE:
-                # The constant the app ships must be this probe's step at the realistic noise.
-                out["app_step"] = focus.CROSS_SESSION_LEVEL_S
-                out["app_step_is_this_step"] = out["step"] == focus.CROSS_SESSION_LEVEL_S
-            summary[f"noise {noise:g}"] = out
-            print(json.dumps({f"noise {noise:g}": out}), flush=True)
+            for j in sets:
+                rec = measure_set(work, noise, j, a.days, a.plant_days)
+                print(json.dumps({"set": rec}), flush=True)
+                recs.append(rec)
+                for name in os.listdir(work):     # this set's recordings are done with
+                    shutil.rmtree(os.path.join(work, name), ignore_errors=True)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    print(json.dumps(summary))
+    print(json.dumps(summarize(recs)))
     return 0
 
 

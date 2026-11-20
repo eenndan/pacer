@@ -141,24 +141,37 @@ MAX_LAP_TOTAL_DRIFT = 0.02
 # typical, and more laps of that recording do not average it away. Neither half of the bar before
 # covered it — half the wider lap-to-lap spread is a within-session width, and 0.07 s
 # (`library.PB_PRECISION_S`) is two LAP times on the best instrument. MEASURED
-# (studio/dev/probes/focus_cross_session.py: ten habit-free days of one driver on the demo
-# circuit, every corner, at GPS noise 2.5, whose per-lap timing σ of 0.036 s sits inside the
-# 0.025-0.087 s docs/ACCURACY.md publishes): one session's corner typical, app minus truth over a
-# fixed stored window, scatters by CORNER_DAY_SIGMA_S. The step is the house rule for a difference
-# of two figures that each carry σ, `stats.DIFF_2SIGMA_K` × σ (the lap step's and the sector
-# step's own formula): 2√2 × 0.0272 = 0.077 → 0.08 s, and two days' corner typicals closer than
-# it read "no change you can act on". Read off the pairs instead, 2 × the sd of the app's
-# unchanged-day difference (0.0395 s) is 0.079 s: the same step. On those days the bar before
-# called 22 of 315 unchanged corners "faster"/"slower"; with the step, 15 — the 2σ rule's share —
-# while a true 0.15 s gain is still found on 53 of 60 pairs and 0.20 s on 60 of 60.
+# (studio/dev/probes/focus_cross_session.py: one driver on the demo circuit, 40 habit-free days per
+# noise level in four seed sets of ten, every corner): one session's corner typical, app minus
+# truth over a fixed stored window, scatters by σ, and the house rule for a difference of two
+# figures that each carry σ is `stats.DIFF_2SIGMA_K` × σ (the lap step's and the sector step's
+# own formula):
+#
+#   GPS noise  per-lap σ  corner-day σ (four sets)        2√2σ   like
+#   1.9        0.025 s    0.0178 s (0.0142-0.0206)        0.050  recording C (0.025 s)
+#   2.7        0.036 s    0.0248 s (0.0190-0.0294)        0.070
+#   4.0        0.053 s    0.0351 s (0.0342-0.0361)        0.099  recording B (0.053 s)
+#   4.8        0.064 s    0.0424 s (0.0413-0.0432)        0.120
+#   6.5        0.086 s    0.0583 s (0.0557-0.0619)        0.165  recording A (0.087 s)
+#
+# THE REFERENCE IS RECORDING B, the middle of the three docs/ACCURACY.md measures against official
+# timing: the step must hold for the typical real recording, not the best one. At B's noise σ is
+# CORNER_DAY_SIGMA_S, so the step is 2√2 × 0.0351 = 0.099 → 0.10 s. At C's noise the rule would
+# give 0.05 s, under the timing step: on a recording that clean the bar is wider than it needs to
+# be, and costs gains found (refused-2026-09 §38's table). At A's noise the rule gives 0.16 s and
+# 0.10 s leaves 262 of 1260 unchanged corners called — what a flat step under-covers, said. The
+# sd of the app's unchanged-day difference is NOT the same step doubled: it also carries the
+# driver's own day-to-day scatter (0.017 s at every noise), so 2 × it (0.102 s at B's noise) runs
+# above 2√2σ, by most where the noise is low (0.056 vs 0.050 s at C's).
+# On B's noise the bar before called 206 of 1260 unchanged corners "faster"/"slower"; with the
+# step, 83. It costs gains found: a true 0.10 s gain is called on 41 of 120 pairs (77 before),
+# 0.15 s on 91 (115), 0.20 s on 117 (119).
 # ONE CONSTANT, not a step scaled by each session's quality: the two quality facts the app has —
 # an estimated clock, and a GPS gate that dropped a concerning share of fixes — already refuse the
 # verdict whole (BLOCK_DEGRADED), so every pair that reaches this step is of the good class, and
 # the one continuous figure left (the median DOP on the provenance card) has no measured map to a
-# corner bias. A flat step is `library.PB_PRECISION_S`'s choice too. What it leaves uncovered,
-# said: on days at GPS noise 4.5 (per-lap σ 0.064 s, between recordings B and A) the same rule
-# gives 0.11 s, and 0.08 s still calls 58 of 315 unchanged corners (refused-2026-09 §38's table).
-CORNER_DAY_SIGMA_S = 0.0272
+# corner bias. A flat step is `library.PB_PRECISION_S`'s choice too.
+CORNER_DAY_SIGMA_S = 0.0351
 CROSS_SESSION_LEVEL_S = round(DIFF_2SIGMA_K * CORNER_DAY_SIGMA_S, 2)
 
 
@@ -911,6 +924,17 @@ def _layout_why_mixed(details: set) -> str:
     return ", or ".join(parts)
 
 
+def _level_digits(then: float, now: float) -> int:
+    """The fewest decimals, from three, at which `then` and `now` as printed are closer than
+    `level_step()` — the two figures of a level line never print a gap the line says it is under.
+    (Two medians closer than the step always get there: at six decimals the printed gap is within
+    1e-6 s of the true one.)"""
+    for digits in range(3, 7):
+        if abs(float(f"{now:.{digits}f}") - float(f"{then:.{digits}f}")) < level_step():
+            return digits
+    return 6
+
+
 def outcome_sentence(o: Outcome) -> str:
     """One focused corner's line — the whole feature in a sentence, and never a number the gate
     did not allow. A refusal SAYS what it would need, because "we can't compare these" is a fact
@@ -939,10 +963,11 @@ def outcome_sentence(o: Outcome) -> str:
     assert o.now is not None and o.delta is not None  # has_verdict implies both
     spread = max(o.item.iqr_s, o.now.iqr)
     # Level by the step alone (`verdict`, `level_step`): its line says so, and prints its two
-    # medians to the millisecond — at two decimals 2.8448 → 2.9097 s (0.0649 s apart) read
-    # "2.84 → 2.91 s", a 0.07 s difference beside "under 0.07 s apart".
+    # medians with enough digits that their PRINTED difference stays under the step it is said to
+    # be under — at two decimals 2.8448 → 2.9097 s (0.0649 s apart) read "2.84 → 2.91 s", and at
+    # three a Δ of 0.0999 s can still print "3.034 → 3.134 s" beside "under 0.10 s apart".
     step_only = o.kind == OUTCOME_UNCHANGED and abs(o.delta) >= SPREAD_MARGIN * spread
-    digits = 3 if step_only else 2
+    digits = _level_digits(o.item.median_s, o.now.median) if step_only else 2
     # Both halves of the comparison, in the order they happened, with the sample each median came
     # from: a verdict that states only its difference cannot be checked by the person reading it.
     body = (f"{o.item.median_s:.{digits}f} → {o.now.median:.{digits}f} s, "

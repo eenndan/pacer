@@ -168,28 +168,28 @@ def test_records_that_disagree_refuse_the_verdict_and_name_the_difference():
 
 def test_a_change_inside_the_corners_own_spread_is_not_a_change():
     """The same actionability test the coaching gate applies within a session, on the same
-    statistic — a driver cannot aim at 0.09 s inside a band whose middle half is 0.20 s wide.
-    (0.09 s, not the 0.061 s this test used to take: that is under the timing step, which says
+    statistic — a driver cannot aim at 0.12 s inside a band whose middle half is 0.26 s wide.
+    (0.12 s, not the 0.061 or 0.09 s this test used to take: those are under the step, which says
     "no change" whatever the spread — `test_a_difference_under_the_timing_step_is_no_change…`.)"""
     alike = _records(("GX0060", _record()), ("GX0062", _record(air=19.0, track_t=26.0)))
-    inside = F.verdict([_item(median=4.537, iqr=0.19)], _now(),
-                       [_sample(4.627, iqr=0.20)], alike).outcomes[0]
+    inside = F.verdict([_item(median=4.537, iqr=0.25)], _now(),
+                       [_sample(4.657, iqr=0.26)], alike).outcomes[0]
     assert inside.kind == F.OUTCOME_UNCHANGED, inside
-    assert inside.delta is not None and abs(inside.delta - 0.090) < 1e-6
-    assert "inside the corner's own 0.20 s spread" in F.outcome_sentence(inside)
+    assert inside.delta is not None and abs(inside.delta - 0.120) < 1e-6
+    assert "inside the corner's own 0.26 s spread" in F.outcome_sentence(inside)
     # …and the same numbers with a narrower spread DO clear the bar.
     outside = F.verdict([_item(median=4.537, iqr=0.05)], _now(),
-                        [_sample(4.627, iqr=0.05)], alike).outcomes[0]
+                        [_sample(4.657, iqr=0.05)], alike).outcomes[0]
     assert outside.kind == F.OUTCOME_SLOWER, outside
-    assert abs(outside.delta - 0.090) < 1e-6
+    assert abs(outside.delta - 0.120) < 1e-6
     # WHOSE spread: the WIDER of the two sessions', in either order — a change is only as aimable
     # as the noisier side. Both pairs above have near-equal spreads, so on their own they cannot
     # tell "wider" from "narrower": a verdict built on the tight side passed them unchanged.
-    for then_iqr, now_iqr in ((0.05, 0.20), (0.20, 0.05)):
+    for then_iqr, now_iqr in ((0.05, 0.26), (0.26, 0.05)):
         lopsided = F.verdict([_item(median=4.537, iqr=then_iqr)], _now(),
-                             [_sample(4.627, iqr=now_iqr)], alike).outcomes[0]
+                             [_sample(4.657, iqr=now_iqr)], alike).outcomes[0]
         assert lopsided.kind == F.OUTCOME_UNCHANGED, (
-            f"0.090 s is inside half of the noisier session's 0.20 s spread, but with IQRs "
+            f"0.120 s is inside half of the noisier session's 0.26 s spread, but with IQRs "
             f"then={then_iqr} / now={now_iqr} it was graded {lopsided.kind!r}")
     # the bar itself is coaching's constant, not a second one invented here
     assert F.SPREAD_MARGIN is K.SPREAD_MARGIN
@@ -303,12 +303,12 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
             assert text.startswith(f"C4 — no change you can act on: under {step:.2f} s apart, "
                                    "within what two recordings of the same driving differ by ("), text
             assert "s faster" not in text and "s slower" not in text, text
-    # AT the step is not under it. Around 0.25 s both 0.25 ± 0.08 (and ± 0.081) difference back
-    # to at least the gap in floating point (around 1.0 s neither sign of 0.081 does).
+    # AT the step is not under it. Around 0.125 s both 0.125 ± 0.10 (and ± 0.101, ± 0.30)
+    # difference back to at least the gap in floating point (around 0.25 or 1.0 s some do not).
     for gap in (step, step + 1e-3, 0.30):
         for sign, kind in ((1, F.OUTCOME_SLOWER), (-1, F.OUTCOME_IMPROVED)):
-            o = F.verdict([_item(median=0.25, iqr=tight)], _now(),
-                          [_sample(0.25 + sign * gap, iqr=tight)], alike).outcomes[0]
+            o = F.verdict([_item(median=0.125, iqr=tight)], _now(),
+                          [_sample(0.125 + sign * gap, iqr=tight)], alike).outcomes[0]
             assert abs(o.delta) >= step and o.kind == kind, (gap, sign, o)
     # …and the boundary itself, exactly: a delta of the step to the last bit is a claim (a `<=` in
     # the rule would call it level).
@@ -321,8 +321,19 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
                      alike).outcomes[0]
     assert near.kind == F.OUTCOME_UNCHANGED, near
     assert F.outcome_sentence(near) == (
-        "C4 — no change you can act on: under 0.08 s apart, within what two recordings of the same "
+        "C4 — no change you can act on: under 0.10 s apart, within what two recordings of the same "
         "driving differ by (2.845 → 2.910 s, 38 → 65 laps)."), F.outcome_sentence(near)
+    # …and at the cross-session step the same rule needs a fourth digit: Δ = step − 0.0001 from
+    # 3.0337 prints "3.034 → 3.134 s" at three (0.100 apart, as printed) beside "under 0.10 s".
+    then = 3.0337
+    edge = F.verdict([_item(median=then, iqr=tight)], _now(),
+                     [_sample(then + step - 1e-4, iqr=tight)], alike).outcomes[0]
+    assert edge.kind == F.OUTCOME_UNCHANGED, edge
+    edge_text = F.outcome_sentence(edge)
+    assert edge_text.endswith(f"({then:.4f} → {then + step - 1e-4:.4f} s, 38 → 65 laps)."), edge_text
+    shown = [float(x) for x in edge_text.split("(")[1].split(" s,")[0].split(" → ")]
+    assert abs(shown[1] - shown[0]) < step, (shown, step)
+    assert abs(float(f"{then + step - 1e-4:.3f}") - float(f"{then:.3f}")) >= step  # 3 digits: not
     # Under the step AND inside the spread: the spread sentence, as before (its number is the why).
     inside = F.verdict([_item(median=4.0, iqr=0.13)], _now(), [_sample(4.05, iqr=0.13)],
                        alike).outcomes[0]
@@ -342,53 +353,96 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
 def test_the_cross_session_step_is_the_house_rule_on_the_measured_sigma():
     """`focus.CROSS_SESSION_LEVEL_S` is derived, not picked: 2·√2 (`stats.DIFF_2SIGMA_K`, the lap
     step's and the sector step's own factor) × the sd of ONE session's corner-typical bias that
-    `studio/dev/probes/focus_cross_session.py` measures at GPS noise 2.5. That σ is published in
-    docs/ACCURACY.md with the step; the probe prints the step it measures beside the app's and
-    measures at the noise the constant's comment names."""
+    `studio/dev/probes/focus_cross_session.py` measures over 40 days at the GPS noise whose per-lap
+    σ is recording B's, the middle of the three docs/ACCURACY.md measures against official timing.
+    That page publishes σ, its seed-set range, B's level and what is left at A's; the probe checks
+    its pooled σ and step against the app's constants at that same noise."""
     import math
     import re
 
     from studio import library, stats
     assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
-    assert F.CROSS_SESSION_LEVEL_S == round(stats.DIFF_2SIGMA_K * F.CORNER_DAY_SIGMA_S, 2) == 0.08
+    assert F.CROSS_SESSION_LEVEL_S == round(stats.DIFF_2SIGMA_K * F.CORNER_DAY_SIGMA_S, 2) == 0.10
     # wider than the timing step, so the timing step is never the one a verdict reads
     assert F.level_step() == F.CROSS_SESSION_LEVEL_S > library.PB_PRECISION_S
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "docs", "ACCURACY.md"), encoding="utf-8") as f:
         accuracy = " ".join(f.read().split())
-    m = re.search(r"at GPS noise ([0-9.]+), whose per-lap σ is ([0-9.]+) s, one session's corner "
-                  r"typical carries a bias of σ ([0-9.]+) s .*? closer than ([0-9.]+) s \(2√2σ\)",
+    m = re.search(r"On (\d+) synthetic race days .*? at GPS noise ([0-9.]+), whose per-lap σ is "
+                  r"([0-9.]+) s, recording ([ABC])'s, one session's corner typical carries a bias of "
+                  r"σ ([0-9.]+) s against truth \(([0-9.]+)–([0-9.]+) s over four seed sets of ten "
+                  r"days\), so two days' corner times closer than ([0-9.]+) s \(2√2σ\) read \"no "
+                  r"change you can act on\"\. At recording A's noise the same rule gives ([0-9.]+) s",
                   accuracy)
     assert m, "docs/ACCURACY.md no longer publishes the cross-session step"
-    assert float(m.group(3)) == F.CORNER_DAY_SIGMA_S, m.groups()
-    assert float(m.group(4)) == F.CROSS_SESSION_LEVEL_S, m.groups()
-    # …measured at a per-lap σ inside the band the same page publishes against official timing
-    assert 0.025 <= float(m.group(2)) <= 0.087, m.groups()
+    days, noise, lap, rec, sigma, lo, hi, step, at_a = m.groups()
+    assert int(days) >= 40 and rec == "B", m.groups()
+    assert float(sigma) == F.CORNER_DAY_SIGMA_S and float(lo) <= float(sigma) <= float(hi)
+    assert float(step) == F.CROSS_SESSION_LEVEL_S, m.groups()
+    assert float(at_a) > F.CROSS_SESSION_LEVEL_S, m.groups()
+    # the per-lap σ it was measured at IS the probe's measured reference value, and that is B's
     with open(os.path.join(root, "studio", "dev", "probes", "focus_cross_session.py"),
               encoding="utf-8") as f:
         probe = f.read()
-    assert re.search(rf"^REALISTIC_NOISE = {re.escape(m.group(1))}$", probe, re.M), m.group(1)
+    ref_lap = float(re.search(r"^REFERENCE_LAP_SIGMA_S = ([0-9.]+)$", probe, re.M).group(1))
+    assert float(lap) == round(ref_lap, 3), (lap, ref_lap)
+    b_row = re.search(r"\| \*\*B\*\* — [^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\| \*\*([0-9.]+) s\*\* \|",
+                      accuracy)
+    assert b_row and round(float(b_row.group(1)), 3) == float(lap), (b_row, lap)
+    assert re.search(rf"^REFERENCE_NOISE = {re.escape(noise)}$", probe, re.M), noise
     assert "from studio.stats import DIFF_2SIGMA_K" in probe
-    assert '"step": round(DIFF_2SIGMA_K * sigma_one, 2)' in probe
-    assert 'out["step"] == focus.CROSS_SESSION_LEVEL_S' in probe
+    assert '"app_sigma_is_this_sigma"' in probe and "round(sigma, 4) == focus.CORNER_DAY_SIGMA_S" \
+        in probe
+    assert 'rule == focus.CROSS_SESSION_LEVEL_S' in probe
     print(f"ok cross-session step: 2√2 × {F.CORNER_DAY_SIGMA_S} s = {F.CROSS_SESSION_LEVEL_S} s")
 
 
+def test_the_probe_re_measures_sigma_near_the_constant_on_a_small_seed_set():
+    """The probe's own σ measurement (`focus_cross_session.measure_sigma`), on its four-day check
+    set (CHECK_SEEDS) at the reference noise — about 15 s: the corner-day σ lands within 25 % of
+    `focus.CORNER_DAY_SIGMA_S` (four days scatter; ten-day sets ran 0.0342-0.0361 s around the
+    pooled 0.0351 s) and the per-lap σ within 10 % of REFERENCE_LAP_SIGMA_S, recording B's. A
+    constant typed by hand, or a probe whose σ drifted, fails here rather than in a doc."""
+    import shutil
+    import tempfile
+
+    from studio import app_support, demo, library, logsetup, marks, prefs, sidecar, track_db
+    # The probe jails the app-support seams and stubs the sidecar write on import; this module has
+    # its own jail (`_TMP`), so every seam it touches is handed back afterwards.
+    seams = (demo, F, library, logsetup, marks, prefs, session_record, track_db)
+    keep = (sidecar.save, [m._app_support_dir for m in seams],
+            os.environ.get(app_support.DIR_ENV))
+    from studio.dev.probes import focus_cross_session as probe
+    work = tempfile.mkdtemp(prefix="focus_sigma_check_")
+    try:
+        sigma, lap = probe.measure_sigma(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        sidecar.save = keep[0]
+        for m, seam in zip(seams, keep[1], strict=True):
+            m._app_support_dir = seam
+        if keep[2] is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = keep[2]
+    assert abs(sigma / F.CORNER_DAY_SIGMA_S - 1) <= 0.25, (sigma, F.CORNER_DAY_SIGMA_S)
+    assert abs(lap / probe.REFERENCE_LAP_SIGMA_S - 1) <= 0.10, (lap, probe.REFERENCE_LAP_SIGMA_S)
+    print(f"ok probe σ check: {sigma:.4f} s (constant {F.CORNER_DAY_SIGMA_S}), lap σ {lap:.4f} s")
+
+
 def test_an_unchanged_day_between_the_old_bar_and_the_step_is_no_change():
-    """The probe's unchanged pairs at GPS noise 2.5 (one driver, nothing changed): the bar before
-    called 22 of 315 corners "faster"/"slower", every one 0.07-0.11 s on a true change of
-    0.00-0.05 s. Two of them, C5 at +0.072 s and C6 at −0.077 s, with spreads whose half sits under
-    that: a claim on main, level now, and the line keeps both days' figures and says why once.
-    (Seven of the 22 are under the step; the 15 at 0.08-0.11 s still read as calls, the 2σ rule's
-    share of 315.)"""
+    """The probe's unchanged pairs (one driver, nothing changed): at recording B's noise the bar
+    before called 206 of 1260 corners "faster"/"slower", and 83 still are with the step. Three
+    under the step, with spreads whose half sits under them, at +0.072, −0.077 and +0.095 s: a
+    claim on main, level now, and the line keeps both days' figures and says why once."""
     alike = _records(("GX0060", _record()), ("GX0062", _record()))
-    for then, now, iqr in ((3.452, 3.524, 0.09), (2.861, 2.784, 0.06)):
+    for then, now, iqr in ((3.452, 3.524, 0.09), (2.861, 2.784, 0.06), (3.105, 3.200, 0.08)):
         o = F.verdict([_item(median=then, iqr=iqr)], _now(), [_sample(now, iqr=iqr)],
                       alike).outcomes[0]
         assert abs(o.delta) >= _spread_half(iqr) and abs(o.delta) >= 0.07, o
         assert o.kind == F.OUTCOME_UNCHANGED, (then, now, o.kind)
         text = F.outcome_sentence(o)
-        assert text == (f"C4 — no change you can act on: under 0.08 s apart, within what two "
+        assert text == (f"C4 — no change you can act on: under 0.10 s apart, within what two "
                         f"recordings of the same driving differ by ({then:.3f} → {now:.3f} s, "
                         f"38 → 65 laps)."), text
         assert text.count("recordings") == 1 and "faster" not in text and "slower" not in text

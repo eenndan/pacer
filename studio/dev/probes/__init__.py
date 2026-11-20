@@ -242,9 +242,10 @@ why the held gap of that compare is shown as timed, never coloured (`PassAnchor.
 
 `focus_cross_session` measures how far two synthetic race days of the same driving disagree on a
 corner's typical time, the step the focus list's verdict must clear across two sessions
-(`focus.CROSS_SESSION_LEVEL_S`, 2√2 × one session's corner-bias σ at GPS noise 2.5), and the
-false calls and planted gains found under the bar before it and with it. Its every-corner
-refusal is `studio/docs/refused-2026-09.md` §38.
+(`focus.CROSS_SESSION_LEVEL_S`, 2√2 × one session's corner-bias σ at recording B's per-lap
+noise), over five noise levels and four seed sets, and the false calls and planted gains found
+under the bar before it and with it. Its every-corner refusal is
+`studio/docs/refused-2026-09.md` §38.
 
     pixi run python -m studio.dev.probes.focus_cross_session
 """
