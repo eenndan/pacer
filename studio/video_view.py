@@ -1901,9 +1901,9 @@ class VideoView(QWidget):
         self.request_video_focus()
 
     def _on_video_double_clicked(self):
-        """Double-click on the video = the same intent as ⤢, and available exactly when it is."""
-        if self.fullscreen_btn.isEnabled():
-            self.videoFocusRequested.emit()
+        """Double-click on the video (either pane) = the same intent as ⤢ and F, through the same
+        door: refused while comparing, it says why as F does instead of nothing."""
+        self.request_video_focus()
 
     def set_video_focus_visual(self, on: bool):
         """Reflect CentralView's video-focus state onto the ⤢ button WITHOUT re-emitting
@@ -2006,6 +2006,8 @@ class VideoView(QWidget):
             self.secondary = PlayerPane(sec_source)
             self._secondary_source = sec_source
             self.secondary.set_muted(True)  # secondary audio ALWAYS muted (telemetry tool)
+            # A double-click on pane B is the ⤢ intent too: refused while comparing, said why.
+            self.secondary.videoDoubleClicked.connect(self._on_video_double_clicked)
             # IMPORTANT: do NOT connect the secondary's positionChanged to _on_pane_position —
             # it must NEVER reach the app's telemetry sync. It is video-only.
             # Seed the fresh secondary with the ACTIVE g-meter visibility so toggling the g-meter
