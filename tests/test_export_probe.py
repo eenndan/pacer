@@ -60,8 +60,14 @@ from studio import export_video as ev  # noqa: E402
 from studio.export_controller import ExportController  # noqa: E402
 
 _REAL_PROBE = ev._prores_session_probe
-_REAL_H264 = (ev._h264_session_probe, ev._H264)       # settled by test_export_gates on import
+_REAL_H264 = (ev._h264_session_probe, ev._H264)
 _REAL_LISTED = ev.videotoolbox_encoder_available
+_PRORES_WAIT, _H264_WAIT = ev._PRORES.wait_s, ev._H264.wait_s
+# THE ONE FILE THAT DRIVES THE REAL H.264 MACHINERY. Every other test runs with the suite's stub
+# (`ev.H264_PROBE_ENV`, set on every ordinary CTest registration and by conftest.py): settled, no
+# ffmpeg. Here the stub is the baseline too, so a test that does not ask for the probe meets the
+# same answer by hand as under CTest, and `_fresh(h264=...)` lifts it for the tests that do.
+os.environ[ev.H264_PROBE_ENV] = "software"
 
 
 class _FakeProbe:
@@ -88,13 +94,13 @@ class _FakeProbe:
 
 def _fresh(probe, h264=None) -> None:
     """A process that has asked nothing yet, whose ProRes probe is `probe`. The H.264 probe is
-    asked afresh too when `h264` is given (its probe), else it keeps the answer test_export_gates
-    settled on import."""
+    asked afresh too, its stub lifted, when `h264` is given (its probe); else it stays stubbed."""
     _settle_warmup()
-    ev._PRORES = ev._EncoderProbe()
+    ev._PRORES = ev._EncoderProbe(_PRORES_WAIT)
     ev._prores_session_probe = probe
     if h264 is not None:
-        ev._H264 = ev._EncoderProbe()
+        os.environ.pop(ev.H264_PROBE_ENV, None)
+        ev._H264 = ev._EncoderProbe(_H264_WAIT)
         ev._h264_session_probe = h264
 
 
@@ -108,9 +114,10 @@ def _settle_warmup() -> None:
 def _restore() -> None:
     _settle_warmup()
     ev._prores_session_probe = _REAL_PROBE
-    ev._PRORES = ev._EncoderProbe()
+    ev._PRORES = ev._EncoderProbe(_PRORES_WAIT)
     ev._h264_session_probe, ev._H264 = _REAL_H264
     ev.videotoolbox_encoder_available = _REAL_LISTED
+    os.environ[ev.H264_PROBE_ENV] = "software"
 
 
 def _warmups() -> list[threading.Thread]:
@@ -575,6 +582,51 @@ def test_an_export_started_before_the_h264_probe_answers_waits_for_its_answer():
     print("ok: an export started early waits for the H.264 probe and takes its answer")
 
 
+def test_a_render_never_waits_past_the_bound_on_a_hung_or_broken_probe():
+    """A probe that hangs past its own timeouts (a child that does not die) or raises must not
+    hang a render: its encoder resolves within the probe's `wait_s` to software, for now and not
+    kept, whether a warm-up started the probe or the render had to start it itself; no second
+    probe starts beside the hung one; and a probe that raised is asked again. The bound here is
+    shortened to 0.4 s (in the app: H.264 55 s, ProRes 85 s — the probes' own timeouts + 5 s)."""
+    cfg = ev.OverlayConfig()                        # "auto": what a render resolves (output_codec)
+    for started_by in ("warm-up", "render"):
+        gate = threading.Event()
+        hung = _FakeProbe(True, gate=gate)
+        _fresh(_FakeProbe(True), h264=hung)
+        ev._H264.wait_s = 0.4
+        try:
+            if started_by == "warm-up":
+                ev.warm_export_probes(None)
+            t0 = time.monotonic()
+            got = ev.output_codec(cfg)
+            took = time.monotonic() - t0
+            assert got == ev.SW_H264, (started_by, got)
+            assert took < 0.4 + 0.5, f"{started_by}: the render waited {took:.2f} s"
+            again = ev.resolve_encoder("auto")
+            assert again == ev.SW_H264 and hung.calls == 1, (again, hung.calls)
+            assert ev.videotoolbox_state() == "probing", "a wedged probe was reported settled"
+            gate.set()                              # it ends after all: its answer is kept
+            deadline = time.monotonic() + 5
+            while ev.videotoolbox_state() == "probing" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ev.resolve_encoder("auto") == ev.VT_H264 and hung.calls == 1
+        finally:
+            gate.set()
+            _restore()
+
+    def broken():
+        raise OSError("planted: ffmpeg could not be started")
+    _fresh(_FakeProbe(True), h264=broken)
+    try:
+        assert ev.output_codec(cfg) == ev.SW_H264
+        assert ev.videotoolbox_state() == "missed", ev.videotoolbox_state()
+        ev._h264_session_probe = _FakeProbe(True)
+        assert ev.resolve_encoder("auto") == ev.VT_H264, "a probe that raised was kept"
+    finally:
+        _restore()
+    print("ok: a hung or raising H.264 probe costs a render at most its bound, then software")
+
+
 def test_the_h264_encoder_chosen_is_the_one_it_always_was():
     """The probe's own logic, unchanged, through ffmpeg faked: VideoToolbox when it is listed AND
     its 64x64 session opens; libx264 when it is unlisted, fails or times out. Every answer is kept
@@ -764,6 +816,7 @@ def _run_all():
              test_the_dialog_never_waits_and_says_what_it_knows_in_each_state,
              test_the_first_export_click_opens_at_once_and_the_hint_waits_for_the_h264_probe,
              test_an_export_started_before_the_h264_probe_answers_waits_for_its_answer,
+             test_a_render_never_waits_past_the_bound_on_a_hung_or_broken_probe,
              test_the_h264_encoder_chosen_is_the_one_it_always_was,
              test_the_warm_up_asks_the_frame_then_h264_then_prores,
              test_a_frame_that_cannot_be_read_leaves_only_the_encoder_to_measure,

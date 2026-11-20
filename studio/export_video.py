@@ -191,7 +191,21 @@ def videotoolbox_usable() -> bool:
     run (a fixed machine capability), one probe in flight: a caller that arrives while the dialog's
     warm-up probes (`warm_export_probes`) waits for it and takes its answer. Two ffmpeg runs
     (~0.5 s), so the UI thread never calls it: it reads `videotoolbox_state`."""
+    if _h264_probe_stubbed():
+        return False
     return _ask_probe(_H264, _h264_session_probe)
+
+
+#: The test suite's seam (set on every ordinary CTest registration and by tests/conftest.py):
+#: "software" answers the H.264 probe as a Mac whose VideoToolbox opens no H.264 session does —
+#: settled, False — without running ffmpeg, so a test's encoder is the same on every machine and
+#: no VideoToolbox session (which a CI VM can wedge) is opened behind it. The `videotoolbox.*`
+#: registrations do not set it, and tests/test_export_probe.py clears it to drive the real probe.
+H264_PROBE_ENV = "PACER_H264_PROBE"
+
+
+def _h264_probe_stubbed() -> bool:
+    return os.environ.get(H264_PROBE_ENV) == "software"
 
 
 def resolve_encoder(choice: str) -> str:
@@ -1756,35 +1770,75 @@ def _alpha_round_trip_unguarded(encoder: str) -> bool | None:
 # that does not open is kept as False for the run, as it always was.
 
 
+#
+# A WAITER IS BOUNDED, AND SO IS A PROBE THAT RAISES. A caller that finds a probe in flight waits
+# for it at most `wait_s`: the probe's own ffmpeg timeouts end to end, plus 5 s to kill and reap
+# (H.264: the listing's 20 s + the encode's 30 s; ProRes: 20 + 30 + the decode's 30). Past that the
+# probe is wedged beyond anything its timeouts can end (a child that does not die), and its answer
+# could only have been the timeout's False: the waiter takes False — software — for now, not kept.
+# A caller with no probe in flight never waits on nothing: it runs the probe itself. A probe that
+# RAISES is a miss (False for now, asked again), never an exception out of a render.
+
+
 class _EncoderProbe:
     """One encoder probe's state for this process (tests swap in a fresh one)."""
 
-    def __init__(self) -> None:
+    def __init__(self, wait_s: float) -> None:
         self.lock = threading.Lock()     # held for the length of one probe
         self.answer: bool | None = None  # settled for the rest of the process
         self.last = False                # what the latest probe said, for the callers who waited
         self.probes = 0                  # probes finished
+        self.wait_s = wait_s             # the longest a caller waits for a probe in flight
 
 
-_PRORES = _EncoderProbe()
-_H264 = _EncoderProbe()
+_PROBE_REAP_S = 5.0
+_PRORES = _EncoderProbe(wait_s=20 + 30 + 30 + _PROBE_REAP_S)
+_H264 = _EncoderProbe(wait_s=20 + 30 + _PROBE_REAP_S)
 
 
 def _ask_probe(probe: _EncoderProbe, run) -> bool:
     """`probe`'s answer: settled, or the one a probe running now gives, or `run()`'s (True /
-    False kept; None = a miss, answered False and asked again next time)."""
+    False kept; None = a miss, answered False and asked again next time). Never waits longer than
+    `probe.wait_s` (the block above)."""
     seen = probe.probes
-    with probe.lock:
-        if probe.answer is not None:
-            return probe.answer
-        if probe.probes != seen:         # a probe finished while we waited for it: its answer
-            return probe.last
-        outcome = run()
-        probe.probes += 1
-        probe.last = bool(outcome)
-        if outcome is not None:
-            probe.answer = outcome
+    deadline = time.monotonic() + probe.wait_s
+    if not probe.lock.acquire(timeout=probe.wait_s):
+        return _probe_overdue(probe)
+    if probe.answer is not None:
+        probe.lock.release()
+        return probe.answer
+    if probe.probes != seen:             # a probe finished while we waited for it: its answer
+        probe.lock.release()
         return probe.last
+
+    def probing() -> None:
+        # Holds the lock until the probe ends, however long that is: no second probe starts
+        # beside a wedged one. The caller below waits for it only until its deadline.
+        try:
+            try:
+                outcome = run()
+            except Exception:  # noqa: BLE001 — a probe that breaks is a miss, never a failed render
+                _log.warning("an encoder probe failed; using software for now", exc_info=True)
+                outcome = None
+            probe.last = bool(outcome)
+            if outcome is not None:
+                probe.answer = outcome
+            probe.probes += 1
+        finally:
+            probe.lock.release()
+    worker = threading.Thread(target=probing, daemon=True, name="export-encoder-probe")
+    worker.start()
+    worker.join(max(0.0, deadline - time.monotonic()))
+    if worker.is_alive():
+        return _probe_overdue(probe)
+    return probe.last
+
+
+def _probe_overdue(probe: _EncoderProbe) -> bool:
+    """What a caller takes from a probe still running at its `wait_s`: software, for now."""
+    _log.warning("an encoder probe has been running for over %.0f s; using software for now",
+                 probe.wait_s)
+    return probe.answer if probe.answer is not None else False
 
 
 def _probe_state(probe: _EncoderProbe) -> str:
@@ -1800,6 +1854,8 @@ def _probe_state(probe: _EncoderProbe) -> str:
 
 def videotoolbox_state() -> str:
     """`_probe_state` of the H.264 VideoToolbox probe (`videotoolbox_usable`); never waits."""
+    if _h264_probe_stubbed():
+        return "no"
     return _probe_state(_H264)
 
 
@@ -2109,7 +2165,8 @@ def export_probes_ready(src_path: str | None) -> bool:
     key = _video_size_key(src_path) if src_path else None
     warming = _WARM_THREAD is not None and _WARM_THREAD.is_alive()
     return (not warming
-            and all(_probe_state(p) in ("yes", "no", "missed") for p in (_H264, _PRORES))
+            and all(s in ("yes", "no", "missed")
+                    for s in (videotoolbox_state(), prores_videotoolbox_state()))
             and (key is None or key in _VIDEO_SIZE_CACHE))
 
 
@@ -2123,7 +2180,7 @@ def warm_export_probes(src_path: str | None) -> threading.Thread | None:
     with _WARM_LOCK:
         if _WARM_THREAD is not None and _WARM_THREAD.is_alive() and _WARM_SRC == src_path:
             return _WARM_THREAD
-        if (all(_probe_state(p) in ("yes", "no") for p in (_H264, _PRORES))
+        if (all(s in ("yes", "no") for s in (videotoolbox_state(), prores_videotoolbox_state()))
                 and (key is None or key in _VIDEO_SIZE_CACHE)):
             return None
 
