@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QScrollBar,
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
@@ -3519,6 +3520,12 @@ class _GroupRuleDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
         paint_group_rule(painter, option, index)
 
+    def updateEditorGeometry(self, editor, option, index):
+        # The ▶ at its cell's own top-left, not at the text rect (the cell padding put it 8 px right
+        # and 4 px low, flush with the edge): its column's spare SPACE_S is then the lane at the
+        # right edge where the table's overlaid scrollbar runs (QuickestPassTable._place_bar).
+        editor.setGeometry(option.rect)
+
 
 class _PassStripDelegate(QStyledItemDelegate):
     """Paints the Quickest passes strip (see QUICKEST_STRIP_COL / stats.pass_strip) and nothing
@@ -3656,6 +3663,20 @@ class QuickestPassTable(QWidget):
         self.table.cellClicked.connect(self._on_cell_clicked)
         self.table.installEventFilter(self)
         self.table.viewport().installEventFilter(self)
+        # The rows' scrollbar is OVERLAID on the ▶ column's right-edge lane instead of taking a
+        # column of its own: a laid-out bar takes its 12 px from the viewport, and with sector rows
+        # at 1280×800 docked that is the corners' Every lap strip (75 → 63 px, under STRIP_MIN_PX).
+        # Hidden it was no answer either (0.18.0 QA: the last sector row cut, nothing saying there
+        # was more). So the table's own bar stays off — it still scrolls by wheel, trackpad, ↑/↓
+        # and a played row — and this one, in the theme's scrollbar look, mirrors it whenever
+        # the rows overflow, and only then.
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        own = self.table.verticalScrollBar()
+        self.rows_bar = QScrollBar(Qt.Vertical, self.table)
+        self.rows_bar.setVisible(False)
+        own.rangeChanged.connect(self._sync_bar)
+        own.valueChanged.connect(self.rows_bar.setValue)
+        self.rows_bar.valueChanged.connect(own.setValue)
         self._num_font = theme.mono_font(theme.TABLE)
         self.empty = EmptyState("")
         self.empty.setVisible(False)
@@ -3676,9 +3697,33 @@ class QuickestPassTable(QWidget):
         if table is not None and obj is table.viewport():
             if event.type() == QEvent.Resize:
                 self._fit_strip()
+                self._place_bar()
+            elif event.type() == QEvent.Move:
+                self._place_bar()
             elif event.type() == QEvent.ToolTip and self._strip_tip(event):
                 return True
         return super().eventFilter(obj, event)
+
+    def _sync_bar(self, low: int, high: int) -> None:
+        """The overlaid bar takes the table's own range and page, and shows only while there is
+        more to reach."""
+        own = self.table.verticalScrollBar()
+        self.rows_bar.setPageStep(own.pageStep())
+        self.rows_bar.setSingleStep(own.singleStep())
+        self.rows_bar.setRange(low, high)
+        self.rows_bar.setValue(own.value())
+        self._place_bar()
+        self.rows_bar.setVisible(high > low)
+
+    def _place_bar(self) -> None:
+        """The bar over the viewport's right edge, beside the ▶ (at its cell's left, see
+        _GroupRuleDelegate), on the table's frame: its transparent track spans the ▶ column's
+        spare SPACE_S and the frame, so the grip (inset SPACE_XXS) paints in that lane, clear of
+        the button."""
+        port = self.table.viewport().geometry()
+        w = self.rows_bar.sizeHint().width()
+        self.rows_bar.setGeometry(QRect(self.table.width() - w, port.top(), w, port.height()))
+        self.rows_bar.raise_()
 
     def _strip_tip(self, event) -> bool:
         """A hover on a strip names the lap and time of the dot nearest the pointer."""
@@ -3937,12 +3982,6 @@ class QuickestPassTable(QWidget):
         # A re-segment can drop the corner or change its level laps: keep k inside the new order.
         self._cycle = (None if row < 0 else
                        (self._cycle[0], self._cycle[1] % len(passes[row].play_order() or (0,))))
-        # With sector rows the table can outgrow a docked panel (3 lines at 1280×800); a scrollbar
-        # there would take its 12 px from the corners' Every lap strip (75 → 63 px, under
-        # STRIP_MIN_PX), so it stays off: the rows still scroll by wheel, trackpad and ↑/↓, the
-        # cut-off last row shows there is more, and a played or walked-to row scrolls into view.
-        self.table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarAlwaysOff if self.sectors is not None else Qt.ScrollBarAsNeeded)
         self.table.setVisible(bool(passes))
         self.empty.setVisible(not passes)
         self.not_counted.setVisible(False)

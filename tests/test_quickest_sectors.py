@@ -33,7 +33,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox, QScrollBar  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -545,6 +545,7 @@ def test_a_sector_under_the_fold_is_scrolled_into_view_when_it_plays():
         q = view.corners_page.quickest
         t = q.table
         # 4 lines at 1280×800 docked overflow; no bar takes the strip's width, the rows scroll
+        # (the overlaid bar says so: test_every_row_is_reachable_and_a_bar_says_when_some_are_below)
         assert t.verticalScrollBar().maximum() > 0 and not t.verticalScrollBar().isVisible()
         t.scrollToTop()
         last = t.rowCount() - 1
@@ -557,6 +558,60 @@ def test_a_sector_under_the_fold_is_scrolled_into_view_when_it_plays():
         assert btn.isVisible() and port.contains(btn.geometry().center())
     finally:
         _close(win)
+        prefs.set_corners_view("lap")
+
+
+def _shown_vertical_bars(table):
+    """Every vertical scrollbar the driver can SEE on the table: its own, or one laid over it."""
+    return [b for b in table.findChildren(QScrollBar)
+            if b.orientation() == Qt.Vertical and b.isVisible()]
+
+
+def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
+    """0.18.0 QA: with the table's bar hidden for the strip (#631), 3 lines at 1280×800 docked cut
+    the last sector row to a sliver with nothing saying there was more. Now, at both sizes and
+    0/2/3/4 lines: a scrollbar shows exactly when the rows overflow, it takes no width from the
+    columns (the strip and the words keep the widths they have with no line), its grip runs clear
+    of every ▶, and dragging it to the end brings the last row and its ▶ fully into view."""
+    prefs.set_corners_view("quickest")
+    try:
+        for size in ((1280, 800), (1440, 900)):
+            base = None
+            for n in (0, 2, 3, 4):
+                win = _window(n, size)
+                try:
+                    t = win.view.corners_page.quickest.table
+                    over = t.verticalScrollBar().maximum() > 0
+                    bars = _shown_vertical_bars(t)
+                    print("rows overflow / bars shown", size, n, over, len(bars))
+                    assert len(bars) == int(over), (size, n, over, bars)
+                    cols = (t.viewport().width(), _strip_state(win), t.columnWidth(3))
+                    base = base or cols
+                    assert cols == base, (size, n, cols, base)
+                    if not over:
+                        continue
+                    bar = bars[0]
+                    grip_x = t.viewport().mapFrom(t, bar.geometry().topLeft()).x() + \
+                        theme.SPACE_XXS
+                    for r in range(t.rowCount()):
+                        btn = t.cellWidget(r, QUICKEST_PLAY_COL)
+                        assert btn.geometry().right() < grip_x, (size, n, r, btn.geometry())
+                    assert bar.geometry().right() < t.width()
+                    bar.setValue(bar.maximum())
+                    _settle()
+                    last = t.rowCount() - 1
+                    port = t.viewport().rect()
+                    assert port.contains(t.visualRect(t.model().index(last, 0))), (size, n)
+                    btn = t.cellWidget(last, QUICKEST_PLAY_COL)
+                    assert port.contains(btn.geometry()), (size, n, btn.geometry(), port)
+                    t.scrollToTop()                   # ...and the bar follows the table back
+                    _settle()
+                    assert bar.value() == 0
+                finally:
+                    _close(win)
+            if size == (1280, 800):
+                assert base[1] == (False, 75), "the demo's corner strip at 1280×800: retarget"
+    finally:
         prefs.set_corners_view("lap")
 
 
