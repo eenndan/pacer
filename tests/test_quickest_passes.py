@@ -115,7 +115,7 @@ def _demo_path() -> str:
         from studio.dev import make_demo as md
         _DEMO["dir"] = tempfile.TemporaryDirectory(prefix="quickest_demo_")
         _DEMO["path"] = os.path.join(_DEMO["dir"].name, "GX019000.MP4")
-        md.make(_DEMO["path"], render=False)
+        _DEMO["truth"] = md.make(_DEMO["path"], render=False)
     return _DEMO["path"]
 
 
@@ -1818,7 +1818,7 @@ def _crowded(lay):
     return out
 
 
-def _sixty_lap_passes(seed=7):
+def _sixty_lap_passes(seed=7, laps=60):
     """A synthetic 60-lap session's Quickest passes (the owner's real sessions run 38-65 laps):
     seven corners, each a tight cluster (σ 0.012-0.08 s) round its own typical."""
     import numpy as np
@@ -1826,7 +1826,7 @@ def _sixty_lap_passes(seed=7):
     base = [3.0, 2.6, 2.3, 3.0, 3.5, 2.8, 3.4]
     sig = [0.012, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08]
     cols = [[b + abs(rng.normal(0, s)) for b, s in zip(base, sig, strict=True)]
-            for _ in range(60)]
+            for _ in range(laps)]
     return stats.quickest_passes(_grid(cols))
 
 
@@ -1890,6 +1890,328 @@ def test_every_dot_has_a_place_or_its_pile_is_said():
                 piled = strip_geometry(stats.pass_strip(p, many.level_s), cell).piled
                 assert ("drawn on top" in said[r]) == bool(piled), (r, piled, said[r])
                 assert t.item(r, QUICKEST_STRIP_COL).data(Qt.AccessibleTextRole) == said[r]
+        finally:
+            win.session.quickest_passes = saved
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+# ------------------------------------------------------------------ the strip's layout, once
+# The strip's layout was recomputed on every paint of every cell, and its dot search was O(laps²):
+# ~80 ms per repaint of the table at 70 laps, a splitter drag at ~5 fps. It is now laid out once
+# per strip and cell size (the delegate's cache, cell-local) and its search looks only at the dots
+# within reach on x. Neither may move a pixel.
+
+
+def _flat(lay):
+    """A StripLayout as exact floats (QPointF/QRectF `==` is fuzzy)."""
+    return (lay.band.getRect(), lay.typical, lay.r, sorted(lay.piles.items()),
+            [(m.lap_id, c.x(), c.y()) for m, c in lay.marks])
+
+
+def _full_search_strip_geometry(strip, rect):
+    """`strip_geometry` as it was before the windowed search: every candidate place tested
+    against EVERY dot already placed. The reference the windowed search must equal exactly."""
+    import math
+
+    from PySide6.QtCore import QPointF, QRectF
+
+    from studio import lap_table as LT
+    pad = theme.SPACE_XS + LT.STRIP_DOT_R + LT.STRIP_RING_PX
+    gutter = 2 * LT.STRIP_DOT_R + theme.SPACE_XS if any(m.behind for m in strip.marks) else 0.0
+    left, width = rect.left() + pad, max(rect.width() - 2 * pad - gutter, 1.0)
+    inset = theme.SPACE_XS
+    band = QRectF(left, rect.top() + inset, strip.band_x * width, rect.height() - 2 * inset)
+    typical = None if strip.typical_x is None else left + strip.typical_x * width
+    mid = rect.center().y()
+    order = sorted(range(len(strip.marks)), key=lambda j: (strip.marks[j].x, j))
+    for r, stack in ((LT.STRIP_DOT_R, LT.STRIP_STACK), (LT.STRIP_PILE_R, LT.STRIP_PILE_STACK)):
+        centres, piles = {}, {}
+        for i in order:
+            m = strip.marks[i]
+            x = left + width + gutter if m.behind else left + m.x * width
+            if not m.behind and not m.level:
+                x = max(x, band.right() + r)
+
+            def clear(lv, x=x, r=r, centres=centres):
+                y = mid + lv * 2 * r
+                return min((math.hypot(c.x() - x, c.y() - y) for c in centres.values()),
+                           default=math.inf)
+            lv = next((lv for lv in stack if clear(lv) >= 2 * r - 1e-9), None)
+            if lv is None:
+                lv = max(stack, key=clear)
+                piles[i] = ()
+            centres[i] = QPointF(x, mid + lv * 2 * r)
+        lay = LT.StripLayout(band, typical, [(m, centres[i]) for i, m in enumerate(strip.marks)],
+                             r, piles)
+        if not piles:
+            break
+    return LT.StripLayout(lay.band, lay.typical, lay.marks, lay.r,
+                          {strip.marks[i].lap_id: lay.pile_at(lay.marks[i][1],
+                                                              strip.marks[i].lap_id)
+                           for i in lay.piles})
+
+
+def test_the_windowed_dot_search_places_every_dot_where_the_full_search_did():
+    """Bit for bit, piles included: the demo, and synthetic 60- and 70-lap sessions (which pile at
+    the narrow widths), at the widths the strip takes, at the cell's origin and off it."""
+    from PySide6.QtCore import QRectF
+
+    from studio.lap_table import STRIP_MAX_PX, STRIP_MIN_PX, strip_geometry
+    sessions = [_demo_session().quickest_passes(), _sixty_lap_passes(),
+                _sixty_lap_passes(seed=3, laps=70)]
+    piled = 0
+    for qps in sessions:
+        for p in qps.passes:
+            s = stats.pass_strip(p, qps.level_s)
+            for w in (STRIP_MIN_PX, 75, 76, 92, 93, 131, STRIP_MAX_PX):
+                for rect in (QRectF(0, 0, w, theme.GRID_ROW_H),
+                             QRectF(517, 233, w - 1, theme.GRID_ROW_H - 1)):
+                    got = strip_geometry(s, rect)
+                    assert _flat(got) == _flat(_full_search_strip_geometry(s, rect)), (p.cid, w)
+                    piled += got.piled
+    assert piled, "the synthetic sessions reach the pile path"
+
+
+def _strip_cache_is_fresh(q):
+    """Every layout the strip delegate holds is of a strip a row shows NOW and equals a fresh
+    `strip_geometry` at its size, and each row's painted size is among them."""
+    from PySide6.QtCore import QRectF
+
+    from studio.lap_table import QUICKEST_STRIP_COL, STRIP_ROLE, strip_geometry
+    t, d = q.table, q.strip_delegate
+    strips = [data[0] for r in range(t.rowCount())
+              if (data := t.item(r, QUICKEST_STRIP_COL).data(STRIP_ROLE))]
+    assert strips
+    for s, sizes in d._layouts.values():
+        assert any(s is x for x in strips), "a layout of a strip no row shows any more"
+        for (w, h), lay in sizes.items():
+            assert _flat(lay) == _flat(strip_geometry(s, QRectF(0, 0, w, h))), (w, h)
+    grid = 1 if t.showGrid() else 0
+    painted = (t.columnWidth(QUICKEST_STRIP_COL) - grid, t.rowHeight(0) - grid)
+    for s in strips:
+        assert painted in d._layouts[id(s)][1], (painted, list(d._layouts[id(s)][1]))
+
+
+def _hover_strips(q):
+    """A hover over every strip cell (its tip uses the cached layout too); returns the tips."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QHelpEvent
+
+    from studio import lap_table
+    from studio.lap_table import QUICKEST_STRIP_COL
+    t, shown = q.table, []
+    saved = lap_table.QToolTip.showText
+    lap_table.QToolTip.showText = staticmethod(lambda _p, text, *_a: shown.append(text))
+    try:
+        for r in range(t.rowCount()):
+            rect = t.visualRect(t.model().index(r, QUICKEST_STRIP_COL))
+            pos = QPoint(rect.left() + 9, rect.center().y())
+            QApplication.sendEvent(t.viewport(), QHelpEvent(QHelpEvent.ToolTip, pos,
+                                                            t.viewport().mapToGlobal(pos)))
+    finally:
+        lap_table.QToolTip.showText = saved
+    return shown
+
+
+def test_an_unchanged_table_repaints_its_strips_without_laying_them_out_again():
+    """The hard gate: repaints and hovers of an unchanged table compute no layout; a new width
+    computes each row's once more, and what is held is always a fresh computation's equal."""
+    from studio.lap_table import QUICKEST_STRIP_COL
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900)
+        t, d = q.table, q.strip_delegate
+        assert not t.isColumnHidden(QUICKEST_STRIP_COL)
+        t.viewport().repaint()
+        _strip_cache_is_fresh(q)
+        laid, painted = d.layouts, d.paints
+        for _ in range(3):
+            t.viewport().repaint()
+        assert len(_hover_strips(q)) == t.rowCount() == 7
+        q._strip_words_at_width()
+        assert d.paints >= painted + 3 * 7, (painted, d.paints)
+        assert d.layouts == laid, f"an unchanged table laid out {d.layouts - laid} strips again"
+        # a narrower window narrows the strip: each row is laid out at the new width, once
+        wide = t.columnWidth(QUICKEST_STRIP_COL)
+        q = _strip_table(win, 1280, 800)
+        assert t.columnWidth(QUICKEST_STRIP_COL) != wide and not t.isColumnHidden(
+            QUICKEST_STRIP_COL)
+        t.viewport().repaint()
+        _strip_cache_is_fresh(q)
+        assert d.layouts > laid
+        laid = d.layouts
+        t.viewport().repaint()
+        _hover_strips(q)
+        assert d.layouts == laid
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_resegment_a_line_edit_and_a_reload_lay_the_strips_out_afresh():
+    """Every rebuild path drops the layouts of strips no row shows any more, and what each row
+    then paints is a fresh computation's equal."""
+    from studio.lap_table import QUICKEST_STRIP_COL, STRIP_ROLE
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900, maximised=True)
+        t, view, s = q.table, win.view, win.session
+        t.viewport().repaint()
+        _strip_cache_is_fresh(q)
+        before = t.item(2, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0]
+        # a re-segment (here: lap 12 left out of the counted laps, as an exclusion does)
+        orig = s.consistency_lap_ids
+        s.consistency_lap_ids = lambda orig=orig: [i for i in orig() if i != 12]
+        try:
+            view.rebuild_derived_views()
+            _settle()
+            assert t.item(2, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0] is not before
+            t.viewport().repaint()
+            _strip_cache_is_fresh(q)
+        finally:
+            s.consistency_lap_ids = orig
+        # a sector-line edit, through the map's own signal (its sidecar write stubbed), from
+        # three lines mid-straight (test_quickest_sectors' placement)
+        truth = _DEMO["truth"]
+        start, _ = s.timing_lines_latlon()
+        assert s.apply_timing_lines_latlon(start, [truth.line_at(sum(truth.circuit.straights[j]) / 2)
+                                                   for j in (1, 3, 5)], confirmed=True)
+        view.rebuild_derived_views()
+        _settle()
+        view._save_sidecar = lambda: None
+        view.map.timing_lines_changed.emit(s.start_line, list(s.sector_lines)[:2])
+        _settle()
+        assert q.sectors is not None and t.rowCount() == 10
+        t.viewport().repaint()
+        _strip_cache_is_fresh(q)
+        # a reload: a new view, a new table, its own layouts
+        old = win.view
+        win._load(list(win._paths))
+        deadline = time.time() + 60
+        while (win.view is old or win.view is None) and time.time() < deadline:
+            _settle(0.02)
+        q = _strip_table(win, 1440, 900, maximised=True)
+        assert q.strip_delegate is not old.corners_page.quickest.strip_delegate
+        q.table.viewport().repaint()
+        _strip_cache_is_fresh(q)
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def _render_strip(delegate, table, row, at):
+    """Paint strip cell `row` through `delegate` at `at` (a QPoint) with the table's own cell
+    size, into a transparent image; returns the cell's pixels."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from studio.lap_table import QUICKEST_STRIP_COL
+    grid = 1 if table.showGrid() else 0
+    w = table.columnWidth(QUICKEST_STRIP_COL) - grid
+    h = table.rowHeight(row) - grid
+    img = QImage(at.x() + w, at.y() + h, QImage.Format_ARGB32)
+    img.fill(0)
+    opt = QStyleOptionViewItem()
+    opt.initFrom(table.viewport())
+    opt.state &= ~QStyle.State_HasFocus
+    opt.rect = QRect(at.x(), at.y(), w, h)
+    opt.widget = table
+    p = QPainter(img)
+    delegate.paint(p, opt, table.model().index(row, QUICKEST_STRIP_COL))
+    p.end()
+    return img.copy(opt.rect)
+
+
+def test_a_cached_strip_paints_the_same_pixels_as_one_laid_out_afresh():
+    """At 1280×800 and 1440×900 docked: every demo row painted where the table puts it, from the
+    cached cell-local layout (twice: the second paint is all cache), equals the uncached path —
+    laid out afresh in the cell's own rect in the viewport and drawn untranslated, as every paint
+    was before the cache. The ringed lap and the lone quickest's purple included."""
+    from PySide6.QtCore import QPoint, QRectF
+    from PySide6.QtWidgets import QStyledItemDelegate
+
+    from studio.lap_table import (
+        QUICKEST_STRIP_COL,
+        STRIP_PLAYING_ROLE,
+        STRIP_ROLE,
+        _PassStripDelegate,
+        paint_group_rule,
+        strip_geometry,
+    )
+
+    class Fresh(_PassStripDelegate):
+        def paint(self, painter, option, index):
+            QStyledItemDelegate.paint(self, painter, option, index)
+            paint_group_rule(painter, option, index)
+            strip, star_lap = index.data(STRIP_ROLE)
+            rect = QRectF(option.rect)
+            painter.save()
+            painter.setClipRect(option.rect)
+            self.draw(painter, strip_geometry(strip, rect), rect, star_lap,
+                      index.data(STRIP_PLAYING_ROLE))
+            painter.restore()
+
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        for size in ((1280, 800), (1440, 900)):
+            q = _strip_table(win, *size)
+            t = q.table
+            q._cycle, q._running = (3, 1), True    # C3 cycled: its strip rings lap 6
+            q._paint_playing()
+            assert not t.isColumnHidden(QUICKEST_STRIP_COL)
+            fresh = Fresh(t)
+            for r in range(t.rowCount()):
+                at = t.visualRect(t.model().index(r, QUICKEST_STRIP_COL)).topLeft() + QPoint(3, 5)
+                _render_strip(q.strip_delegate, t, r, at)
+                laid = q.strip_delegate.layouts
+                cached = _render_strip(q.strip_delegate, t, r, at)
+                assert q.strip_delegate.layouts == laid
+                assert cached == _render_strip(fresh, t, r, at), (size, r)
+            q._cycle, q._running = None, False
+            q._paint_playing()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_seventy_laps_repaint_the_table_without_laying_a_strip_out():
+    """A 70-lap session (synthetic) at 1440×900: once laid out, a repaint of the whole table lays
+    out no strip — on main every repaint redid seven O(laps²) layouts, 65-85 ms. The time bound is
+    loose (a loaded CI runner); the counter is the gate."""
+    import statistics
+
+    from studio.lap_table import QUICKEST_STRIP_COL, STRIP_ROLE
+    many = _sixty_lap_passes(seed=3, laps=70)
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        q = _strip_table(win, 1440, 900)
+        saved = win.session.quickest_passes
+        win.session.quickest_passes = lambda: many
+        try:
+            q.refresh()
+            _settle(0.1)
+            t, d = q.table, q.strip_delegate
+            assert not t.isColumnHidden(QUICKEST_STRIP_COL)
+            assert len(t.item(0, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0].marks) == 70
+            t.viewport().repaint()
+            _strip_cache_is_fresh(q)
+            laid, painted = d.layouts, d.paints
+            ms = []
+            for _ in range(7):
+                _APP.processEvents()
+                t0 = time.perf_counter()
+                t.viewport().repaint()
+                ms.append((time.perf_counter() - t0) * 1e3)
+            assert d.paints - painted == 7 * 7 and d.layouts == laid, (d.paints, d.layouts)
+            print("70-lap full-table repaint, ms", [round(m, 1) for m in ms])
+            assert statistics.median(ms) < 30, ms
         finally:
             win.session.quickest_passes = saved
     finally:
