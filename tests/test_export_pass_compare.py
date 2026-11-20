@@ -193,7 +193,8 @@ def test_a_pass_compare_opens_the_picker_on_this_pass_and_exports_both_clips():
     assert opened["scope"] == opened["items"][0], opened
     assert opened["rows"][0] == "Export", opened["rows"]
     notes = " ".join(opened["notes"])
-    assert f"Both passes through {label} play as they do on screen" in notes, notes
+    assert (f"Both passes through {label}, each from its own lead-in to 1 s after its exit, "
+            "started together.") in notes, notes
     assert "The shorter pass holds its last frame" in notes, notes
     assert seen["save"] == f"_lap{lap + 1}_vs_lap{lap_b + 1}_{label}_compare.mp4", seen["save"]
     (spec,) = seen["specs"]
@@ -279,8 +280,15 @@ def test_the_delta_plate_is_blank_then_live_then_held_neutral():
     held = printed_gap_s(*anchor.pass_s)
     label = anchor.label
     kinds = set()
-    for f, ta in zip(frames, track.t_a, strict=True):
+    exit_b = anchor.sides[1][1]
+    timed_b = f"LAP {lap_b + 1}   {label} · {anchor.pass_s[1]:.2f} s"
+    for f, ta, tb in zip(frames, track.t_a, track.t_b, strict=True):
         assert "0:" not in f.caption_a and "0:" not in f.caption_b, f   # no lap clock
+        # pane B's plate gains ITS pass time on its OWN exit frame, never before or after
+        assert f.caption_b == (timed_b if tb > exit_b else f"LAP {lap_b + 1}   {label}"), (
+            tb, exit_b, f.caption_b)
+        timed_a = f"LAP {lap + 1}   {label} · {anchor.pass_s[0]:.2f} s"
+        assert f.caption_a == (timed_a if ta > exit_ else f"LAP {lap + 1}   {label}"), f.caption_a
         if ta < entry:
             kinds.add("blank")
             assert f.delta is None and f.delta_run == "Δ —" and f.neutral, f
@@ -361,32 +369,45 @@ def test_a_real_render_plays_each_clip_and_holds_the_shorter_across_the_seam():
     s = Session.load(chapters.discover_siblings(rec.paths[0]))
     seam = s.chapters.chapters[1].offset
     laps = s.valid_lap_ids()
-    found = []
+    fps = 30000 / 1001
+    seamed, longest = [], []
     for c in s.corners.corner_list():
         wins = {lap: ev.pass_window_for_export(s, lap, c.cid) for lap in laps}
         if any(w is None or ev.pass_subject(s, lap, c.cid) is None for lap, w in wins.items()):
             continue
         for a in laps:
             for b in laps:
-                if a != b and wins[a][0] < seam < wins[a][3] and not wins[b][0] < seam < wins[b][3]:
-                    found.append((abs((wins[a][3] - wins[a][0]) - (wins[b][3] - wins[b][0])),
-                                  a, b, c.cid))
-    assert found, "no pass of the synthetic recording straddles the seam in one pane only"
-    _diff, across, other, cid = max(found)
+                if a == b:
+                    continue
+                over = [wins[x][0] < seam < wins[x][3] for x in (a, b)]
+                diff = abs(ev.frame_count(wins[a][0], wins[a][3], fps)
+                           - ev.frame_count(wins[b][0], wins[b][3], fps))
+                if over == [True, False]:
+                    seamed.append((diff, a, b, c.cid))
+                elif not any(over):
+                    longest.append((diff, a, b, c.cid))
+    assert seamed, "no pass of the synthetic recording straddles the seam in one pane only"
     # Both ways round: the seam in pane A and pane B's clip held, then the seam in pane B and
-    # pane A's own decoder running out first, its frame held.
+    # pane A's own decoder running out first, its frame held. The seam pairs' clips differ by one
+    # frame on this fixture, so the pair whose clips differ the most (3 frames, measured
+    # 2026-11-20) is rendered both ways too: a hold of several frames, in each pane.
+    _diff, across, other, cid = max(seamed)
     for a, b in ((across, other), (other, across)):
-        _render_one_way(s, a, b, cid, tmp.name, seam_in_a=a == across)
+        _render_one_way(s, a, b, cid, tmp.name, seam=(a == across, a != across))
+    diff, one, two, cid = max(longest)
+    assert diff >= 3, f"no pair of clips differs by several frames ({diff})"
+    for a, b in ((one, two), (two, one)):
+        _render_one_way(s, a, b, cid, tmp.name, seam=(False, False))
     tmp.cleanup()
 
 
-def _render_one_way(s, a, b, cid, folder, seam_in_a):
-    out = os.path.join(folder, f"pass_compare_{a}_{b}.mp4")
+def _render_one_way(s, a, b, cid, folder, seam):
+    out = os.path.join(folder, f"pass_compare_{a}_{b}_{cid}.mp4")
     cfg = ec.CompareConfig(out_height=SH, encoder="libx264", hwaccel_decode=False)
     spec = ec.build_pass_compare_spec(s, out, a, b, _anchor(s, a, b, cid), config=cfg,
                                       label_a=f"LAP {a + 1}", label_b=f"LAP {b + 1}")
     spans = (bool(spec.source.concat_list_path), bool(spec.source_b.concat_list_path))
-    assert spans == (seam_in_a, not seam_in_a), f"one pane's clip is the two-chapter span: {spans}"
+    assert spans == seam, f"which pane's clip is the two-chapter span: {spans}, not {seam}"
     try:
         r = ec.CompareRenderer(s, spec)
         res = r.run()
@@ -429,10 +450,16 @@ def _render_one_way(s, a, b, cid, folder, seam_in_a):
         steps = np.diff(got[1:n_own]) % CYCLE
         assert np.all(steps == 1), f"pane {name}: a frame dropped or held inside its clip"
         if n_own < n:
+            # held: the clip's LAST frame, the very picture, for the whole hold
             assert np.all(got[n_own - 1:] == got[n_own - 1]), f"pane {name} did not hold"
+            last = frames[n_own - 1, rows].astype(int)
+            worst = max(int(np.abs(frames[k, rows].astype(int) - last).max())
+                        for k in range(n_own, n))
+            assert worst <= 2, f"pane {name}'s held frames are not its last frame ({worst})"
     assert r.held_frames == 0 and r._held_a == 0
-    print(f"ok a real render: {n} frames, pane A {n_a}, pane B {n_b}, the seam in pane "
-          f"{'A' if seam_in_a else 'B'}; clip starts {spec.t0 * fps % 1:.2f} / "
+    where = "A" if seam[0] else "B" if seam[1] else "neither pane"
+    print(f"ok a real render: {n} frames, pane A {n_a}, pane B {n_b}, the seam in {where}; "
+          f"held {abs(n_a - n_b)}; clip starts {spec.t0 * fps % 1:.2f} / "
           f"{spec.t_b0 * fps % 1:.2f} of a frame in")
 
 

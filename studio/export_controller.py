@@ -1613,8 +1613,8 @@ class ExportController:
     _COMPARE_LAPS_DESC = ("Both laps play locked to the same point on TRACK, not the same time on "
                           "the clock — so as one pulls ahead the two frames stay at the same "
                           "corner and the gap between the clocks is the delta.")
-    _COMPARE_PASS_DESC = ("Both passes through {label} play as they do on screen: each from its own "
-                          "lead-in to 1 s after its exit, started together. The gap shows no "
+    _COMPARE_PASS_DESC = ("Both passes through {label}, each from its own lead-in to 1 s after "
+                          "its exit, started together. The gap shows no "
                           "number before the entry, the gap since the entry through {label}, and "
                           "after the exit the two passes' gap as timed, held.")
 
