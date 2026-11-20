@@ -1151,10 +1151,19 @@ class StatsView(QWidget):
         # On the scale, and on it deliberately: SPACE_M of gutter, SPACE_S under the panel chrome,
         # and SPACE_XS between blocks — the 6 px that used to sit here was the page's only
         # off-scale gap, and it is the rhythm every section heading and tile row is measured from.
-        # The GROUP separation is paid for by the tile grids' own bottom margin (see _grid), so a
-        # tighter step here tightens the rows without letting the sections run together.
-        page.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_M)
+        # The GROUP separation is paid for by each section heading's own top margin
+        # (`stats_common.section_heading`), so a tighter step here tightens the rows without
+        # letting the sections run together.
+        # NO TOP MARGIN: each column's first heading already carries SPACE_S above itself, so a
+        # page margin on top of it put every section 8 px lower than it had stood (docked at
+        # 1440x900 that cost PACE's second tile row). The banners, which carry no margin of their
+        # own, get their SPACE_S from `_banner_air`, shown only with one of them.
+        page.setContentsMargins(theme.SPACE_M, 0, theme.SPACE_M, theme.SPACE_M)
         page.setSpacing(theme.SPACE_XS)
+        self._banner_air = QWidget()
+        self._banner_air.setFixedHeight(theme.SPACE_S - theme.SPACE_XS)
+        self._banner_air.setVisible(False)
+        page.addWidget(self._banner_air)
 
         # --- the page's own trust banner + empty state, above everything they qualify.
         # These stay FULL WIDTH at every column count: they qualify the whole page, and a caveat
@@ -1682,10 +1691,12 @@ class StatsView(QWidget):
     def _grid(self, *tiles: Tile) -> QGridLayout:
         g = QGridLayout()
         # The tile grid, on the scale. It was `0,0,0,4` / 18 / 8 — one step, one nudge and one
-        # step. The bottom margin is now the GROUP separator (SPACE_S under a block of tiles, on
-        # top of the column's own SPACE_XS), the columns are SPACE_L apart — the widest gap that
-        # still reads as one row at the 148 px tile floor — and the rows keep SPACE_S.
-        g.setContentsMargins(0, 0, 0, theme.SPACE_S)
+        # step. No bottom margin: the GROUP separator is the next heading's (SPACE_S above every
+        # `section_heading`, on top of the column's own SPACE_XS), so a section reads the same
+        # gap whether tiles, a note or a table end the one above. The columns are SPACE_L apart —
+        # the widest gap that still reads as one row at the 148 px tile floor — and the rows
+        # keep SPACE_S.
+        g.setContentsMargins(0, 0, 0, 0)
         g.setHorizontalSpacing(theme.SPACE_L)
         g.setVerticalSpacing(theme.SPACE_S)
         self._place_tiles(g, list(tiles), self._tile_cols)
@@ -2205,6 +2216,8 @@ class StatsView(QWidget):
         self.provisional_banner.setVisible(
             bool(valid) and not getattr(session, "timing_verified", True))
         self._set_no_laps_state(bool(valid))
+        self._banner_air.setVisible(not (self.provisional_banner.isHidden()
+                                         and self.no_laps_note.isHidden()))
         # The absent-accelerometer note sits under the SPEED · G tiles whose dashes it explains,
         # so it hides with them on a lapless recording (the empty-state block tells that story).
         self.no_gmeter_note.setVisible(

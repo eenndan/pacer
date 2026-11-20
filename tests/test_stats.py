@@ -6393,6 +6393,132 @@ def test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap():
     print("test_a_rolling_best_inside_the_timing_step_reads_level_with_the_best_lap OK")
 
 
+def _heading_gaps(v) -> dict:
+    """{heading text: px from the bottom of the nearest visible widget above it (overlapping it
+    horizontally, not its ancestor) to the heading's TEXT}, for every visible section heading."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel, QWidget
+    content = v._scroll.widget()
+    heads = [lab for lab in content.findChildren(QLabel)
+             if lab.property("role") == "BarLabel" and lab.isVisibleTo(content)]
+    others = [w for w in content.findChildren(QWidget)
+              if w.isVisibleTo(content) and w.height() > 0 and w.property("role") != "BarLabel"]
+    out = {}
+    for h in heads:
+        top = h.mapTo(content, QPoint(0, 0))
+        text_top = top.y() + h.contentsMargins().top()
+        above = [p.y() + w.height() for w in others if not w.isAncestorOf(h)
+                 for p in (w.mapTo(content, QPoint(0, 0)),)
+                 if p.y() + w.height() <= top.y() + 1
+                 and p.x() < top.x() + max(h.width(), 40) and p.x() + w.width() > top.x()]
+        if above:
+            out[h.text()] = text_top - max(above)
+    return out
+
+
+def test_every_section_heading_sits_the_same_gap_under_the_block_above():
+    """Discovery 6 (craft, P3): SPEED · G, DRIVING and the sections after a table sat 4 px under the
+    block above (the column's SPACE_XS alone), while a heading after a tile grid or MOMENTS sat
+    12 px under it — the grid's and MOMENTS' bottom margin was the group separator, so the gap
+    depended on what the section above happened to end with. The separator is now the heading's
+    own: every heading after the first sits SPACE_XS + SPACE_S under the block above, on the
+    one-column quadrant (where SPEED · G stacks under IDEAL LAP) and on the dashboard."""
+    _app()
+    from studio import theme
+    from studio.stats_panel import StatsView
+    v = StatsView(_fake_view_session())
+    v.show()
+    want = theme.SPACE_XS + theme.SPACE_S
+    try:
+        for width in (503, 1900):
+            v.resize(width, 900)
+            _settle(10)
+            gaps = _heading_gaps(v)
+            for name in ("PACE", "SPEED · G", "DRIVING"):
+                assert name in gaps or width == 1900, (width, name, gaps)
+            assert len(gaps) >= 6, (width, gaps)
+            off = {k: g for k, g in gaps.items() if g != want}
+            assert not off, f"at {width} px these headings are not {want} px under the block " \
+                            f"above: {off} (all: {gaps})"
+    finally:
+        v.close()
+    print("test_every_section_heading_sits_the_same_gap_under_the_block_above OK")
+
+
+def test_the_page_starts_where_it_did_with_or_without_a_banner():
+    """The heading's own SPACE_S on top of the page's SPACE_S top margin put every column's first
+    heading 16 px down instead of 8 (docked at 1440x900 that cut PACE's second tile row). The page
+    has no top margin now: the first heading's text is SPACE_S under the page's top, and so is the
+    amber banner when the timing is provisional (it has no heading margin of its own)."""
+    _app()
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel
+
+    from studio import theme
+    from studio.stats_panel import StatsView
+    for verified in (True, False):
+        v = StatsView(_fake_view_session(verified=verified))
+        v.resize(503, 900)
+        v.show()
+        _settle(10)
+        content = v._scroll.widget()
+        first = min((lab for lab in content.findChildren(QLabel)
+                     if lab.property("role") == "BarLabel" and lab.isVisibleTo(content)),
+                    key=lambda lab: lab.mapTo(content, QPoint(0, 0)).y())
+        text_top = first.mapTo(content, QPoint(0, first.contentsMargins().top())).y()
+        banner = v.provisional_banner
+        try:
+            if verified:
+                assert not banner.isVisibleTo(content)
+                assert text_top == theme.SPACE_S, (first.text(), text_top)
+            else:
+                assert banner.isVisibleTo(content)
+                assert banner.mapTo(content, QPoint(0, 0)).y() == theme.SPACE_S
+                assert text_top > banner.mapTo(content, QPoint(0, banner.height())).y()
+        finally:
+            v.close()
+    print("test_the_page_starts_where_it_did_with_or_without_a_banner OK")
+
+
+def test_the_heading_under_moments_sits_the_same_gap_under_its_last_row():
+    """MOMENTS' body used to end in an empty SPACE_S margin (the old group separator). Measured from
+    the body's own box, a heading under it read 12 px either way; what the reader sees is the gap
+    from the last MOMENTS row's ink box to the next heading's text, and that must be the page's one
+    SPACE_XS + SPACE_S too, not 20 px."""
+    _app()
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel, QWidget
+
+    from studio import story, theme
+    from studio.stats_panel import StatsView
+    times = {0: 45.0, 1: 45.4, 2: 45.9, 3: 46.3, 4: 46.0}
+    v = StatsView(_moments_session(story.session_moments(times, None, best_lap=0)))
+    v.show()
+    want = theme.SPACE_XS + theme.SPACE_S
+    try:
+        for width in (503, 1900):
+            v.resize(width, 900)
+            _settle(10)
+            content = v._scroll.widget()
+            body = v.moments.body
+            assert body.isVisibleTo(content), "the stub session shows no MOMENTS"
+            rows = [w for w in body.findChildren(QWidget) if w.parentWidget() is body
+                    and w.isVisibleTo(content)]
+            assert rows, "MOMENTS shows no row"
+            left = body.mapTo(content, QPoint(0, 0)).x()
+            last = max(w.mapTo(content, QPoint(0, w.height())).y() for w in rows)
+            below = [lab.mapTo(content, QPoint(0, lab.contentsMargins().top())).y()
+                     for lab in content.findChildren(QLabel)
+                     if lab.property("role") == "BarLabel" and lab.isVisibleTo(content)
+                     and lab.mapTo(content, QPoint(0, 0)).y() >= last
+                     and abs(lab.mapTo(content, QPoint(0, 0)).x() - left) < 2]
+            assert below, f"at {width} px no heading under MOMENTS in its column"
+            assert min(below) - last == want, (width, min(below) - last, want)
+    finally:
+        v.close()
+    print("test_the_heading_under_moments_sits_the_same_gap_under_its_last_row OK")
+
+
 if __name__ == "__main__":
     # AT THE FOOT OF THE FILE, and that is a fix rather than a move. This block used to sit ~120
     # lines above the end, so the three "Phase 4: the page fits its pane" tests written after it

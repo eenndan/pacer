@@ -242,6 +242,27 @@ def test_no_bare_palette_hue_is_read_anywhere_in_studio():
     print("test_no_bare_palette_hue_is_read_anywhere_in_studio OK")
 
 
+def test_the_lap_ruler_marks_read_on_both_grooves_in_both_palettes():
+    """The video ruler's ★ / ▼ (cool/fullscreen-readout) sit on the scrub groove, which is amber
+    (C.accent) where it has been played and C.border where it has not. Straight on the amber the
+    ★ read 1.12:1 and the ▼ 1.55:1, so each mark sits on its own plate: the ink clears 3:1 (WCAG
+    non-text) against the plate, in both palettes, whichever groove is under it."""
+    from studio import video_view
+    saved = theme.active_palette()
+    try:
+        for palette in (theme.PALETTE_STANDARD, theme.PALETTE_COLORBLIND):
+            theme.set_palette(palette)
+            plate = video_view.ruler_mark_plate()
+            for glyph in ("★", "▼"):
+                ink = video_view.ruler_mark_colour(glyph)
+                assert contrast(ink, plate) >= 3.0, (palette, glyph, ink, plate)
+                for groove in (C.accent, C.border):          # what the plate sits on, for scale:
+                    assert contrast(ink, groove) < contrast(ink, plate) or \
+                        contrast(ink, groove) >= 3.0, (palette, glyph, groove)
+    finally:
+        theme.set_palette(saved)
+
+
 def test_hero_ideal_readout_follows_the_palette():
     """U10 / W4-01. `format_ideal_readout` feeds the #DiffBox — the largest text in the window — and
     it read the raw `C.behind`, so the app's biggest number kept the standard palette's red in BOTH
@@ -1315,6 +1336,7 @@ def _run_all():
     test_mono_font_actually_delivers_tabular_figures()
     test_no_module_constant_freezes_a_palette_hue()
     test_no_bare_palette_hue_is_read_anywhere_in_studio()
+    test_the_lap_ruler_marks_read_on_both_grooves_in_both_palettes()
     test_hero_ideal_readout_follows_the_palette()
     test_the_ideal_readout_clamps_instead_of_printing_a_minus_sign()
     test_best_lap_curve_colour_follows_the_palette_in_both_directions()

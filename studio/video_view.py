@@ -43,8 +43,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStyle,
     QStyleOptionSlider,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -62,7 +63,7 @@ from PySide6.QtWidgets import (
 from . import chapters, data_quality, gmeter_overlay, theme
 from . import marks as marks_model
 from ._signal import fmt_hms, plural
-from .player_pane import _WINDOW_STOP_TOL_S, PlayerPane
+from .player_pane import _WINDOW_STOP_TOL_S, PlayerPane, ReadoutLines
 from .widgets import PanelToolbar, ToggleButton, icon_button
 
 # The g-meter toggle's own line. The dial's two SENTENCES — the felt-force convention and the axis
@@ -105,6 +106,17 @@ _LOOP_TOOLTIP = ("Loop this pass (L): play it again from its lead-in each time i
                  "Stays on for the next pass you pick; a seek, a lap pick or Compare stops it.")
 _SLOW_TOOLTIP = (f"Slow motion: play the pass at {_RATE_LABELS[0]}.\n"
                  "Stays on for the next pass you pick; leaving the pass gives back your speed.")
+
+
+def ruler_mark_colour(glyph: str) -> str:
+    """The ink of a lap-ruler mark: ★ the best-lap colour (palette-aware, the Laps table's), ▼ text."""
+    return theme.best_lap_colour() if glyph == "★" else theme.C.text
+
+
+def ruler_mark_plate() -> str:
+    """The plate under every lap-ruler mark, so it reads on the amber played groove and the grey
+    unplayed one alike (tests/test_contrast.py)."""
+    return theme.C.canvas
 
 
 def nearest_rate(rate: float) -> float:
@@ -176,6 +188,10 @@ class _LapRulerSlider(QSlider):
     def __init__(self, orientation):
         super().__init__(orientation)
         self._lap_ticks: list[int] = []  # boundary values in slider units (ms), sorted/unique
+        # Every lap as (start ms, end ms, mark, hover line): the ★ / ▼ the Laps table's Lap cells
+        # wear (LapTable.ruler_marks, "" for none) and "Lap 7 · 0:45.298 …" for the hover.
+        self._segments: list[tuple[int, int, str, str]] = []
+        self._mark_font = theme.ui_font(theme.CAPTION, theme.W_SEMIBOLD)
         self._span_note = ""             # what this bar currently spans, when that is not obvious
         # The decimation step (and so the tooltip) is a function of the range and the width; both
         # change under the ruler as chapters load and the panel is resized.
@@ -203,6 +219,74 @@ class _LapRulerSlider(QSlider):
         self._lap_ticks = sorted({int(v) for v in values})
         self._refresh_tooltip()
         self.update()
+
+    # THE SESSION'S SHAPE ON THE BAR YOU SEEK WITH (discovery C-craft candidate 4, glyph-only). The
+    # best lap's segment wears ★ and each slow lap the Laps table cues wears ▼ — the SAME laps, read
+    # off the table (`LapTable.ruler_marks`), so ★ is withheld on provisional timing here exactly
+    # as there. Glyphs on the groove, not the mock's 12-14 px bar band: the video is already the
+    # smallest panel, and these cost it nothing. No quickest-pass marks: they tie (§32).
+    def set_lap_segments(self, segments: list[tuple[int, int, str, str]]) -> None:
+        """Every lap as (start ms, end ms, mark, hover line); mark is "★", "▼ C5" or ""."""
+        self._segments = sorted(segments)
+        self.update()
+
+    def segments(self) -> list[tuple[int, int, str, str]]:
+        return list(self._segments)
+
+    def mark_plan(self) -> list[tuple[int, str]]:
+        """(x, glyph) for every mark paintEvent draws: ★ always (one lap, the one that matters), ▼
+        only where its lap is wider than the glyph (a 65-lap session's 7 px laps would smear)."""
+        if not self._segments or self.maximum() <= self.minimum():
+            return []
+        fm = QFontMetrics(self._mark_font)
+        out = []
+        for a, b, mark, _tip in self._segments:
+            if not mark:
+                continue
+            glyph = mark.split()[0]
+            xa, xb = self._x_for(a), self._x_for(b)
+            if glyph != "★" and xb - xa < fm.horizontalAdvance(glyph) + 2:
+                continue
+            out.append(((xa + xb) // 2, glyph))
+        return out
+
+    def _mark_rect(self, x: int, glyph: str, cy: int | None = None):
+        """The plate a mark is painted on, centred on (x, groove centre)."""
+        fm = QFontMetrics(self._mark_font)
+        if cy is None:
+            cy = self._groove_rect().center().y()
+        h = fm.height()
+        w = max(fm.horizontalAdvance(glyph) + 4, h)
+        return QRectF(x - w / 2, cy - h / 2, w, h)
+
+    def _handle_rect(self):
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        return self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+
+    def painted_marks(self) -> list[tuple[int, str]]:
+        """mark_plan less every mark whose plate would touch the handle: the playhead is on (or
+        beside) that lap, and a glyph on the handle's edge reads as a badge on it."""
+        handle = self._handle_rect()
+        return [(x, g) for x, g in self.mark_plan()
+                if not (self._mark_rect(x, g).right() >= handle.left()
+                        and self._mark_rect(x, g).left() <= handle.right() + 1)]
+
+    def segment_at(self, x: int) -> tuple[int, int, str, str] | None:
+        """The lap under pixel `x`, or None between laps."""
+        for seg in self._segments:
+            if self._x_for(seg[0]) <= x <= self._x_for(seg[1]):
+                return seg
+        return None
+
+    def event(self, ev):  # noqa: N802 (Qt override)
+        # Hover: the lap under the pointer, its time and its mark, above what the bar does.
+        if ev.type() == QEvent.ToolTip and self._segments:
+            seg = self.segment_at(int(ev.pos().x()))
+            if seg is not None:
+                QToolTip.showText(ev.globalPos(), f"{seg[3]}\n{self.toolTip()}", self)
+                return True
+        return super().event(ev)
 
     def _groove_rect(self):
         """The style's groove rect for this slider — the band the handle travels in. Used to map a
@@ -311,10 +395,28 @@ class _LapRulerSlider(QSlider):
     def paintEvent(self, ev):
         super().paintEvent(ev)  # base groove + sub/add-page fill + handle (themed QSS) first
         plan = self.tick_plan()
-        if not (plan["minor"] or plan["major"] or plan["current"]):
+        marks = self.painted_marks()
+        if not (plan["minor"] or plan["major"] or plan["current"] or marks):
             return
         cy = self._groove_rect().center().y()
         painter = QPainter(self)
+        if marks:
+            # On the groove, centred in the lap, each on its own small CANVAS plate: the groove is
+            # amber where it has been played and grey where it has not, and ★ / ▼ straight on the
+            # amber read 1.12:1 / 1.55:1. On the plate both clear 3:1 on either side
+            # (tests/test_contrast.py). Left out wherever the plate would touch the handle.
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+            painter.setFont(self._mark_font)
+            fm = QFontMetrics(self._mark_font)
+            for x, glyph in marks:
+                plate = self._mark_rect(x, glyph, cy)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(ruler_mark_plate()))
+                painter.drawRoundedRect(plate, plate.height() / 2, plate.height() / 2)
+                painter.setPen(QColor(ruler_mark_colour(glyph)))
+                w = fm.horizontalAdvance(glyph)
+                painter.drawText(x - w // 2, cy + (fm.ascent() - fm.descent()) // 2, glyph)
         painter.setRenderHint(QPainter.Antialiasing, False)
 
         def bars(xs, height, colour, opacity, width=1):
@@ -1184,6 +1286,9 @@ class VideoView(QWidget):
     # Not a state mirror: CompareController remains the single source of truth for 'are we
     # comparing', and this says only what the view now holds.
     compareModeChanged = Signal(bool)
+    # The live readout needs its lines NOW: it just came on (video focus, I), or what it names
+    # changed with no position change (a pass ended while paused, Loop flipped).
+    liveReadoutShown = Signal()
 
     # The primary pane's mute choice for THIS RUN of the app (QA 2026-09-26, LIFE-4). Opening another
     # recording rebuilds the whole view, and with it a fresh, muted PlayerPane, so an un-mute reset
@@ -1562,6 +1667,7 @@ class VideoView(QWidget):
                 self._release_slow(restore=True)
         for b in (self.loop_btn, self.slow_btn):
             b.setVisible(on)
+        self._refresh_live_readout()   # the readout's pass line follows the pass at once
 
     def _on_loop_toggled(self, on: bool):
         if self.pane.is_looping() != on and not self.pane.set_loop(on):
@@ -1570,6 +1676,7 @@ class VideoView(QWidget):
     def _on_loop_changed(self, on: bool):
         self._reflect(self.loop_btn, on)
         self.loopChanged.emit(on)
+        self._refresh_live_readout()   # ...and its "· looping"
 
     def _on_slow_toggled(self, on: bool):
         if on:
@@ -1670,8 +1777,18 @@ class VideoView(QWidget):
         clear the ruler there."""
         if self._panes_mounted() or not getattr(self, "_lap_boundaries_s", None):
             self.slider.set_lap_ticks([])
+            self.slider.set_lap_segments([])
         else:
             self.slider.set_lap_ticks([int(round(s * 1000)) for s in self._lap_boundaries_s])
+            self.slider.set_lap_segments([(int(round(a * 1000)), int(round(b * 1000)), m, tip)
+                                          for a, b, m, tip in getattr(self, "_lap_segments", [])])
+
+    def set_lap_segments(self, segments: list[tuple[float, float, str, str]]) -> None:
+        """Every lap as (start s, end s, mark, hover line) on the global clock — the ruler's ★ / ▼
+        and its per-lap hover (`_LapRulerSlider.set_lap_segments`). Cleared in compare with the
+        ticks."""
+        self._lap_segments = list(segments)
+        self._apply_lap_ticks()
 
     # ------------------------------------------------------------- compare toggle / enablement
     def set_compare_enabled(self, enabled: bool):
@@ -1767,6 +1884,69 @@ class VideoView(QWidget):
             self.fullscreen_btn.blockSignals(False)
             self.fullscreen_btn.refresh_glyph()   # blockSignals suppressed the button's own repaint
         self._sync_fullscreen_tooltip()
+        self._focused = bool(on)
+        self._sync_live_readout()
+
+    # ------------------------------------------------------------- live readout (fullscreen video)
+    # THE VIDEO FILLING THE SCREEN (F) HIDES EVERY NUMBER: the charts, the map, the hero Δ and the
+    # Laps table all go with the grid, and the picture is all that is left (discovery B-workflow
+    # candidate 4). So while — and only while — the video fills the screen, the primary pane shows
+    # a numbers-only readout over it (PlayerPane.LiveReadout): the lap and its clock, the hero's own
+    # Δ and speed, and the pass being played. In the normal layout the panels beside the video
+    # already show all of it, so it stays off there. I hides it (and brings it back); the choice
+    # lasts the run, like the mute choice.
+    _readout_wanted = True
+
+    def live_readout_shown(self) -> bool:
+        """True while the readout is meant to be on the video: video focus, the I choice on, and
+        one video (compare refuses focus, so this is belt and braces). The central view asks this
+        before it formats the lap line — nothing is computed for a readout nobody can see."""
+        return (getattr(self, "_focused", False) and VideoView._readout_wanted
+                and not self._panes_mounted())
+
+    def toggle_live_readout(self) -> bool:
+        """I: the readout off / on (it shows only while the video fills the screen). Returns the
+        new choice."""
+        VideoView._readout_wanted = not VideoView._readout_wanted
+        self._sync_live_readout()
+        return VideoView._readout_wanted
+
+    def set_live_delta(self, text: str, colour: str | None):
+        """The hero readout's text and Δ colour, as the hero paints them (CentralView._set_diff_text,
+        after its level rule): split at the formatters' five-space join into the Δ run and its tail
+        (the speed, or "whole lap"). Stored every time (two assignments); pushed only when shown."""
+        head, _sep, tail = text.partition("     ")
+        self._live_delta = (head, colour, tail.strip())
+        if self.live_readout_shown():
+            self._push_live_readout()
+
+    def set_live_lap(self, lap: str, dim: bool, pass_line: str = ""):
+        """The lap line ("LAP 7   0:23.415" / "No lap"), muted on provisional timing, and the pass
+        line during a played pass. Called by the central view only while the readout is shown."""
+        self._live_lap = (lap, bool(dim), pass_line)
+        self._push_live_readout()
+
+    def _push_live_readout(self):
+        lap, dim, pass_line = getattr(self, "_live_lap", ("", False, ""))
+        delta, colour, tail = getattr(self, "_live_delta", ("", None, ""))
+        self.pane.set_live_readout(ReadoutLines(lap=lap, lap_dim=dim, delta=delta,
+                                                delta_colour=colour, tail=tail, pass_=pass_line))
+
+    def _refresh_live_readout(self):
+        """Something the readout's lines name changed with no position change (a pass ended while
+        paused, Loop flipped): ask the central view for fresh lines now, not on the next move."""
+        if self.live_readout_shown():
+            self.liveReadoutShown.emit()
+
+    def _sync_live_readout(self):
+        """Show or hide the readout to match live_readout_shown(); the central view refills its lap
+        line on the next tick (liveReadoutShown asks it for one at once)."""
+        on = self.live_readout_shown()
+        if on != self.pane.is_live_readout_on():
+            self.pane.set_live_readout_visible(on)
+            if on:
+                self._push_live_readout()
+                self.liveReadoutShown.emit()
 
     def set_compare(self, pane_a: PaneSpec, pane_b: PaneSpec):
         """Enter or re-seed compare mode: swap the single pane for a 2-pane QSplitter. pane_a is the
