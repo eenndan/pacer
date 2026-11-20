@@ -2895,8 +2895,8 @@ class StudioWindow(QMainWindow):
         Parented to the window so they survive every view swap; every handler is one of the NAMED
         command methods below, which is what lets the ⌘K palette and the ? card offer the same
         commands this binds (help_dialog.COMMANDS carries the method name). G / C go through the
-        button's click() so a disabled button makes its shortcut a no-op. ←/→ stepping is handled
-        in keyPressEvent, not here, so the lap table keeps its arrow navigation."""
+        button, so a disabled one gates its key and says why (`_press_or_say`). ←/→ stepping is
+        handled in keyPressEvent, not here, so the lap table keeps its arrow navigation."""
         def shortcut(key, handler):
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.WindowShortcut)
@@ -3025,15 +3025,25 @@ class StudioWindow(QMainWindow):
         """Mute / unmute the clip audio (M)."""
         self._video_do(lambda v: v.toggle_mute())
 
+    def _press_or_say(self, button) -> None:
+        """A key / ⌘K command that IS a transport button: click it, or — the button disabled —
+        put its own tooltip, which says why ("… — needs ≥2 valid laps"), on the status line. A
+        disabled button's click() is a silent no-op, and the tooltip was the only place the reason
+        lived: C on a one-lap session did nothing and said nothing."""
+        if button.isEnabled():
+            button.click()
+        else:
+            self.statusBar().showMessage(button.toolTip(), STATUS_MS)
+
     def toggle_gmeter(self):
         """Show / hide the g-meter overlay (G) — through the button, so a recording with no
-        accelerometer (a disabled toggle) makes the key a no-op instead of a silent failure."""
-        self._video_do(lambda v: v.gmeter_btn.click())
+        accelerometer (a disabled toggle) says why instead of toggling nothing."""
+        self._video_do(lambda v: self._press_or_say(v.gmeter_btn))
 
     def toggle_compare(self):
         """Enter / leave two-lap compare mode (C) — through the button, which is disabled below
-        two valid laps."""
-        self._video_do(lambda v: v.compare_btn.click())
+        two valid laps; then its reason is what C says."""
+        self._video_do(lambda v: self._press_or_say(v.compare_btn))
 
     def toggle_datum(self):
         """Drop or clear the charts' datum (second) cursor (D) — the interval between the two
