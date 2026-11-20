@@ -20,6 +20,7 @@ missing).
 
 from __future__ import annotations
 
+import bisect
 import math
 import statistics
 from dataclasses import dataclass
@@ -3479,6 +3480,13 @@ def strip_geometry(strip, rect: QRectF) -> StripLayout:
     for r, stack in ((STRIP_DOT_R, STRIP_STACK), (STRIP_PILE_R, STRIP_PILE_STACK)):
         centres: dict[int, QPointF] = {}
         piles: dict[int, tuple[int, ...]] = {}
+        # The dots placed so far, sorted on x, so a candidate place is tested only against those
+        # within reach on x: a dot nearer than 2r is within 2r on x, so the nearest one is always
+        # in the window whenever it decides anything (it is < 2r away), and the result is the
+        # same as against every dot — at 70 laps it was ~480,000 distances per refresh.
+        xs: list[float] = []
+        placed: list[tuple[float, float]] = []
+        reach = 2 * r + 1.0   # a pixel beyond 2r: no rounding at the window's edge can matter
         for i in order:
             m = strip.marks[i]
             if m.behind:
@@ -3487,16 +3495,19 @@ def strip_geometry(strip, rect: QRectF) -> StripLayout:
                 x = left + m.x * width
                 if not m.level:
                     x = max(x, band.right() + r)
+            near = placed[bisect.bisect_left(xs, x - reach):bisect.bisect_right(xs, x + reach)]
 
-            def clear(lv, x=x, r=r, centres=centres):
+            def clear(lv, x=x, r=r, near=near):
                 y = mid + lv * 2 * r
-                return min((math.hypot(c.x() - x, c.y() - y) for c in centres.values()),
-                           default=math.inf)
+                return min((math.hypot(cx - x, cy - y) for cx, cy in near), default=math.inf)
             lv = next((lv for lv in stack if clear(lv) >= 2 * r - 1e-9), None)
             if lv is None:
                 lv = max(stack, key=clear)
                 piles[i] = ()
             centres[i] = QPointF(x, mid + lv * 2 * r)
+            at = bisect.bisect_right(xs, x)
+            xs.insert(at, x)
+            placed.insert(at, (centres[i].x(), centres[i].y()))
         layout = StripLayout(band, typical, [(m, centres[i]) for i, m in enumerate(strip.marks)],
                              r, piles)
         if not piles:
@@ -3554,6 +3565,34 @@ class _PassStripDelegate(QStyledItemDelegate):
     def __init__(self, parent):
         super().__init__(parent)
         self.paints = 0   # cells painted, for the repaint-cost test
+        self.layouts = 0  # strip layouts computed (strip_geometry), for the layout-cache test
+        # id(strip) -> (strip, {(w, h): its StripLayout in a cell at (0, 0)}). The strip is held so
+        # its id cannot be reused while cached; a rebuild (QuickestPassTable.refresh: load,
+        # re-segment, sector edit) makes new strips and `retain`s only theirs; a new size, a new key.
+        self._layouts: dict[int, tuple[object, dict]] = {}
+
+    def layout(self, strip, w: float, h: float) -> StripLayout:
+        """`strip`'s layout in a `w`×`h` cell at (0, 0): computed once per strip and cell size,
+        then reused by every paint, hover and the cell's words. It was recomputed on every paint
+        of every cell — O(laps²): ~80 ms per repaint of the table at 70 laps, a splitter drag at
+        ~5 fps — breaking the "each tick is a cheap lookup" invariant (studio/README.md)."""
+        held = self._layouts.get(id(strip))
+        if held is None or held[0] is not strip:
+            held = self._layouts[id(strip)] = (strip, {})
+        sizes = held[1]
+        lay = sizes.get((w, h))
+        if lay is None:
+            if len(sizes) >= 4:   # a resize drag walks through widths: keep only the recent ones
+                sizes.clear()
+            lay = sizes[(w, h)] = strip_geometry(strip, QRectF(0, 0, w, h))
+            self.layouts += 1
+        return lay
+
+    def retain(self, strips) -> None:
+        """The rows were rebuilt: keep only the layouts of `strips`, the ones they show now (a
+        resize while the rows were being replaced may have laid out a strip just dropped)."""
+        held = {id(s): self._layouts.get(id(s)) for s in strips}
+        self._layouts = {k: v for k, v in held.items() if v is not None}
 
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
@@ -3568,10 +3607,16 @@ class _PassStripDelegate(QStyledItemDelegate):
         self.paints += 1
         strip, star_lap = data
         playing = index.data(STRIP_PLAYING_ROLE)
-        rect = QRectF(option.rect)
-        lay = strip_geometry(strip, rect)
         painter.save()
         painter.setClipRect(option.rect)
+        painter.translate(QPointF(option.rect.topLeft()))   # the cached layout is cell-local
+        w, h = option.rect.width(), option.rect.height()
+        self.draw(painter, self.layout(strip, w, h), QRectF(0, 0, w, h), star_lap, playing)
+        painter.restore()
+
+    @staticmethod
+    def draw(painter, lay: StripLayout, rect: QRectF, star_lap, playing) -> None:
+        """Paint strip layout `lay`, laid out in `rect`, in `painter`'s coordinates."""
         painter.setRenderHint(QPainter.Antialiasing, True)
         fill = QColor(theme.C.text_dim)
         fill.setAlpha(STRIP_BAND_ALPHA)
@@ -3608,7 +3653,6 @@ class _PassStripDelegate(QStyledItemDelegate):
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(QColor(theme.C.accent), STRIP_RING_PX))
             painter.drawEllipse(ringed, r + STRIP_RING_PX, r + STRIP_RING_PX)
-        painter.restore()
 
 
 class QuickestPassTable(QWidget):
@@ -3752,8 +3796,9 @@ class QuickestPassTable(QWidget):
         passes = self.passes()
         if not data or not 0 <= index.row() < len(passes):
             return False
-        lay = strip_geometry(data[0], QRectF(self.table.visualRect(index)))
-        p = QPointF(event.pos())
+        cell = self.table.visualRect(index)
+        lay = self.strip_delegate.layout(data[0], cell.width(), cell.height())
+        p = QPointF(event.pos() - cell.topLeft())   # the layout is cell-local
         mark, c = min(lay.marks, key=lambda mc: (mc[1] - p).manhattanLength())
         qp = passes[index.row()]
         tip = strip_mark_tip(mark, qp, lay.pile_at(c, mark.lap_id), self.row_level_s(qp))
@@ -3780,14 +3825,14 @@ class QuickestPassTable(QWidget):
         """Each strip's words at the width it now has: a pile too dense to part is said in them
         (strip_geometry). Written only when they change: a write is a repaint."""
         t = self.table
-        cell = QRectF(0, 0, t.columnWidth(QUICKEST_STRIP_COL), theme.GRID_ROW_H)
+        w = t.columnWidth(QUICKEST_STRIP_COL)
         for r, qp in enumerate(self.passes()):
             item = t.item(r, QUICKEST_STRIP_COL)
             data = item.data(STRIP_ROLE) if item is not None else None
             if not data:
                 continue
             words = strip_words(self.corner_label(qp.cid), qp, data[0], self.row_level_s(qp),
-                                strip_geometry(data[0], cell).piled)
+                                self.strip_delegate.layout(data[0], w, theme.GRID_ROW_H).piled)
             if item.toolTip() != words:
                 item.setToolTip(words)
                 item.setData(Qt.AccessibleTextRole, words)
@@ -4007,6 +4052,7 @@ class QuickestPassTable(QWidget):
         self.not_counted.setVisible(False)
         if not passes:
             self.table.setRowCount(0)
+            self.strip_delegate.retain(())
             self.empty.set_state(QUICKEST_NEEDS_LAPS, self._needs_laps_body())
             return
         left = self.result.not_counted
@@ -4071,6 +4117,9 @@ class QuickestPassTable(QWidget):
             btn.setProperty("row", r)
             btn.clicked.connect(self._on_play_clicked)
             self.table.setCellWidget(r, QUICKEST_PLAY_COL, btn)
+        self.strip_delegate.retain(
+            data[0] for r in range(len(passes))
+            if (data := self.table.item(r, QUICKEST_STRIP_COL).data(STRIP_ROLE)))
         self._level_need_px = self._measure_level_need()
         self._paint_playing()
         self._fit_strip()
