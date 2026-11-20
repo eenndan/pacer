@@ -606,6 +606,24 @@ class PassVsTypical:
     level_s: float
 
 
+def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: float | None,
+                       level_s: float) -> PassVsTypical | None:
+    """THE ONE RULE for a pass beside its stretch's typical pass, a corner's or a sector's
+    (`CornerMatrix.pass_vs_typical`, `SplitMatrix.pass_vs_typical`): the other side is
+    `typical_pass_lap` over the `counted` passes (lap → time) with `lap` excluded, `level` is their
+    printed gap under `level_s`, and `is_typical` asks the same with nothing excluded. None where
+    `lap` is not counted, there is no typical, or no other pass."""
+    lap = int(lap)
+    other = typical_pass_lap(list(counted), list(counted.values()), typical, exclude=lap)
+    if typical is None or lap not in counted or other is None:
+        return None
+    nearest = typical_pass_lap(list(counted), list(counted.values()), typical)
+    gap = printed_gap_s(counted[other], counted[lap])
+    return PassVsTypical(cid=int(key), lap_id=lap, pass_s=counted[lap], typical_lap_id=other,
+                         typical_pass_s=counted[other], gap_s=gap, level=is_level(gap, level_s),
+                         is_typical=nearest == lap, level_s=level_s)
+
+
 
 def fmt_pass_vs_typical(gap: float) -> str:
     """`pass_vs_typical_s`'s printed form, "+0.82 s" — the one formatter every surface that prints
@@ -972,6 +990,16 @@ class SplitMatrix:
         rules cost on the owner's own recordings)."""
         return is_best_at_print(self.cells[row][col], self.bests[col], MATRIX_DECIMALS)
 
+    def pass_vs_typical(self, col: int, lap: int, level_s: float) -> PassVsTypical | None:
+        """Lap `lap`'s split through sector column `col` beside the sector's typical pass, by the
+        corners' rule (`pass_vs_typical_of`) over this column's counted cells and its median; the
+        result is keyed by the sector's stretch key (`sector_key`)."""
+        if not 0 <= col < self.columns:
+            return None
+        counted = {int(lid): float(val) for lid, row in zip(self.lap_ids, self.cells, strict=True)
+                   if (val := row[col]) is not None}
+        return pass_vs_typical_of(sector_key(col), lap, counted, self.medians[col], level_s)
+
 
 @dataclass(frozen=True)
 class CornerMatrix:
@@ -1105,21 +1133,15 @@ class CornerMatrix:
         """Lap `lap`'s pass through corner `cid` beside the corner's typical pass — `typical_pass`
         with `lap` where the best lap stands (so never `lap` itself on the other side). None where
         `lap`'s cell is not counted (no time, or not matched on track) or the corner has no typical.
-        `is_typical` asks the same `typical_pass_lap` with nothing excluded."""
-        tp = self.typical_pass(cid, lap)
-        if tp is None:
+        `is_typical` asks the same `typical_pass_lap` with nothing excluded (`pass_vs_typical_of`,
+        the rule a sector's shares)."""
+        if int(cid) not in self.cids:
             return None
         col = self.cids.index(int(cid))
-        counted = [(int(lid), float(val)) for lid, row, ok
+        counted = {int(lid): float(val) for lid, row, ok
                    in zip(self.lap_ids, self.cells, self.resolved, strict=True)
-                   if (val := row[col]) is not None and ok[col]]
-        nearest = typical_pass_lap([i for i, _t in counted], [t for _i, t in counted],
-                                   self.medians[col])
-        gap = printed_gap_s(tp.pass_s, tp.best_pass_s)
-        return PassVsTypical(cid=int(cid), lap_id=int(lap), pass_s=tp.best_pass_s,
-                             typical_lap_id=tp.lap_id, typical_pass_s=tp.pass_s, gap_s=gap,
-                             level=is_level(gap, level_s), is_typical=nearest == int(lap),
-                             level_s=level_s)
+                   if (val := row[col]) is not None and ok[col]}
+        return pass_vs_typical_of(cid, lap, counted, self.medians[col], level_s)
 
 
 @dataclass(frozen=True)

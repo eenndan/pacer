@@ -227,4 +227,10 @@ noise levels, against the generator's truth: how many sectors each candidate ste
 quickest, and how many of those name the wrong lap. Its rule is `stats.SECTOR_LEVEL_S`.
 
     pixi run python -m studio.dev.probes.sector_quickest
+
+`sector_typical_compare` asks, on the same grid, where "Compare with my typical pass" would be
+offered on a sector row: per sector, the printed typical split minus the quickest against
+`stats.SECTOR_LEVEL_S`, over every counted lap too, and the true gap the generator planted.
+
+    pixi run python -m studio.dev.probes.sector_typical_compare
 """
