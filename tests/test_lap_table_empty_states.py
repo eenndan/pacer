@@ -271,6 +271,7 @@ def test_one_crossing_zero_lap_placeholders_name_the_crossing():
     one = _FakeLapSession(valid=0, detected=1)
     corner_one = _FakeCornerSession(valid=())
     corner_one.lap_count = lambda: 1
+    corner_one.timing_quality = data_quality.TimingQuality()   # the GPS held: the count is trusted
     corners = _keep(LT.CornerTable(corner_one))
     corners.refresh()
     laps = _keep(LT.LapTable(one))

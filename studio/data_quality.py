@@ -102,10 +102,13 @@ DROPPED_FIX_CONCERN_FRAC = 0.08
 NO_LAPS_HEADLINE = "No complete laps in this recording."
 NO_LAPS_REASON = ("The GPS may not have locked, or the recording is too short to cross the "
                   "start/finish line.")
-# The KNOWN cause, when the count says so (discovery, a synthetic session whose GPS locked fine
-# and whose kart crossed the line once): the two guesses above are both false there.
-NO_LAPS_ONE_CROSSING_REASON = ("The kart crossed the start/finish line only once in this "
-                               "recording, and a lap needs two crossings.")
+# The MEASURED cause, when the count says so (discovery, a synthetic session whose GPS locked fine
+# and whose kart crossed the line once): the two guesses above are both false there. Worded as the
+# measurement — the loaded trace's crossings — not as a claim about the kart or the recording:
+# fixes the quality gate dropped hide real crossings (review of #636: 7 driven, 1 counted, 88 % of
+# fixes dropped), and one open chapter is not the whole recording.
+NO_LAPS_ONE_CROSSING_REASON = ("The GPS trace crosses the start/finish line only once, and a lap "
+                               "needs two crossings.")
 NO_LAPS_NEXT_ACTION = ("If this is the right track, drag the start/finish line on the map to set "
                        "where a lap begins.")
 # The second way out, and it is an ADDITION rather than a replacement: `lap_table.NO_LAPS_ACTION`
@@ -124,9 +127,9 @@ def no_laps_body(crossings: int | None = None) -> str:
     text and asserts this exact string is inside it.
 
     `crossings` is how many times the trace crosses the start/finish line (`Session.lap_count()`:
-    every crossing opens a lap, and the last one stays open). Exactly ONE is a recording whose GPS
-    locked fine and simply never came round again, so the guessed causes give way to the known
-    one; both ways out stay, in the same order."""
+    every crossing opens a lap, and the last one stays open). Exactly ONE, on a trace whose GPS
+    held (`no_laps_body_for` decides that), is a trace that never came round again, so the guessed
+    causes give way to the measured one; both ways out stay, in the same order."""
     reason = NO_LAPS_ONE_CROSSING_REASON if crossings == 1 else NO_LAPS_REASON
     return f"{reason} {NO_LAPS_NEXT_ACTION} {NO_LAPS_ALT_ACTION}"
 
@@ -134,9 +137,14 @@ def no_laps_body(crossings: int | None = None) -> str:
 def no_laps_body_for(session: Any) -> str:
     """`no_laps_body` with `session`'s own crossing count — what every zero-lap surface that holds
     a session states. A caller with no session (or a double with no lap account) gets the plain
-    body."""
+    body, and so does a session whose GPS quality is low or unknown: when the quality gate dropped
+    a concerning share of fixes, the count is of the SURVIVING trace and "the GPS may not have
+    locked" is still the likelier cause (review of #636: 7 crossings driven, 1 counted)."""
     count = getattr(session, "lap_count", None)
     if not callable(count) or getattr(session, "laps", True) is None:
+        return no_laps_body()
+    quality = getattr(session, "timing_quality", None)
+    if not isinstance(quality, TimingQuality) or quality.low_gps_quality:
         return no_laps_body()
     crossings: Any = count()
     return no_laps_body(int(crossings))

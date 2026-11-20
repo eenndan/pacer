@@ -278,10 +278,10 @@ def test_the_split_zero_lap_copy_still_adds_up_to_the_shared_string():
         f"the two halves render {joined!r}, not NO_LAPS_TEXT")
     view = _zero_lap_stats_view()
     live = f"{view.no_laps_note.text()} {view.no_laps_prose.text()}"
-    # The live prose is the shared body FOR THIS SESSION: its reason names a single start/finish
-    # crossing when that is the cause (`data_quality.no_laps_body_for`; this fixture has one).
+    # The live prose is the shared body for THIS session: this fixture's trace crosses the line
+    # once with a clean GPS, so its reason is the one-crossing one (`no_laps_body(1)`).
     from studio import data_quality
-    want = f"{stats_panel.NO_LAPS_BANNER} {data_quality.no_laps_body_for(view.session)}"
+    want = f"{stats_panel.NO_LAPS_BANNER} {data_quality.no_laps_body(1)}"
     assert live == want, f"the live labels render {live!r}"
     print("test_the_split_zero_lap_copy_still_adds_up_to_the_shared_string OK "
           f"({len(stats_panel.NO_LAPS_TEXT)} characters, "

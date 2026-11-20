@@ -2480,13 +2480,16 @@ def test_few_laps_copy_never_says_reload():
 
 class _OneCrossingSession(_LapAccountSession):
     """Zero valid laps on a trace that crosses the start/finish line `crossings` times (what
-    `Session.lap_count()` counts: every crossing opens a lap)."""
+    `Session.lap_count()` counts: every crossing opens a lap), with `dropped` of its fixes rejected
+    by the quality gate."""
 
     laps = object()
 
-    def __init__(self, crossings):
+    def __init__(self, crossings, dropped=0.0):
+        from studio import data_quality as dq
         super().__init__(n_clean=0, valid=[], dropout=[])
         self._crossings = crossings
+        self.timing_quality = dq.TimingQuality(dropped_fraction=dropped)
 
     def lap_count(self):
         return self._crossings
@@ -2501,8 +2504,8 @@ def test_zero_laps_after_one_crossing_names_the_crossing_not_the_gps():
     opps = K.Opportunities(enough=False, n_laps=0, median_lap_id=None, rows=[])
     title, body = K.empty_state_copy(opps, _OneCrossingSession(1))
     assert title == dq.NO_LAPS_HEADLINE, title
-    assert body.startswith("The kart crossed the start/finish line only once in this recording, "
-                           "and a lap needs two crossings."), body
+    assert body.startswith("The GPS trace crosses the start/finish line only once, and a lap "
+                           "needs two crossings."), body
     assert "GPS may not have locked" not in body, body
     assert dq.NO_LAPS_NEXT_ACTION in body and dq.NO_LAPS_ALT_ACTION in body, body
     for n in (0, 2, 5):
@@ -2510,6 +2513,23 @@ def test_zero_laps_after_one_crossing_names_the_crossing_not_the_gps():
     # No lap account at all (a caller with no session) keeps the plain body.
     assert dq.no_laps_body_for(None) == dq.no_laps_body()
     print("ok zero laps: one crossing is named as the cause")
+
+
+def test_one_crossing_on_a_low_quality_gps_trace_keeps_the_gps_reason():
+    """Review of #636: `lap_count` counts the crossings of the trace that SURVIVED the quality gate.
+    A synthetic session that drove 7 crossings but lost ~88 % of its fixes counted 1, and every
+    surface said the trace crossed once — replacing the GPS-lock reason that was the true one. Low
+    (or unknown) GPS quality keeps the plain body, whatever the count."""
+    from studio import data_quality as dq
+    opps = K.Opportunities(enough=False, n_laps=0, median_lap_id=None, rows=[])
+    lost = _OneCrossingSession(1, dropped=0.88)
+    assert lost.timing_quality.low_gps_quality
+    assert K.empty_state_copy(opps, lost)[1] == dq.no_laps_body(), K.empty_state_copy(opps, lost)
+    assert "GPS may not have locked" in dq.no_laps_body_for(lost)
+    unknown = _OneCrossingSession(1)
+    del unknown.timing_quality                  # no quality verdict: not evidence the GPS held
+    assert dq.no_laps_body_for(unknown) == dq.no_laps_body()
+    print("ok zero laps: a low-quality trace keeps the GPS reason")
 
 
 def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent():
