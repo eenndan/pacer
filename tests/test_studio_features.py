@@ -2298,7 +2298,7 @@ def test_excepthook_never_propagates_even_if_dialog_throws():
 if __name__ == "__main__":
     # Hang watchdog (permanent CI hardening): this file is full of Qt/event-loop tests, where a
     # regression can hang the whole run, and ctest buffers a test's stdout/stderr until it ENDS —
-    # so a bare 20-min job cancel surfaces nothing. Dump every thread's stack at 180 s (clear of the
+    # so a bare job-limit cancel surfaces nothing. Dump every thread's stack at 180 s (clear of the
     # ~110 s legit test_export_video, so zero noise on healthy runs); the dump lands in the buffer
     # that `ctest --timeout` flushes when it kills the hang, pinpointing the stuck test + thread.
     # exit=False: a pure no-op on the fast path. (This is what root-caused the original C1 hang.)

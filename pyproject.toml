@@ -65,11 +65,11 @@ build = { cmd = "cmake --build build/Release", depends-on = ["configure"] }
 # lives exactly as long as the ctest child. `golden` is deliberately NOT wrapped: it carries no
 # --timeout, so a sleep makes it slow rather than red.
 #
-# --timeout 480: a per-test ceiling well under CI's 20-min job cap, with headroom over the one
+# --timeout 480: a per-test ceiling well under CI's 35-min job cap, with headroom over the one
 # legitimately-slow test (test_export_video, ~110 s ffmpeg encode). A hang dies at 8 min instead
 # of eating the whole job, and a ctest timeout FLUSHES the test's buffered output (with
 # --output-on-failure), surfacing the in-test faulthandler watchdog dump instead of an opaque
-# 20-min job cancel that shows nothing (what made the C1 off-thread-load CI hang diagnosable).
+# job cancel that shows nothing (what made the C1 off-thread-load CI hang diagnosable).
 # The `footage.*` registrations carry their own TIMEOUT (3600 s, tests/CMakeLists.txt), which
 # --timeout does not override. On the dev Mac they run here on the Desktop working set (G2); in CI
 # there is no footage and each is reported Skipped by name.
