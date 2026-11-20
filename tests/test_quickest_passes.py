@@ -1996,7 +1996,7 @@ def test_compare_this_pass_with_the_typical_pass_at_the_corner():
         assert view.video.secondary.clip_end() == clip_b[1]
         assert view.pass_zoomed() and _corner_framed(view, 3) and not view.map._view_fitted
         # the readouts count from the corner's entry, and the seam says so
-        assert view.compare.corner_anchor() == "C3"
+        assert view.compare.pass_anchor() == "C3"
         # the pair named for the whole comparison (the status line expires in 6 s)
         assert view.video.seam.caption.text() == "lap 13 (2.32) vs typical lap 1 (2.40) · C3"
         msg = win.statusBar().currentMessage()
@@ -2010,7 +2010,7 @@ def test_compare_this_pass_with_the_typical_pass_at_the_corner():
         _settle()
         assert not view._comparing() and view.plots.selected_lap_ids() == [12]
         assert view.table.selected_lap_ids() == [12] and not view.pass_zoomed()
-        assert view.compare.corner_anchor() is None
+        assert view.compare.pass_anchor() is None
     finally:
         _close(win)
         prefs.set_corners_view("lap")
@@ -2068,7 +2068,7 @@ def test_a_coaching_compare_counts_from_the_corner_and_jump_says_how_its_pass_st
         tp = s.typical_passes()[1]
         assert view.compare_at_corner(tp, "+0.36 s")
         _settle()
-        assert view.compare.corner_anchor() == "C1"
+        assert view.compare.pass_anchor() == "C1"
         assert view.video.seam.caption.text() == (
             f"lap 4 ({tp.pass_s:.2f}) vs best lap 13 ({tp.best_pass_s:.2f}) · C1")
         view.video.compare_btn.click()
@@ -2136,11 +2136,11 @@ def _check_corner_readout(view, s, a, b, cid, held, caption):
         assert bb == theme.format_delta_run(-held), (bb, held)
         arrow = not within_timing_precision(held)
         assert seam == theme.format_delta_run(held, arrow=arrow), (seam, held)
-    assert view.compare.corner_anchor() == f"C{cid}"
+    assert view.compare.pass_anchor() == f"C{cid}"
     # a pane scrubbed out of its clip: the whole lap's Δ again, under the plain caption
     t_out = ca[1] + 10.0                         # ten seconds on, still on lap a, far past C#
     seam, ba, _bb, cap = _panes_at(view, t_out, xb + 0.2)
-    assert view.compare.corner_anchor() is None
+    assert view.compare.pass_anchor() is None
     assert cap == f"lap {a + 1} vs lap {b + 1}", cap
     assert ba == theme.format_delta_run(s.delta_between(a, b, t_out)), ba
 
@@ -2148,7 +2148,7 @@ def _check_corner_readout(view, s, a, b, cid, held, caption):
 def test_the_corner_readout_is_blank_before_the_entry_live_inside_and_held_after():
     """#626 review P1: the anchored readout was subtracted everywhere — before the corner, after
     it, and after a scrub to the other end of the lap ("lap 6 vs lap 9 · from C5 entry −0.67 s ▲"
-    in green for a pass 2.84 s SLOWER). The rule (`compare_controller.CornerAnchor`), for this
+    in green for a pass 2.84 s SLOWER). The rule (`compare_controller.PassAnchor`), for this
     compare and for Coaching's Compare, which share it."""
     from studio.stats import printed_gap_s
     win = _window()
@@ -2161,7 +2161,7 @@ def test_the_corner_readout_is_blank_before_the_entry_live_inside_and_held_after
         assert -v.gap_s == printed_gap_s(v.pass_s, v.typical_pass_s) == 2.84
         _check_corner_readout(view, s, 5, 8, 5, 2.84,
                               "lap 6 (6.45) vs typical lap 9 (3.61) · C5")
-        assert not view._comparing() or view.compare.corner_anchor() is None
+        assert not view._comparing() or view.compare.pass_anchor() is None
         view.video.compare_btn.click() if view._comparing() else None
         _settle()
         # the Coaching Compare: the typical lap (pane A) against the best lap (pane B) at C1
@@ -2220,7 +2220,7 @@ def test_leaving_a_corner_compare_any_way_clears_it_and_its_status():
         # a pane repoint is not "this corner" any more (M4): the anchor and the state go
         view.compare.on_pane_repoint(1, 6)
         _settle()
-        assert view.compare.corner_anchor() is None and view._corner_compare is None
+        assert view.compare.pass_anchor() is None and view._corner_compare is None
         assert view.video.seam.caption.text() == "lap 13 vs lap 7"
         view.video.compare_btn.click()
         _settle()
@@ -2262,7 +2262,7 @@ def test_c_keeps_its_whole_lap_meaning_while_a_pass_is_studied():
         assert view.pass_subject() == (12, 3, "C3")
         win.toggle_compare()
         _settle()
-        assert view._comparing() and view.compare.corner_anchor() is None
+        assert view._comparing() and view.compare.pass_anchor() is None
         assert getattr(view, "_corner_compare", None) is None
         assert view.video.seam.caption.text() == (
             f"lap {view.compare.lap_a + 1} vs lap {view.compare.lap_b + 1}")
@@ -2419,10 +2419,10 @@ def test_esc_leaves_either_corner_compare_and_keeps_its_meaning_in_a_whole_lap_o
         QTest.keyClick(win, Qt.Key_Escape)
         _settle()
         assert view._maximized_panel is None and view._comparing()
-        assert view.compare.corner_anchor() == "C1"
+        assert view.compare.pass_anchor() == "C1"
         QTest.keyClick(win, Qt.Key_Escape)
         _settle()
-        assert not view._comparing() and view.compare.corner_anchor() is None
+        assert not view._comparing() and view.compare.pass_anchor() is None
         assert (view._comparing(), view.table.selected_lap_ids(),
                 view.plots.selected_lap_ids()) == by_c
         assert bar.currentMessage() == ""
@@ -2438,7 +2438,7 @@ def test_esc_leaves_either_corner_compare_and_keeps_its_meaning_in_a_whole_lap_o
         _settle()
         win.toggle_compare()
         _settle()
-        assert view._comparing() and view.compare.corner_anchor() is None
+        assert view._comparing() and view.compare.pass_anchor() is None
         QTest.keyClick(win, Qt.Key_Escape)
         _settle()
         assert view._comparing()

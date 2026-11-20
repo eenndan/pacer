@@ -13,8 +13,13 @@ through the same pass path a corner row takes. These tests pin:
   * the view on the real window over the demo (PACER_NO_MEDIA) with 0, 2 and 4 lines: no line
     leaves the table exactly as it was; the rows, the legend, the clip and zoom windows, the
     subject, the fullscreen readout's pass line, the walk staying among the sectors, the menu
-    (export and compare greyed out, "not for sectors yet"), ⌘K, and a line edit refreshing the rows
-    and dropping a studied sector that no longer exists.
+    (export greyed out, "not for sectors yet"), ⌘K, and a line edit refreshing the rows and
+    dropping a studied sector that no longer exists;
+  * "Compare with my typical pass" on a sector row: the corners' rule over the SPLITS grid
+    (`stats.pass_vs_typical_of`, one code path), offered only where the typical split beats the
+    quickest by the split's step — on the demo with 2, 3 and 4 lines, S1 alone — both panes at
+    the sector, and `compare_controller.PassAnchor`'s readout (blank in the lead-in, live inside,
+    held after, dropped outside the clip, neutral inside 0.30 s); Esc leaves it.
 
 Its own file rather than test_quickest_passes.py (2,277 lines): the sector windows are built with
 lines added, which every one of these needs and none of those does.
@@ -356,9 +361,9 @@ def test_the_walk_stays_among_the_sectors_and_says_where_it_ends():
         prefs.set_corners_view("lap")
 
 
-def test_the_menu_plays_a_sector_and_greys_out_export_and_compare_and_cmd_k_lists_it():
+def test_the_menu_plays_a_sector_and_greys_out_export_and_a_level_compare_and_cmd_k_lists_it():
     from studio import command_palette
-    from studio.central_view import SECTOR_COMPARE_NOT_YET, SECTOR_EXPORT_NOT_YET
+    from studio.central_view import SECTOR_EXPORT_NOT_YET
     prefs.set_corners_view("quickest")
     win = _window(3)
     try:
@@ -370,7 +375,10 @@ def test_the_menu_plays_a_sector_and_greys_out_export_and_compare_and_cmd_k_list
         play, export, compare = menu.actions()
         assert play.isEnabled() and not export.isEnabled() and not compare.isEnabled()
         assert export.toolTip() == SECTOR_EXPORT_NOT_YET
-        assert compare.toolTip() == SECTOR_COMPARE_NOT_YET
+        # S3's quickest is level with its typical split under the split's step: the true reason
+        lap = s.split_matrix().best_lap[2]
+        assert compare.toolTip() == (f"Lap {lap + 1}'s pass through S3 is level with your typical "
+                                     "pass (within 0.30 s): nothing to tell apart"), compare.toolTip()
         play.trigger()
         lap = s.split_matrix().best_lap[2]
         assert plays[-1] == s.stretch_clip(lap, stats.sector_key(2))
@@ -389,6 +397,158 @@ def test_the_menu_plays_a_sector_and_greys_out_export_and_compare_and_cmd_k_list
         view.statusNotice.connect(notices.append)
         assert not view.play_lap_pass(lap, stats.sector_key(1))
         assert f"Lap {lap + 1} has no counted S2 split" in notices[-1], notices
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_sector_pass_beside_its_typical_follows_the_corners_rule():
+    """`SplitMatrix.pass_vs_typical` is `CornerMatrix.pass_vs_typical` over a column of splits:
+    the same typical lap, gap, tie and is-typical on the same numbers (one rule,
+    `stats.pass_vs_typical_of`), keyed by the sector's stretch key, under the step it is given."""
+    rows = [[10.00, 20.0], [10.50, 20.1], [10.40, 20.2], [10.20, 20.3], [10.30, 20.4],
+            [float("nan"), 20.5]]
+    m = _splits(rows)
+    corners = stats.corner_matrix(range(6), [1], [[r[0]] for r in rows], [[True]] * 6)
+    for lap in range(5):
+        v, c = m.pass_vs_typical(0, lap, 0.30), corners.pass_vs_typical(1, lap, 0.30)
+        assert (v.lap_id, v.pass_s, v.typical_lap_id, v.typical_pass_s, v.gap_s, v.level,
+                v.is_typical) == (c.lap_id, c.pass_s, c.typical_lap_id, c.typical_pass_s,
+                                  c.gap_s, c.level, c.is_typical), (lap, v, c)
+        assert v.cid == stats.sector_key(0) and v.level_s == 0.30
+    # lap 0's 10.00 against the typical 10.30 (lap 4): exactly the step apart is NOT level
+    v = m.pass_vs_typical(0, 0, 0.30)
+    assert (v.typical_lap_id, v.gap_s, v.level) == (4, 0.3, False)
+    assert m.pass_vs_typical(0, 0, 0.31).level                 # the step decides it
+    assert m.pass_vs_typical(0, 4, 0.30).is_typical
+    assert m.pass_vs_typical(0, 5, 0.30) is None, "a blank row is not counted"
+    assert m.pass_vs_typical(2, 0, 0.30) is None, "no such column"
+
+
+def _quickest_compare(view, q, row):
+    pos = q.table.visualRect(q.table.model().index(row, 1)).center()
+    return view.pass_menu(view._quickest_menu_pass(q.table, pos)).actions()[2]
+
+
+def test_compare_with_the_typical_pass_is_offered_on_a_sector_row_only_past_the_split_step():
+    """The demo with 2, 3 and 4 lines: each sector row's Compare item is enabled exactly where its
+    quickest split and its typical split are NOT level under 0.30 s (S1 alone, typical − quickest
+    0.47-0.55 s; studio/dev/probes/sector_typical_compare), and greyed with its own computed reason
+    everywhere else. On main every sector row was greyed "Not for sectors yet"."""
+    prefs.set_corners_view("quickest")
+    win = _window(2)
+    try:
+        view, s = win.view, win.session
+        _record_plays(view)
+        q = view.corners_page.quickest
+        for n in CONFIGS:
+            _with_lines(s, n)
+            view.rebuild_derived_views()
+            _settle()
+            m = s.split_matrix()
+            enabled = []
+            for c in range(n + 1):
+                key, lap = stats.sector_key(c), m.best_lap[c]
+                compare = _quickest_compare(view, q, q.row_of(key))
+                v = s.pass_vs_typical(lap, key)
+                assert v.level_s == stats.SECTOR_LEVEL_S and v.typical_lap_id != lap
+                assert compare.isEnabled() == (not v.level), (n, c, v)
+                if compare.isEnabled():
+                    enabled.append(f"S{c + 1}")
+                    assert v.gap_s >= stats.SECTOR_LEVEL_S, v      # typical − quickest
+                    assert compare.toolTip() == (
+                        f"Lap {lap + 1} and your typical pass through S{c + 1}, lap "
+                        f"{v.typical_lap_id + 1}, side by side from the lead-in")
+                else:
+                    assert compare.toolTip() == (
+                        f"Lap {lap + 1}'s pass through S{c + 1} is level with your typical pass "
+                        "(within 0.30 s): nothing to tell apart"), compare.toolTip()
+            assert enabled == ["S1"], (n, enabled)
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def _panes_at(view, t_a, t_b):
+    """Both compare panes at telemetry times (t_a, t_b), the tick run: (seam, badge A, badge B,
+    caption, seam colour)."""
+    view.video.pane.current_global_time = lambda: t_a
+    view.video.secondary.current_global_time = lambda: t_b
+    view.compare._compare_last_t = None
+    view.compare.tick()
+    v = view.video
+    return (v.seam.value.text(), v._cell_a.badge.text(), v._cell_b.badge.text(),
+            v.seam.caption.text())
+
+
+def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout():
+    from studio.central_view import typical_compare_status
+    from studio.stats import printed_gap_s
+    prefs.set_corners_view("quickest")
+    win = _window(3)
+    try:
+        view, s = win.view, win.session
+        _record_plays(view)
+        seeks = []
+        real_seek = view.video.seek_pane
+        view.video.seek_pane = lambda side, t: (seeks.append((side, t)), real_seek(side, t))
+        q = view.corners_page.quickest
+        key = stats.sector_key(0)
+        a = s.split_matrix().best_lap[0]
+        v = s.pass_vs_typical(a, key)
+        b = v.typical_lap_id
+        compare = _quickest_compare(view, q, q.row_of(key))
+        assert compare.isEnabled()
+        compare.trigger()
+        _settle()
+        assert view._comparing() and (view.compare.lap_a, view.compare.lap_b) == (a, b)
+        # both panes at their own lead-in into S1, each pausing at its own clip end
+        clip_a, clip_b = s.stretch_clip(a, key), s.stretch_clip(b, key)
+        assert seeks[-2:] == [(0, clip_a[0]), (1, clip_b[0])], seeks[-2:]
+        assert view.video.pane.clip_end() == clip_a[1]
+        assert view.video.secondary.clip_end() == clip_b[1]
+        assert view.pass_zoomed()
+        assert view.compare.pass_anchor() == "S1"
+        cap = f"lap {a + 1} ({v.pass_s:.2f}) vs typical lap {b + 1} ({v.typical_pass_s:.2f}) · S1"
+        assert view.video.seam.caption.text() == cap
+        msg = win.statusBar().currentMessage()
+        assert msg == typical_compare_status(v, "S1") and " quicker through S1 " in msg, msg
+        assert "fastest" not in msg.lower()
+        tip = view.video.seam.toolTip()
+        assert "±0.30 s" in tip and "the whole sector" in tip, tip   # the sector's own step
+        # the readout rule at the sector's two lines (`Session.stretch_edges`)
+        (ea, xa), (eb, xb) = s.stretch_edges(a, key), s.stretch_edges(b, key)
+        assert abs((xa - ea) - v.pass_s) < 1e-9 and abs((xb - eb) - v.typical_pass_s) < 1e-9
+        seam, ba, bb, cap_now = _panes_at(view, clip_a[0] + 0.05, clip_b[0] + 0.05)
+        assert (seam, ba, bb) == ("Δ —", "Δ —", "Δ —") and cap_now == cap, (seam, ba, bb)
+        seam, ba, bb, _ = _panes_at(view, ea, eb)
+        assert "0.00" in seam and "0.00" in ba and "0.00" in bb, (seam, ba, bb)
+        held = printed_gap_s(v.pass_s, v.typical_pass_s)
+        assert held == -v.gap_s and abs(held) >= stats.SECTOR_LEVEL_S
+        for ta, tb in ((xa + 0.2, xb + 0.2), (clip_a[1] + 0.03, clip_b[1] + 0.05)):
+            seam, ba, bb, _ = _panes_at(view, ta, tb)
+            assert ba == theme.format_delta_run(held) and bb == theme.format_delta_run(-held)
+            assert seam == theme.format_delta_run(held), seam
+        # inside the sector a Δ under the split's step is shown neutral, without its arrow
+        anchor = view.compare._anchor
+        assert anchor.level_s == stats.SECTOR_LEVEL_S and anchor.noun == "sector"
+        view.compare._set_pane_badge(0, 0.2)
+        view.compare._set_seam(0.2)
+        assert view.video._cell_a.badge.text() == theme.format_delta_run(0.2, arrow=False)
+        assert view.video.seam.value.text() == theme.format_delta_run(0.2, arrow=False)
+        # a pane scrubbed out of its clip: the anchor goes, the whole-lap Δ under the plain caption
+        seam, ba, _bb, cap_now = _panes_at(view, clip_a[1] + 10.0, xb + 0.2)
+        assert view.compare.pass_anchor() is None and cap_now == f"lap {a + 1} vs lap {b + 1}"
+        # Esc leaves it: lap a alone again
+        view.video.compare_btn.click()
+        _settle()
+        assert compare.isEnabled() and view.compare_pass_with_typical(a, key)
+        _settle()
+        assert view.compare.pass_anchor() == "S1"
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view._comparing() and view.table.selected_lap_ids() == [a]
+        assert view.compare.pass_anchor() is None and win.statusBar().currentMessage() == ""
     finally:
         _close(win)
         prefs.set_corners_view("lap")

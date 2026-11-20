@@ -2826,15 +2826,28 @@ class Session:
         `CornerModel.pass_clip`; a sector's runs from PASS_LEAD_S before the line it starts at to
         PASS_TAIL_S after the line it ends at, those instants read off the same chord interpolation
         as the lap's SPLITS cells (`lap_sector_splits`), so the clip shows exactly the split timed."""
+        if stats_service.sector_col(key) is None:
+            return self.corners.pass_clip(lap_id, key)
+        edges = self.stretch_edges(lap_id, key)
+        if edges is None:
+            return None
+        return (edges[0] - corner_model.PASS_LEAD_S, edges[1] + corner_model.PASS_TAIL_S)
+
+    def stretch_edges(self, lap_id: int, key: int) -> tuple[float, float] | None:
+        """The telemetry-clock instants lap `lap_id` enters and leaves `key`: a corner's entry and
+        exit (`CornerModel.corner_edge_media_time`, its pass clip's edges), a sector's two line
+        crossings (the chord interpolation its SPLITS cell is timed between). What a compare at
+        the stretch counts its Δ from and holds it after (`compare_controller.PassAnchor`)."""
         col = stats_service.sector_col(key)
         if col is None:
-            return self.corners.pass_clip(lap_id, key)
+            enter = self.corners.corner_edge_media_time(lap_id, key, "enter")
+            leave = self.corners.corner_edge_media_time(lap_id, key, "exit")
+            return None if enter is None or leave is None else (enter, leave)
         splits = self.lap_sector_splits(lap_id)
         if not 0 <= col < len(splits):
             return None
-        t0 = float(self._lap_columns(lap_id)[0][0])
-        enter = t0 + sum(splits[:col])
-        return (enter - corner_model.PASS_LEAD_S, enter + splits[col] + corner_model.PASS_TAIL_S)
+        enter = float(self._lap_columns(lap_id)[0][0]) + sum(splits[:col])
+        return enter, enter + splits[col]
 
     def stretch_plot_window(self, key: int, mode: str) -> tuple[float, float] | None:
         """`key`'s window on the charts' shared axis in `mode`: a corner's enter → exit
@@ -2884,12 +2897,19 @@ class Session:
     def pass_vs_typical(self, lap_id: int, cid: int) -> stats_service.PassVsTypical | None:
         """Lap `lap_id`'s pass through corner `cid` beside the corner's typical pass
         (`CornerMatrix.pass_vs_typical`: Coaching's typical, with this lap where the best lap
-        stands), level under the same step the Quickest passes name a tie by. None without it."""
+        stands), level under the same step the Quickest passes name a tie by. A sector's key
+        (`stats.sector_key`) asks the SPLITS grid by the same rule, under the split's own step
+        (`stats.sector_level_floor`). None without it."""
+        estimated = bool(self.timing_quality.media_clock)
+        col = stats_service.sector_col(cid)
+        if col is not None:
+            splits = self.split_matrix()
+            return (None if splits is None else splits.pass_vs_typical(
+                col, lap_id, stats_service.sector_level_floor(estimated)))
         matrix = self.corner_matrix()
         if matrix is None:
             return None
-        level_s = stats_service.rolling_level_floor(bool(self.timing_quality.media_clock))
-        return matrix.pass_vs_typical(cid, lap_id, level_s)
+        return matrix.pass_vs_typical(cid, lap_id, stats_service.rolling_level_floor(estimated))
 
     def corner_plot_window(self, cid: int, mode: str) -> tuple[float, float] | None:
         """Corner `cid`'s window, enter to exit, on the charts' shared axis in `mode` — the

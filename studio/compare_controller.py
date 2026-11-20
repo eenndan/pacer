@@ -35,34 +35,43 @@ def _printed(d: float) -> float:
     return float(theme.format_delta_value(d).replace("\u2212", "-"))
 
 
-# How far outside its clip a pane may report and still be "at this corner": the clip's own pause
+# How far outside its clip a pane may report and still be "at this pass": the clip's own pause
 # lands up to ~50 ms past its end on the real player (cool/compare-this-pass), a seek to the clip
 # start can quantise just before it.
 ANCHOR_SLACK_S = 0.5
 
 
-class CornerAnchor:
-    """A compare AT ONE CORNER: what the seam and both pane badges show while both panes are on
-    that corner's passes. THE READOUT RULE, per pane, at that pane's own time t:
+class PassAnchor:
+    """A compare AT ONE PASS WINDOW — a corner's entry to exit, or a sector's line to line (the
+    `noun` it names): what the seam and both pane badges show while both panes are on that
+    stretch's passes. THE READOUT RULE, per pane, at that pane's own time t:
 
-      * BEFORE the corner's entry (the lead-in): no number — "Δ —", neutral. The caption still
-        names the corner. A gap before the corner is not the gap through it.
-      * INSIDE the corner: the gap since the entry — this lap's Δ against the other at t, less its
-        Δ at the entry (`Session.delta_between`, both warps off the best lap).
-      * AFTER the exit: HELD at the gap through the corner, the two passes' printed times apart
+      * BEFORE the entry (the lead-in): no number — "Δ —", neutral. The caption still names the
+        stretch. A gap before it is not the gap through it.
+      * INSIDE: the gap since the entry — this lap's Δ against the other at t, less its Δ at the
+        entry (`Session.delta_between`, both warps off the best lap).
+      * AFTER the exit: HELD at the gap through the stretch, the two passes' printed times apart
         (`stats.printed_gap_s`; pane B's the same, negated) — so the frame both panes pause on
         shows exactly the gap the status line names.
       * A pane OUTSIDE its clip ([start, end], `ANCHOR_SLACK_S` either side), once both have been
-        inside: the comparison is no longer "this corner". The anchor is dropped and the readout
+        inside: the comparison is no longer "this pass". The anchor is dropped and the readout
         goes back to the whole lap's Δ under the plain caption. So does a pane repoint, a reset to
         the start line, or the exit.
 
+    Every number it shows is neutral, without its ▲/▼, inside `level_s`: the step two of the
+    stretch's times are level under (`library.PB_PRECISION_S` for a corner, as the seam has
+    always used; `stats.SECTOR_LEVEL_S` for a split, which carries more GPS noise). A sector's Δ
+    of 0.2 s is a difference its timing cannot make, and is not coloured as one.
+
     `sides` holds per pane (entry, exit, clip start, clip end, Δ at the entry, held gap)."""
 
-    def __init__(self, label: str, caption: str, sides: tuple[tuple, tuple]):
+    def __init__(self, label: str, caption: str, sides: tuple[tuple, tuple], *,
+                 noun: str = "corner", level_s: float = PB_PRECISION_S):
         self.label = label
         self.caption = caption
         self.sides = sides
+        self.noun = noun
+        self.level_s = level_s
         self.armed = False     # both panes have been inside their clips (the seeks landed)
 
     def inside(self, side: int, t: float) -> bool:
@@ -80,6 +89,10 @@ class CornerAnchor:
 
 
 class CompareController:
+    # No pass anchored (set per instance in __init__; the class default keeps the badge and seam
+    # formatters readable on a bare controller, as tests/test_compare.py builds one).
+    _anchor: PassAnchor | None = None
+
     def __init__(
         self,
         session: Session,
@@ -110,11 +123,11 @@ class CompareController:
         # Last (t_a, t_b) the badges/g were computed for; lets tick() early-out when neither pane
         # moved. Sentinel that no real (float, float) equals, so the first tick always applies.
         self._compare_last_t: object = None
-        # A compare AT A CORNER (`set_corner_anchor`, `CornerAnchor`'s readout rule). None for a
-        # compare of whole laps; any pair change, a reset to the line or a pane leaving its clip
-        # drops it, and `on_anchor_dropped` tells the view (the one place it hears "not this
-        # corner any more", whichever way it happened).
-        self._anchor: CornerAnchor | None = None
+        # A compare AT A PASS, a corner's or a sector's (`set_pass_anchor`, `PassAnchor`'s
+        # readout rule). None for a compare of whole laps; any pair change, a reset to the line or
+        # a pane leaving its clip drops it, and `on_anchor_dropped` tells the view (the one place
+        # it hears "not this pass any more", whichever way it happened).
+        self._anchor: PassAnchor | None = None
         self.on_anchor_dropped: Callable[[], None] | None = None
         # Cross-recording compare: when _cross, pane B's g / lap window / lap id / video source all
         # resolve against _session_b (the reference Session), not self.session. Dormant otherwise
@@ -256,12 +269,12 @@ class CompareController:
             d_a = self.session.delta_between(a, b, t_a)
             d_b = self.session.delta_between(b, a, t_b)
             anchor = self._anchor
-            if anchor is not None:   # a corner compare: `CornerAnchor`'s readout rule
+            if anchor is not None:   # a compare at a pass: `PassAnchor`'s readout rule
                 both_in = anchor.inside(0, t_a) and anchor.inside(1, t_b)
                 if both_in:
                     anchor.armed = True
                 if anchor.armed and not both_in:
-                    self._drop_anchor()          # a pane left the corner: the whole-lap Δ again
+                    self._drop_anchor()          # a pane left the pass: the whole-lap Δ again
                 elif not anchor.armed:
                     d_a = d_b = None             # the seeks to the lead-in have not landed yet
                 else:
@@ -311,9 +324,13 @@ class CompareController:
         """Format + colour a pane Δ badge via theme.format_delta_run (the app's SINGLE Δ formatter,
         so the badge carries the same ▲/▼ non-colour direction cue as the hero readout, the charts
         and the corner table — hand-rolling the f-string here dropped it) and theme.delta_colour
-        (neutral when dead-even)."""
+        (neutral when dead-even). At a pass (`PassAnchor`), neutral and arrowless inside its step,
+        as the seam is: two passes level under it have no direction to show."""
         if same_lap:
             self.video.set_pane_badge(side, self.SAME_LAP_BADGE, None)
+        elif (self._anchor is not None and d is not None
+              and abs(_printed(d)) < self._anchor.level_s):   # level under the pass's own step
+            self.video.set_pane_badge(side, theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_pane_badge(side, theme.format_delta_run(d), theme.delta_colour(d))
 
@@ -324,11 +341,13 @@ class CompareController:
         "level / ahead / behind" lap verdict in the app applies). The badge's own dead band is
         5 ms, which is right for 11 px in a corner; at the hero's size a number that flashes red
         and green at ±0.01 s while two laps are level is a claim the timing cannot make. Inside
-        the band the number is still printed, neutral and without its ▲/▼, so it never hides.
+        the band the number is still printed, neutral and without its ▲/▼, so it never hides. At
+        a pass (`PassAnchor`) the band is that stretch's own step, a sector's wider one.
 
         Decided on the PRINTED value, as the Laps table's Δbest decides on the gap it prints:
         0.0699 and 0.0700 both print `+0.07`, and two equal strings must not look different."""
-        if d is not None and within_timing_precision(_printed(d)):
+        if d is not None and (within_timing_precision(_printed(d)) if self._anchor is None
+                              else abs(_printed(d)) < self._anchor.level_s):
             self.video.set_seam_delta(theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_seam_delta(theme.format_delta_run(d), theme.delta_colour(d))
@@ -358,13 +377,15 @@ class CompareController:
         if self._anchor is not None:
             label = self._anchor.label
             caption = self._anchor.caption
+            noun = self._anchor.noun
             since = (f"Counted from {label}'s entry: no number in the lead-in, the gap since the "
-                     f"entry through {label}, and after its exit the gap through the whole corner, "
-                     "held. A pane leaving the corner's clip goes back to the laps' gap since the "
+                     f"entry through {label}, and after its exit the gap through the whole {noun}, "
+                     f"held. A pane leaving the {noun}'s clip goes back to the laps' gap since the "
                      "start line. ")
+        step = PB_PRECISION_S if self._anchor is None else self._anchor.level_s
         tip = (f"Lap {lap_label(a)} against {other} at the same place on track: − is ahead. "
                + since +
-               f"Coloured only beyond timing precision (±{PB_PRECISION_S:.2f} s); inside it the "
+               f"Coloured only beyond timing precision (±{step:.2f} s); inside it the "
                "two laps are level and the number stays neutral.")
         self.video.set_seam_pair(caption, tip)
 
@@ -606,11 +627,13 @@ class CompareController:
         status chip, which is the same call the charts header's `Δ TO REF` label already makes."""
         return f"lap {lap_label(ref_lap)}  ({fmt_time(ref_sess.lap_time(ref_lap))})"
 
-    def set_corner_anchor(self, label: str, caption: str, side_a: tuple, side_b: tuple) -> bool:
-        """Anchor both Δ badges and the seam at corner `label` (`CornerAnchor`'s readout rule),
-        under the seam `caption` that names the pair for the whole comparison. Each side is that
-        pane's (entry, exit, clip start, clip end, pass time) on the telemetry clock. Same-recording
-        pairs only; False (whole-lap Δ kept) when either entry Δ cannot be read."""
+    def set_pass_anchor(self, label: str, caption: str, side_a: tuple, side_b: tuple, *,
+                        noun: str = "corner", level_s: float = PB_PRECISION_S) -> bool:
+        """Anchor both Δ badges and the seam at the pass through `label`, a corner or a sector
+        (`noun`; `PassAnchor`'s readout rule, neutral inside `level_s`), under the seam `caption`
+        that names the pair for the whole comparison. Each side is that pane's (entry, exit, clip
+        start, clip end, pass time) on the telemetry clock. Same-recording pairs only; False
+        (whole-lap Δ kept) when either entry Δ cannot be read."""
         a, b = self._compare_a, self._compare_b
         if not self._compare or self._cross or a is None or b is None:
             return False
@@ -619,19 +642,20 @@ class CompareController:
         if d_a is None or d_b is None:
             return False
         held = printed_gap_s(side_a[4], side_b[4])   # + = pane A's pass the slower
-        self._anchor = CornerAnchor(label, caption, (
+        self._anchor = PassAnchor(label, caption, (
             (*map(float, side_a[:4]), float(d_a), held),
-            (*map(float, side_b[:4]), float(d_b), -held)))
+            (*map(float, side_b[:4]), float(d_b), -held)), noun=noun, level_s=float(level_s))
         self._compare_last_t = None
         self._sync_seam_pair()
         return True
 
-    def corner_anchor(self) -> str | None:
-        """The corner the Δ readouts are anchored at ("C3"), or None for a whole-lap compare."""
+    def pass_anchor(self) -> str | None:
+        """The stretch the Δ readouts are anchored at ("C3", "S1"), or None for a whole-lap
+        compare."""
         return None if self._anchor is None else self._anchor.label
 
     def _drop_anchor(self) -> None:
-        """Not "this corner" any more: back to the whole-lap Δ under the plain caption, and the
+        """Not "this pass" any more: back to the whole-lap Δ under the plain caption, and the
         view told (`on_anchor_dropped`) so its own corner-compare state goes with it."""
         if self._anchor is None:
             return

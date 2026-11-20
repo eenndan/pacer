@@ -127,11 +127,10 @@ def typical_compare_status(v, label: str) -> str:
 # Where the pass being studied was played from (`CentralView.pass_subject`): the corner walk from a
 # Quickest passes row steps to the next corner's QUICKEST pass, from anywhere else along the lap.
 PASS_FROM_QUICKEST = "quickest"
-# A sector pass plays, zooms, loops and walks like a corner pass; its export and its compare with a
-# typical pass are not built yet (the clip's corner-time readout and the compare's corner anchor
-# are corner-shaped), so their menu items are greyed out with this said rather than half-working.
+# A sector pass plays, zooms, loops, walks and compares with its typical pass like a corner pass;
+# its export is not built yet (the clip's corner-time readout is corner-shaped), so that menu item
+# is greyed out with this said rather than half-working.
 SECTOR_EXPORT_NOT_YET = "Not for sectors yet: a pass export is for a corner's pass"
-SECTOR_COMPARE_NOT_YET = "Not for sectors yet: compare with the typical pass is for a corner's pass"
 # What a held status line depends on (`CentralView._hold_status`): the pass being studied, or a
 # compare at one corner.
 _HELD_PASS = "pass"
@@ -2400,7 +2399,7 @@ class CentralView(QWidget):
         d = PRINT_DECIMALS
         caption = (f"lap {lap_label(a)} ({tp.pass_s:.{d}f}) vs best lap {lap_label(b)} "
                    f"({tp.best_pass_s:.{d}f}) · {self._corner_label(cid)}")
-        if not self._enter_corner_pair(cid, a, b, tp.pass_s, tp.best_pass_s, caption):
+        if not self._enter_pass_pair(cid, a, b, tp.pass_s, tp.best_pass_s, caption):
             return False
         corners = self.session.corners
         for side, lap in ((0, a), (1, b)):
@@ -2415,15 +2414,16 @@ class CentralView(QWidget):
         self._hold_status(_HELD_CORNER, compare_status(tp, lost) + COACHING_COMPARE_KEYS)
         return True
 
-    def _enter_corner_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
-                           caption: str) -> bool:
-        """Compare lap `a` (pane A, the charts' cursor) with lap `b` AT corner `cid`: C's gates (two
-        valid laps; a Lap race ends first), the grid restored, any compare or pass zoom left, the
-        pair entered, the corner ringed, and both Δ badges and the seam anchored at the corner
-        (`compare_controller.CornerAnchor`: nothing in the lead-in, the gap since the entry inside
+    def _enter_pass_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
+                         caption: str, sector_level_s: float | None = None) -> bool:
+        """Compare lap `a` (pane A, the charts' cursor) with lap `b` AT stretch `cid`, a corner or
+        a sector (`stats.sector_key`, whose split step is `sector_level_s`): C's gates (two valid
+        laps; a Lap race ends first), the grid restored, any compare or pass zoom left, the pair
+        entered, a corner ringed, and both Δ badges and the seam anchored at the pass
+        (`compare_controller.PassAnchor`: nothing in the lead-in, the gap since the entry inside
         it, the passes' printed gap held after the exit) under `caption`, the pair named for the
-        whole comparison. `pass_a` / `pass_b` are the two passes' times through the corner. False
-        when nothing changed."""
+        whole comparison. `pass_a` / `pass_b` are the two passes' times through it. False when
+        nothing changed."""
         if not self.video.compare_btn.isEnabled():
             return False
         if self.is_racing():
@@ -2435,17 +2435,20 @@ class CentralView(QWidget):
         self.end_pass_zoom()     # enter_pair below does not toggle the button the zoom listens to
         if not self.compare.enter_pair(a, b):
             return False
-        corners = self.session.corners
         sides = []
         for lap, pass_s in ((a, pass_a), (b, pass_b)):
-            entry = corners.corner_edge_media_time(lap, cid, "enter")
-            leave = corners.corner_edge_media_time(lap, cid, "exit")
-            clip = corners.pass_clip(lap, cid)
-            sides.append(None if None in (entry, leave, clip) else
-                         (entry, leave, clip[0], clip[1], pass_s))
+            edges = self.session.stretch_edges(lap, cid)
+            clip = self.session.stretch_clip(lap, cid)
+            sides.append(None if edges is None or clip is None else (*edges, *clip, pass_s))
         if None not in sides:
-            self.compare.set_corner_anchor(self._corner_label(cid), caption, *sides)
-        self._ring_corner(cid)
+            # A sector's Δ is neutral inside the split's own step (`sector_level_s`, the one its
+            # compare is offered past); a corner keeps the seam's timing step.
+            self.compare.set_pass_anchor(
+                self._corner_label(cid), caption, *sides,
+                **({} if sector_level_s is None else {"noun": "sector",
+                                                      "level_s": sector_level_s}))
+        if sector_col(cid) is None:      # a sector has no apex to ring
+            self._ring_corner(cid)
         return True
 
     # ------------------------------------------------------------- this pass vs the typical one
@@ -2458,16 +2461,20 @@ class CentralView(QWidget):
     # to look for. Leaving: C, the compare button, Esc or a lap pick — and the charts go back to
     # this lap alone (`_on_corner_compare_left`). Loop and Slow are off in it: compare is not a
     # pass (#621's `set_compare` ends the pass), and two panes looping on different lengths would
-    # drift apart.
+    # drift apart. A SECTOR's pass (a Quickest passes sector row, `stats.sector_key`) is the same
+    # compare, beside the SPLITS grid's typical split, offered past the split's own wider step
+    # (`stats.SECTOR_LEVEL_S`): on the demo with 2, 3 or 4 sector lines, at S1 alone — every
+    # other sector's quickest is level with its typical (studio/dev/probes/sector_typical_compare).
     def typical_compare_refusal(self, lap_id: int, cid: int) -> str | None:
         """Why lap `lap_id`'s pass through `cid` cannot be compared with the typical pass, or None."""
         why = self.lap_pass_refusal(lap_id, cid)
         if why is not None:
             return why
-        if sector_col(cid) is not None:
-            return SECTOR_COMPARE_NOT_YET
         label, lap = self._corner_label(cid), lap_label(lap_id)
         v = self.session.pass_vs_typical(lap_id, cid)
+        if v is None and sector_col(cid) is not None:     # its split is counted (lap_pass_refusal)
+            return (f"{label} has too few counted splits for a typical one (it needs a median of "
+                    "several laps)")
         if v is None:
             matrix = self.session.corner_matrix()
             col = matrix.cids.index(cid) if matrix is not None and cid in matrix.cids else None
@@ -2499,16 +2506,16 @@ class CentralView(QWidget):
                 f"lap {lap_label(v.typical_lap_id)}")
 
     def compare_pass_with_typical(self, lap_id: int, cid: int) -> bool:
-        """Compare lap `lap_id`'s pass through `cid` with the corner's typical pass (see above).
-        Refused, with the reason on the status line, where `typical_compare_refusal` says so."""
+        """Compare lap `lap_id`'s pass through `cid`, a corner or a sector, with its typical pass
+        (see above). Refused, with the reason on the status line, where `typical_compare_refusal`
+        says so."""
         why = self.typical_compare_refusal(lap_id, cid)
         if why is not None:
             self.statusNotice.emit(why)
             return False
         v = self.session.pass_vs_typical(lap_id, cid)
-        corners = self.session.corners
-        clip_a = corners.pass_clip(lap_id, cid)
-        clip_b = corners.pass_clip(v.typical_lap_id, cid)
+        clip_a = self.session.stretch_clip(lap_id, cid)
+        clip_b = self.session.stretch_clip(v.typical_lap_id, cid)
         if clip_a is None or clip_b is None:
             self.statusNotice.emit(f"Lap {lap_label(v.typical_lap_id)}'s pass has no clip")
             return False
@@ -2516,8 +2523,8 @@ class CentralView(QWidget):
         d, label = PRINT_DECIMALS, self._corner_label(cid)
         caption = (f"lap {lap_label(lap_id)} ({v.pass_s:.{d}f}) vs typical lap "
                    f"{lap_label(v.typical_lap_id)} ({v.typical_pass_s:.{d}f}) · {label}")
-        if not self._enter_corner_pair(cid, lap_id, v.typical_lap_id, v.pass_s,
-                                       v.typical_pass_s, caption):
+        if not self._enter_pass_pair(cid, lap_id, v.typical_lap_id, v.pass_s, v.typical_pass_s,
+                                     caption, v.level_s if sector_col(cid) is not None else None):
             return False
         self.video.seek_pane(0, clip_a[0])
         self.video.seek_pane(1, clip_b[0])
@@ -2553,10 +2560,10 @@ class CentralView(QWidget):
             self._set_corner_lap(pair[0])
 
     def leave_corner_compare(self) -> bool:
-        """Esc on a compare AT A CORNER — this pass beside the typical one, or a Coaching row's
-        Compare — leaves it, as C does. False when none is on: a plain whole-lap compare (C, the
-        button) has no corner anchor, and Esc there keeps its meaning (nothing to back out of)."""
-        if not self._comparing() or self.compare.corner_anchor() is None:
+        """Esc on a compare AT A PASS — this pass (a corner's or a sector's) beside the typical
+        one, or a Coaching row's Compare — leaves it, as C does. False when none is on: a plain
+        whole-lap compare (C, the button) has no pass anchor, and Esc there keeps its meaning (nothing to back out of)."""
+        if not self._comparing() or self.compare.pass_anchor() is None:
             return False
         self.video.compare_btn.click()      # compareToggled(False): the exit, then the restore
         return True
