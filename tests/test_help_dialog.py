@@ -162,8 +162,8 @@ def test_every_group_shares_one_key_column():
     assert _K10_REWORDED <= set(want), sorted(_K10_REWORDED - set(want))
     assert not _K10_WAS & {d for _k, d in want}, "a K10 row still reads its old description"
     # 33: + Return, Corners ▸ Quickest passes (cool/quickest-passes); 34: + L, loop the pass
-    # (cool/pass-loop-slowmo)
-    assert len(want) == 34, len(want)
+    # (cool/pass-loop-slowmo); 35: + ⌥← · ⌥→, the corner walk (cool/play-every-pass)
+    assert len(want) == 35, len(want)
     for size in (None, "minimum"):
         d = _shown(ShortcutsDialog())
         if size:

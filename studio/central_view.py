@@ -34,6 +34,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -44,10 +45,10 @@ from PySide6.QtWidgets import (
 )
 
 from . import chapters, data_quality, motion, plots_view, sidecar, theme, units
-from ._signal import lap_label, plural
+from ._signal import PRINT_DECIMALS, lap_label, plural
 from .coaching_panel import OpportunitiesPanel, compare_status
 from .compare_controller import CompareController
-from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable
+from .lap_table import CORNERS_VIEW_QUICKEST, CornersPage, LapTable, is_selection_click
 from .map_view import MapView
 from .marks_panel import MarksPanel
 from .overlay import broadcast
@@ -99,6 +100,9 @@ _PLOTS_BASELINE_LABELS = {
     plots_view.DELTA_BASELINE_REFERENCE: _PLOTS_LABEL_REF,
 }
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
+# Where the pass being studied was played from (`CentralView.pass_subject`): the corner walk from a
+# Quickest passes row steps to the next corner's QUICKEST pass, from anywhere else along the lap.
+PASS_FROM_QUICKEST = "quickest"
 _RESTORE_GLYPH = "ph.corners-in"     # shown while maximized — click/Esc to restore the grid
 # The two constants that used to live here (_HDR_ICON_PX 15, _HDR_ICON_BTN 26x24) are gone: an
 # icon button's size is theme.ICON_BTN and its glyph theme.ICON_PX, applied by widgets.icon_button.
@@ -570,6 +574,9 @@ class CentralView(QWidget):
     # A one-line, just-happened fact for the WINDOW's status bar, from a panel that has no channel
     # to it (U2: LapTable.selection_capped — a multi-select trimmed to the charts' lap cap).
     statusNotice = Signal(str)
+    # A pass's right-click "Export this pass…": (lap, cid, label) -> the window's overlay export,
+    # opened on that pass (ExportController.export_pass_video, the ⌘K row's own door).
+    passExportRequested = Signal(int, int, str)
     # The Lap Race started (True) or ended (False) — the window keeps its menu check in step.
     raceChanged = Signal(bool)
 
@@ -848,7 +855,7 @@ class CentralView(QWidget):
         self.video.loopChanged.connect(self._on_pass_loop_changed)
         # B4: a Corners row rings its apex on the map, like the Stats CORNERS and Coaching
         # rows — the same maximize-aware handler, so the three surfaces behave identically.
-        self.corner_table.corner_clicked.connect(self._on_stats_corner_clicked)
+        self.corner_table.corner_clicked.connect(self._on_corner_row_clicked)
         self._corner_lap: int | None = None  # the lap the Corners view describes
         # Stats mode: the 3rd page — the session-statistics dashboard (studio/stats_panel.py).
         # UNDERSCORED, and the `stats_view` property below is the only way to it: the page renders
@@ -1035,6 +1042,15 @@ class CentralView(QWidget):
         # the grid first — a ring on a zero-width collapsed map helps no one (the N10 rule).
         self.stats_view.corner_clicked.connect(self._on_stats_corner_clicked)
         self.stats_view.moment_jump.connect(self._on_stats_moment_jump)
+        self.stats_view.pass_requested.connect(self._on_grid_pass_requested)   # a grid cell
+        # Right-click on a row or cell that names one pass: "Play this pass" / "Export this pass…".
+        for widget, resolve in (
+                (self.corners_page.quickest.table, self._quickest_menu_pass),
+                (self.corner_table.table, self._corner_row_menu_pass),
+                (self.stats_view.corner_grid_table, self._grid_menu_pass)):
+            widget.setContextMenuPolicy(Qt.CustomContextMenu)
+            widget.customContextMenuRequested.connect(
+                lambda pos, w=widget, r=resolve: self._show_pass_menu(w, r(w, pos), pos))
         self.table_stack = QStackedWidget()
         # The Marks page: the driver's own annotations + the derived ones (studio/marks.py). It owns
         # no store and no session — the window feeds it the merged list and acts on its signals, the
@@ -1350,6 +1366,7 @@ class CentralView(QWidget):
         self.table.laps_selected.connect(self._on_user_select)
         self.table.selection_capped.connect(self.statusNotice)
         self.table.slow_corner_clicked.connect(self._on_slow_corner_clicked)   # the "▼ C5" cue
+        self.table.slow_pass_requested.connect(self._on_slow_pass_requested)  # ...plays its pass
         # Video focus (the ⤢ button / a double-click on the video): toggle the "fill the screen"
         # gesture. False until the user asks for it.
         self._video_focused = False
@@ -1902,6 +1919,9 @@ class CentralView(QWidget):
             page.refresh_quickest()
 
     def _forget_quickest_cycle(self):
+        """The driver went somewhere else (another lap, a Jump): the pass being studied is
+        forgotten everywhere — the Quickest row's count, ⌘K's export row, the corner walk."""
+        self._pass_subject = None
         page = getattr(self, "corners_page", None)
         if page is not None:
             page.quickest.forget_cycle()
@@ -1929,10 +1949,205 @@ class CentralView(QWidget):
     def _play_quickest_row(self, lap_id: int, cid: int, status: str) -> None:
         """A Quickest passes row's play: its pass, and its status line says the pass it names can
         be exported (⌘K lists "Export the C3 pass — lap 13…" exactly while the row names it)."""
-        self.play_corner_pass(lap_id, cid, status, export_hint=True)
+        self.play_corner_pass(lap_id, cid, status, export_hint=True, origin=PASS_FROM_QUICKEST)
+
+    # ------------------------------------------------------------- the pass being studied
+    # ONE source of truth for "the pass being studied": (lap, corner, where it was played from),
+    # set by `play_corner_pass` — the only door every entry point goes through (a Quickest row, a
+    # Corners lap row, a CORNERS BY LAP cell, the slow-lap cue, the corner walk, ⌘K) — and
+    # forgotten with the Quickest cycle (`_forget_quickest_cycle`: a lap pick, a Jump) or a
+    # re-segment. The zoom (#618) has its own, shorter life (the playhead inside the clip); ⌘K's
+    # "Export the C5 pass — lap 6…" and the corner walk read this.
+    def pass_subject(self) -> tuple[int, int, str] | None:
+        """(lap, cid, label) of the pass being studied, or None.
+
+        THE RULE, one for every surface that reads it (⌘K's export row, the right-click menu, the
+        corner walk; the zoom, Loop and Slow follow the same pass in the player): the pass is the
+        subject from the moment it is played until it is LEFT — a seek away from it, a lap pick, a
+        Jump, Compare, a Lap race, ▶ playing on past it, Esc, a reload or a re-segment that takes
+        its corner away. The clip merely ENDING (the auto-pause 1 s after the exit) does not leave
+        it: he is looking at the corner he just watched, and can still export, loop or walk on
+        from it. The player is the authority on "left" (`PlayerPane.pass_clip`, #621): the subject
+        holds only while the player still holds that same pass."""
+        live = self._live_subject()
+        return None if live is None else (live[0], live[1], self._corner_label(live[1]))
+
+    def _live_subject(self) -> tuple[int, int, str] | None:
+        """(lap, cid, origin) of `pass_subject`'s pass while the rule above holds, else None."""
+        subject = getattr(self, "_pass_subject", None)
+        if subject is None:
+            return None
+        lap, cid, origin, clip = subject
+        held = self.video.pane.pass_clip()
+        if held is None or abs(held[0] - clip[0]) > 1e-6:
+            return None
+        if cid not in {c.cid for c in self.session.corners.corner_list()}:
+            return None
+        return lap, cid, origin
+
+    def _corner_label(self, cid: int) -> str:
+        found = [c.label for c in self.session.corners.corner_list() if c.cid == cid]
+        return found[0] if found else f"C{cid}"
+
+    def lap_pass_refusal(self, lap_id: int, cid: int) -> str | None:
+        """Why lap `lap_id`'s pass through corner `cid` cannot be played as a measured pass, or
+        None when it can. The rule is the CORNERS BY LAP grid's: a lap that is a row of it (⊘
+        excluded and ⚠ dropout laps are not), with a time through the corner, matched on track at
+        both edges — the cells the Quickest view counts. A pass is never played on a time the
+        grid itself declines to compare."""
+        label, lap = self._corner_label(cid), lap_label(lap_id)
+        matrix = self.session.corner_matrix()
+        if matrix is None or cid not in matrix.cids:
+            return f"No corner times to play here: {label} needs a few clean laps first"
+        if lap_id not in matrix.lap_ids:
+            return (f"Lap {lap} is not counted in the corner times (⊘ excluded or ⚠ GPS dropout), "
+                    "so its passes are not played")
+        r, c = matrix.lap_ids.index(lap_id), matrix.cids.index(cid)
+        if matrix.cells[r][c] is None:
+            return f"Lap {lap} has no time through {label}"
+        if not matrix.resolved[r][c]:
+            return (f"Lap {lap}'s pass through {label} was not matched on track at both edges, so "
+                    "its time is not precise enough to play as a pass")
+        if self.session.corners.pass_clip(lap_id, cid) is None:
+            return f"Lap {lap}'s pass through {label} has no clip"
+        return None
+
+    def play_lap_pass(self, lap_id: int, cid: int) -> bool:
+        """Play lap `lap_id`'s OWN pass through corner `cid` — a Corners lap row, a CORNERS BY LAP
+        cell, the slow-lap cue, the corner walk. Its status names that lap and its own time (the
+        grid's cell), never "quickest". Refused, with the reason on the status line, when
+        `lap_pass_refusal` says so."""
+        why = self.lap_pass_refusal(lap_id, cid)
+        if why is not None:
+            self.statusNotice.emit(why)
+            return False
+        matrix = self.session.corner_matrix()
+        t = matrix.cells[matrix.lap_ids.index(lap_id)][matrix.cids.index(cid)]
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            page.quickest.forget_cycle()     # a Quickest row no longer names what plays
+        status = (f"Playing lap {lap_label(lap_id)} through {self._corner_label(cid)} "
+                  f"({t:.{PRINT_DECIMALS}f})")
+        return self.play_corner_pass(lap_id, cid, status, export_hint=True)
+
+    def _on_corner_row_clicked(self, cid: int):
+        """Corners ▸ Lap N corners, a row click: ring the corner as before (maximize-aware), and
+        play the lap's own pass through it — the same click a Quickest passes row answers with."""
+        self._on_stats_corner_clicked(cid)
+        lap = getattr(self, "_corner_lap", None)
+        if lap is not None and cid is not None and not is_selection_click():
+            self.play_lap_pass(lap, cid)
+
+    def _on_grid_pass_requested(self, lap_id: int, cid: int):
+        """A CORNERS BY LAP cell click plays its pass; a ⌘ / ⇧ click is a selection gesture."""
+        if not is_selection_click():
+            self.play_lap_pass(lap_id, cid)
+
+    # The right-click menu on a row / cell that names ONE pass. Each resolver answers (lap, cid,
+    # play) for the point clicked — `play` the gesture a left click on it makes — or None.
+    def _quickest_menu_pass(self, table, pos):
+        row = table.indexAt(pos).row()
+        q = self.corners_page.quickest
+        lap = q.shown_lap(row)
+        if lap is None:
+            return None
+        return lap, q.passes()[row].cid, lambda: q.play_shown(row)
+
+    def _corner_row_menu_pass(self, table, pos):
+        cid = self.corner_table.cid_at(table.indexAt(pos).row())
+        lap = getattr(self, "_corner_lap", None)
+        if cid is None or lap is None:
+            return None
+        return lap, cid, lambda: self.play_lap_pass(lap, cid)
+
+    def _grid_menu_pass(self, table, pos):
+        index = table.indexAt(pos)
+        got = self.stats_view.grid_pass_at(index.row(), index.column())
+        if got is None:
+            return None
+        lap, cid = got
+        return lap, cid, lambda: self.play_lap_pass(lap, cid)
+
+    def pass_menu(self, target) -> QMenu | None:
+        """The menu for `target` = (lap, cid, play): "Play this pass" and "Export this pass…" (the
+        overlay export opened on that pass, #619). A per-lap pass the grid declines to compare is
+        greyed out in both, with the reason as the menu's tip."""
+        if target is None:
+            return None
+        lap, cid, play = target
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        play_action = menu.addAction("Play this pass")
+        play_action.triggered.connect(play)
+        export_action = menu.addAction("Export this pass…")
+        label = self._corner_label(cid)
+        export_action.triggered.connect(lambda: self.passExportRequested.emit(lap, cid, label))
+        why = self.lap_pass_refusal(lap, cid)
+        if why is not None:
+            for action in (play_action, export_action):
+                action.setEnabled(False)
+                action.setToolTip(why)
+        return menu
+
+    def _show_pass_menu(self, table, target, pos):
+        menu = self.pass_menu(target)
+        if menu is not None:
+            self._run_menu(menu, table.viewport().mapToGlobal(pos))
+            menu.deleteLater()
+
+    def _run_menu(self, menu: QMenu, at: QPoint) -> None:
+        """Pop `menu` up at `at` and wait for the choice (the one modal step: a seam for tests)."""
+        menu.exec(at)
+
+    def _on_slow_pass_requested(self, lap_id: int, cid: int):
+        """The Laps table's "▼ C5" cue: play the culprit corner's pass on that lap (the row click
+        under it has already selected the lap and sought its start; this moves on to the corner)."""
+        self.play_lap_pass(lap_id, cid)
+
+    def step_corner_pass(self, step: int) -> bool:
+        """The corner walk (⌥← / ⌥→): ONE pass per press, never more (§31: no reel). From the pass
+        being studied, the previous / next corner — on the same lap, or, when that pass came from
+        Corners ▸ Quickest passes, that corner's quickest pass. With none, the corner before /
+        after the playhead on its lap. Corners a lap cannot play are stepped over; at either end of
+        the lap it stops and says so."""
+        order = [c.cid for c in self.session.corners.corner_list()]
+        if not order:
+            self.statusNotice.emit("No corners on this track yet")
+            return False
+        subject = self._live_subject()   # a pass that was LEFT walks from the playhead instead
+        if subject is not None:
+            lap, cid, origin = subject
+            k = order.index(cid) + step
+            candidates = ([] if not 0 <= k < len(order) else
+                          order[k:] if step > 0 else order[k::-1])
+        else:
+            lap = self.session.lap_at_time(self._playback.applied_t)
+            origin = None
+            if lap is None:
+                self.statusNotice.emit("Pick a lap first: the corner walk steps through one lap")
+                return False
+            t, corners = self._playback.applied_t, self.session.corners
+            entries = [(cid, corners.corner_entry_media_time(lap, cid)) for cid in order]
+            if step > 0:
+                candidates = [cid for cid, e in entries if e is not None and e > t + 0.5]
+            else:
+                candidates = [cid for cid, e in reversed(entries) if e is not None and e < t - 0.5]
+        if origin == PASS_FROM_QUICKEST:
+            page = getattr(self, "corners_page", None)
+            for cid in candidates:
+                if page is not None and page.quickest.play_named(page.quickest.row_of(cid)):
+                    return True
+        else:
+            for cid in candidates:
+                if self.lap_pass_refusal(lap, cid) is None:
+                    return self.play_lap_pass(lap, cid)
+        edge = "first" if step < 0 else "last"
+        self.statusNotice.emit(f"No {'earlier' if step < 0 else 'later'} corner to play: this is "
+                               f"the {edge} one with a pass on lap {lap_label(lap)}")
+        return False
 
     def play_corner_pass(self, lap_id: int, cid: int, status: str = "", *,
-                         export_hint: bool = False) -> bool:
+                         export_hint: bool = False, origin: str = "lap") -> bool:
         """The Corners tab's Quickest passes: show lap `lap_id`'s pass through corner `cid` and PLAY
         it. The lap is selected as a Stats MOMENTS Jump selects it (charts, map ring), the video
         seeks to the clip start (`CornerModel.pass_clip`: 2 s before the entry, or the previous
@@ -1960,6 +2175,7 @@ class CentralView(QWidget):
         self._playback.followed_lap = self.session.lap_at_time(clip[0])
         self._pin_owned_ring(cid)
         self._zoom_to_pass(lap_id, cid, clip)
+        self._pass_subject = (int(lap_id), int(cid), origin, (float(clip[0]), float(clip[1])))
         if status:
             self.statusNotice.emit(self._pass_status(status, export_hint))
         return True

@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QImage,
     QKeySequence,
     QShortcut,
+    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -40,10 +41,13 @@ from PySide6.QtWidgets import (
     QFrame,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -2067,6 +2071,12 @@ class StudioWindow(QMainWindow):
         # A transient fact a panel has no status bar to state (U2: a lap selection trimmed to the
         # charts' cap). Timed like every other just-happened confirmation.
         self.view.statusNotice.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS))
+        # A pass's right-click "Export this pass…" (guarded: the lifecycle tests' stand-in views,
+        # and windows a test builds piecemeal without the export controller).
+        export_pass = getattr(self.view, "passExportRequested", None)
+        exports = getattr(self, "exports", None)
+        if export_pass is not None and exports is not None:
+            export_pass.connect(exports.export_pass_video)
         # View ▸ Lap race carries its on/off state, and a re-segment changes whether it can run.
         # Guarded: the lifecycle tests' stand-in views carry no race.
         race_changed = getattr(self.view, "raceChanged", None)
@@ -2565,6 +2575,24 @@ class StudioWindow(QMainWindow):
         for action in (self._stats_action, self._race_action, self._race_follow_action):
             _ShortcutGate(self, action, self._sync_view_menu)
         view_menu.addSeparator()
+        # The corner walk: ONE pass per press, never a reel (refused-2026-09 §31). ⌥ beside the
+        # arrows that already step the video (← / → a second, ⇧ five): ⌥ steps a corner. A
+        # QAction, so a focused table's own ←/→ never swallows it, and ⌘K harvests both.
+        self._prev_corner_action = view_menu.addAction("Previous corner pass")
+        self._prev_corner_action.setShortcut(QKeySequence("Alt+Left"))
+        self._prev_corner_action.triggered.connect(lambda: self._step_corner_pass(-1))
+        self._next_corner_action = view_menu.addAction("Next corner pass")
+        self._next_corner_action.setShortcut(QKeySequence("Alt+Right"))
+        self._next_corner_action.triggered.connect(lambda: self._step_corner_pass(+1))
+        for action in (self._prev_corner_action, self._next_corner_action):
+            # A HELD key is not a walk through the lap: Qt's auto-repeat would play one pass per
+            # repeat, C1 → C7 in under a second — the reel §31 refuses. One press, one pass.
+            action.setAutoRepeat(False)
+            action.setToolTip(
+                "Play the previous / next corner's pass: on the lap of the pass you are studying "
+                "(from Corners ▸ Quickest passes, that corner's quickest), else around the "
+                "playhead. One pass per press.")
+        view_menu.addSeparator()
         # The lap panel's pages are REAL tabs now (Laps · Corners · Stats · Coaching · Marks,
         # digits 1-5) — the old show/hide toggles for the coaching + consistency strips died with the
         # strips themselves. Only the excluded strip (inside the Laps page) keeps a toggle.
@@ -3038,6 +3066,22 @@ class StudioWindow(QMainWindow):
             out.append((f"Export the {label} pass — lap {lap_label(lap)}…",
                         lambda: self.exports.export_pass_video(lap, cid, label)))
         return out
+
+    def _step_corner_pass(self, step: int) -> bool:
+        """View ▸ Previous / Next corner pass (⌥← / ⌥→): `CentralView.step_corner_pass`. In a text
+        field (the Marks note, any line edit) ⌥← / ⌥→ keep their macOS meaning, a word back /
+        forward: the window-wide shortcut would otherwise take the key from the field."""
+        field = QApplication.focusWidget()
+        if isinstance(field, QLineEdit):
+            (field.cursorWordBackward if step < 0 else field.cursorWordForward)(False)
+            return False
+        if isinstance(field, (QTextEdit, QPlainTextEdit)):
+            field.moveCursor(QTextCursor.PreviousWord if step < 0 else QTextCursor.NextWord)
+            return False
+        view = getattr(self, "view", None)
+        if view is None or not hasattr(view, "step_corner_pass"):
+            return False
+        return view.step_corner_pass(step)
 
     def play_quickest_pass(self, cid: int) -> bool:
         """Play the quickest pass through corner `cid` from Corners ▸ Quickest passes: always the
