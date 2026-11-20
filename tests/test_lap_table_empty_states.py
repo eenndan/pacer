@@ -263,6 +263,27 @@ def test_both_zero_lap_placeholders_state_both_next_actions():
     print("test_both_zero_lap_placeholders_state_both_next_actions OK")
 
 
+def test_one_crossing_zero_lap_placeholders_name_the_crossing():
+    """Discovery, a synthetic session with a clean GPS lock whose kart crossed the start/finish
+    line once: both placeholders guessed "The GPS may not have locked, or the recording is too
+    short…". `lap_count()` counts the crossings (each opens a lap), so one is a KNOWN cause — and
+    the body says it, keeping both ways out."""
+    one = _FakeLapSession(valid=0, detected=1)
+    corner_one = _FakeCornerSession(valid=())
+    corner_one.lap_count = lambda: 1
+    corner_one.timing_quality = data_quality.TimingQuality()   # the GPS held: the count is trusted
+    corners = _keep(LT.CornerTable(corner_one))
+    corners.refresh()
+    laps = _keep(LT.LapTable(one))
+    laps.refresh()
+    for text in (corners.empty.text(), laps._empty.text()):
+        assert data_quality.no_laps_body(1) in text, text
+        assert data_quality.NO_LAPS_ONE_CROSSING_REASON in text, text
+        assert "GPS may not have locked" not in text, text
+        assert text.endswith(data_quality.NO_LAPS_ALT_ACTION), text
+    print("test_one_crossing_zero_lap_placeholders_name_the_crossing OK")
+
+
 def test_excluded_strip_escalates_when_the_ratio_crosses_the_threshold():
     """L3-06: one stray lap and half the session must not read alike. Below the threshold the strip
     keeps its muted one-liner; above it, it states the share in WORDS (so the escalation survives

@@ -2280,6 +2280,16 @@ def test_a_pace_theme_is_not_argued_with_by_a_consistency_cause_and_every_start_
     assert K.theme_actions(K.headline_theme(wide), wide)[-1].startswith(
         "Start with C3, C1, C4, C5 or C9: +0.40 s down to +0.38 s")
     assert [K.corner_names(c) for c in ([7], [7, 5], [])] == ["C7", "C7 or C5", ""]
+    # Ends that PRINT the same are said once (discovery, synthetic best-lap-first session: "+0.01 s
+    # down to +0.01 s"), in the share card's "each" (`share_card.opp_loss`).
+    flat = [_ranked_row(c, 0.012 - 0.001 * i, 0.3) for i, c in enumerate((4, 1, 3))]
+    assert [r.cid for r in K.lead_ties(flat, 4)] == [4, 1, 3]
+    assert K.theme_actions(K.headline_theme(flat), flat)[-1] == (
+        "Start with C4, C1 or C3: at +0.01 s each they sit closer together than your own "
+        "lap-to-lap spread, so this cannot rank them.")
+    pair = [_ranked_row(c, 0.012 - 0.001 * i, 0.3) for i, c in enumerate((4, 1))]
+    assert K.theme_actions(K.headline_theme(pair), pair)[-1].startswith(
+        "Start with C4 or C1: at +0.01 s each they sit closer together")
     print(f"ok QA1-THEME-CLASH: Sandown 3h => {expect['Sandown 3h 2026'][1]!r}")
 
 
@@ -2449,8 +2459,77 @@ def test_u2_count_decided_coaching_copy_keeps_its_next_action_and_reconciles_tot
     assert "1 of its 2 laps had a GPS dropout" in got, got
     plain = _panel_state_text(_LapAccountSession(n_clean=2, valid=[0, 1], dropout=[]))
     assert plain == ("Not enough clean laps yet.\n\nCoaching needs 3 clean (valid, GPS-dropout-"
-                     "free) laps; this session has 2. Drive a few more laps and reload."), plain
+                     "free) laps; this session has 2. Drive a few more laps in your next "
+                     "session."), plain
     print("ok U2: count-decided copy keeps 'drive more' and reconciles a dropout")
+
+
+def test_few_laps_copy_never_says_reload():
+    """Discovery, synthetic two-lap session: "…this session has 2. Drive a few more laps and
+    reload." Reloading the same recording finds the same two laps, so the remedy is the next
+    session, and no "reload" is offered."""
+    for n_clean, valid, dropout in ((2, [0, 1], []), (1, [0, 1], [1]), (0, [0], [])):
+        title, body = K.empty_state_copy(
+            K.Opportunities(enough=False, n_laps=n_clean, median_lap_id=None, rows=[]),
+            _LapAccountSession(n_clean=n_clean, valid=valid, dropout=dropout))
+        assert title == K.FEW_LAPS_TITLE, title
+        assert "reload" not in body.lower(), body
+        assert body.endswith("Drive a few more laps in your next session."), body
+    print("ok few laps: the next session is the remedy, not a reload")
+
+
+class _OneCrossingSession(_LapAccountSession):
+    """Zero valid laps on a trace that crosses the start/finish line `crossings` times (what
+    `Session.lap_count()` counts: every crossing opens a lap), with `dropped` of its fixes rejected
+    by the quality gate."""
+
+    laps = object()
+
+    def __init__(self, crossings, dropped=0.0):
+        from studio import data_quality as dq
+        super().__init__(n_clean=0, valid=[], dropout=[])
+        self._crossings = crossings
+        self.timing_quality = dq.TimingQuality(dropped_fraction=dropped)
+
+    def lap_count(self):
+        return self._crossings
+
+
+def test_zero_laps_after_one_crossing_names_the_crossing_not_the_gps():
+    """Discovery, synthetic session with a clean GPS lock whose kart crossed the line ONCE: every
+    zero-lap surface guessed "The GPS may not have locked, or the recording is too short…" — both
+    false there. With one crossing the body states the known cause and keeps both ways out; any
+    other count keeps the guesses."""
+    from studio import data_quality as dq
+    opps = K.Opportunities(enough=False, n_laps=0, median_lap_id=None, rows=[])
+    title, body = K.empty_state_copy(opps, _OneCrossingSession(1))
+    assert title == dq.NO_LAPS_HEADLINE, title
+    assert body.startswith("The GPS trace crosses the start/finish line only once, and a lap "
+                           "needs two crossings."), body
+    assert "GPS may not have locked" not in body, body
+    assert dq.NO_LAPS_NEXT_ACTION in body and dq.NO_LAPS_ALT_ACTION in body, body
+    for n in (0, 2, 5):
+        assert K.empty_state_copy(opps, _OneCrossingSession(n))[1] == dq.no_laps_body(), n
+    # No lap account at all (a caller with no session) keeps the plain body.
+    assert dq.no_laps_body_for(None) == dq.no_laps_body()
+    print("ok zero laps: one crossing is named as the cause")
+
+
+def test_one_crossing_on_a_low_quality_gps_trace_keeps_the_gps_reason():
+    """Review of #636: `lap_count` counts the crossings of the trace that SURVIVED the quality gate.
+    A synthetic session that drove 7 crossings but lost ~88 % of its fixes counted 1, and every
+    surface said the trace crossed once — replacing the GPS-lock reason that was the true one. Low
+    (or unknown) GPS quality keeps the plain body, whatever the count."""
+    from studio import data_quality as dq
+    opps = K.Opportunities(enough=False, n_laps=0, median_lap_id=None, rows=[])
+    lost = _OneCrossingSession(1, dropped=0.88)
+    assert lost.timing_quality.low_gps_quality
+    assert K.empty_state_copy(opps, lost)[1] == dq.no_laps_body(), K.empty_state_copy(opps, lost)
+    assert "GPS may not have locked" in dq.no_laps_body_for(lost)
+    unknown = _OneCrossingSession(1)
+    del unknown.timing_quality                  # no quality verdict: not evidence the GPS held
+    assert dq.no_laps_body_for(unknown) == dq.no_laps_body()
+    print("ok zero laps: a low-quality trace keeps the GPS reason")
 
 
 def test_look_9_the_page_states_counts_not_verdicts_and_says_all_at_100_percent():

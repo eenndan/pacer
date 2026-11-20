@@ -1912,10 +1912,19 @@ def corner_names(cids: Iterable[int]) -> str:
 
 def _tied_lead_sentence(tied: list[Opportunity]) -> str:
     """"Start with C3 or C12: …" — the honest form of the start-here action when the corners at the
-    top of the list are the same number. Called only with 2+ rows."""
+    top of the list are the same number. Called only with 2+ rows.
+
+    Ends that PRINT the same say so once: a session whose tied corners all lose 0.01 s read
+    "+0.01 s down to +0.01 s" (discovery, synthetic best-lap-first session) — the share card's
+    "+0.15 s each" (`share_card.opp_loss`) is the house wording for that span."""
     names = corner_names(r.cid for r in tied)
-    nums = (f"+{tied[0].time_lost:.2f} s and +{tied[1].time_lost:.2f} s" if len(tied) == 2
-            else f"+{tied[0].time_lost:.2f} s down to +{tied[-1].time_lost:.2f} s")
+    hi, lo = f"+{tied[0].time_lost:.2f}", f"+{tied[-1].time_lost:.2f}"
+    if hi == lo:
+        nums = f"at {hi} s each they"
+    elif len(tied) == 2:
+        nums = f"{hi} s and {lo} s"
+    else:
+        nums = f"{hi} s down to {lo} s"
     tail = "so either is the same call." if len(tied) == 2 else "so this cannot rank them."
     return (f"Start with {names}: {nums} sit closer together than your own lap-to-lap spread, "
             f"{tail}")
@@ -2224,7 +2233,7 @@ def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
     if not opps.enough:
         valid, dropouts = _lap_account(session)
         if valid == 0:
-            return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body()
+            return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body_for(session)
         needs = (f"Coaching needs {MIN_LAPS} clean (valid, GPS-dropout-free) laps; this "
                  f"session has {opps.n_laps}")
         # (dropouts > 0 only with a lap account: `valid` is then a count.)
@@ -2235,8 +2244,11 @@ def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
             return ("Not enough clean laps.",
                     f"{needs}: {lost} (flagged in the Laps tab), which leaves too few to compare "
                     "corner by corner. You drove the laps — the GPS lost its fix during them.")
+        # The remedy is the NEXT session: this copy once ended "…and reload", and reloading the
+        # same recording finds the same laps.
         return (FEW_LAPS_TITLE,
-                f"{needs}{f' ({lost})' if lost else ''}. Drive a few more laps and reload.")
+                f"{needs}{f' ({lost})' if lost else ''}. Drive a few more laps in your next "
+                "session.")
     return ("No corner is losing time.",
             "Your typical lap matches your best lap all the way round — your best-lap pace is "
             "consistent. Nice driving.")
