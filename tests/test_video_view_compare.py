@@ -1110,6 +1110,85 @@ def test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum():
     print("test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum OK")
 
 
+# --------------------------------------------------------------- leaving compare gives back all
+#: The classes one compare entry builds and its exit must give back, counted as live PySide
+#: wrappers (the inert `_Null*` media stand-ins and the real triplet both, so the same census reads
+#: either player).
+_COMPARE_MADE = ("PlayerPane", "_PaneCell", "_PaneStrip", "GMeterOverlay", "LiveReadout",
+                 "QSplitter", "_NullMediaPlayer", "_NullAudioOutput", "QMediaPlayer",
+                 "QAudioOutput", "QVideoSink", "QVideoWidget")
+
+
+def _spin_deletes():
+    """What the running app's event loop does between two clicks, done by hand: a test that only
+    calls `processEvents()` outside `exec()` never runs a `deleteLater` (DeferredDelete), so every
+    object a compare exit schedules for deletion LOOKS leaked — 8 more top-level widgets per cycle,
+    which is what was measured and reported as a leak on main."""
+    import gc
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+    for _ in range(3):
+        _APP.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    gc.collect()
+
+
+def _census():
+    """Top-level widgets and all widgets by class, and the compare-made objects still alive."""
+    from collections import Counter
+
+    from shiboken6 import Shiboken
+    alive = Counter(type(o).__name__ for o in Shiboken.getAllValidWrappers()
+                    if type(o).__name__ in _COMPARE_MADE)
+    return (Counter(type(w).__name__ for w in QApplication.topLevelWidgets()),
+            len(QApplication.allWidgets()), alive)
+
+
+def test_leaving_compare_gives_back_everything_it_made():
+    """Each compare entry builds pane B (its player, audio output, g-meter and readout overlay
+    windows) plus two cells and a splitter, and each exit gives every one of them back. Measured on
+    main with the loop spun (`_spin_deletes`): 0 top-level widgets, 0 widgets and 0 media objects
+    left after 30 cycles of each door, inert and real player alike. Pinned here for the three doors
+    — the C toggle, Coaching's Compare and a quickest-vs-typical pass — on the real window over the
+    demo: after a warm-up cycle, CYCLES more leave the census exactly where it was."""
+    from test_race_controller import _settle as _wait
+    from test_race_controller import _window
+
+    cycles = 3
+    with _window() as (win, _path, _open):
+        v = win.view
+        typical = next((lap, cid) for cid in v.corner_table._cids
+                       for lap in v.session.valid_lap_ids()
+                       if v.typical_compare_refusal(lap, cid) is None)
+        doors = (("C", win.toggle_compare),
+                 ("Coaching Compare", v.opportunities._compare_pair),
+                 ("typical pass", lambda: v.compare_pass_with_typical(*typical)))
+
+        def cycle(name, enter):
+            enter()
+            _wait(0.03)
+            _spin_deletes()
+            assert v.video._panes_mounted(), f"{name}: compare did not open"
+            win.toggle_compare()
+            _wait(0.03)
+            _spin_deletes()
+            assert not v.video._panes_mounted(), f"{name}: compare did not close"
+
+        for name, enter in doors:
+            cycle(name, enter)                    # one-time lazies (popups, menus) exist after it
+            # A BASELINE, not absolute counts: the earlier tests in this file leave their own
+            # VideoViews (panes, cells) alive, so only what a cycle adds is this test's business.
+            tops, widgets, alive = _census()
+            for i in range(cycles):
+                cycle(name, enter)
+                tops2, widgets2, alive2 = _census()
+                assert (tops2, widgets2, alive2) == (tops, widgets, alive), (
+                    f"{name}: compare cycle {i + 1} left objects behind — top-level "
+                    f"+{dict(tops2 - tops)} -{dict(tops - tops2)}, widgets "
+                    f"{widgets2 - widgets:+d}, compare-made +{dict(alive2 - alive)}")
+    print("test_leaving_compare_gives_back_everything_it_made OK")
+
+
 # --------------------------------------------------------------- one story: a pick during compare
 # A lap pick while two laps were compared moved the CHARTS alone: the panes and the seam went on
 # reading "lap 13 vs lap 12" above charts of lap 6. The rule: a pick LEAVES compare first (as a Lap
@@ -1479,6 +1558,7 @@ def _run_all():
     test_u9_04_f_key_reaches_the_video_focus_gesture()
     test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum()
     test_a_lap_pick_during_compare_leaves_it_and_the_window_tells_one_story()
+    test_leaving_compare_gives_back_everything_it_made()
     print("ALL VIDEO-VIEW COMPARE TESTS PASSED")
 
 
