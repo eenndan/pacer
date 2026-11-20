@@ -55,7 +55,7 @@ shared `$TMPDIR` ([test_temp_isolation.py](test_temp_isolation.py), no carve-out
 CPU and the VideoToolbox sessions: a check failing near its timeout or on a hardware encode under
 that load is re-run alone before it is believed.
 
-**Reading a hang dump.** A Python test still running 10 % (at most 30 s) before its timeout writes
+**Reading a hang dump.** A Python test still running 10 % (1 to 30 s) before its timeout writes
 `==== HANG DUMP: running test: <test_…> (<file>:<line>)`, then every thread's stack (most recent
 call first), into its log above `***Timeout` ([_hang_dump.py](_hang_dump.py), armed in every
 registration by [_site/sitecustomize.py](_site/sitecustomize.py)). The stuck line is the top frame
