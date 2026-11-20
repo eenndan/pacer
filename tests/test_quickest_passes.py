@@ -2319,6 +2319,25 @@ def test_leaving_a_pass_takes_its_status_line_down_at_once():
             if view.is_racing():
                 view.end_lap_race()
             _settle()
+        # a re-segment that takes the studied corner away. A real line edit cannot remove a demo
+        # corner (they come from the best lap's curvature), and a corner set shrunk under the
+        # whole rebuild breaks the tables' row indexing, so this drives the step of the rebuild
+        # (`rebuild_derived_views` → `_refresh_quickest`) that re-reads the corners, with C3 gone
+        # and the Quickest page's own repaint stubbed: the player still holds the clip, but it is
+        # no longer a pass through a corner, and its line goes
+        said = play()
+        corners, page = win.session.corners, view.corners_page
+        real_list, real_refresh = corners.corner_list, page.refresh_quickest
+        corners.corner_list = lambda: [c for c in real_list() if c.cid != 3]
+        page.refresh_quickest = lambda: None
+        try:
+            assert view.video.pane.pass_clip() is not None
+            view._refresh_quickest()
+            _settle()
+            assert view.pass_subject() is None
+            assert bar.currentMessage() != said, bar.currentMessage()
+        finally:
+            corners.corner_list, page.refresh_quickest = real_list, real_refresh
         # a newer message is never taken down by the pass it outlived
         said = play()
         bar.showMessage("something else", 6000)
@@ -2389,7 +2408,15 @@ def test_esc_leaves_either_corner_compare_and_keeps_its_meaning_in_a_whole_lap_o
         assert view.compare_at_corner(tp, "+0.36 s")
         _settle()
         said = bar.currentMessage()
-        assert said.startswith("C1 · lap 4"), said
+        assert said.startswith("C1 · lap 4") and said.endswith(" · C or Esc: back to one video"), said
+        # the Esc order holds: a maximised panel is restored first, the compare stays
+        view._toggle_panel_maximized(view._map_panel)
+        _settle()
+        assert view._maximized_panel is view._map_panel
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert view._maximized_panel is None and view._comparing()
+        assert view.compare.corner_anchor() == "C1"
         QTest.keyClick(win, Qt.Key_Escape)
         _settle()
         assert not view._comparing() and view.compare.corner_anchor() is None

@@ -297,6 +297,19 @@ def test_a_pass_zoom_folds_the_key_and_gives_back_the_users_own_state():
     assert prefs.map_key_collapsed() is False
     assert mv.unzoom_pass() and not key.painted_collapsed()
     _drop(mv)
+    # ...and on a key he had COLLAPSED, the click is his ordinary toggle: it opens the key and
+    # stores "open" (it is his click, not the zoom's)
+    prefs.set_map_key_collapsed(True)
+    mv = _map()
+    key = mv._map_key
+    assert mv.zoom_to_pass(2.0, 6.0) and key.painted_collapsed()
+    assert key.toolTip() == key._TIP_COLLAPSED
+    _press(key)
+    assert not key.painted_collapsed() and not key.collapsed()
+    assert prefs.map_key_collapsed() is False
+    assert mv.unzoom_pass() and not key.painted_collapsed()
+    _drop(mv)
+    prefs.set_map_key_collapsed(False)
     print("test_a_pass_zoom_folds_the_key_and_gives_back_the_users_own_state OK")
 
 

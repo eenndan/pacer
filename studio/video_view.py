@@ -245,7 +245,10 @@ class _LapRulerSlider(QSlider):
     def mark_plan(self) -> list[tuple[int, str]]:
         """(x, glyph) for every mark paintEvent draws: ★ always (one lap, the one that matters), ▼
         where its lap is wider than the glyph, and where it is not (a 65-lap session's 7 px laps
-        would smear the glyph) the reduced tick, RULER_SLOW_TICK."""
+        would smear the glyph) the reduced tick, RULER_SLOW_TICK — down to a lap of the tick's
+        plate + 2 px. Narrower still (~120 laps docked) the plate would spill into its neighbours
+        and two slow laps merge into one bar, so nothing is drawn there, as before; nor where the
+        tick's plate would meet the ★'s."""
         if not self._segments or self.maximum() <= self.minimum():
             return []
         fm = QFontMetrics(self._mark_font)
@@ -256,9 +259,13 @@ class _LapRulerSlider(QSlider):
             glyph = mark.split()[0]
             xa, xb = self._x_for(a), self._x_for(b)
             if glyph != "★" and xb - xa < fm.horizontalAdvance(glyph) + 2:
+                if xb - xa < _SLOW_TICK_W + 2 + 2:
+                    continue
                 glyph = RULER_SLOW_TICK
             out.append(((xa + xb) // 2, glyph))
-        return out
+        stars = [self._mark_rect(x, g) for x, g in out if g == "★"]
+        return [(x, g) for x, g in out if g != RULER_SLOW_TICK
+                or not any(self._mark_rect(x, g).intersects(s.adjusted(-1, 0, 1, 0)) for s in stars)]
 
     def _mark_rect(self, x: int, glyph: str, cy: int | None = None):
         """The plate a mark is painted on, centred on (x, groove centre)."""

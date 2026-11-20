@@ -406,6 +406,43 @@ def test_a_slow_lap_narrower_than_its_glyph_still_shows_as_a_tick():
             wide = [(lo, edges[20], "", "a"), (edges[20], hi, "▼ C2", "b")]
             slider.set_lap_segments(wide)
             assert [g for _x, g in slider.mark_plan()] == ["▼"]
+            # a slow lap beside the best lap: the tick never meets the ★'s plate. Sixty laps (8 px):
+            # the ★'s 16 px plate reaches into both neighbours, so their ticks are left out, and a
+            # slow lap further on keeps its own
+            e60 = [lo + (hi - lo) * k // 60 for k in range(61)]
+            s60 = [(e60[k], e60[k + 1], "", f"Lap {k + 1}") for k in range(60)]
+            s60[10] = (*s60[10][:2], "★", "best")
+            for k in (9, 11, 40):
+                s60[k] = (*s60[k][:2], "▼ C1", f"slow {k}")
+            slider.set_lap_segments(s60)
+            plan = slider.mark_plan()
+            star = next(slider._mark_rect(x, g) for x, g in plan if g == "★")
+            ticks = [x for x, g in plan if g == RULER_SLOW_TICK]
+            assert len(ticks) == 1, (size, plan)
+            assert slider.segment_at(ticks[0])[3] == "slow 40"
+            assert not slider._mark_rect(ticks[0], RULER_SLOW_TICK).intersects(
+                star.adjusted(-1, 0, 1, 0))
+            # 80 and 120 laps (review of #629): a tick's plate stays inside its own lap and a pixel
+            # clear of the next one's, so two slow laps side by side never merge; a lap narrower
+            # than the plate + 2 px gets none
+            for n in (80, 120):
+                edges = [lo + (hi - lo) * k // n for k in range(n + 1)]
+                segs = [(edges[k], edges[k + 1], "▼ C3" if k % 2 else "", f"Lap {k + 1}")
+                        for k in range(n)]
+                slider.set_lap_segments(segs)
+                spans = {(slider._x_for(a) + slider._x_for(b)) // 2:
+                         (slider._x_for(a), slider._x_for(b)) for a, b, m, _t in segs if m}
+                plates = []
+                for x, g in slider.mark_plan():
+                    assert g == RULER_SLOW_TICK, g
+                    r, (xa, xb) = slider._mark_rect(x, g), spans[x]
+                    assert xa <= r.left() and r.right() <= xb, (n, size, r, xa, xb)
+                    plates.append(r)
+                for r1, r2 in zip(plates, plates[1:], strict=False):
+                    assert r2.left() - r1.right() >= 1, (n, size, r1, r2)
+                narrow = min(xb - xa for xa, xb in spans.values())
+                if n == 120:
+                    assert narrow < 7 and slider.mark_plan() == [], (size, narrow)
         finally:
             _close(win)
 

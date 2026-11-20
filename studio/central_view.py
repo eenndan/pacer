@@ -106,6 +106,11 @@ _PLOTS_BASELINE_LABELS = {
     plots_view.DELTA_BASELINE_REFERENCE: _PLOTS_LABEL_REF,
 }
 _MAXIMIZE_GLYPH = "ph.corners-out"   # expand this panel to fill the window
+# What a Coaching row's Compare line ends with: C or Esc leaves it as one video (both laps stay
+# on the charts, as C has always left it).
+COACHING_COMPARE_KEYS = " · C or Esc: back to one video"
+
+
 def typical_compare_status(v, label: str) -> str:
     """The status line of "compare this pass with my typical pass": both laps with their own
     printed times, and the gap between those two printed times (`PassVsTypical.gap_s`), quicker or
@@ -2356,7 +2361,9 @@ class CentralView(QWidget):
         window = self.session.corner_plot_window(cid, self.plots.axis_mode())
         if window is not None:
             self.plots.frame_span(*window)
-        self._hold_status(_HELD_CORNER, compare_status(tp, lost))
+        # The keys that leave it, as the typical-pass compare names them (measured at 1280x800 on
+        # the demo: the longest of the seven rows is 1003 px of the bar's 1263).
+        self._hold_status(_HELD_CORNER, compare_status(tp, lost) + COACHING_COMPARE_KEYS)
         return True
 
     def _enter_corner_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
