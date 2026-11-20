@@ -28,19 +28,39 @@ jail (tests/test_app_support_jail.py), no test builds a fixed path in the shared
 (tests/test_temp_isolation.py), and the real-footage checks share RESOURCE_LOCK footage, so they
 still run one at a time (tests/test_footage_checks.py).
 
-Pure tomllib + ast: no Qt, no bindings, no ctest.
+A HANG SAYS WHERE IT IS (2026-11-20). A test killed at its timeout used to leave only `***Timeout
+480.11 sec` in the log (#649 lost a CI timeout that way). tests/_hang_dump.py, armed in every
+Python registration by tests/_site/sitecustomize.py, prints the running test and every thread's
+stack shortly before the timeout and changes nothing else. The checks below run children armed
+with a 3 s ceiling against each hang shape — a Python sleep, a lock deadlock, a Qt event loop
+nobody quits, and a C call holding the GIL (faulthandler's own thread then dumps) — and a child that
+finishes in time, which must print nothing extra; and they hold every Python registration to the
+arming, the ceiling to ctest's own `--timeout` (found on a grandparent too), and this very
+registration to being armed when ctest runs it — so a green CI run says the feature is on there.
+
+Stdlib (tomllib + ast) but for two things: the hang children import QtCore, and one check lists
+this build's registrations through ctest (PACER_CTEST_COMMAND, as test_app_support_jail does).
 
 Run: python tests/test_parallel_suite.py
 """
 import ast
 import glob
+import json
 import os
 import re
 import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 import tomllib
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TESTS = os.path.join(_REPO, "tests")
+sys.path.insert(0, _TESTS)
+
+import _hang_dump  # noqa: E402
 
 #: The ctest tasks that default to parallel. `test-footage` is deliberately not one: its checks
 #: share one RESOURCE_LOCK, so a level there would change nothing but how its command reads.
@@ -247,10 +267,278 @@ def test_the_ci_decode_world_runs_every_real_player_test():
     print(f"test_the_ci_decode_world_runs_every_real_player_test OK ({', '.join(sorted(found))})")
 
 
+# ------------------------------------------------------------------------------ hang dumps
+#: The child's ceiling, as PACER_HANG_DUMP gives it: the dump lands at 2.0 s (the 1 s floor on the
+#: margin), faulthandler's backup at 2.75 s. A 2.2 s ceiling put them 0.11 s apart, and on CI's
+#: loaded runner the timer thread woke after the backup had already dumped (2026-11-20).
+_CEILING = "3"
+#: How long each hang shape lasts before ending by itself, so a child never needs killing.
+_HANG_S = 5
+#: The hang shapes, each a test function run by a runner like the suite's own. Every hanging call
+#: carries `# HANG` (the line the dump must point at); QtCore is imported before the clock matters.
+_SHAPES_SRC = '''\
+import os, sys, threading, time
+from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+
+HANG_S = {hang}
+
+
+def test_sleeps_in_python():
+    time.sleep(HANG_S)  # HANG
+
+
+def test_deadlocks_on_two_locks():
+    a, b = threading.Lock(), threading.Lock()
+    a.acquire()
+    b_held = threading.Event()
+
+    def holder():
+        with b:
+            b_held.set()
+            a.acquire(timeout=HANG_S)  # HELPER
+
+    t = threading.Thread(target=holder, name="lock-holder")
+    t.start()
+    b_held.wait()
+    b.acquire(timeout=HANG_S)  # HANG
+    a.release()
+    t.join()
+
+
+def test_spins_a_qt_event_loop_nobody_quits():
+    app = QCoreApplication.instance() or QCoreApplication([])
+    loop = QEventLoop()
+    QTimer.singleShot(HANG_S * 1000, loop.quit)  # only so the probe ends; the dump comes first
+    loop.exec()  # HANG
+    del app
+
+
+def test_holds_the_gil_in_a_c_call():
+    import ctypes, ctypes.util
+    libc = ctypes.PyDLL(ctypes.util.find_library("c"))  # a PyDLL call keeps the GIL
+    libc.sleep(HANG_S)  # HANG
+
+
+def test_finishes_in_time():
+    print("PACER_HANG_DUMP left for children:", os.environ.get("PACER_HANG_DUMP"))
+
+
+if __name__ == "__main__":
+    print("ok  test_before_it")
+    globals()[sys.argv[1]]()
+    print("ok  " + sys.argv[1])
+'''
+#: A stand-in for ctest: a process named `ctest` (a symlink to this Python) whose own command line
+#: carries the `--timeout`. It starts the test through a shell, so the ctest is a GRANDPARENT, as
+#: behind any wrapper; the shell sets PACER_HANG_DUMP=ctest for the test alone, so the stand-in
+#: arms nothing itself. `exit $?` keeps the shell from exec-ing into the test.
+_FAKE_CTEST_SRC = ("import subprocess, sys\n"
+                   "sys.exit(subprocess.call(['/bin/sh', '-c', 'PACER_HANG_DUMP=ctest \"$@\"; "
+                   "exit $?', 'sh', *sys.argv[1:4]]))\n")
+_shape_runs: dict[str, tuple[int, str, str, float]] = {}
+_shape_script: list[str] = []
+
+
+def _hang_line(src: str, func: str, marker: str = "# HANG") -> int:
+    lines = src.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.lstrip().startswith(f"def {func}("))
+    return next(i for i in range(start, len(lines)) if lines[i].endswith(marker)) + 1
+
+
+def _child_env(ceiling: str | None) -> dict:
+    """This environment with tests/_site first on PYTHONPATH, as a registration has it, and the
+    hang-dump variable set to `ceiling` (or absent)."""
+    env = {k: v for k, v in os.environ.items() if k != _hang_dump.ENV}
+    env["PYTHONPATH"] = os.pathsep.join(
+        [os.path.join(_TESTS, "_site")] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    if ceiling is not None:
+        env[_hang_dump.ENV] = ceiling
+    return env
+
+
+def _run_shapes() -> tuple[str, dict[str, tuple[int, str, str, float]]]:
+    """Run every shape at once (the wall time is one hang, ~5 s): armed by the variable, and twice
+    more under a fake ctest, with and without `--timeout`. Cached: two checks read it. Returns the
+    script's path (gone by then) and, per run, (exit status, stdout, stderr, seconds)."""
+    if _shape_runs:
+        return _shape_script[0], _shape_runs
+    workdir = tempfile.mkdtemp(prefix="pacer-hang-dump-")
+    script = os.path.join(workdir, "test_hang_shapes.py")
+    _shape_script.append(script)
+    with open(script, "w", encoding="utf-8") as f:
+        f.write(_SHAPES_SRC.format(hang=_HANG_S))
+    runs = {name: [sys.executable, script, name] for name in (
+        "test_sleeps_in_python", "test_deadlocks_on_two_locks",
+        "test_spins_a_qt_event_loop_nobody_quits", "test_holds_the_gil_in_a_c_call",
+        "test_finishes_in_time")}
+    procs = {name: (subprocess.Popen(argv, env=_child_env(_CEILING), stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True), time.monotonic())
+             for name, argv in runs.items()}
+    fake_ctest = os.path.join(workdir, "ctest")
+    os.symlink(sys.executable, fake_ctest)
+    for key, extra in (("ctest --timeout", ["--timeout", _CEILING]), ("ctest, no --timeout", [])):
+        argv = [fake_ctest, "-c", _FAKE_CTEST_SRC, *runs["test_sleeps_in_python"], *extra]
+        env = dict(_child_env(None), **{_hang_dump.DEBUG_ENV: "1"})
+        procs[key] = (subprocess.Popen(argv, env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True), time.monotonic())
+    try:
+        for key, (proc, t0) in procs.items():
+            out, err = proc.communicate(timeout=120)
+            _shape_runs[key] = (proc.returncode, out, err, time.monotonic() - t0)
+    finally:
+        for proc, _t0 in procs.values():
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        shutil.rmtree(workdir, ignore_errors=True)
+    return script, _shape_runs
+
+
+def test_a_hang_prints_the_running_test_and_every_thread_before_the_timeout():
+    """Each hang shape, armed with a 3 s ceiling (dump at 2 s), writes the running test, the
+    hanging line and every thread's stack to stderr, once, before the ceiling — and the child
+    still runs to its own end with exit 0: the dump neither exits nor signals. A Qt event loop and a lock wait release the
+    GIL, so the Python watchdog names the test; a C call that keeps it leaves the dump to
+    faulthandler's own thread, whose stack still names the test. A child that finishes in time
+    prints nothing extra, and its children inherit no arming."""
+    script, runs = _run_shapes()
+    src = _SHAPES_SRC.format(hang=_HANG_S)
+    problems = []
+    threads = {"test_sleeps_in_python": 2, "test_deadlocks_on_two_locks": 3,
+               "test_spins_a_qt_event_loop_nobody_quits": 2}
+    for name, n_threads in threads.items():
+        rc, out, err, secs = runs[name]
+        line = _hang_line(src, name)
+        want = [f"{_hang_dump.BANNER}: still running",
+                f"{_hang_dump.BANNER}: running test: {name} ({script}:{line})",
+                f'File "{script}", line {line} in {name}', f"{_hang_dump.BANNER}: end"]
+        if name == "test_deadlocks_on_two_locks":
+            want.append(f'line {_hang_line(src, "holder", "# HELPER")} in holder')
+        mine = [f"{name}: stderr lacks {w!r}" for w in want if w not in err]
+        stacks = err.count("Thread 0x") + err.count("Current thread 0x")
+        if stacks != n_threads:
+            mine.append(f"{name}: {stacks} thread stacks, want {n_threads} (the test's threads "
+                        "and the watchdog's)")
+        if err.count(f"{_hang_dump.BANNER}: running test") != 1 or "Timeout (" in err:
+            mine.append(f"{name}: not exactly one dump (the backup must be cancelled)")
+        if rc != 0 or not out.rstrip().endswith(f"ok  {name}") or secs < _HANG_S:
+            mine.append(f"{name}: the dump changed the run: exit {rc} after {secs:.1f} s, "
+                        f"stdout {out[-200:]!r}")
+        problems += mine + ([f"{name} stderr:\n{err[-3000:]}"] if mine else [])
+
+    name = "test_holds_the_gil_in_a_c_call"
+    rc, out, err, secs = runs[name]
+    line = _hang_line(src, name)
+    if not (err.startswith("Timeout (0:00:02") and f"line {line} in {name}" in err
+            and _hang_dump.BANNER not in err and rc == 0 and secs >= _HANG_S):
+        problems.append(f"{name}: faulthandler's own thread did not dump the GIL-held hang "
+                        f"alone (exit {rc}, {secs:.1f} s):\n{err[-3000:]}")
+
+    rc, out, err, _secs = runs["test_finishes_in_time"]
+    if rc != 0 or err != "" or "left for children: None" not in out:
+        problems.append(f"a child that finishes in time changed: exit {rc}, stderr {err!r}, "
+                        f"stdout {out!r}")
+    assert not problems, "\n".join(problems)
+    print("test_a_hang_prints_the_running_test_and_every_thread_before_the_timeout OK")
+
+
+def test_the_dump_beats_ctests_own_timeout():
+    """The ceiling is the one that kills the test: a registration's TIMEOUT, else the running
+    ctest's `--timeout`, read off the nearest ctest ancestor's command line (CTest exports
+    neither), a wrapper between them included. With no `--timeout` nothing kills the test, so
+    nothing is armed. The dump sits 10 % (at least 1 s, at most 30 s) under the ceiling, so it
+    lands well before ctest's kill at 480 s and at 3600 s."""
+    assert _hang_dump.deadlines(480) == (450.0, 472.5), _hang_dump.deadlines(480)
+    assert _hang_dump.deadlines(3600) == (3570.0, 3592.5), _hang_dump.deadlines(3600)
+    for line, want in (
+            ("ctest --test-dir build/Release --output-on-failure --timeout 480", 480.0),
+            ("ctest --timeout=33 -R '^test_x$'", 33.0),
+            ("ctest --timeout 10 --timeout 44", 44.0),  # measured: ctest 4.4 computes 44
+            ("ctest --test-dir build/Release -R test_golden_synthetic", None),
+            ("ctest --timeout 0", None), ("", None)):
+        got = _hang_dump.ctest_timeout(line)
+        assert got == want, f"{line!r}: read {got}, want {want}"
+
+    _script, runs = _run_shapes()
+    rc, _out, err, _secs = runs["ctest --timeout"]
+    said = f"{_hang_dump.BANNER} armed against {float(_CEILING):g} s (ctest --timeout, pid "
+    want = f"before its {float(_CEILING):g} s timeout (ctest --timeout, pid "
+    assert rc == 0 and err.startswith(said) and want in err and (
+        "running test: test_sleeps_in_python" in err), (
+        f"a test whose ctest grandparent has `--timeout {_CEILING}` did not dump against it "
+        f"(exit {rc}):\n{err[-3000:]}")
+    rc, _out, err, _secs = runs["ctest, no --timeout"]
+    assert rc == 0 and err == f"{_hang_dump.BANNER} not armed (no --timeout on ctest pid " + (
+        err.rpartition(" pid ")[2]), f"with no --timeout something was armed:\n{err[-3000:]}"
+    print("test_the_dump_beats_ctests_own_timeout OK")
+
+
+def test_this_registration_is_armed_against_its_own_ceiling():
+    """IN THE REAL RUN: this very process, started by ctest, armed itself against the ceiling ctest
+    will kill it at — so the feature is on wherever this passes under ctest (CI's `pixi run test`:
+    `caffeinate -si ctest … --timeout 480`, so 480 s, dump at 450 s). Run by hand, with no ctest
+    above it, nothing was armed."""
+    found = _hang_dump.ctest_ancestor()
+    ceiling = _hang_dump.ctest_timeout(found[1]) if found else None
+    got = _hang_dump.armed
+    if ceiling is None:  # by hand; the no-`--timeout` rule itself is held by the check above
+        where = f"ctest pid {found[0]}" if found else "not under ctest"
+        print("test_this_registration_is_armed_against_its_own_ceiling OK (no ctest --timeout "
+              f"above this process: {where})")
+        return
+    assert got is not None and got[0] == ceiling, (
+        f"under `{found[1] if found else ''}` this registration should be armed against "
+        f"{ceiling:g} s, but is armed against {got}: the hang dump is OFF in this run")
+    print(f"test_this_registration_is_armed_against_its_own_ceiling OK (armed against {got[0]:g} "
+          f"s from {got[1]}: dump at {_hang_dump.deadlines(got[0])[0]:g} s)")
+
+
+def test_every_python_registration_arms_the_hang_dump():
+    """THE BUILD: every registration that runs a Python file has tests/_site first on PYTHONPATH
+    and PACER_HANG_DUMP set to its own TIMEOUT, or to `ctest` where it has none — so a new test,
+    footage check or soak is covered with no edit."""
+    ctest = os.environ.get("PACER_CTEST_COMMAND") or shutil.which("ctest") or os.path.join(
+        _REPO, ".pixi", "envs", "default", "bin", "ctest")
+    build = os.environ.get("PACER_CTEST_DIR") or os.path.join(_REPO, "build", "Release")
+    assert os.path.isfile(ctest) and os.path.isdir(build), (
+        f"cannot list the registered tests (ctest={ctest}, build dir={build}). Run this through "
+        "ctest, or build first — this check must not pass by finding nothing to check")
+    proc = subprocess.run([ctest, "--test-dir", build, "--show-only=json-v1"], capture_output=True,
+                          text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    python = [t for t in json.loads(proc.stdout)["tests"]
+              if any(str(c).endswith(".py") for c in t.get("command", []))]
+    assert len(python) >= 100, f"only {len(python)} Python registrations listed — listing broken"
+    site = os.path.realpath(os.path.join(_TESTS, "_site"))
+    wrong = []
+    for t in python:
+        props = {p["name"]: p["value"] for p in t.get("properties", [])}
+        values = [e.split("=", 1)[1] for e in props.get("ENVIRONMENT", [])
+                  if e.startswith(_hang_dump.ENV + "=")]
+        timeout = props.get("TIMEOUT")
+        armed = len(values) == 1 and (values[0] == _hang_dump.CTEST if timeout is None
+                                      else float(values[0]) == float(timeout))
+        prepended = any(m.startswith("PYTHONPATH=path_list_prepend:")
+                        and os.path.realpath(m.split(":", 1)[1]) == site
+                        for m in props.get("ENVIRONMENT_MODIFICATION", []))
+        if not (armed and prepended):
+            wrong.append(f"{t['name']} ({values}, TIMEOUT {timeout}, prepends _site: {prepended})")
+    assert not wrong, (
+        f"{len(wrong)} of {len(python)} Python registrations are not armed for a hang dump: "
+        f"{', '.join(wrong[:8])}. The HANG DUMPS loop near the end of tests/CMakeLists.txt arms "
+        "every registration above it")
+    assert os.path.isfile(os.path.join(site, "sitecustomize.py"))
+    print(f"test_every_python_registration_arms_the_hang_dump OK ({len(python)} registrations)")
+
+
 if __name__ == "__main__":
     test_the_suite_tasks_default_to_parallel()
     test_no_ctest_task_passes_its_own_parallel_flag()
     test_every_task_regex_names_real_registrations()
     test_the_ci_decode_world_runs_every_real_player_test()
-    print("\nOK: the suite runs in parallel by default, a run can still be made serial, and every "
-          "task's list names real registrations")
+    test_a_hang_prints_the_running_test_and_every_thread_before_the_timeout()
+    test_the_dump_beats_ctests_own_timeout()
+    test_this_registration_is_armed_against_its_own_ceiling()
+    test_every_python_registration_arms_the_hang_dump()
+    print("\nOK: the suite runs in parallel by default, a run can still be made serial, every "
+          "task's list names real registrations, and a hang prints where it is before its timeout")

@@ -15,10 +15,15 @@ pytest run as safe as that script run, and makes it run the same tests:
   (each runs as its own `footage.` / `soak.` / `videotoolbox.<check>` registration; the soak alone
   is ~113 s), and run a test that
   names `monkeypatch_restore` inside its module's `_Restore()` (the three export test files).
+* The hang dump (tests/_hang_dump.py), when asked for: `PACER_HANG_DUMP=60 pixi run python -m
+  pytest -s …` prints the running test and every thread's stack at ~54 s (without `-s` pytest
+  captures it into the test's report). A by-hand run has no timeout to beat, so without the
+  variable nothing is armed.
 """
 import os
 import sys
 
+import _hang_dump
 import pytest
 
 os.environ.setdefault("PACER_APP_SUPPORT_JAIL", "1")
@@ -28,6 +33,7 @@ _BINDINGS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
                          "bindings", "pacer")
 if _BINDINGS not in sys.path:
     sys.path.insert(0, _BINDINGS)
+_hang_dump.arm_from_environment()
 
 
 def _by_registration(item) -> bool:

@@ -12,6 +12,7 @@ macro(add_pacer_test name)
     target_link_libraries(${name} PRIVATE ${ARGN} Catch2::Catch2WithMain)
     add_test(NAME ${name} COMMAND ${name})
     set_property(TARGET ${name} PROPERTY FOLDER "tests")
+    list(APPEND _pacer_cpp_tests ${name})  # the hang-dump loop at the end skips these
 endmacro()
 
 add_pacer_test(test_coordinate_system pacer::geometry)
@@ -61,7 +62,7 @@ set(_no_media
     test_media_clock test_playback_rate test_provenance_panel test_quality_chip_trust
     test_quality_strip test_session_log test_synth_gopro test_welcome_first_touch)
 # + PACER_CTEST_COMMAND / PACER_CTEST_DIR, for a test that lists this build's own registrations:
-set(_ctest test_app_support_jail test_footage_checks)
+set(_ctest test_app_support_jail test_footage_checks test_parallel_suite)
 #
 # COST. ctest starts the highest COST first, but a FRESH build dir — every CI run, every new
 # worktree — has no measured costs, so it ran in registration order and the slowest suites started
@@ -210,6 +211,26 @@ add_videotoolbox_test(test_export_video test_the_last_frame_and_the_audio_reach_
 add_videotoolbox_test(test_export_video test_the_videotoolbox_prores_alpha_round_trip_is_straight)
 add_videotoolbox_test(test_export_video test_real_prores_overlay_on_videotoolbox_matches_the_prores_ks_fallback)
 add_videotoolbox_test(test_export_pipeline test_the_relay_turns_itself_on_over_the_hardware_decode_and_paints_the_serial_frames)
+
+# HANG DUMPS. Every Python registration prints the running test and every thread's stack to its log
+# shortly before its timeout kills it, instead of only "***Timeout" (tests/_hang_dump.py). It gets
+# tests/_site first on PYTHONPATH, whose sitecustomize.py arms the dump at interpreter start, and
+# PACER_HANG_DUMP: its own TIMEOUT where it has one, else "ctest" (the running ctest's --timeout).
+# C++ registrations have no Python to arm. Runs after every registration, so none is missed;
+# test_parallel_suite holds it to every Python registration.
+get_property(_pacer_registered_tests DIRECTORY PROPERTY TESTS)
+foreach(_pacer_test IN LISTS _pacer_registered_tests)
+    if("${_pacer_test}" IN_LIST _pacer_cpp_tests)
+        continue()
+    endif()
+    get_test_property(${_pacer_test} TIMEOUT _secs)
+    if(NOT _secs)
+        set(_secs ctest)
+    endif()
+    set_property(TEST ${_pacer_test} APPEND PROPERTY ENVIRONMENT "PACER_HANG_DUMP=${_secs}")
+    set_property(TEST ${_pacer_test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+                 "PYTHONPATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/_site")
+endforeach()
 
 # KEEP THIS LAST. Every registration above runs with PACER_APP_SUPPORT_JAIL=1: the first store path
 # any process in the test's tree resolves is a fresh temp dir (exported to its children, removed at
