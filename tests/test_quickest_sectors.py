@@ -376,8 +376,8 @@ def test_the_menu_plays_and_exports_a_sector_and_greys_out_a_level_compare_and_c
         assert play.isEnabled() and export.isEnabled() and not compare.isEnabled()
         # S3's quickest is level with its typical split under the split's step: the true reason
         lap = s.split_matrix().best_lap[2]
-        assert compare.toolTip() == (f"Lap {lap + 1}'s pass through S3 is level with your typical "
-                                     "pass (within 0.30 s): nothing to tell apart"), compare.toolTip()
+        assert compare.toolTip() == (f"Lap {lap + 1}'s pass through S3 is within 0.30 s of your "
+                                     "typical pass as timed"), compare.toolTip()
         play.trigger()
         lap = s.split_matrix().best_lap[2]
         assert plays[-1] == s.stretch_clip(lap, stats.sector_key(2))
@@ -463,8 +463,8 @@ def test_compare_with_the_typical_pass_is_offered_on_a_sector_row_only_past_the_
                         f"{v.typical_lap_id + 1}, side by side from the lead-in")
                 else:
                     assert compare.toolTip() == (
-                        f"Lap {lap + 1}'s pass through S{c + 1} is level with your typical pass "
-                        "(within 0.30 s): nothing to tell apart"), compare.toolTip()
+                        f"Lap {lap + 1}'s pass through S{c + 1} is within 0.30 s of your typical "
+                        "pass as timed"), compare.toolTip()
             assert enabled == ["S1"], (n, enabled)
     finally:
         _close(win)
@@ -514,10 +514,13 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         cap = f"lap {a + 1} ({v.pass_s:.2f}) vs typical lap {b + 1} ({v.typical_pass_s:.2f}) · S1"
         assert view.video.seam.caption.text() == cap
         msg = win.statusBar().currentMessage()
-        assert msg == typical_compare_status(v, "S1") and " quicker through S1 " in msg, msg
+        assert msg == typical_compare_status(v, "S1") and " quicker through S1 as timed " in msg
         assert "fastest" not in msg.lower()
         tip = view.video.seam.toolTip()
         assert "±0.30 s" in tip and "the whole sector" in tip, tip   # the sector's own step
+        # the held figure is a measurement of these two passes, not a verdict: the tip says so
+        assert "the difference between these two passes as timed" in tip, tip
+        assert "partly luck" in tip and "Coloured only beyond timing precision" not in tip, tip
         # the readout rule at the sector's two lines (`Session.stretch_edges`)
         (ea, xa), (eb, xb) = s.stretch_edges(a, key), s.stretch_edges(b, key)
         assert abs((xa - ea) - v.pass_s) < 1e-9 and abs((xb - eb) - v.typical_pass_s) < 1e-9
@@ -529,8 +532,12 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         assert held == -v.gap_s and abs(held) >= stats.SECTOR_LEVEL_S
         for ta, tb in ((xa + 0.2, xb + 0.2), (clip_a[1] + 0.03, clip_b[1] + 0.05)):
             seam, ba, bb, _ = _panes_at(view, ta, tb)
-            assert ba == theme.format_delta_run(held) and bb == theme.format_delta_run(-held)
-            assert seam == theme.format_delta_run(held), seam
+            # held after the exit: the printed gap as measured, neutral, without ▲/▼
+            assert ba == theme.format_delta_run(held, arrow=False), ba
+            assert bb == theme.format_delta_run(-held, arrow=False), bb
+            assert seam == theme.format_delta_run(held, arrow=False), seam
+            assert (view.video._cell_a._badge_colour, view.video._cell_b._badge_colour,
+                    view.video.seam.value.colour()) == (None, None, None)
         # inside the sector a Δ under the split's step is shown neutral, without its arrow
         anchor = view.compare._anchor
         assert anchor.level_s == stats.SECTOR_LEVEL_S and anchor.noun == "sector"
@@ -553,6 +560,16 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         _settle()
         assert not view._comparing() and view.table.selected_lap_ids() == [a]
         assert view.compare.pass_anchor() is None and win.statusBar().currentMessage() == ""
+        # an ordinary lap-vs-lap compare (C) keeps its colour rule and its wording
+        win.toggle_compare()
+        _settle()
+        assert view._comparing() and view.compare.pass_anchor() is None
+        tip = view.video.seam.toolTip()
+        assert "Coloured only beyond timing precision (±0.07 s)" in tip and "luck" not in tip, tip
+        view.compare._set_pane_badge(0, 0.5)
+        assert view.video._cell_a._badge_colour == theme.delta_colour(0.5) is not None
+        win.toggle_compare()
+        _settle()
         # ⌘K: with S1's quickest pass studied, the compare is a row beside its export, and runs
         q.activate(q.row_of(key))
         _settle()

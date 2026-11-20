@@ -2001,8 +2001,11 @@ def test_compare_this_pass_with_the_typical_pass_at_the_corner():
         assert view.video.seam.caption.text() == "lap 13 (2.32) vs typical lap 1 (2.40) · C3"
         msg = win.statusBar().currentMessage()
         assert msg == (f"Comparing lap 13 ({v.pass_s:.2f}) with your typical pass, lap 1 "
-                       f"({v.typical_pass_s:.2f}): 0.08 s quicker through C3 · C or Esc: back to "
-                       "lap 13"), msg
+                       f"({v.typical_pass_s:.2f}): 0.08 s quicker through C3 as timed · C or Esc: "
+                       "back to lap 13"), msg
+        tip = view.video.seam.toolTip()
+        assert "the difference between these two passes as timed" in tip, tip
+        assert "partly luck" in tip and "Coloured only beyond timing precision" not in tip, tip
         assert "fastest" not in msg.lower()
         assert view.pass_subject() is None, "compare is not a pass: nothing stale to export"
         # Esc leaves it: lap 13 alone, the whole lap and track
@@ -2028,10 +2031,10 @@ def test_level_or_typical_passes_are_not_compared_and_say_why():
         pos = q.table.visualRect(q.table.model().index(1, 1)).center()      # C2: level
         compare = view.pass_menu(view._quickest_menu_pass(q.table, pos)).actions()[2]
         assert not compare.isEnabled()
-        assert compare.toolTip() == ("Lap 11's pass through C2 is level with your typical pass "
-                                     "(within 0.07 s): nothing to tell apart"), compare.toolTip()
+        assert compare.toolTip() == ("Lap 11's pass through C2 is within 0.07 s of your typical "
+                                     "pass as timed"), compare.toolTip()
         assert not view.compare_pass_with_typical(10, 2) and not view._comparing()
-        assert "level with your typical pass" in win.statusBar().currentMessage()
+        assert "within 0.07 s of your typical pass" in win.statusBar().currentMessage()
         assert not view.compare_pass_with_typical(3, 1)                     # lap 4 IS C1's typical
         assert "is your typical pass through C1" in win.statusBar().currentMessage()
         # ⌘K: no compare row while a level pass is studied, one while C3's quickest is
@@ -2112,8 +2115,10 @@ def _edges(s, lap, cid):
             c.pass_clip(lap, cid))
 
 
-def _check_corner_readout(view, s, a, b, cid, held, caption):
-    """The readout rule through one corner compare of lap `a` (pane A) with lap `b` (pane B)."""
+def _check_corner_readout(view, s, a, b, cid, held, caption, held_neutral=False):
+    """The readout rule through one corner compare of lap `a` (pane A) with lap `b` (pane B).
+    `held_neutral`: a "Compare with my typical pass", whose held gap is printed as measured but
+    never coloured nor arrowed (`PassAnchor.held_neutral`); otherwise coloured as before."""
     from studio import theme
     from studio.library import within_timing_precision
     ea, xa, ca = _edges(s, a, cid)
@@ -2132,10 +2137,19 @@ def _check_corner_readout(view, s, a, b, cid, held, caption):
     # gap, the gap the status line names; pane B mirrors it
     for ta, tb in ((xa + 0.2, xb + 0.2), (ca[1] + 0.03, cb[1] + 0.05)):
         seam, ba, bb, _ = _panes_at(view, ta, tb)
+        colours = (view.video._cell_a._badge_colour, view.video._cell_b._badge_colour,
+                   view.video.seam.value.colour())
+        if held_neutral:
+            assert ba == theme.format_delta_run(held, arrow=False), (ba, held)
+            assert bb == theme.format_delta_run(-held, arrow=False), (bb, held)
+            assert seam == theme.format_delta_run(held, arrow=False), (seam, held)
+            assert colours == (None, None, None), colours
+            continue
         assert ba == theme.format_delta_run(held), (ba, held)
         assert bb == theme.format_delta_run(-held), (bb, held)
         arrow = not within_timing_precision(held)
         assert seam == theme.format_delta_run(held, arrow=arrow), (seam, held)
+        assert colours[:2] == (theme.delta_colour(held), theme.delta_colour(-held)), colours
     assert view.compare.pass_anchor() == f"C{cid}"
     # a pane scrubbed out of its clip: the whole lap's Δ again, under the plain caption
     t_out = ca[1] + 10.0                         # ten seconds on, still on lap a, far past C#
@@ -2160,7 +2174,7 @@ def test_the_corner_readout_is_blank_before_the_entry_live_inside_and_held_after
         v = s.pass_vs_typical(5, 5)
         assert -v.gap_s == printed_gap_s(v.pass_s, v.typical_pass_s) == 2.84
         _check_corner_readout(view, s, 5, 8, 5, 2.84,
-                              "lap 6 (6.45) vs typical lap 9 (3.61) · C5")
+                              "lap 6 (6.45) vs typical lap 9 (3.61) · C5", held_neutral=True)
         assert not view._comparing() or view.compare.pass_anchor() is None
         view.video.compare_btn.click() if view._comparing() else None
         _settle()

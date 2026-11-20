@@ -63,16 +63,29 @@ class PassAnchor:
     always used; `stats.SECTOR_LEVEL_S` for a split, which carries more GPS noise). A sector's Δ
     of 0.2 s is a difference its timing cannot make, and is not coloured as one.
 
+    `held_neutral` (a compare of the QUICKEST pass with the typical one, "Compare with my typical
+    pass"): the held figure after the exit is printed as measured but never coloured, nor given
+    a ▲/▼. It is the difference between these two passes as timed, not a verdict on them: the
+    quickest of 14 noisy times is partly a lucky one, so the true gap behind an offered pair is
+    under the step on 5 of 11 corner rows and 3 of 6 sector rows at GPS noise 2
+    (studio/dev/probes/corner_typical_compare, sector_typical_compare).
+
     `sides` holds per pane (entry, exit, clip start, clip end, Δ at the entry, held gap)."""
 
     def __init__(self, label: str, caption: str, sides: tuple[tuple, tuple], *,
-                 noun: str = "corner", level_s: float = PB_PRECISION_S):
+                 noun: str = "corner", level_s: float = PB_PRECISION_S,
+                 held_neutral: bool = False):
         self.label = label
         self.caption = caption
         self.sides = sides
         self.noun = noun
         self.level_s = level_s
+        self.held_neutral = held_neutral
         self.armed = False     # both panes have been inside their clips (the seeks landed)
+
+    def held(self, side: int, t: float) -> bool:
+        """Is the pane past the exit, its readout the held gap?"""
+        return t > self.sides[side][1]
 
     def inside(self, side: int, t: float) -> bool:
         _e, _x, start, end, _d0, _held = self.sides[side]
@@ -269,6 +282,7 @@ class CompareController:
             d_a = self.session.delta_between(a, b, t_a)
             d_b = self.session.delta_between(b, a, t_b)
             anchor = self._anchor
+            neutral_a = neutral_b = False        # a held gap shown as measured, not as a verdict
             if anchor is not None:   # a compare at a pass: `PassAnchor`'s readout rule
                 both_in = anchor.inside(0, t_a) and anchor.inside(1, t_b)
                 if both_in:
@@ -280,9 +294,11 @@ class CompareController:
                 else:
                     d_a = anchor.value(0, t_a, d_a)
                     d_b = anchor.value(1, t_b, d_b)
-            self._set_pane_badge(0, d_a)
-            self._set_pane_badge(1, d_b)
-            self._set_seam(d_a)
+                    neutral_a = anchor.held_neutral and anchor.held(0, t_a)
+                    neutral_b = anchor.held_neutral and anchor.held(1, t_b)
+            self._set_pane_badge(0, d_a, neutral=neutral_a)
+            self._set_pane_badge(1, d_b, neutral=neutral_b)
+            self._set_seam(d_a, neutral=neutral_a)
         # F4 map ghost: lap B's kart at the same t_b the badge used (both panes play time-into-lap).
         if self.map is not None:
             if self._cross:
@@ -320,21 +336,23 @@ class CompareController:
     # The badge for the degenerate "both panes on the same lap" pair (see tick()).
     SAME_LAP_BADGE = "same lap"
 
-    def _set_pane_badge(self, side: int, d: float | None, *, same_lap: bool = False) -> None:
+    def _set_pane_badge(self, side: int, d: float | None, *, same_lap: bool = False,
+                        neutral: bool = False) -> None:
         """Format + colour a pane Δ badge via theme.format_delta_run (the app's SINGLE Δ formatter,
         so the badge carries the same ▲/▼ non-colour direction cue as the hero readout, the charts
         and the corner table — hand-rolling the f-string here dropped it) and theme.delta_colour
         (neutral when dead-even). At a pass (`PassAnchor`), neutral and arrowless inside its step,
-        as the seam is: two passes level under it have no direction to show."""
+        as the seam is: two passes level under it have no direction to show. `neutral`: always
+        so (a typical-pass compare's held gap, `PassAnchor.held_neutral`)."""
         if same_lap:
             self.video.set_pane_badge(side, self.SAME_LAP_BADGE, None)
-        elif (self._anchor is not None and d is not None
-              and abs(_printed(d)) < self._anchor.level_s):   # level under the pass's own step
+        elif d is not None and (neutral or (self._anchor is not None
+                                            and abs(_printed(d)) < self._anchor.level_s)):
             self.video.set_pane_badge(side, theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_pane_badge(side, theme.format_delta_run(d), theme.delta_colour(d))
 
-    def _set_seam(self, d: float | None) -> None:
+    def _set_seam(self, d: float | None, *, neutral: bool = False) -> None:
         """The seam's big live Δ: pane A's badge value, the SAME float, never a second read.
 
         Coloured only OUTSIDE timing precision (`library.PB_PRECISION_S`, the one rule every
@@ -342,12 +360,14 @@ class CompareController:
         5 ms, which is right for 11 px in a corner; at the hero's size a number that flashes red
         and green at ±0.01 s while two laps are level is a claim the timing cannot make. Inside
         the band the number is still printed, neutral and without its ▲/▼, so it never hides. At
-        a pass (`PassAnchor`) the band is that stretch's own step, a sector's wider one.
+        a pass (`PassAnchor`) the band is that stretch's own step, a sector's wider one; `neutral`
+        prints it neutral whatever its size (a typical-pass compare's held gap).
 
         Decided on the PRINTED value, as the Laps table's Δbest decides on the gap it prints:
         0.0699 and 0.0700 both print `+0.07`, and two equal strings must not look different."""
-        if d is not None and (within_timing_precision(_printed(d)) if self._anchor is None
-                              else abs(_printed(d)) < self._anchor.level_s):
+        if d is not None and (neutral or (within_timing_precision(_printed(d))
+                                          if self._anchor is None
+                                          else abs(_printed(d)) < self._anchor.level_s)):
             self.video.set_seam_delta(theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_seam_delta(theme.format_delta_run(d), theme.delta_colour(d))
@@ -383,10 +403,18 @@ class CompareController:
                      f"held. A pane leaving the {noun}'s clip goes back to the laps' gap since the "
                      "start line. ")
         step = PB_PRECISION_S if self._anchor is None else self._anchor.level_s
+        if self._anchor is not None and self._anchor.held_neutral:
+            # A typical-pass compare: the colour of the live gap is the timing step's, and the held
+            # figure is a measurement of two passes, never a verdict (`PassAnchor.held_neutral`).
+            noun = self._anchor.noun
+            colour = (f"Inside the {noun} the gap is coloured only beyond ±{step:.2f} s. After "
+                      f"the exit it holds the difference between these two passes as timed, "
+                      "neutral, because the quickest of many passes is partly luck.")
+        else:
+            colour = (f"Coloured only beyond timing precision (±{step:.2f} s); inside it the "
+                      "two laps are level and the number stays neutral.")
         tip = (f"Lap {lap_label(a)} against {other} at the same place on track: − is ahead. "
-               + since +
-               f"Coloured only beyond timing precision (±{step:.2f} s); inside it the "
-               "two laps are level and the number stays neutral.")
+               + since + colour)
         self.video.set_seam_pair(caption, tip)
 
     # ------------------------------------------------------------------ enter / exit
@@ -628,9 +656,11 @@ class CompareController:
         return f"lap {lap_label(ref_lap)}  ({fmt_time(ref_sess.lap_time(ref_lap))})"
 
     def set_pass_anchor(self, label: str, caption: str, side_a: tuple, side_b: tuple, *,
-                        noun: str = "corner", level_s: float = PB_PRECISION_S) -> bool:
+                        noun: str = "corner", level_s: float = PB_PRECISION_S,
+                        held_neutral: bool = False) -> bool:
         """Anchor both Δ badges and the seam at the pass through `label`, a corner or a sector
-        (`noun`; `PassAnchor`'s readout rule, neutral inside `level_s`), under the seam `caption`
+        (`noun`; `PassAnchor`'s readout rule, neutral inside `level_s`, the held gap neutral with
+        `held_neutral`), under the seam `caption`
         that names the pair for the whole comparison. Each side is that pane's (entry, exit, clip
         start, clip end, pass time) on the telemetry clock. Same-recording pairs only; False
         (whole-lap Δ kept) when either entry Δ cannot be read."""
@@ -644,7 +674,8 @@ class CompareController:
         held = printed_gap_s(side_a[4], side_b[4])   # + = pane A's pass the slower
         self._anchor = PassAnchor(label, caption, (
             (*map(float, side_a[:4]), float(d_a), held),
-            (*map(float, side_b[:4]), float(d_b), -held)), noun=noun, level_s=float(level_s))
+            (*map(float, side_b[:4]), float(d_b), -held)), noun=noun, level_s=float(level_s),
+            held_neutral=held_neutral)
         self._compare_last_t = None
         self._sync_seam_pair()
         return True

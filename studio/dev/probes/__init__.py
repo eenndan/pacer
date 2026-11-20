@@ -233,4 +233,10 @@ offered on a sector row: per sector, the printed typical split minus the quickes
 `stats.SECTOR_LEVEL_S`, over every counted lap too, and the true gap the generator planted.
 
     pixi run python -m studio.dev.probes.sector_typical_compare
+
+`corner_typical_compare` is its corner twin (first written by the #641 review): on each corner
+row, whether the compare is offered and the TRUE typical − quickest gap behind it. Its numbers are
+why the held gap of that compare is shown as timed, never coloured (`PassAnchor.held_neutral`).
+
+    pixi run python -m studio.dev.probes.corner_typical_compare
 """
