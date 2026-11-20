@@ -6,6 +6,76 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-11-20
+
+A minor release: 10 pull requests, #629 to #636, #638 and #640, Wave 13 of the campaign. Its
+theme: the driver's own sectors join the pass family, and a session that is not the demo reads
+true.
+
+### Highlights
+
+- **The File menu's export works again.** File ▸ Export overlay video… and its ⌘K row open the
+  export options again; both had crashed since 0.17.0 (#638)
+- **Your own sectors in Quickest passes.** Draw sector lines on the map and S1, S2… list under the
+  corners: the quickest split, its lap and the laps level with it within 0.30 s, twice a split's
+  noise. A sector row plays, loops, slows and walks (⌥← / ⌥→) like a corner row (#631)
+- **A refusal says why.** C and G on a disabled button, F while comparing, ⌥→ on a session too
+  short for corner times and a sector's export or compare put the reason on the status line (#635,
+  #640)
+- **No Stats claim from nothing.** No empty IDEAL LAP table, no STRAIGHTS slow exit the timing step
+  cannot tell from level, no COASTING place too small to list, "—" for one lap's spreads (#634)
+- **A short session reads true.** A clean GPS trace that crosses the start/finish line only once
+  says so on every no-laps panel; Coaching's too-few-laps note no longer says to reload (#636)
+- **Status lines end with their state.** Leaving a pass or a compare at a corner takes its line
+  down at once; a walk from Quickest passes ends on "C7 is the last corner" on the demo (#629)
+- **Nothing piles up.** ⌘K, the Library, the saved-tracks manager and the right-click menus free
+  themselves when closed: on the demo each Library open used to leave 113 widgets behind (#633)
+- **Measured and refused: early or late apex, and the line at the apex.** On the demo the apex rule
+  fires once, at C7, a constant-radius arc with no minimum to place (#630)
+
+### Added
+
+- Quickest passes lists your own sectors (S1, S2…) below the corners when you draw sector lines: the
+  quickest split, its lap and the laps level with it (within 0.30 s, twice a split's noise). (#631)
+- A sector pass zooms, loops, plays slow and walks (⌥←/⌥→ step the sectors) like a corner pass; its
+  export and compare say "not for sectors yet". (#631)
+
+### Fixed
+
+- File ▸ Export overlay video… and its ⌘K command open the export options again (broken since
+  0.17.0). (#638)
+- F and ⌘K "Make the video fill the screen" while comparing two laps now say why they do nothing
+  on the status line, as C and G already do, instead of staying silent. (#640)
+- A clean GPS trace that crosses the start/finish line only once now says so on every no-laps panel,
+  instead of guessing that the GPS did not lock or the recording is too short. (#636)
+- Coaching's "Start with …" tie reads "at +0.01 s each" when its two ends round to the same figure.
+  (#636)
+- Coaching's too-few-laps message no longer says to reload: the remedy is more laps next session.
+  (#636)
+- ⌥→ / ⌥← on a session too short for corner times says why no pass plays, instead of claiming "the
+  last one with a pass"; with no complete lap it says so, not "No corners on this track yet". (#635)
+- C and G on a disabled Compare or g-meter button put the button's reason on the status line instead
+  of doing nothing and saying nothing. (#635)
+- Stats ▸ IDEAL LAP no longer shows an empty table over "These 0 segments hold 0.00 s": when no
+  segment reaches 0.05 s, one sentence says the gap is spread under that in every segment. (#634)
+- Stats ▸ STRAIGHTS no longer names a "slow exit costing the most" whose extra time down the
+  straight the timing step cannot tell from level. (#634)
+- Stats ▸ COASTING no longer names a place its own heading counted as too small to list. (#634)
+- With one lap, BRAKING's Span m and STRAIGHTS' Exit Δ print "—" instead of a spread of 0.0. (#634)
+- ⌘K, the Library, the saved-tracks manager and the right-click inspect menus free themselves when
+  closed, instead of each open leaving its whole window behind until you quit. (#633)
+- Leaving a played pass (Esc, a lap pick, C, a Lap race, a Jump, a reload) takes its status line
+  ("Esc: whole lap · ⌘K: export this pass") down at once instead of 6 s later. (#629)
+- A corner walk (⌥→) from a Quickest passes row ends on "C7 is the last corner", not on a lap.
+  (#629)
+- Esc leaves a Coaching row's Compare as it leaves "compare with my typical pass" (C still does).
+  (#629)
+- A slow lap narrower than its ▼ on the video's lap ruler shows as a small tick instead of nothing.
+  (#629)
+- The map key folds to its title while a pass is zoomed and comes back as you left it. (#629)
+- A Quickest strip's hover on a tie says what is true of each lap: the named one, or level with it.
+  (#629)
+
 ## [0.17.0] — 2026-11-20
 
 A minor release: 12 pull requests from #616 to #627, Wave 12 of the campaign, built to the
@@ -2457,7 +2527,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/eenndan/pacer/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/eenndan/pacer/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/eenndan/pacer/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/eenndan/pacer/compare/v0.14.0...v0.15.0
