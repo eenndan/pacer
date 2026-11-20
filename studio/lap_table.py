@@ -3992,6 +3992,17 @@ class QuickestPassTable(QWidget):
             self._running = False
             self._paint_playing()
 
+    def highlight_pass(self, lap_id: int, cid: int) -> None:
+        """Highlight the row whose pass this is — lap `lap_id` through `cid` is its quickest or one
+        of its level laps — and no row when none names it. Plays nothing: a compare started from
+        a row's menu or ⌘K, whose pass the highlight must name, not the pass played before it."""
+        row = self.row_of(cid)
+        if row >= 0 and lap_id in self.passes()[row].play_order():
+            self.table.selectRow(row)
+            self.table.scrollToItem(self.table.item(row, 0))
+        else:
+            self.table.clearSelection()
+
     def focus_first(self) -> None:
         """Keyboard-ready: focus the table and, with nothing selected yet, make row 0 current, so
         the arrow keys and Return work at once. Plays nothing."""

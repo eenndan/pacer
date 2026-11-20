@@ -1069,6 +1069,36 @@ def test_u9_04_f_key_reaches_the_video_focus_gesture():
     print("test_u9_04_f_key_reaches_the_video_focus_gesture OK")
 
 
+def test_a_double_click_on_the_video_while_comparing_says_why_as_f_does():
+    """A double-click on the video — the third door to ⤢ — did nothing and said nothing while
+    comparing (DECISIONS §21); F and ⌘K have said why since #640. It now goes through the same
+    `request_video_focus`, so the refusal is the disabled button's tooltip, one sentence for the
+    three doors, on either pane. Out of compare it still asks for video focus."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    def double_click(pane):
+        p = QPointF(10, 10)
+        _APP.sendEvent(pane.video, QMouseEvent(QEvent.MouseButtonDblClick, p, pane.video.mapToGlobal(p),
+                                               Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    _themed()
+    view = VideoView(_cmap("PRIMARY"))
+    intents, refused = [], []
+    view.videoFocusRequested.connect(lambda: intents.append(True))
+    view.videoFocusRefused.connect(refused.append)
+    double_click(view.pane)
+    assert intents == [True] and refused == [], (intents, refused)
+    view.set_compare(_spec(0, (0.0, 10.0), "A", [0]), _spec(0, (20.0, 30.0), "B", [0]))
+    intents.clear()
+    for pane in (view.pane, view.secondary):
+        double_click(pane)
+    reason = "Make the video fill the screen (F) — not while comparing two laps"
+    assert view.fullscreen_btn.toolTip() == reason
+    assert intents == [] and refused == [reason, reason], (intents, refused)
+    _ALIVE.append(view)
+    print("test_a_double_click_on_the_video_while_comparing_says_why_as_f_does OK")
+
+
 def test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum():
     """QA L9-02: _position_gmeter's "only move on change" guard NEVER held at the default layout.
     _OVERLAY_ASPECT put the smallest dial at 120x134 while GMeterOverlay floors itself at 120x140,
@@ -1561,6 +1591,7 @@ def _run_all():
     test_l8_07_scrub_slider_clears_the_hit_target_floor()
     test_ia_06_compare_button_carries_a_visible_label()
     test_u9_04_f_key_reaches_the_video_focus_gesture()
+    test_a_double_click_on_the_video_while_comparing_says_why_as_f_does()
     test_l9_02_overlay_target_rect_agrees_with_the_dials_own_minimum()
     test_a_lap_pick_during_compare_leaves_it_and_the_window_tells_one_story()
     test_leaving_compare_gives_back_everything_it_made()
