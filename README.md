@@ -95,14 +95,16 @@ official timing measures the noise floor.
   recording's first open, once its timing is trusted, lands on it as a **debrief** and puts its top
   corners on the track's **focus list**, for the next session there to re-measure.
 
-<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, the ranked corners with their reasons and a Jump to the video, and under them the best lap's time, large, beside its speed-coloured line with the focus corners ringed">
+<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, led by the best lap's time, large, beside its speed-coloured line with the focus corners ringed; under it a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, and the ranked corners with their reasons and a Jump to the video">
 
 - **Your quickest pass through each corner, one click from the video.** Corners ▸ **Quickest
   passes** lists each corner's quickest time and the lap it was on; a click plays that pass from
   just before the corner and pauses just after it. Where other laps are level within the 0.07 s
-  timing step it says how many, with no ★, and the next click plays the next of them.
+  timing step it says how many, with no ★, and the next click plays the next of them. The
+  charts and the map zoom onto the corner while it plays; L loops it, Slow plays it at 0.25×, and a
+  right-click sets it beside your typical pass through the same corner.
 
-<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap and how many laps are level with it, C3's row reading playing lap 13 (2.32) · 1 of 6, only C5's 3.52 starred, the demo's picture, the map marker and the chart cursor all in C3, and a status line saying 5 more laps are level there and to click C3 again for the next">
+<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, only C5's 3.52 starred, the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass">
 
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**

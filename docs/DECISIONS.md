@@ -989,3 +989,157 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   under provisional timing; Extras on in Classic; the ◆ glyph; Follow's default; a Broadcast still;
   the keys 1-5 right after a load on a real display; pull request #582's commit list comment; the
   published real-footage Coaching tables cannot be re-verified offline.
+
+## 19. Recorded at the 0.17.0 release, 2026-11-20
+
+- **v0.17.0 is a minor release**: 12 pull requests from #616 to #627, Wave 12 of the campaign
+  section 8 records, its theme "every number leads to the footage".
+  - #616: the first-open debrief leads with the best lap's card.
+  - #617: the big Δ readout is neutral under the 0.07 s timing step; the speed beside it is
+    secondary.
+  - #618: a played pass zooms the charts onto its corner and the map onto its stretch of track.
+  - #619: export one corner pass as a clip.
+  - #620: the Library's PB chart spreads one day's sessions in the order driven, and its summary
+    reads them in that order.
+  - #621: Loop (L) and Slow (0.25×) for a pass.
+  - #622: the session report shows its chart and map right after the front page, its Stats in two
+    columns on a wide screen.
+  - #623: even Stats heading gaps, the export dialog's "Measuring…" hint with a 30 s probe limit,
+    and the shortcuts card's key caps on their baseline, "Comma" and "Period".
+  - #624: every corner time plays its pass (a Corners lap row, a CORNERS BY LAP cell, the slow-lap
+    cue), ⌥← / ⌥→ walk the corners, and a right-click plays or exports a pass.
+  - #625: a live readout over the fullscreen video (I hides it), and ★ / ▼ on the lap ruler.
+  - #626: compare a pass with the typical pass through the same corner; a compare at a corner,
+    Coaching's included, counts its readout from the corner's entry.
+  - #627: an Every lap strip on each Quickest passes row.
+- **Owner rulings of 2026-11-19.** He asked for comprehensive research into further features and
+  for the work to be planned and implemented autonomously ("you are the CTO", "don't ask",
+  "continue and don't come back to me"), and delegated the design: "very logical and simple".
+- **What was decided for him**, each open to his overrule:
+  - **The theme, "every number leads to the footage"**: the three discovery lanes agreed that a
+    number naming a moment should play it, and that the pass deserved a closer look.
+  - **One click on a row or cell that names one pass plays it, everywhere** (Quickest passes, a
+    Corners lap row, a CORNERS BY LAP cell, the slow-lap cue); a ⌘- or ⇧-click is a selection and
+    never plays.
+  - **Loop and Slow are light switches**: they stay on for the next pass picked from any row, and
+    every pass is still one deliberate click (`studio/docs/refused-2026-09.md` §31: no reel).
+  - **One Esc means back to the whole lap**: it ends the zoom and the pass together (Loop and Slow
+    off, the speed his again).
+  - **The pass being studied lives from its play until it is left** (a seek away, a lap pick, a
+    Jump, Compare, a Lap race, ▶ past it, Esc, a reload, a re-segment); the clip pausing itself
+    does not leave it, so it can still be exported, looped or walked on from.
+  - **A pass is compared with the typical pass only where the two printed times are not level
+    within the timing step**, quicker or slower, both directions: on the demo at four of its seven
+    corners.
+  - **A compare at a corner shows no number before the entry and holds the passes' printed gap
+    after the exit**, so the frame both panes pause on shows the gap the status line names.
+  - **C keeps its whole-lap meaning** while a pass is studied: a key that changed meaning with a
+    state the driver cannot see would disagree with the Compare button beside it.
+  - **The strip uses each row's own time scale** with the level band at its true width, hollow
+    rings for passes outside the band, and hides when it cannot fit beside the row's words or
+    while Loop is on (its words then need the room).
+  - **Stats headings take one 12 px gap everywhere**, at the cost of three tile labels below the
+    fold when the panel is docked at 1440×900.
+  - **The debrief's headline stays the shared panel header** under the picture rather than a
+    larger line of its own.
+  - **The Library chart spreads a day's sessions evenly in the order driven**, not at their time of
+    day: two heats 40 minutes apart would sit on one line again at any span past a day.
+  - **The fullscreen readout uses the 0.07 s step on every clock**, as the compare seam and the
+    exports do.
+  - **The garbage collection before a load worker starts is unchanged** (section 18).
+- **Refused or deferred this wave, with the numbers** (discovery 6 and the pull requests).
+  - A session time-loss heat map against the best lap: a per-bin sign test marks 32 of the demo's
+    97 bins with losses as small as 0.002 s per 10 m; with a 0.01 s floor, 12 remain, among them a
+    corner Coaching refuses to rank, while the planted habit's apex bins, slow on 8 of 13 laps, are
+    hidden.
+  - Two laps' racing lines compared at close zoom: 10 Hz GPS lateral noise would be drawn as a
+    line difference; the zoomed map keeps one line.
+  - Apex, entry and exit speed columns for the quickest pass against the typical one: on real
+    footage the apex speed rarely clears the ±1.75 km/h noise of two traces, and on the demo only
+    the planted habit's corners do.
+  - Quickest-pass marks on the lap ruler: six of the demo's seven corners have 5 to 10 laps level
+    with the quickest, and which tops a tie is noise (§32).
+  - A per-corner season trend: one recording per track on this machine; on the demo and a second
+    synthetic session the focus list says "can't say" for all three corners until a session record
+    exists.
+  - Frame-step keys: one 60 fps frame is 17 ms against 100 ms GPS samples and the 0.07 s step, and
+    `,` and `.` are the marks' keys; Slow shows every source frame.
+  - The strip of corner chips under the video, again: its 32 px would be 12 to 14 % of the video's
+    height at 1440×900 and 1280×800.
+  - The back-to-back reel, again (§31). A light theme: the owner's call. Tiering CI by changed
+    paths: already refused (§35).
+- **Process.** Three discovery lanes (market, workflow, craft) fed the plan. A usage-limit
+  interruption on 2026-11-19 paused the wave; work resumed and nothing was left half-merged. CI
+  caught two failures before merge: an undeclared telemetry-to-media clock crossing in #619, and a
+  Stats scroll-guard fixture that #623's spacing changed. The QA pass drove the combined tree in the
+  real window on the demo (every pass entry point, Loop and Slow across rows, the walk pressed and
+  held, every right-click item, the compare at a corner and back by C and by Esc, the fullscreen
+  readout and I, the Esc order with a maximised panel and video focus, a Lap race, the report, the
+  Library with two same-day sessions, three window sizes) and with the real player on a recording
+  of two chapters (the zoom, ten loops, Slow, a loop across the chapter seam, the walk, the
+  slow-lap cue's picture, a pass export, the compare, the readout over the footage, five minutes of
+  use, and once with software decoding). A Stats page dump from v0.16.0's `studio/` and from 0.17.0
+  differs only in geometry, the CORNERS BY LAP cells' play hint and one hidden spacer, on the demo
+  and on that recording; the report holds the same text tokens in its new order with byte-identical
+  images; a painter-level render of 98 lap, session and compare export configurations, 16 frames
+  each, is byte-identical; the golden gate passes, and its manual half on that recording is
+  equivalent.
+- **The media.** Re-captured on the synthetic demo at 0.17.0: `debrief.png` (picture first),
+  `quickest.png` (the zoom, the strip, Loop and Slow, the longer status line), `hero.png` (the
+  neutral readout and its secondary speed, ★ and ▼ on the ruler), `og.png` (composed from the new
+  hero; it is also the repository's social preview on GitHub, uploaded by hand) and `moments.png`
+  (the Stats spacing). `map.png`, `accuracy.png`, `report.png` and `lapstrip.png` (its own run) are
+  byte-identical to the files already committed. The waivers of `data-trust.png` and
+  `ideal-lap.png` are renewed: a demo render of both from 0.17.0 differs from v0.16.0's in spacing
+  only, so the published stills show the old spacing. Those of `overlay.jpg`, `best-lap.jpg` and
+  `best-lap.mp4` are renewed: the export A/B above is byte-identical.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. Real macOS fullscreen Spaces, a second monitor and hover could not be
+  checked offscreen. The full gate, the soak and the smoke run on the release branch, not in the
+  QA pass.
+- **Resolved from section 18**: the chart zoom during a pass (#618); the CORNERS BY LAP cells play
+  their pass (#624).
+- **Open for the owner** (new).
+  - Quickest passes is still not the Corners tab's default view.
+  - Sector lines he draws are still not in the pass family.
+  - Early or late apex and a line offset are measure-first packages, not started.
+  - Exporting a compare started at a corner renders the two whole laps.
+  - Each compare re-entry leaves seven top-level widgets (pre-existing, measured in #626's review).
+  - The readout and the overlays on real macOS fullscreen Spaces and a second monitor are
+    unverified offscreen.
+  - The strip's hover calls each level pass "level with the quickest" while the Quickest column
+    still names one lap.
+  - The strip hides at 1280×800 docked for sessions of about 60 laps or more, and for the real
+    recording here; it shows at 1440×900 and maximised.
+  - At 1440×900 docked the Stats page's even gaps put three tile labels below the fold.
+  - On the docked video the lap ruler has no room for ▼ once laps are narrower than the glyph; a
+    session of 30 to 40 laps shows only the ★ there.
+  - After Esc, a lap pick or C, the status line still reads "Esc: whole lap · ⌘K: export this
+    pass" for up to 6 s although the pass is left.
+  - At the end of a walk that started from Quickest passes the line says "the last one with a pass
+    on lap N", though that walk crosses laps.
+  - Esc does not leave a Coaching Compare (C does), while a compare with the typical pass names
+    "C or Esc".
+- **Open for the owner** (carried from section 18): the default Corners view; drawn sectors in the
+  view; the strip under the video stays available as a later option; a corner straight after
+  another starts its clip at the previous exit; a long corner window plays a long clip; the ★'s two
+  meanings on one tab; the rows scroll at the window's minimum size; the status line clears after
+  6 s while the row keeps saying "playing"; the first time costs three clicks from the debrief;
+  with verdicts on the list, the docked chip says "3 of 3 re-measured"; a session with no laps is
+  left out of the welcome's list, and an unreadable library shows the first-visit screen; the
+  overlays use the 0.07 s step even on an estimated clock; a re-profiled corner that keeps its
+  direction is still compared; focus items and Library rows stored before 0.15.0 carry no
+  direction until reopened; a one-corner shortlist's theme reads oddly; after the docked pair's
+  Jump its Compare is one tab away; a missing file's name in the welcome is cut; `overlay.jpg`
+  needs real footage to re-shoot; 13 planted defects no test catches; two slow product paths; a
+  marginal corner near the 30° detection limit; the mixed headline's count of refusals; a Compare
+  started from the maximised page stays in the grid; the focus verdict's medians to two decimals;
+  FIRST_LAP's loop paragraph and step 8; the report's Laps card scroll with sector lines;
+  `fmt_time` negatives; Broadcast as the default Style; a ranked corner under the display floor;
+  one lap drawn in two colours in a race over a pick; a session reload stranding widgets; the
+  capture tool's `lapstrip.png` bytes; ranking corners that lose under 0.07 s; consistency on the
+  middle half rather than σ; the apex and braking reasons' noise floor; the demo habit ranked only
+  on its own seed; the overlay's ★/Δ under provisional timing; Extras on in Classic; the ◆ glyph;
+  Follow's default; a Broadcast still; the keys 1-5 right after a load on a real display; pull
+  request #582's commit list comment; the published real-footage Coaching tables cannot be
+  re-verified offline.
