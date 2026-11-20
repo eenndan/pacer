@@ -116,12 +116,13 @@ def typical_compare_status(v, label: str) -> str:
     """The status line of "compare this pass with my typical pass": both laps with their own
     printed times, and the gap between those two printed times (`PassVsTypical.gap_s`), quicker or
     slower — never "fastest", and no cause (an apex or exit speed column beside it was refused as
-    noise: discovery 6, B (d))."""
+    noise: discovery 6, B (d)). "As timed": the gap is these two passes' measurement, not a verdict
+    on the pass — the quickest of many is partly a lucky one (`PassAnchor.held_neutral`)."""
     d = PRINT_DECIMALS
     way = "quicker" if v.gap_s > 0 else "slower"
     return (f"Comparing lap {lap_label(v.lap_id)} ({v.pass_s:.{d}f}) with your typical pass, lap "
             f"{lap_label(v.typical_lap_id)} ({v.typical_pass_s:.{d}f}): {abs(v.gap_s):.{d}f} s "
-            f"{way} through {label} · C or Esc: back to lap {lap_label(v.lap_id)}")
+            f"{way} through {label} as timed · C or Esc: back to lap {lap_label(v.lap_id)}")
 
 
 # Where the pass being studied was played from (`CentralView.pass_subject`): the corner walk from a
@@ -2409,15 +2410,17 @@ class CentralView(QWidget):
         return True
 
     def _enter_pass_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
-                         caption: str, sector_level_s: float | None = None) -> bool:
+                         caption: str, sector_level_s: float | None = None,
+                         held_neutral: bool = False) -> bool:
         """Compare lap `a` (pane A, the charts' cursor) with lap `b` AT stretch `cid`, a corner or
         a sector (`stats.sector_key`, whose split step is `sector_level_s`): C's gates (two valid
         laps; a Lap race ends first), the grid restored, any compare or pass zoom left, the pair
         entered, a corner ringed, and both Δ badges and the seam anchored at the pass
         (`compare_controller.PassAnchor`: nothing in the lead-in, the gap since the entry inside
         it, the passes' printed gap held after the exit) under `caption`, the pair named for the
-        whole comparison. `pass_a` / `pass_b` are the two passes' times through it. False when
-        nothing changed."""
+        whole comparison. `pass_a` / `pass_b` are the two passes' times through it;
+        `held_neutral` shows the held gap as measured, never coloured (a typical-pass compare,
+        `PassAnchor.held_neutral`). False when nothing changed."""
         if not self.video.compare_btn.isEnabled():
             return False
         if self.is_racing():
@@ -2438,7 +2441,7 @@ class CentralView(QWidget):
             # A sector's Δ is neutral inside the split's own step (`sector_level_s`, the one its
             # compare is offered past); a corner keeps the seam's timing step.
             self.compare.set_pass_anchor(
-                self._corner_label(cid), caption, *sides,
+                self._corner_label(cid), caption, *sides, held_neutral=held_neutral,
                 **({} if sector_level_s is None else {"noun": "sector",
                                                       "level_s": sector_level_s}))
         if sector_col(cid) is None:      # a sector has no apex to ring
@@ -2483,9 +2486,9 @@ class CentralView(QWidget):
         if v.is_typical:
             return (f"Lap {lap}'s pass ({v.pass_s:.{PRINT_DECIMALS}f}) is your typical pass "
                     f"through {label}: there is nothing typical to set beside it")
-        if v.level:
-            return (f"Lap {lap}'s pass through {label} is level with your typical pass (within "
-                    f"{v.level_s:.2f} s): nothing to tell apart")
+        if v.level:   # what was measured, and no more: under the step, as timed
+            return (f"Lap {lap}'s pass through {label} is within {v.level_s:.2f} s of your typical "
+                    "pass as timed")
         if not self.video.compare_btn.isEnabled():
             return "Compare needs two laps"
         return None
@@ -2518,7 +2521,8 @@ class CentralView(QWidget):
         caption = (f"lap {lap_label(lap_id)} ({v.pass_s:.{d}f}) vs typical lap "
                    f"{lap_label(v.typical_lap_id)} ({v.typical_pass_s:.{d}f}) · {label}")
         if not self._enter_pass_pair(cid, lap_id, v.typical_lap_id, v.pass_s, v.typical_pass_s,
-                                     caption, v.level_s if sector_col(cid) is not None else None):
+                                     caption, v.level_s if sector_col(cid) is not None else None,
+                                     held_neutral=True):
             return False
         self.video.seek_pane(0, clip_a[0])
         self.video.seek_pane(1, clip_b[0])
