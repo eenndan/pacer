@@ -459,9 +459,10 @@ def test_the_default_export_is_the_footage_with_the_overlay_burned_in():
         assert scores[best] > 0.6, (
             f"frame {i}: the middle of the picture matches no source frame near {want:.1f} (best "
             f"correlation {scores[best]:.2f}) — the footage is not in the file")
-        # 1.5: the accurate seek keeps the first frame AT OR AFTER t0 (up to one late), and the
-        # fps filter then takes the nearest 59.94 frame to each 30 fps tick (half a frame either way).
-        assert abs(best - want) <= 1.5, (
+        # EXACTLY the 59.94 frame SHOWING at each 30 fps tick (cool/export-first-frame). This
+        # allowed 1.5 frames: the accurate seek dropped the frame showing at t0 and the fps filter
+        # took the frame nearest each tick, on this source the one AFTER it, 17 ms ahead.
+        assert best == int(np.floor(want + 1e-3)), (
             f"frame {i} shows source frame {best}, planned {want:.1f}: the footage is "
             f"{(best - want) / float(SOURCE_FPS) * 1000:+.0f} ms off its overlay")
 

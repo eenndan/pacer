@@ -432,22 +432,21 @@ def _render_one_way(s, a, b, cid, folder, seam):
                          capture_output=True, check=True).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, 2 * SH, SW, 3)
     assert len(frames) == n
-    # Each pane is its OWN clip, frame for frame, then held. Frame i is the source frame showing at
-    # its media time (floor), give or take ONE frame the decode's accurate seek rounds the clip
-    # start by, the same for the whole clip: on this fixture, 2026-11-20, a pane B clip starting
-    # 0.88 of a source frame in read the NEXT frame on every frame, one 0.77 in the frame showing
-    # (both panes go through `build_decode_cmd`, as every export does). Frame 0 is the first
-    # source frame at or after the clip start (tests/test_export_pass.py's snap).
+    # Each pane is its OWN clip, frame for frame, then held. Frame i — the first one included — is
+    # the source frame SHOWING at its media time (floor), exactly: both panes go through
+    # `build_decode_cmd`, as every export does. Until cool/export-first-frame this allowed the
+    # whole clip one source frame ahead, which a pane B clip starting 0.88 of a frame in was
+    # (tests/test_export_pass.py's sweep has every start).
     i = np.arange(n)
     for name, rows, t0, n_own in (("A", slice(140, 180), spec.t0, n_a),
                                   ("B", slice(SH + 180, SH + 220), spec.t_b0, n_b)):
         got = _codes(frames, rows)
         at = (t0 + np.minimum(i, n_own - 1) / fps) * fps
         off = _off(got, np.floor(at + 1e-6).astype(int))
-        assert off[0] in (0, 1) and off[1] in (0, 1) and np.all(off[1:] == off[1]), (
+        assert not np.any(off), (
             f"pane {name} (clip start {at[0] % 1:.2f} of a frame in): frames off their clip at "
-            f"{np.flatnonzero(off[1:] != off[1]) + 1}")
-        steps = np.diff(got[1:n_own]) % CYCLE
+            f"{np.flatnonzero(off)[:6]} by {off[np.flatnonzero(off)][:6]}")
+        steps = np.diff(got[:n_own]) % CYCLE
         assert np.all(steps == 1), f"pane {name}: a frame dropped or held inside its clip"
         if n_own < n:
             # held: the clip's LAST frame, the very picture, for the whole hold
