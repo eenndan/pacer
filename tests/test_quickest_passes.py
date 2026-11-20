@@ -1114,7 +1114,8 @@ def test_right_click_offers_play_and_export_for_the_pass_a_row_or_cell_names():
         pos = q.table.visualRect(q.table.model().index(4, 1)).center()   # C5's row
         menu = view.pass_menu(view._quickest_menu_pass(q.table, pos))
         names = [a.text() for a in menu.actions()]
-        assert names == ["Play this pass", "Export this pass…"], names
+        assert names == ["Play this pass", "Export this pass…", "Compare with my typical pass"], \
+            names
         menu.actions()[0].trigger()
         assert plays[-1] == s.corners.pass_clip(9, 5) and q.playing() == (5, 9)
         menu.actions()[1].trigger()
@@ -1291,7 +1292,8 @@ def test_a_right_click_shows_the_menu_and_plays_nothing():
         _settle()
         right_click(view.stats_view.corner_grid_table, 3, len(stats_panel_lead()) + 2)
         assert plays == [], plays
-        assert shown == [["Play this pass", "Export this pass…"]] * 3, shown
+        assert shown == [["Play this pass", "Export this pass…",
+                          "Compare with my typical pass"]] * 3, shown
     finally:
         _close(win)
         prefs.set_corners_view("lap")
@@ -1401,6 +1403,163 @@ def test_the_hand_shows_only_over_cells_that_play():
         _patched_matrix(win, unresolved=(3, 2))
         view.stats_view._corner_matrix = win.session.corner_matrix()
         assert hover(3, lead + 1) == Qt.ArrowCursor, "an unmatched cell does not play"
+    finally:
+        _close(win)
+
+
+# ------------------------------------------------------------------ this pass vs the typical pass
+# (cool/compare-this-pass) "What did I do differently?" in one step: the pass being studied (pane
+# A) beside the corner's typical pass (pane B) — Coaching's typical, the same `typical_pass_lap` —
+# both from the lead-in, playing once, the charts and map on the corner. Offered only where the two
+# printed times are not level under the timing step.
+
+
+def test_the_typical_pass_is_coachings_and_level_pairs_are_not_offered():
+    """Qt-free: `Session.pass_vs_typical` picks Coaching's typical lap (the same
+    `CornerMatrix.typical_pass`, this lap where the best lap stands); 4 of the demo's 7 quickest
+    passes clear the 0.07 s step against it; a lap whose pass IS the typical one says so."""
+    s = _demo_session()
+    tps = s.typical_passes()
+    offered = []
+    for q in s.quickest_passes().passes:
+        v = s.pass_vs_typical(q.lap_id, q.cid)
+        # the lap Coaching's Compare puts in pane A at every corner of the demo
+        assert v.typical_lap_id == tps[q.cid].lap_id, (q.cid, v, tps[q.cid])
+        assert v.typical_lap_id != q.lap_id and not v.is_typical
+        if not v.level:
+            offered.append(q.cid)
+    assert offered == [1, 3, 5, 7], offered
+    c3 = s.pass_vs_typical(12, 3)
+    assert (c3.typical_lap_id, round(c3.gap_s, 2)) == (0, 0.08) and not c3.level, c3
+    # lap 4's C1 pass is the corner's typical one (Coaching compares it with the best lap's)
+    assert tps[1].lap_id == 3 and s.pass_vs_typical(3, 1).is_typical
+
+
+def test_compare_this_pass_with_the_typical_pass_at_the_corner():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        _record_plays(view)
+        seeks = []
+        real_seek_pane = view.video.seek_pane
+
+        def seek_pane(side, t):
+            seeks.append((side, t))
+            real_seek_pane(side, t)
+        view.video.seek_pane = seek_pane
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        q.activate(q.row_of(3))                              # lap 13's C3, the quickest
+        _settle()
+        assert view.pass_subject() == (12, 3, "C3")
+        # the right-click menu offers it beside Play / Export
+        pos = q.table.visualRect(q.table.model().index(2, 1)).center()
+        menu = view.pass_menu(view._quickest_menu_pass(q.table, pos))
+        names = [a.text() for a in menu.actions()]
+        assert names == ["Play this pass", "Export this pass…", "Compare with my typical pass"]
+        assert menu.actions()[2].isEnabled()
+        menu.actions()[2].trigger()
+        _settle()
+        v = s.pass_vs_typical(12, 3)
+        assert view._comparing() and (view.compare.lap_a, view.compare.lap_b) == (12, 0)
+        assert v.typical_lap_id == s.typical_passes()[3].lap_id, "Coaching's typical pass"
+        clip_a, clip_b = s.corners.pass_clip(12, 3), s.corners.pass_clip(0, 3)
+        assert seeks[-2:] == [(0, clip_a[0]), (1, clip_b[0])], seeks[-2:]
+        assert view.video.pane.clip_end() == clip_a[1]
+        assert view.video.secondary.clip_end() == clip_b[1]
+        assert view.pass_zoomed() and _corner_framed(view, 3) and not view.map._view_fitted
+        # the readouts count from the corner's entry, and the seam says so
+        assert view.compare.corner_anchor() == "C3"
+        assert view.video.seam.caption.text() == "lap 13 vs lap 1 · from C3 entry"
+        msg = win.statusBar().currentMessage()
+        assert msg == (f"Comparing lap 13 ({v.pass_s:.2f}) with your typical pass, lap 1 "
+                       f"({v.typical_pass_s:.2f}): 0.08 s quicker through C3 · C or Esc: back to "
+                       "lap 13"), msg
+        assert "fastest" not in msg.lower()
+        assert view.pass_subject() is None, "compare is not a pass: nothing stale to export"
+        # Esc leaves it: lap 13 alone, the whole lap and track
+        QTest.keyClick(win, Qt.Key_Escape)
+        _settle()
+        assert not view._comparing() and view.plots.selected_lap_ids() == [12]
+        assert view.table.selected_lap_ids() == [12] and not view.pass_zoomed()
+        assert view.compare.corner_anchor() is None
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_level_or_typical_passes_are_not_compared_and_say_why():
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        _record_plays(view)
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        pos = q.table.visualRect(q.table.model().index(1, 1)).center()      # C2: level
+        compare = view.pass_menu(view._quickest_menu_pass(q.table, pos)).actions()[2]
+        assert not compare.isEnabled()
+        assert compare.toolTip() == ("Lap 11's pass through C2 is level with your typical pass "
+                                     "(within 0.07 s): nothing to tell apart"), compare.toolTip()
+        assert not view.compare_pass_with_typical(10, 2) and not view._comparing()
+        assert "level with your typical pass" in win.statusBar().currentMessage()
+        assert not view.compare_pass_with_typical(3, 1)                     # lap 4 IS C1's typical
+        assert "is your typical pass through C1" in win.statusBar().currentMessage()
+        # ⌘K: no compare row while a level pass is studied, one while C3's quickest is
+        q.activate(q.row_of(2))
+        _settle()
+        assert not [t for t, _c in win.quickest_pass_commands() if t.startswith("Compare")]
+        q.activate(q.row_of(3))
+        _settle()
+        rows = {t: c for t, c in win.quickest_pass_commands() if t.startswith("Compare")}
+        assert list(rows) == ["Compare lap 13 through C3 with typical lap 1"], list(rows)
+        rows["Compare lap 13 through C3 with typical lap 1"]()
+        _settle()
+        assert view._comparing() and (view.compare.lap_a, view.compare.lap_b) == (12, 0)
+        # C leaves it (C keeps its meaning): back to lap 13 alone
+        win.toggle_compare()
+        _settle()
+        assert not view._comparing() and view.plots.selected_lap_ids() == [12]
+        # a lap pick leaves it and the PICK stands
+        rows = {t: c for t, c in win.quickest_pass_commands() if t.startswith("Compare")}
+        assert rows == {}, "the pass was left with the compare"
+        assert view.compare_pass_with_typical(12, 3)
+        view.table.laps_selected.emit([4])
+        _settle()
+        assert not view._comparing() and view.plots.selected_lap_ids() == [4]
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_coaching_compare_counts_from_the_corner_and_jump_says_how_its_pass_stands():
+    win = _window()
+    try:
+        view, s = win.view, win.session
+        tp = s.typical_passes()[1]
+        assert view.compare_at_corner(tp, "+0.36 s")
+        _settle()
+        assert view.compare.corner_anchor() == "C1"
+        assert view.video.seam.caption.text().endswith("· from C1 entry")
+        view.video.compare_btn.click()
+        _settle()
+        # Jump shows the BEST lap's pass, which is not always a good one there: it says how it
+        # stands. The demo's C5 (discovery 6: best lap 3.615 vs typical 3.605, quickest 3.522)
+        # is LEVEL with the typical at print — 3.61 and 3.61 — not "slower" as the raw figures read;
+        # C1's best-lap pass is quicker than the typical one by 0.36 s
+        v5 = s.pass_vs_typical(12, 5)
+        assert v5.level and win._jump_pass_clause(12, 5, "C5") == (
+            f"; its C5 pass ({v5.pass_s:.2f}) is level with your typical pass (lap "
+            f"{v5.typical_lap_id + 1}, {v5.typical_pass_s:.2f})")
+        v1 = s.pass_vs_typical(12, 1)
+        assert v1.gap_s > 0 and not v1.level
+        assert win._jump_pass_clause(12, 1, "C1").startswith(
+            f"; its C1 pass ({v1.pass_s:.2f}) is quicker than your typical pass (lap 4, ")
+        assert win._jump_pass_clause(3, 1, "C1") == (
+            f"; its C1 pass ({s.pass_vs_typical(3, 1).pass_s:.2f}) is your typical pass there")
     finally:
         _close(win)
 

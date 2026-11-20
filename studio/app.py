@@ -71,7 +71,7 @@ from . import (
 from . import (
     marks as marks_model,
 )
-from ._signal import fmt_hms, fmt_time, lap_label
+from ._signal import PRINT_DECIMALS, fmt_hms, fmt_time, lap_label
 from .central_view import CentralView, undo_summary
 from .coaching_panel import DEBRIEF_COMPARE
 from .command_palette import CommandPalette
@@ -3065,6 +3065,10 @@ class StudioWindow(QMainWindow):
             lap, cid, label = named
             out.append((f"Export the {label} pass — lap {lap_label(lap)}…",
                         lambda: self.exports.export_pass_video(lap, cid, label)))
+            # ...and set it beside the corner's typical pass, where the two are not level.
+            title = getattr(view, "typical_compare_title", lambda *_a: None)(lap, cid)
+            if title is not None:
+                out.append((title, lambda: view.compare_pass_with_typical(lap, cid)))
         return out
 
     def _step_corner_pass(self, step: int) -> bool:
@@ -3215,6 +3219,8 @@ class StudioWindow(QMainWindow):
         if view is not None and getattr(view, "_maximized_panel", None) is not None:
             view._restore_splitter_sizes()  # the inverse of the ⛶ collapse; the view owns the snapshot
             return True
+        if view is not None and getattr(view, "leave_corner_compare", lambda: False)():
+            return True                     # this pass beside the typical one: back to this lap
         if view is not None and getattr(view, "escape_pass", lambda: False)():
             return True                     # a played pass: the whole lap and track again
         if self.isFullScreen():
@@ -3600,6 +3606,28 @@ class StudioWindow(QMainWindow):
             # Seed auto-follow to the seek's lap so the post-seek tick isn't a lap-change edge.
             view._playback.followed_lap = self.session.lap_at_time(target)
 
+    def _jump_pass_clause(self, best: int | None, cid: int, label: str) -> str:
+        """What the Jump's status line adds about the PASS it shows: the best lap's pass is not
+        always a good one at this corner (the demo's C5: lap 13's 3.62 against a typical 3.61 and
+        a quickest 3.52), so it says how it stands against the typical pass — level, quicker or
+        slower, on the printed times. "" where that cannot be read."""
+        try:
+            v = self.session.pass_vs_typical(best, cid) if best is not None else None
+        except Exception:  # noqa: BLE001 — a clause must never cost the Jump its status line
+            return ""
+        if v is None:
+            return ""
+        d = PRINT_DECIMALS
+        if v.is_typical:
+            return f"; its {label} pass ({v.pass_s:.{d}f}) is your typical pass there"
+        if v.level:
+            how = "level with your typical pass"
+        else:
+            how = "quicker than your typical pass" if v.gap_s > 0 else (
+                "slower than your typical pass")
+        return (f"; its {label} pass ({v.pass_s:.{d}f}) is {how} (lap "
+                f"{lap_label(v.typical_lap_id)}, {v.typical_pass_s:.{d}f})")
+
     def _reveal_jump_corner(self, cid: int, compare_ended: bool = False):
         """Point at the row the jump landed on: scroll corner `cid` to the middle of the Corners
         grid, make it the current cell, and say on the status bar which corner and which lap the
@@ -3624,10 +3652,12 @@ class StudioWindow(QMainWindow):
             label = item.text().split()[0]      # "C9 ⟳" -> "C9" (drop the direction glyph)
             # A Jump that ended compare says so in the same line: this message replaces the
             # one the pick posted (CentralView._pick_leaves_compare).
+            best = self.session.best_lap_id()
             self.statusBar().showMessage(
                 ("compare ended; " if compare_ended else "") +
                 f"jumped to {label} — Corners is showing lap "
-                f"{lap_label(self.session.best_lap_id())}, this session's best", STATUS_MS)
+                f"{lap_label(best)}, this session's best" + self._jump_pass_clause(best, cid, label),
+                STATUS_MS)
         except (ValueError, AttributeError, IndexError):
             return  # the corner set moved under us (a re-segment); the map ring already landed
 
