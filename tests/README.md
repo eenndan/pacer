@@ -55,6 +55,14 @@ shared `$TMPDIR` ([test_temp_isolation.py](test_temp_isolation.py), no carve-out
 CPU and the VideoToolbox sessions: a check failing near its timeout or on a hardware encode under
 that load is re-run alone before it is believed.
 
+**Reading a hang dump.** A Python test still running 10 % (at most 30 s) before its timeout writes
+`==== HANG DUMP: running test: <test_…> (<file>:<line>)`, then every thread's stack (most recent
+call first), into its log above `***Timeout` ([_hang_dump.py](_hang_dump.py), armed in every
+registration by [_site/sitecustomize.py](_site/sitecustomize.py)). The stuck line is the top frame
+of the thread whose stack runs through that test; a `Timeout (0:07:45)!` header with no banner
+means the test held the GIL in a C call, and its `test_…` frame names it. For one by hand, give
+ctest a shorter ceiling: `pixi run ctest --test-dir build/Release -R '^test_x$' --timeout 60`.
+
 - **C++ Catch2 (5):** `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`,
   `test_gps_source`.
 - **Python studio (the rest):** pure-Python and registered with CTest — offscreen Qt where they
