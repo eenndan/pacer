@@ -83,8 +83,8 @@ def _lap_name(lap_id: int) -> str:
 # A pass clip (export_video.PassSubject) burns no lap clock and no lap Δ, and the ring's gap to the
 # kart IS the lap's running Δ from the start line — read beside a corner's name, it would read as
 # that corner's gap. So a pass has no ghost.
-PASS_REASON = ("A corner-pass clip shows no lap clock, and the ghost's gap is the lap's running Δ, "
-               "not this corner's.")
+PASS_REASON = ("A pass clip shows no lap clock, and the ghost's gap is the lap's running Δ, "
+               "not this pass's.")
 
 
 def _session_reason(session, lap_id: int | None, follow_laps: bool) -> str | None:

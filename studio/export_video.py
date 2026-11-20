@@ -59,9 +59,10 @@ from PySide6.QtGui import (
     QRadialGradient,
 )
 
-from . import data_quality, gmeter_overlay, overlay, theme, units
+from . import corner_model, data_quality, gmeter_overlay, overlay, theme, units
 from ._signal import PRINT_DECIMALS, fmt_time, lap_label, plural
 from .export_palette import EXPORT
+from .stats import sector_col
 from .timeline import trace_point_at, trace_tail  # noqa: F401  (trace_point_at: tests read ev.*)
 
 _log = logging.getLogger(__name__)
@@ -578,6 +579,9 @@ def _mk_concat_list(chapters_span, tmp_dir: str) -> str:
 class PassSubject:
     """The corner a pass clip shows: its id, its label as the Corners tab prints it ("C3") and the
     lap's time through it (`CornerModel.lap_corner_stats`, the Quickest passes row's own number).
+    Or the SECTOR it shows (`cid` a `stats.sector_key`, < 0): "S2" and the lap's SPLITS cell, the
+    sector row's own number; everything below holds for it word for word, the corner's entry and
+    exit being the sector's first and last line.
 
     A PASS CLIP BURNS NO LAP CLOCK AND NO LAP Δ. Mid-lap, a running lap clock reads as a lap time
     and the lap's Δ as this corner's gap, and neither is: the strip names the lap and the corner,
@@ -4894,17 +4898,16 @@ def pass_window_for_export(session, lap_id: int,
     after the exit) — with the corner's entry and exit inside it, all converted from the telemetry
     clock the corner model speaks onto the media clock the picture runs on, as
     `lap_window_for_export` converts a lap. Clamped to the footage like a lap's padding, never
-    into the corner. None when the pass has no clip."""
-    corners = getattr(session, "corners", None)
-    clip = corners.pass_clip(int(lap_id), int(cid)) if corners is not None else None
-    if clip is None:
+    into the corner. None when the pass has no clip.
+
+    A SECTOR's pass (`cid` a `stats.sector_key`) is the same window over `Session.stretch_clip`,
+    the clip its Quickest row plays: PASS_LEAD_S before the sector's first line to PASS_TAIL_S
+    after its last, so the lines are the clip's ends moved in by exactly those, the instants the
+    SPLITS cell is timed between."""
+    edges = _pass_edges(session, int(lap_id), int(cid))
+    if edges is None:
         return None
-    enter = corners.corner_edge_media_time(int(lap_id), int(cid), "enter")
-    leave = corners.corner_edge_media_time(int(lap_id), int(cid), "exit")
-    if enter is None or leave is None:
-        return None
-    t0, t_enter, t_exit, t1 = (_media_time(session, float(t))
-                               for t in (clip[0], enter, leave, clip[1]))
+    t0, t_enter, t_exit, t1 = (_media_time(session, float(t)) for t in edges)
     t0 = min(t_enter, max(0.0, t0))
     total = footage_duration(session)
     if total is not None:
@@ -4914,9 +4917,37 @@ def pass_window_for_export(session, lap_id: int,
     return t0, t_enter, t_exit, t1
 
 
+def _pass_edges(session, lap_id: int,
+                cid: int) -> tuple[float, float, float, float] | None:
+    """The TELEMETRY-clock (clip start, entry, exit, clip end) of lap `lap_id`'s pass through
+    `cid`: a corner's off `CornerModel`, a sector's off `Session.stretch_clip`. None without."""
+    if sector_col(cid) is not None:
+        clip = session.stretch_clip(lap_id, cid)
+        if clip is None:
+            return None
+        return (clip[0], clip[0] + corner_model.PASS_LEAD_S, clip[1] - corner_model.PASS_TAIL_S,
+                clip[1])
+    corners = getattr(session, "corners", None)
+    clip = corners.pass_clip(lap_id, cid) if corners is not None else None
+    if clip is None:
+        return None
+    enter = corners.corner_edge_media_time(lap_id, cid, "enter")
+    leave = corners.corner_edge_media_time(lap_id, cid, "exit")
+    if enter is None or leave is None:
+        return None
+    return clip[0], enter, leave, clip[1]
+
+
 def pass_subject(session, lap_id: int, cid: int) -> PassSubject | None:
     """The corner lap `lap_id`'s pass clip names: its label and the lap's time through it, the
-    Corners table's (and the Quickest passes row's) number. None when the lap has no time there."""
+    Corners table's (and the Quickest passes row's) number. None when the lap has no time there.
+    A sector's (`cid` a `stats.sector_key`): "S2" and the lap's SPLITS cell (`Session.stretch_time`,
+    the sector row's number), None where the grid does not count that lap."""
+    if sector_col(cid) is not None:
+        t = session.stretch_time(int(lap_id), int(cid))
+        if t is None or not math.isfinite(float(t)):
+            return None
+        return PassSubject(cid=int(cid), label=session.stretch_label(int(cid)), time_s=float(t))
     corners = getattr(session, "corners", None)
     if corners is None:
         return None
@@ -4938,7 +4969,8 @@ def build_pass_spec(session, out_path: str, lap_id: int, cid: int,
     win = pass_window_for_export(session, lap_id, cid)
     subject = pass_subject(session, lap_id, cid)
     if win is None or subject is None:
-        raise ValueError(f"lap {lap_label(lap_id)} has no pass through C{cid} to export")
+        label = session.stretch_label(int(cid)) if hasattr(session, "stretch_label") else f"C{cid}"
+        raise ValueError(f"lap {lap_label(lap_id)} has no timed pass through {label} to export")
     t0, t_enter, t_exit, t1 = win
     best_id = _best_lap_id(session)
     return ExportSpec(out_path=out_path, lap_id=int(lap_id), t0=t0, t1=t1,
