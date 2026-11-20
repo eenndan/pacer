@@ -1533,3 +1533,64 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
   real display; pull request #582's commit list comment; the published real-footage Coaching
   tables cannot be re-verified offline.
+
+## 23. Recorded at the 0.20.1 release, 2026-11-20
+
+- **v0.20.1 is a patch release**: 1 user-visible pull request, #660, and three internal ones
+  (#654, #656, #657). No capability was added and nothing on screen changed.
+- **The hang.** A recording could fail to finish loading, and the app then wait on that load when
+  quitting, if it was opened while the app was starting a helper process (ffprobe or ffmpeg: the
+  export dialog's background probes, an export's render). numpy's maths library, OpenBLAS, shuts
+  its worker threads down in the parent before every new process is started, and Python starts
+  processes that way on macOS; a matrix product that was running on those workers in another
+  thread lost them and spun forever. The one Pacer runs on every load large enough to use workers
+  is the g-meter's rotation in `Session.load` (147,800 rows on the demo).
+- **How it was found.** #654 made a Python test that runs into its CTest timeout print the running
+  test's name and every thread's stack first. The next CI hang of `test_export_pass` (on a tree
+  with #649) printed the load's main thread inside that matrix product, with no other Python
+  thread alive. A minimal numpy-and-subprocess script then hung 10 runs of 10, and the app's own
+  probes against a demo load, with an instant stand-in for ffmpeg, 12 of 20.
+- **Default applied for the owner, 2026-11-20** (open to his overrule, reversible by deleting
+  `_single_threaded_blas` in `studio/__init__.py`): **numpy's maths runs on one thread for the
+  whole process**, set when `studio` is imported, before any window or load. With one thread there
+  are no workers to strand, and every place the app starts a process is covered at once. A lock
+  between process starts and numpy calls cannot be complete (any numpy call can use the workers),
+  and starting processes another way would touch about 15 call sites. Measured on the demo
+  (medians, 8 threads → 1), all within noise:
+
+  | | 8 threads | 1 thread |
+  |---|---|---|
+  | `Session.load` | 256 ms | 253 ms |
+  | window to loaded | 1105–1200 ms | 1097–1120 ms |
+  | lap switch | 13.4–13.9 ms | 13.6–14.9 ms |
+  | `rebuild_derived_views` | 62.0 ms | 62.5–62.9 ms |
+
+  The g-meter arrays are bit-identical at 1 and 8 threads, and the golden gate's maximum |Δ| is 0.
+  `tests/test_export_thread_safety.py` holds the thread count and races a forking thread against
+  that matrix product in a child process under a timeout.
+- **What v0.20.0 exposes, and how likely.** The race is in every release that starts ffmpeg off
+  the main thread, v0.20.0 included: a recording opened within about a second of the export
+  dialog's probes, or while an export starts ffmpeg, can stay on its loading screen, with the
+  window still responsive, and the quit then waits on it. With the real ffmpeg the app-level
+  reproduction hung 0 times in 6: the window is a matrix product of about half a millisecond
+  inside a load of about 250 ms. It is rare in use, and it does not end on its own.
+- **Not in 0.20.1.** #649 (the first export click opens at once, by probing the H.264 encoder in
+  the background) was merged after 0.20.0 and reverted (#658) before any release: it added process
+  starts beside the next load, which made the race likely in CI. Its probe logic was not the cause,
+  and it will re-land unchanged.
+- **The CI job limit** went from 20 to 35 minutes (#656). Five runs in a day were cancelled at 20
+  minutes, two of them after every step had passed; 35 clears the slowest green run measured plus
+  one test running out its 480 s timeout. The suite's time fell about 5 % (#657); its one product
+  edit, measuring each distinct string once when an overlay sizes its widest text, gives the same
+  widths exactly.
+- **The media.** `hero.png`, `og.png`, `map.png`, `accuracy.png`, `debrief.png`, `moments.png`,
+  `report.png`, `quickest.png` and `lapstrip.png` (its own run) were re-captured on the synthetic
+  demo at 0.20.1 and are byte-identical to the files already committed. The waivers section 22
+  renewed at 0.20.0 hold through 0.20.x and were not renewed.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. The release lane's app-level check (ten reloads straight after opening
+  the export dialog, with real ffmpeg and with a forking stand-in) finished every load on 0.20.1,
+  but with the fix undone in-process it did not hang either, so it shows no regression rather than
+  the fix; the unit test's race does fail with the fix disabled.
+- **Open for the owner**: section 22's lists stand, re-checked against this release, which touched
+  none of their code. Its item on #649 now reads: re-land it unchanged.
