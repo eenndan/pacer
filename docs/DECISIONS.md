@@ -1143,3 +1143,124 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   Follow's default; a Broadcast still; the keys 1-5 right after a load on a real display; pull
   request #582's commit list comment; the published real-footage Coaching tables cannot be
   re-verified offline.
+
+## 20. Recorded at the 0.18.0 release, 2026-11-20
+
+- **v0.18.0 is a minor release**: 8 pull requests from #629 to #636, Wave 13 of the campaign
+  section 8 records, its theme "the driver's own sectors join the pass family, and a session that
+  is not the demo reads true".
+  - #629: six fixes from the 0.17.0 QA: a pass's status line goes when the pass is left, a walk
+    from Quickest passes ends on "C7 is the last corner", Esc leaves a Coaching Compare, a slow lap
+    narrower than its ▼ shows as a tick on the lap ruler, the map key folds while a pass is zoomed,
+    and a tie's strip hover says what is true of each lap.
+  - #630: early or late apex and the line offset at the apex, measured and refused
+    (`studio/docs/refused-2026-09.md` §36 and §37).
+  - #631: the driver's own sector lines in Corners ▸ Quickest passes, each sector row playing,
+    looping, slowing and walking like a corner row.
+  - #632: a test that a compare re-entry leaves nothing behind.
+  - #633: ⌘K, the Library, the saved-tracks manager and three right-click menus free themselves
+    when closed.
+  - #634: no Stats claim printed from nothing (an empty IDEAL LAP table, a STRAIGHTS slow exit
+    under the timing step, an unlisted COASTING place, one lap's 0.0 spreads).
+  - #635: ⌥← / ⌥→, C and G say why when they cannot act.
+  - #636: the few-laps wording: a tie "each", a cause for a trace that crosses the start/finish
+    line only once, no "reload".
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19 ("continue and don't come
+  back to me"), with the design delegated to "very logical and simple".
+- **What was decided for him**, each open to his overrule:
+  - **A sector is level with the quickest within 0.30 s**, the house rule for two figures each
+    carrying the published split σ (2·√2 × 0.106 s, rounded), the same gate refusal §26 used,
+    rather than the corners' 0.07 s. At that step no measured session earns a sector ★: the view
+    names the quickest split and how many laps are level with it.
+  - **With sector rows shown, the Quickest table hides its vertical scrollbar**, so the Every lap
+    strip keeps its width beside the rows; the wheel and the arrow keys still reach every row. A
+    reversible judgement call: see the open list.
+  - **A sector pass plays, zooms, loops, slows and walks**, and its walk stays among the sectors;
+    its export and its compare with the typical pass are greyed out with "Not for sectors yet",
+    because the clip's corner-time readout and the compare's anchor are corner-shaped.
+  - **The compare re-entry "leak" is closed as a counting artefact** (#632): the widgets a
+    re-entry seemed to leave were already handed to `deleteLater()`, and a probe pumping
+    `processEvents()` outside the event loop never delivers the deferred delete; with it delivered,
+    each of the three doors leaves nothing over 30 cycles, the real player included, and a test
+    holds it. Section 19's item is closed.
+  - **"The GPS trace crosses the start/finish line only once" is said only on a trace whose GPS
+    quality is known and not low**: dropped fixes hide real crossings, so a low- or unknown-quality
+    trace keeps the plain "The GPS may not have locked…" body.
+  - **A disabled button's key says the button's own reason** (C, G), rather than a second wording
+    of it.
+- **Refused this wave, with the numbers** (§36, §37, #630). Early or late apex: the rule is safe
+  (0 to 1 of 48 null cells fire) but blind to what a driver would call early or late: a 2 m shift
+  never reliably fires, and on the demo it fires once, at C7, a constant-radius arc with no
+  minimum to place. The line offset at the apex: 1 m reads as 0.58 m after the de-drift, and the
+  quick-against-typical split manufactures "tighter" on recordings with no line habit planted (3
+  of 7 demo corners).
+- **Process.** Discovery 7 ("the session that is not the demo", twelve synthetic sessions through
+  the real loader) produced #634 to #636. The QA pass drove the combined tree in the real window,
+  offscreen and jailed, at 1280×800 and 1440×900: the demo with three sector lines (every
+  right-click menu on corner and sector rows after #633's deferred deletes, each menu item acting on
+  the row chosen, the "not for sectors yet" refusals, the sector walk to both ends, Esc and a lap
+  pick taking the pass's line down, C on a sector pass, the corner walk's end from Quickest
+  passes, the widget census across menus, compares and ⌘K), synthetic sessions of zero, one, two
+  and ten level laps (the no-laps body beside the Stats empty states, the keys' refusals), and the
+  one real recording on this machine, read-only. A demo render of the ideal-lap and data-trust
+  shots from v0.17.0's `studio/` and from 0.18.0 is byte-identical.
+- **The media.** Re-captured on the synthetic demo at 0.18.0: `quickest.png` (the map key folds
+  while the pass is zoomed, #629) and `report.png` (347 anti-aliased pixels along the drawn line
+  differ from 0.17.0's; the same words and figures). `hero.png`, `og.png`, `map.png`,
+  `accuracy.png`, `debrief.png`, `moments.png` and `lapstrip.png` (its own run) are byte-identical
+  to the files already committed, so the social card did not change. The waivers of
+  `data-trust.png` and `ideal-lap.png` are renewed: #634 changed Stats page code, in branches the
+  captured session does not reach (its IDEAL LAP lists nine segments), and the demo A/B above is
+  byte-identical. Those of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed: 0.18.0
+  changed no export-video code.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. Real macOS fullscreen Spaces, a second monitor and hover could not be
+  checked offscreen. The full gate, the soak and the smoke run on the release branch, not in the
+  QA pass.
+- **Resolved from section 19**: drawn sector lines in the pass family (#631); early or late apex
+  and a line offset (refused, #630); the compare re-entry widgets (a counting artefact, #632); the
+  strip's hover on a tie, the ruler's ▼ on narrow laps, the status line after leaving a pass, the
+  end of a walk from Quickest passes and Esc on a Coaching Compare (#629).
+- **Open for the owner** (new).
+  - A sector pass's export and its compare with the typical pass say "not for sectors yet".
+  - F (fill the screen) while comparing does nothing and says nothing.
+  - On a session with no complete lap the map's empty-state card sits over the middle of the
+    trace.
+  - Section 13's question (should Coaching rank corners that lose under 0.07 s, and name a habit
+    there?) has new synthetic evidence: on a ten-lap session of one driver with GPS noise only,
+    every lap level, the debrief still ranks three corners at +0.01 to +0.02 s and names a braking
+    cause at the first ("brake later / shorter").
+  - With sector rows shown and the scrollbar hidden, the last sector row is cut at 1280×800
+    docked (on the demo with three lines, 11 px of S4), and a session whose Quickest view carries
+    its "laps not counted" line loses whole rows; there the strip is hidden anyway, so the hidden
+    scrollbar buys nothing.
+  - The overlay export dialog, "Export this pass…" included, is not freed when closed: each open
+    leaves 9 top-level and 101 widgets behind on the demo (pre-existing; not one of #633's doors).
+- **Open for the owner** (carried from section 19, each still true on 0.18.0's code): Quickest
+  passes is still not the Corners tab's default view; exporting a compare started at a corner
+  renders the two whole laps; the readout and the overlays on real macOS fullscreen Spaces and a
+  second monitor are unverified offscreen; the strip hides at 1280×800 docked for sessions of
+  about 60 laps or more and for the real recording here; at 1440×900 docked the Stats page's even
+  gaps put three tile labels below the fold.
+- **Open for the owner** (carried from sections 18 and 19, untouched by this wave's changes): the
+  strip under the video stays available as a later option; a corner straight after another starts
+  its clip at the previous exit; a long corner window plays a long clip; the ★'s two meanings on
+  one tab; the rows scroll at the window's minimum size; the status line clears after 6 s while
+  the row keeps saying "playing"; the first time costs three clicks from the debrief; with verdicts
+  on the list, the docked chip says "3 of 3 re-measured"; a session with no laps is left out of the
+  welcome's list, and an unreadable library shows the first-visit screen; the overlays use the
+  0.07 s step even on an estimated clock; a re-profiled corner that keeps its direction is still
+  compared; focus items and Library rows stored before 0.15.0 carry no direction until reopened; a
+  one-corner shortlist's theme reads oddly; after the docked pair's Jump its Compare is one tab
+  away; a missing file's name in the welcome is cut; `overlay.jpg` needs real footage to re-shoot;
+  13 planted defects no test catches; two slow product paths; a marginal corner near the 30°
+  detection limit; the mixed headline's count of refusals; a Compare started from the maximised
+  page stays in the grid; the focus verdict's medians to two decimals; FIRST_LAP's loop paragraph
+  and step 8; the report's Laps card scroll with sector lines; `fmt_time` negatives; Broadcast as
+  the default Style; a ranked corner under the display floor; one lap drawn in two colours in a
+  race over a pick; a session reload stranding widgets; the capture tool's `lapstrip.png` bytes;
+  consistency on the middle half rather than σ; the apex and braking reasons' noise floor; the demo
+  habit ranked only on its own seed; the overlay's ★/Δ under provisional timing; Extras on in
+  Classic; the ◆ glyph; Follow's default; a Broadcast still; the keys 1-5 right after a load on a
+  real display; pull request #582's commit list comment; the published real-footage Coaching
+  tables cannot be re-verified offline.
