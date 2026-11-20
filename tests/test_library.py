@@ -1792,6 +1792,33 @@ def test_the_library_summary_reads_a_level_day_as_the_debrief_does():
     assert library.pb_steps([45.00]) == []
 
 
+def test_the_best_lap_chart_is_named_for_what_it_draws_and_rings_the_pbs():
+    """cool/library-chart-name (disc9). The chart titled "PB progression" draws every session's
+    best lap, so a slower day drew the line UP under a title saying the PB progressed there. It is
+    "Best lap by session" now, the line unchanged, and the sessions that set a PB — by the rule the
+    summary line counts "N PBs" by (`library.pb_steps`) — ringed, the title naming the rings."""
+    idx = library.empty_index()
+    for i, best in enumerate([45.62, 45.02, 45.41, 44.99]):     # PB, slower day, level day
+        library.upsert(idx, _entry(f"S{i}", track="MK", date=f"2026-06-{i + 1:02d}", best=best,
+                                   paths=[]))
+    dlg = LibraryDialog(idx, _OpenSpy())
+    dlg._show_pb("MK")
+    dlg._show_summary("MK")
+    title, summary = dlg._pb_title.text(), dlg._summary.text()
+    _xs, ys = dlg._pb_curve.getData()
+    rx, ry = dlg._pb_rings.getData()
+    assert list(ys) == [45.62, 45.02, 45.41, 44.99], ys            # every session's best, as before
+    assert list(ry) == [45.02] and len(rx) == 1, (rx, ry)          # only the 0.60 s step is a PB
+    assert title.startswith("Best lap by session — MK  (0:44.990 best over 4 sessions)"), title
+    assert "PB progression" not in title and title.endswith(" · 1 PB ringed"), title
+    assert "1 PB" in summary, summary                              # one number, two places
+    # No PB set: no ring, and the title explains none.
+    dlg._show_pb(None)
+    assert dlg._pb_title.text() == "Best lap by session"
+    assert len(dlg._pb_rings.getData()[0]) == 0
+    dlg.deleteLater()
+
+
 def test_pb_points_are_in_driven_order():
     """`library.pb_points`: by date, then by the first fix's clock within a date (rows with none
     after, by best); `pb_series` keeps its own (date, best) order for the summary's PB count."""
@@ -3558,8 +3585,8 @@ def test_the_library_charts_a_track_driven_both_ways_one_way_at_a_time():
         if fp in ("GX9112", "GX9113"):
             assert summary.startswith(f"{_DEMO}, anticlockwise  ·  2 sessions  ·  best 0:45.105"), \
                 summary
-            assert title == f"PB progression — {_DEMO}, anticlockwise  (0:45.105 best over 2 " \
-                "sessions)", title
+            assert title == (f"Best lap by session — {_DEMO}, anticlockwise  (0:45.105 best "
+                             "over 2 sessions) · 1 PB ringed"), title
             if fp == "GX9112":
                 assert like == "", like        # it IS the best this way round
             else:
@@ -3572,7 +3599,7 @@ def test_the_library_charts_a_track_driven_both_ways_one_way_at_a_time():
                 assert like.startswith("Comparable with your best here (2026-06-01)"), like
         else:
             assert summary.startswith("Daytona MK  ·  1 session"), summary
-            assert title == "PB progression — Daytona MK  (1 session: 1:08.000)", title
+            assert title == "Best lap by session — Daytona MK  (1 session: 1:08.000)", title
     dlg.deleteLater()
     print("ok library: two ways, two PB lines; one way, as before")
 
@@ -3637,7 +3664,8 @@ def test_a_mixed_library_dialog_names_no_way_over_rows_that_do_not_know_it():
         seen[dlg.table.item(r, _COL_DATE).data(FP_ROLE)] = (dlg._summary.text(),
                                                             dlg._pb_title.text())
     assert seen["GX9104"][0].startswith(f"{_DEMO}  ·  3 sessions  ·  best 0:44.929"), seen
-    assert seen["GX9104"][1].startswith(f"PB progression — {_DEMO}  (0:44.929 best over 3"), seen
+    assert seen["GX9104"][1].startswith(
+        f"Best lap by session — {_DEMO}  (0:44.929 best over 3"), seen
     assert seen["GX9103"][0].startswith(f"{_DEMO}  ·  3 sessions  ·  best 0:44.929"), seen
     assert not any("clockwise" in t for pair in seen.values() for t in pair), seen
     dlg.deleteLater()
