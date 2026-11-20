@@ -1305,6 +1305,9 @@ class VideoView(QWidget):
     # button OR a double-click on the video content). CentralView owns the enter/exit; the shell only
     # forwards the intent (mirrors compareToggled's input-only contract).
     videoFocusRequested = Signal()
+    # ...and that request refused (F or ⌘K on a disabled ⤢: compare owns the stage), with the
+    # button's own tooltip as the reason, for the shell's status line (app._press_or_say's voice).
+    videoFocusRefused = Signal(str)
     # The two-pane stage was mounted / dropped — a LAYOUT fact, emitted on the transition only, for
     # the shell to reflect in the panel's identity row (the COMPARING chip) and in the tab chain.
     # Not a state mirror: CompareController remains the single source of truth for 'are we
@@ -1885,9 +1888,13 @@ class VideoView(QWidget):
         refused gesture (compare mode disables the button) is a no-op rather than a silently
         ignored state change. Public because the request has three doors now: the button, a
         double-click on the video, and the window's F key / command palette, and the last two must
-        not reach past the button's enabled state to get in."""
+        not reach past the button's enabled state to get in. Refused, it says why: the disabled
+        button's tooltip (`_sync_fullscreen_tooltip`, the one place the reason is written) goes out
+        on videoFocusRefused — F and ⌘K did nothing and said nothing while comparing."""
         if self.fullscreen_btn.isEnabled():
             self.fullscreen_btn.click()
+        else:
+            self.videoFocusRefused.emit(self.fullscreen_btn.toolTip())
 
     def _on_focus_shortcut(self):
         """F → the ⤢ button's own click (so the disabled state gates the key too)."""
