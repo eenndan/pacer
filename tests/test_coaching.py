@@ -3895,7 +3895,7 @@ def _land_compare_at_c1(v, s, button) -> float:
         lo, hi, x0, x1)
     assert v.map.pinned_corner() == "C1"
     assert notices[-1] == (
-        "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) — lap 4's is your typical pass "
+        "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) as timed — lap 4's is your typical pass "
         "here (median of 14: 3.38 s); typical loss through C1: +0.36 s · C or Esc: back to one "
         "video"), notices
     assert "median lap" not in notices[-1]
@@ -3969,6 +3969,8 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             btn = t.cellWidget(0, cp._PANEL_COL_CMP)
             tp = s.typical_passes()[1]
             assert "not your median lap" in btn.toolTip(), btn.toolTip()
+            # ...and the held gap after the exit is as timed, uncoloured (DECISIONS §21)
+            assert cp.COMPARE_HELD_AS_TIMED in btn.toolTip(), btn.toolTip()
 
             # RECONCILED WITH THE ROW: 14 passes, whose middle two are lap 5's 3.37 and lap 4's
             # 3.39 around a typical of 3.38; lap 4 is the lower of the tie. The typical less the

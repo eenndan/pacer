@@ -2394,7 +2394,10 @@ class CentralView(QWidget):
         d = PRINT_DECIMALS
         caption = (f"lap {lap_label(a)} ({tp.pass_s:.{d}f}) vs best lap {lap_label(b)} "
                    f"({tp.best_pass_s:.{d}f}) · {self._corner_label(cid)}")
-        if not self._enter_pass_pair(cid, a, b, tp.pass_s, tp.best_pass_s, caption):
+        # The held gap is neutral, as a typical-pass compare's is: the best lap's pass, on a row
+        # ranked by its loss, is partly a lucky one (`PassAnchor.held_neutral`).
+        if not self._enter_pass_pair(cid, a, b, tp.pass_s, tp.best_pass_s, caption,
+                                     held_neutral=True):
             return False
         corners = self.session.corners
         for side, lap in ((0, a), (1, b)):
@@ -2419,8 +2422,8 @@ class CentralView(QWidget):
         (`compare_controller.PassAnchor`: nothing in the lead-in, the gap since the entry inside
         it, the passes' printed gap held after the exit) under `caption`, the pair named for the
         whole comparison. `pass_a` / `pass_b` are the two passes' times through it;
-        `held_neutral` shows the held gap as measured, never coloured (a typical-pass compare,
-        `PassAnchor.held_neutral`). False when nothing changed."""
+        `held_neutral` shows the held gap as measured, never coloured (a typical-pass compare and
+        a Coaching row's Compare, `PassAnchor.held_neutral`). False when nothing changed."""
         if not self.video.compare_btn.isEnabled():
             return False
         if self.is_racing():

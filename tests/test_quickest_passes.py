@@ -2500,13 +2500,27 @@ def test_the_corner_readout_is_blank_before_the_entry_live_inside_and_held_after
         assert not view._comparing() or view.compare.pass_anchor() is None
         view.video.compare_btn.click() if view._comparing() else None
         _settle()
-        # the Coaching Compare: the typical lap (pane A) against the best lap (pane B) at C1
+        # the Coaching Compare: the typical lap (pane A) against the best lap (pane B) at C1. Its
+        # held gap is neutral too (DECISIONS §21 open item): the best lap's pass on a row ranked
+        # by that loss is partly luck — on habit-free seeds 1-8, 8 of the 12 gaps the seam would
+        # have coloured were truly under the step (studio/dev/probes/coaching_compare_held_gap)
         tp = s.typical_passes()[1]
         assert view.compare_at_corner(tp, "+0.36 s")
         _settle()
         held = printed_gap_s(tp.pass_s, tp.best_pass_s)
+        assert abs(held) >= 0.07, "C1's held gap is past the step: it was coloured before"
+        tip = view.video.seam.toolTip()
+        assert "as timed" in tip and "your best lap's) is partly luck" in tip, tip
         _check_corner_readout(view, s, tp.lap_id, tp.best_lap_id, 1, held,
-                              f"lap 4 ({tp.pass_s:.2f}) vs best lap 13 ({tp.best_pass_s:.2f}) · C1")
+                              f"lap 4 ({tp.pass_s:.2f}) vs best lap 13 ({tp.best_pass_s:.2f}) · C1",
+                              held_neutral=True)
+        # ...while a plain C compare keeps the colour rule
+        view.video.compare_btn.click()
+        _settle()
+        win.toggle_compare()
+        _settle()
+        assert view._comparing() and view.compare.pass_anchor() is None
+        assert "Coloured only beyond timing precision" in view.video.seam.toolTip()
     finally:
         _close(win)
 
