@@ -6,6 +6,21 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-11-20
+
+A patch release: 1 pull request, #660. A recording opened while an export was starting ffmpeg could
+fail to finish loading, and the app then waited on it at quit; that can no longer happen.
+
+### Highlights
+
+- **A load can no longer hang beside an export.** numpy's maths now runs on one thread, so a new
+  process can never strand it; on the demo, loads and lap switches take the same time (#660)
+
+### Fixed
+
+- A load or a calculation can no longer freeze for good when an export starts ffmpeg at the same
+  moment: numpy's maths now runs on one thread, which a new process can never strand. (#660)
+
 ## [0.20.0] — 2026-11-20
 
 A minor release: 6 pull requests, #647, #648 and #650 to #653, Wave 15 of the campaign. Its theme:
@@ -2614,7 +2629,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/eenndan/pacer/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/eenndan/pacer/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/eenndan/pacer/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/eenndan/pacer/compare/v0.17.0...v0.18.0
