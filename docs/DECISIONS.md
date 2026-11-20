@@ -1150,9 +1150,9 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   section 8 records, its theme "the driver's own sectors join the pass family, and a session that
   is not the demo reads true".
   - #629: six fixes from the 0.17.0 QA: a pass's status line goes when the pass is left, a walk
-    from Quickest passes ends on "C7 is the last corner", Esc leaves a Coaching Compare, a slow lap
-    narrower than its ▼ shows as a tick on the lap ruler, the map key folds while a pass is zoomed,
-    and a tie's strip hover says what is true of each lap.
+    from Quickest passes ends on the last corner rather than on a lap, Esc leaves a Coaching
+    Compare, a slow lap narrower than its ▼ shows as a tick on the lap ruler, the map key folds
+    while a pass is zoomed, and a tie's strip hover says what is true of each lap.
   - #630: early or late apex and the line offset at the apex, measured and refused
     (`studio/docs/refused-2026-09.md` §36 and §37).
   - #631: the driver's own sector lines in Corners ▸ Quickest passes, each sector row playing,
@@ -1190,10 +1190,10 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     of it.
 - **Refused this wave, with the numbers** (§36, §37, #630). Early or late apex: the rule is safe
   (0 to 1 of 48 null cells fire) but blind to what a driver would call early or late: a 2 m shift
-  never reliably fires, and on the demo it fires once, at C7, a constant-radius arc with no
-  minimum to place. The line offset at the apex: 1 m reads as 0.58 m after the de-drift, and the
-  quick-against-typical split manufactures "tighter" on recordings with no line habit planted (3
-  of 7 demo corners).
+  never reliably fires, and on the demo it fires once, at its last corner, a constant-radius arc
+  with no minimum to place. The line offset at the apex: 1 m reads as 0.58 m after the de-drift,
+  and the quick-against-typical split manufactures "tighter" on recordings with no line habit
+  planted (3 of 7 demo corners).
 - **Process.** Discovery 7 ("the session that is not the demo", twelve synthetic sessions through
   the real loader) produced #634 to #636. The QA pass drove the combined tree in the real window,
   offscreen and jailed, at 1280×800 and 1440×900: the demo with three sector lines (every
