@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
@@ -324,6 +324,21 @@ def _key_text(key: Keys) -> str:
     return QKeySequence(key).toString(QKeySequence.NativeText)
 
 
+#: Keys whose character is a speck in the KeyCap face — "," and "." painted 1.5 x 2 px of ink at
+#: the card's size (craft review, discovery 6) — are written as the named keys the card already
+#: uses for Space and Return. The card only: the palette and the binding guards read `_key_text`,
+#: Qt's own spelling, and each cap keeps that as its "key" property. "[" and "]" stay glyphs: they
+#: are full-height strokes (3 x 11 px of ink, a capital's height), read like the keycap print, and
+#: "Right bracket" would tie "Shift + ← / →" (86 px) for the card's widest key cell.
+_NAMED_CAPS = {",": "Comma", ".": "Period"}
+
+
+def _cap_text(key: Keys) -> str:
+    """What one key cap on the shortcuts card SHOWS: `_key_text`, a speck character named."""
+    text = _key_text(key)
+    return _NAMED_CAPS.get(text, text)
+
+
 def _key_cap(text: str) -> QLabel:
     """One KEY CAP label: BarLabel's dimmed small-header type in the MONO face, so the glyphs line
     up into a gutter. It shipped as BarLabel + a one-line `font-family` patch that spelled the whole
@@ -344,7 +359,9 @@ def _key_widget(key: Keys) -> QWidget:
     The pair is right-aligned inside the gutter like every other cap, so the icon lands where a
     trailing character used to and the column still reads as a column."""
     if not isinstance(key, GlyphKey):
-        return _key_cap(_key_text(key))
+        cap = _key_cap(_cap_text(key))
+        cap.setProperty("key", _key_text(key))
+        return cap
     box = QWidget()
     row = QHBoxLayout(box)
     row.setContentsMargins(0, 0, 0, 0)
@@ -518,6 +535,39 @@ class ShortcutsDialog(QDialog):
         super().showEvent(event)
         self._share_key_column()
         _fit_to_copy(self, self._scroll, self._column)
+        self._end_on_a_row()
+
+    def _end_on_a_row(self) -> None:
+        """When the card is capped below its rows, open it with the scroll column ending in the
+        gap after a whole row (or a whole group), never through one.
+
+        At 1280x800 the 85% cap ended the column 263 px into ANALYSIS's 363, through whatever row
+        stood there, so the card opened on a sliced line and read as cut off rather than as a list
+        that scrolls on. The column is shortened to the last row boundary that fits — at most one
+        row's height — so its foot is a gap and the scrollbar says the rest is below. The cap
+        itself, and every rule `_fit_to_copy` holds, are unchanged. Idempotent."""
+        scroll, body = self._scroll, self._scroll.widget()
+        self.layout().activate()
+        body.layout().activate()
+        cap = scroll.minimumHeight()
+        ends = []
+        for g in self._grids:
+            group = g.parentWidget()
+            last = g.rowCount() - 1
+            for r in range(g.rowCount()):
+                cells = [g.itemAtPosition(r, c) for c in (0, 1)]
+                bottom = max(it.widget().mapTo(body, QPoint(0, it.widget().height())).y()
+                             for it in cells if it is not None)
+                ends.append(group.mapTo(body, QPoint(0, group.height())).y() if r == last
+                            else bottom + g.verticalSpacing())
+        if not ends or max(ends) <= cap:
+            return                                          # every row fits: nothing to cut
+        fit = max((e for e in ends if e <= cap), default=0)
+        if 0 < fit < cap:
+            scroll.setMinimumHeight(fit)
+            self.layout().activate()        # lower the card's own floor before asking for less
+            # _fit_to_copy just opened the column at `cap` (the viewport is not laid out yet).
+            self.resize(self.width(), self.height() - (cap - fit))
 
     def _share_key_column(self) -> None:
         """Give every group's key column the width of the WIDEST key cell on the card, so every
@@ -530,7 +580,23 @@ class ShortcutsDialog(QDialog):
         moves the shared column with it — which is why a GESTURE's key cell is a bare verb ("Drag",
         "Click" + the button's glyph) and its object is in the description: a long cell would set
         the description column of every row. Today "Shift + ← / →" is the widest, at 86 px.
-        Idempotent; re-run at show, where the face is final."""
+        Idempotent; re-run at show, where the face is final.
+
+        AND EACH CAP SITS ON ITS DESCRIPTION'S BASELINE. Both cells are top-aligned, and the cap's
+        mono face at the header size has a shorter ascent than the description's, so every cap
+        stood ~3 px above the line it labels (craft review, discovery 6). The cap is lowered by the
+        difference of the two ascents, measured off the polished faces."""
+        for g in self._grids:
+            for r in range(g.rowCount()):
+                key_item, desc_item = g.itemAtPosition(r, 0), g.itemAtPosition(r, 1)
+                if key_item is None or desc_item is None:
+                    continue
+                ascent = desc_item.widget().fontMetrics().ascent()
+                kw = key_item.widget()
+                for cap in [kw, *kw.findChildren(QLabel)]:
+                    if isinstance(cap, QLabel) and cap.property("role") == "KeyCap":
+                        drop = max(0, ascent - cap.fontMetrics().ascent())
+                        cap.setContentsMargins(0, drop, 0, 0)
         cells = [g.itemAtPosition(r, 0).widget() for g in self._grids
                  for r in range(g.rowCount()) if g.itemAtPosition(r, 0) is not None]
         width = max((c.sizeHint().width() for c in cells), default=0)

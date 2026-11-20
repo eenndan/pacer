@@ -72,9 +72,16 @@ _DRIVING_COAST = (
 
 
 def section_heading(title: str) -> QLabel:
-    """A section's heading: the page's one `BarLabel` style, by role."""
+    """A section's heading: the page's one `BarLabel` style, by role.
+
+    THE HEADING CARRIES THE GROUP SEPARATOR: SPACE_S above it, on top of the column's SPACE_XS.
+    It used to be the bottom margin of a tile grid (and of MOMENTS' body), so a section that
+    followed a note or a table (SPEED · G, DRIVING, PER LAP, CORNERS BY LAP …) sat 4 px under it
+    while one that followed tiles (IDEAL LAP, DISTRIBUTIONS …) sat 12 px under — two rhythms on
+    one page. Here, every heading gets the same gap, whatever is above it."""
     lab = QLabel(title)
     lab.setProperty("role", "BarLabel")
+    lab.setContentsMargins(0, theme.SPACE_S, 0, 0)
     return lab
 
 

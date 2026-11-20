@@ -61,11 +61,11 @@ class MomentsSection:
         self._jump = jump
         self.heading = section_heading("MOMENTS")
         self.heading.setToolTip(MOMENTS_TOOLTIP)
-        # One body under the heading, its bottom margin the tile grids' group separator
-        # (`StatsView._grid`), so the section ends where its neighbours' tile rows end.
+        # One body under the heading. No bottom margin: the next section's heading carries the
+        # group separator (`stats_common.section_heading`).
         self.body = QWidget()
         body = QVBoxLayout(self.body)
-        body.setContentsMargins(0, 0, 0, theme.SPACE_S)
+        body.setContentsMargins(0, 0, 0, 0)
         # SPACE_S between rows, the tile rows' own step: at SPACE_XS a wrapped row's second line
         # ran into the next row's label.
         body.setSpacing(theme.SPACE_S)
