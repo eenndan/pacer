@@ -1358,6 +1358,9 @@ def test_stats_view_braking_table_filters_unbraked_and_emits_clicks():
     assert t.item(0, 0).text() == "C1" and t.item(0, 2).text() == "2.1"
     assert t.item(0, 4).text() == "88" and t.item(0, 5).text() == "3.5"
     assert t.item(1, 2).text() == "—"                   # single-lap σ: dash, never 0
+    # …and the single-lap SPAN too: a max − min of one onset is 0 by construction (disc7 #4).
+    assert t.item(1, 3).text() == "—", t.item(1, 3).text()
+    assert t.item(0, 3).text() == "6.0"
     assert t.item(1, 5).text() == "\u22121.2"
     fired = []
     v.corner_clicked.connect(fired.append)
@@ -1662,6 +1665,74 @@ def test_stats_view_straights_say_how_many_laps_each_column_counted():
     assert "8 of 38" in t.item(part, 6).toolTip() and "C8's exit" in t.item(part, 6).toolTip()
     v.hide()
     print("test_stats_view_straights_say_how_many_laps_each_column_counted OK")
+
+
+def test_straights_note_names_no_slow_exit_the_timing_calls_level():
+    """disc7 #2: ten laps of ONE driver, GPS noise only, and the note said "Slow exit costing the
+    most: C4. Your usual exit is 0.1 km/h under your best lap's, and the C4 → C5 straight after it
+    takes 0.02 s longer than its best" — a cause named for any median − best above zero. A spread
+    the timing step calls level (`stats.is_level`, the floor the rolling-best caption reads) is no
+    cost, so it is not ranked; one that beats the step still is, and under an estimated clock the
+    wider step applies."""
+    _app()
+    from dataclasses import replace
+
+    from studio.data_quality import MEDIA_CLOCK_FALLBACK, TimingQuality
+    from studio.stats import StraightStat
+    from studio.stats_panel import StatsView
+
+    def straight(index, label, ring, spread, delta, lev):
+        return StraightStat(index=index, label=label, ring_cid=ring, n=10, best_s=4.0,
+                            median_s=4.0 + spread, sigma_s=0.02, trap_best_kmh=90.0,
+                            trap_median_kmh=89.9, exit_delta_kmh=delta, leverage=lev)
+
+    report = [straight(1, "C4 → C5", 4, 0.02, -0.1, 0.002),     # the tie case: level
+              straight(2, "C5 → C6", 5, 0.069, -0.3, 0.0207)]   # 0.069 s: still under the step
+    sess = _fake_view_session()
+    sess.straights_report = lambda: report
+    v = StatsView(sess)
+    assert v.straights.note.text() == "" and v.straights.note.isHidden(), v.straights.note.text()
+    # A spread that beats the step is named, even ranked below a level one by leverage.
+    report.append(straight(3, "C6 → C7", 6, 0.10, -0.1, 0.01))
+    report[0] = replace(report[0], leverage=0.5)
+    v.refresh()
+    note = v.straights.note.text()
+    assert note.startswith("Slow exit costing the most: C6. ") and "0.10 s longer" in note, note
+    # An estimated clock's wider step (0.15 s) calls that 0.10 s level as well.
+    sess.timing_quality = TimingQuality(clock=MEDIA_CLOCK_FALLBACK)
+    v.refresh()
+    assert v.straights.note.text() == "", v.straights.note.text()
+    v.deleteLater()
+    print("test_straights_note_names_no_slow_exit_the_timing_calls_level OK")
+
+
+def test_one_lap_spreads_print_a_dash_not_zero():
+    """disc7 #4: with ONE clean lap, STRAIGHTS printed "Exit Δ 0.0" on every row — the median
+    exit of one lap against that same lap's exit, 0 by construction. Under two samples it is a
+    dash, as σ already was; two exits print their figure."""
+    _app()
+    from studio.stats import StraightStat
+    from studio.stats_panel import DASH, StatsView
+    sess = _fake_view_session()
+    sess.straights_report = lambda: [
+        StraightStat(index=1, label="C1 → C2", ring_cid=1, n=1, best_s=1.92, median_s=1.92,
+                     sigma_s=None, trap_best_kmh=78.6, trap_median_kmh=78.6,
+                     exit_delta_kmh=0.0, leverage=0.0, n_laps=1, n_trap=1, n_exit=1),
+        StraightStat(index=2, label="C2 → C3", ring_cid=2, n=1, best_s=5.11, median_s=5.11,
+                     sigma_s=None, trap_best_kmh=89.6, trap_median_kmh=89.6,
+                     exit_delta_kmh=0.0, leverage=0.0),                # no per-column counts
+        StraightStat(index=3, label="C3 → C4", ring_cid=3, n=2, best_s=1.6, median_s=1.7,
+                     sigma_s=0.07, trap_best_kmh=83.0, trap_median_kmh=82.0,
+                     exit_delta_kmh=-0.4, leverage=0.04, n_laps=2, n_trap=2, n_exit=2),
+    ]
+    v = StatsView(sess)
+    t = v.straights.table
+    rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
+    assert t.item(rows["C1 → C2"], 6).text() == DASH, t.item(rows["C1 → C2"], 6).text()
+    assert t.item(rows["C2 → C3"], 6).text() == DASH, t.item(rows["C2 → C3"], 6).text()
+    assert t.item(rows["C3 → C4"], 6).text() == "−0.4"
+    v.deleteLater()
+    print("test_one_lap_spreads_print_a_dash_not_zero OK")
 def _coast_places(*rows):
     from studio.stats import CoastPlace
     return [CoastPlace(index=i, label=label, ring_cid=ring, s_per_lap=s, laps=laps, share=share,
@@ -1749,6 +1820,36 @@ def test_coast_note_names_at_most_six_tied_places():
                                  places=_coast_places(("C3", 3, 0.5, 1, 1.0, True))))
     assert one == "All the coasting on the 1 clean lap is in C3: 0.50 s a lap.", one
     print("test_coast_note_names_at_most_six_tied_places OK")
+
+
+def test_coasting_note_does_not_name_a_place_the_heading_left_unlisted():
+    """disc7 #3 (70 laps): the heading said "COASTING · 1 place under 0.05 s/lap not listed" and
+    the note under the empty table went on to list it, "All the coasting on the 70 clean laps is in
+    C6: 0.00 s a lap". With nothing over the listing floor the note says there is too little."""
+    _app()
+    from studio.stats import CoastReport
+    from studio.stats_coasting import COAST_LIST_MIN_S
+    from studio.stats_panel import StatsView
+    sess = _fake_view_session()
+    sess.coast_report = lambda: CoastReport(n_laps=70, per_lap_s=0.003, lead_separable=True,
+                                            places=_coast_places(("C6", 6, 0.003, 2, 1.0, True)))
+    v = StatsView(sess)
+    assert v.coasting.table.isHidden()
+    assert v.coasting.heading.text() == (
+        f"COASTING · 1 place under {COAST_LIST_MIN_S:.2f} s/lap not listed")
+    note = v.coasting.note.text()
+    assert note == ("Too little coasting to list on the 70 clean laps: under "
+                    f"{COAST_LIST_MIN_S:.2f} s a lap in every place."), note
+    assert "C6" not in note, note
+    # Several places, none listed: no tie sentence over places nobody can see either.
+    sess.coast_report = lambda: CoastReport(n_laps=12, per_lap_s=0.01, lead_separable=False,
+                                            places=_coast_places(
+        ("C2", 2, 0.006, 3, 0.6, True), ("C4", 4, 0.004, 2, 0.4, True)))
+    v.refresh()
+    assert v.coasting.note.text().startswith("Too little coasting to list on the 12 clean laps"), \
+        v.coasting.note.text()
+    v.deleteLater()
+    print("test_coasting_note_does_not_name_a_place_the_heading_left_unlisted OK")
 
 
 def test_stats_view_trend_sparkline_shows_and_hides():

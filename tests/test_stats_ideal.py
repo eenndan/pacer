@@ -289,6 +289,43 @@ def test_the_ideal_note_agrees_with_its_own_counts():
     print("test_the_ideal_note_agrees_with_its_own_counts OK")
 
 
+def test_no_segment_over_the_floor_prints_no_empty_table_and_no_zero_ranking():
+    """disc7 #1: on sessions of near-identical laps (best first, best last, a tie, a dropout, one
+    slow lap) every segment's gain sat under the 0.05 s floor, and the block printed a header-only
+    table over "These 0 segments hold 0.00 s of the 0.12 s; the other 15 hold 0.12 s between them
+    … Ranked by gain × …" — a list and a ranking printed from nothing. Now the table hides and one
+    sentence says where the gap is; the tiles and the sample line stay (they are true)."""
+    _app()
+    from studio.stats_panel import StatsView
+    sb = _note_fixture([0.02, 0.03, 0.01], [2, 0, 0])
+    assert sb.single_donor_id() is None
+    s = _fake_view_session()
+    s.ideal_segment_bests = lambda: sb
+    s.ideal_total = lambda: sb.total
+    s.theoretical_best = lambda: sb.total
+    s.ideal_donor_lap_id = lambda: sb.single_donor_id()
+    v = StatsView(s)
+    assert v.ideal.table.rowCount() == 0
+    assert v.ideal.table.isHidden(), "a header-only table is a list of nothing"
+    assert not v.ideal.heading.isHidden() and not v.ideal.t_gap.isHidden()
+    assert not v.ideal.sample.isHidden() and not v.ideal.note.isHidden()
+    note = v.ideal.note.text()
+    assert note == ("No segment holds 0.05 s or more of the 0.06 s: the 3 segments hold it "
+                    "between them, under 0.05 s each, so none is listed."), note
+    assert "These 0" not in note and "Ranked" not in note, note
+    assert v.ideal.t_gap.value.text() == "0.06 s", v.ideal.t_gap.value.text()
+    # …and re-fed a composite with a listed row, the table comes back (the section's own refresh).
+    sb2 = _note_fixture([0.0, 0.284, 0.024], [1, 0, 0])
+    s.ideal_segment_bests = lambda: sb2
+    s.ideal_total = lambda: sb2.total
+    s.ideal_donor_lap_id = lambda: sb2.single_donor_id()
+    v.ideal.refresh(s)
+    assert not v.ideal.table.isHidden() and v.ideal.table.rowCount() == 1
+    _assert_ideal_page_adds_up(v)
+    v.deleteLater()
+    print("test_no_segment_over_the_floor_prints_no_empty_table_and_no_zero_ranking OK")
+
+
 def test_the_ideal_says_what_it_was_minimised_over_where_a_reader_sees_it():
     """THE IDEAL IS AN ORDER STATISTIC, AND THE PAGE NOW SAYS SO ON THE SURFACE, not only on hover.
 

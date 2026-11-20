@@ -336,7 +336,18 @@ class IdealSection:
         # "These 1 segments hold", and a one-row remainder — 96 of the 240 composites
         # tests/test_stats_ideal.py sweeps — "the other 1 hold … between them, … each".
         n_shown, n_rest = len(shown), len(rest)
-        lead = (f"This {n_shown} segment holds" if n_shown == 1
+        # NOTHING CLEARS THE FLOOR (disc7 #1): a header-only table over "These 0 segments hold
+        # 0.00 s of the 0.12 s … Ranked by gain" was a list and a ranking printed from nothing — on
+        # a session of near-identical laps the gap is a few hundredths in every segment. No table
+        # then, and one sentence that says where the gap is: everywhere, under the floor in each.
+        self.table.setVisible(bool(shown))
+        if not shown:
+            self.note.setText(
+                f"No segment holds {IDEAL_GAIN_FLOOR:.2f} s or more of the {gap_s:.2f} s: the "
+                f"{n_rest} segments hold it between them, under {IDEAL_GAIN_FLOOR:.2f} s each, so "
+                "none is listed.")
+            return
+        lead =(f"This {n_shown} segment holds" if n_shown == 1
                 else f"These {n_shown} segments hold")
         tail = (f"holds {rest_s:.2f} s, under {IDEAL_GAIN_FLOOR:.2f} s" if n_rest == 1
                 else f"hold {rest_s:.2f} s between them, under {IDEAL_GAIN_FLOOR:.2f} s each")

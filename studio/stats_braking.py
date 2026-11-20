@@ -114,7 +114,9 @@ class BrakingSection:
             t.setItem(r, 0, name)
             t.setItem(r, 1, cell(bc.n, "{:d}"))
             t.setItem(r, 2, cell(bc.sigma_m, "{:.1f}"))
-            t.setItem(r, 3, cell(bc.span_m, "{:.1f}"))
+            # A max − min of ONE onset is 0 by construction, not a repeatable brake point: a dash
+            # under two samples, the rule Onset σ already follows (disc7 #4).
+            t.setItem(r, 3, cell(bc.span_m if bc.n >= 2 else None, "{:.1f}"))
             t.setItem(r, 4, cell(bc.commit_pct, "{:.0f}"))
             # A distance, not a gain: no forced "+" (a negative median keeps its minus).
             t.setItem(r, 5, cell(bc.metres_later_med, "{:.1f}"))
