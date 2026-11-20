@@ -95,7 +95,8 @@ def _start_phases(fps):
 class _Restore:
     """Save/restore the module globals the renderer stubs clobber (no pytest here)."""
 
-    _EV = ("probe_video_size", "probe_source_duration", "probe_source_clock", "resolve_encoder")
+    _EV = ("probe_video_size", "probe_source_duration", "probe_source_clock", "resolve_encoder",
+           "known_encoder")
 
     def __enter__(self):
         self._saved = {n: getattr(ev, n) for n in self._EV}
@@ -119,7 +120,7 @@ def _stub_probes(src_fps: float) -> None:
     ev.probe_source_duration = lambda _s: 1.0e9
     ev.probe_source_clock = lambda _p: ev.SourceClock(
         rate=Fraction(src_fps).limit_denominator(1001), timecode="00:00:00:00")
-    ev.resolve_encoder = lambda _c: ev.SW_H264
+    ev.resolve_encoder = ev.known_encoder = lambda _c="auto": ev.SW_H264
 
 
 class _LapSession:
@@ -321,7 +322,8 @@ def test_an_unpadded_lap_clip_ends_on_its_finish_frame(monkeypatch_restore):
     a frame past it, marked finished and printing the table's lap time; the frame before it still
     running; decode and encode asked for exactly those frames; the last one forced to a keyframe;
     and the picker quoting exactly those frames."""
-    ev.resolve_encoder = lambda _c: ev.SW_H264          # the hint names one; no ffmpeg probe
+    # the hint names one; no ffmpeg probe
+    ev.resolve_encoder = ev.known_encoder = lambda _c="auto": ev.SW_H264
     tally = _Tally("unpadded lap clips")
     for fps, _pad, session, case in _lap_clip_cases((0.0,)):
         spec, times = _lap_clip(session, fps, 0.0)
@@ -339,7 +341,7 @@ def test_an_unpadded_lap_clip_ends_on_its_finish_frame(monkeypatch_restore):
 def test_a_padded_clip_shows_the_finish_on_its_first_run_off_frame(monkeypatch_restore):
     """A padded clip always had its finish frame, its first run-off frame, and the unpadded one was
     given the same one. Same property, run-up and run-off of 0.5 s and 5 s."""
-    ev.resolve_encoder = lambda _c: ev.SW_H264
+    ev.resolve_encoder = ev.known_encoder = lambda _c="auto": ev.SW_H264
     tally = _Tally("padded lap clips")
     for fps, pad, session, case in _lap_clip_cases(PADS[1:]):
         spec, times = _lap_clip(session, fps, pad)
@@ -366,7 +368,7 @@ def test_the_plan_and_the_overlay_agree_on_the_line(monkeypatch_restore):
     planned one frame past its finish and marked both finished. With one tolerance, a line planted
     anywhere near a frame gives exactly one finished frame, the clip's last, and the picker quotes
     the same count."""
-    ev.resolve_encoder = lambda _c: ev.SW_H264
+    ev.resolve_encoder = ev.known_encoder = lambda _c="auto": ev.SW_H264
     tally = _Tally("lines planted near a frame")
     for name, clock in CLOCKS.items():
         for fps in RATES:
