@@ -585,6 +585,27 @@ class TypicalPass:
     best_pass_s: float   # the best lap's time through the same corner
 
 
+@dataclass(frozen=True)
+class PassVsTypical:
+    """ONE pass beside its corner's typical pass, for "compare this pass with my typical pass"
+    (`CornerMatrix.pass_vs_typical`). The typical pass is Coaching's (`typical_pass_lap`, the same
+    `CornerMatrix.typical_pass`), only with THIS lap on the other side instead of the best lap.
+    `gap_s` is the printed typical minus the printed pass (+ = this pass quicker), the number a
+    reader gets from the two times the status line prints; `level` is that gap under the timing
+    step (`is_level`), where the compare is not offered. `is_typical`: this pass IS the corner's
+    typical pass, nearer the median than any other."""
+
+    cid: int
+    lap_id: int
+    pass_s: float
+    typical_lap_id: int
+    typical_pass_s: float
+    gap_s: float
+    level: bool
+    is_typical: bool
+    level_s: float
+
+
 
 def fmt_pass_vs_typical(gap: float) -> str:
     """`pass_vs_typical_s`'s printed form, "+0.82 s" — the one formatter every surface that prints
@@ -1079,6 +1100,26 @@ class CornerMatrix:
         return TypicalPass(cid=int(cid), lap_id=lap, pass_s=counted[lap], typical_s=float(med),
                            n=len(counted), best_lap_id=int(best_lap),
                            best_pass_s=counted[best_lap])
+
+    def pass_vs_typical(self, cid: int, lap: int, level_s: float) -> PassVsTypical | None:
+        """Lap `lap`'s pass through corner `cid` beside the corner's typical pass — `typical_pass`
+        with `lap` where the best lap stands (so never `lap` itself on the other side). None where
+        `lap`'s cell is not counted (no time, or not matched on track) or the corner has no typical.
+        `is_typical` asks the same `typical_pass_lap` with nothing excluded."""
+        tp = self.typical_pass(cid, lap)
+        if tp is None:
+            return None
+        col = self.cids.index(int(cid))
+        counted = [(int(lid), float(val)) for lid, row, ok
+                   in zip(self.lap_ids, self.cells, self.resolved, strict=True)
+                   if (val := row[col]) is not None and ok[col]]
+        nearest = typical_pass_lap([i for i, _t in counted], [t for _i, t in counted],
+                                   self.medians[col])
+        gap = printed_gap_s(tp.pass_s, tp.best_pass_s)
+        return PassVsTypical(cid=int(cid), lap_id=int(lap), pass_s=tp.best_pass_s,
+                             typical_lap_id=tp.lap_id, typical_pass_s=tp.pass_s, gap_s=gap,
+                             level=is_level(gap, level_s), is_typical=nearest == int(lap),
+                             level_s=level_s)
 
 
 @dataclass(frozen=True)

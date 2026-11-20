@@ -2795,6 +2795,16 @@ class Session:
         found = {cid: matrix.typical_pass(cid, best) for cid in matrix.cids}
         return {cid: tp for cid, tp in found.items() if tp is not None}
 
+    def pass_vs_typical(self, lap_id: int, cid: int) -> stats_service.PassVsTypical | None:
+        """Lap `lap_id`'s pass through corner `cid` beside the corner's typical pass
+        (`CornerMatrix.pass_vs_typical`: Coaching's typical, with this lap where the best lap
+        stands), level under the same step the Quickest passes name a tie by. None without it."""
+        matrix = self.corner_matrix()
+        if matrix is None:
+            return None
+        level_s = stats_service.rolling_level_floor(bool(self.timing_quality.media_clock))
+        return matrix.pass_vs_typical(cid, lap_id, level_s)
+
     def corner_plot_window(self, cid: int, mode: str) -> tuple[float, float] | None:
         """Corner `cid`'s window, enter to exit, on the charts' shared axis in `mode` — the
         projection `corner_plot_positions` places its apex label by. None without it."""
