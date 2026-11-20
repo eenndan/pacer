@@ -70,18 +70,45 @@ class PassAnchor:
     under the step on 5 of 11 corner rows and 3 of 6 sector rows at GPS noise 2
     (studio/dev/probes/corner_typical_compare, sector_typical_compare).
 
-    `sides` holds per pane (entry, exit, clip start, clip end, Δ at the entry, held gap)."""
+    `sides` holds per pane (entry, exit, clip start, clip end, Δ at the entry, held gap). `key` is
+    the stretch's id (a corner's cid, a sector's `stats.sector_key`) and `pass_s` the two passes'
+    printed times, (pane A's, pane B's): what "Export comparison video ▸ This pass" renders and
+    names (`export_compare.build_pass_compare_spec`), with this same rule on its Δ plate."""
 
     def __init__(self, label: str, caption: str, sides: tuple[tuple, tuple], *,
                  noun: str = "corner", level_s: float = PB_PRECISION_S,
-                 held_neutral: bool = False):
+                 held_neutral: bool = False, key: int | None = None,
+                 pass_s: tuple[float, float] | None = None):
         self.label = label
         self.caption = caption
         self.sides = sides
         self.noun = noun
         self.level_s = level_s
         self.held_neutral = held_neutral
+        self.key = key
+        self.pass_s = pass_s
         self.armed = False     # both panes have been inside their clips (the seeks landed)
+
+    @classmethod
+    def between(cls, session, a: int, b: int, label: str, caption: str, side_a: tuple,
+                side_b: tuple, **kw) -> PassAnchor | None:
+        """The anchor for lap `a` (pane A) against lap `b` at one stretch, each side that pane's
+        (entry, exit, clip start, clip end, pass time) on the telemetry clock; `kw` as `__init__`.
+        None when either entry Δ cannot be read."""
+        d_a = session.delta_between(a, b, side_a[0])
+        d_b = session.delta_between(b, a, side_b[0])
+        if d_a is None or d_b is None:
+            return None
+        held = printed_gap_s(side_a[4], side_b[4])   # + = pane A's pass the slower
+        return cls(label, caption, (
+            (*map(float, side_a[:4]), float(d_a), held),
+            (*map(float, side_b[:4]), float(d_b), -held)),
+            pass_s=(float(side_a[4]), float(side_b[4])), **kw)
+
+    def reads_level(self, d: float | None) -> bool:
+        """Is readout `d` inside this stretch's step, so neutral and without its ▲/▼? Decided on the
+        PRINTED value, as the seam has always decided."""
+        return d is not None and abs(_printed(d)) < self.level_s
 
     def held(self, side: int, t: float) -> bool:
         """Is the pane past the exit, its readout the held gap?"""
@@ -347,7 +374,7 @@ class CompareController:
         if same_lap:
             self.video.set_pane_badge(side, self.SAME_LAP_BADGE, None)
         elif d is not None and (neutral or (self._anchor is not None
-                                            and abs(_printed(d)) < self._anchor.level_s)):
+                                            and self._anchor.reads_level(d))):
             self.video.set_pane_badge(side, theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_pane_badge(side, theme.format_delta_run(d), theme.delta_colour(d))
@@ -367,7 +394,7 @@ class CompareController:
         0.0699 and 0.0700 both print `+0.07`, and two equal strings must not look different."""
         if d is not None and (neutral or (within_timing_precision(_printed(d))
                                           if self._anchor is None
-                                          else abs(_printed(d)) < self._anchor.level_s)):
+                                          else self._anchor.reads_level(d))):
             self.video.set_seam_delta(theme.format_delta_run(d, arrow=False), None)
         else:
             self.video.set_seam_delta(theme.format_delta_run(d), theme.delta_colour(d))
@@ -657,25 +684,23 @@ class CompareController:
 
     def set_pass_anchor(self, label: str, caption: str, side_a: tuple, side_b: tuple, *,
                         noun: str = "corner", level_s: float = PB_PRECISION_S,
-                        held_neutral: bool = False) -> bool:
+                        held_neutral: bool = False, key: int | None = None) -> bool:
         """Anchor both Δ badges and the seam at the pass through `label`, a corner or a sector
         (`noun`; `PassAnchor`'s readout rule, neutral inside `level_s`, the held gap neutral with
         `held_neutral`), under the seam `caption`
         that names the pair for the whole comparison. Each side is that pane's (entry, exit, clip
-        start, clip end, pass time) on the telemetry clock. Same-recording pairs only; False
-        (whole-lap Δ kept) when either entry Δ cannot be read."""
+        start, clip end, pass time) on the telemetry clock; `key` the stretch's id, which the
+        compare export's "This pass" renders. Same-recording pairs only; False (whole-lap Δ kept)
+        when either entry Δ cannot be read."""
         a, b = self._compare_a, self._compare_b
         if not self._compare or self._cross or a is None or b is None:
             return False
-        d_a = self.session.delta_between(a, b, side_a[0])
-        d_b = self.session.delta_between(b, a, side_b[0])
-        if d_a is None or d_b is None:
+        anchor = PassAnchor.between(self.session, a, b, label, caption, side_a, side_b,
+                                    noun=noun, level_s=float(level_s), held_neutral=held_neutral,
+                                    key=key)
+        if anchor is None:
             return False
-        held = printed_gap_s(side_a[4], side_b[4])   # + = pane A's pass the slower
-        self._anchor = PassAnchor(label, caption, (
-            (*map(float, side_a[:4]), float(d_a), held),
-            (*map(float, side_b[:4]), float(d_b), -held)), noun=noun, level_s=float(level_s),
-            held_neutral=held_neutral)
+        self._anchor = anchor
         self._compare_last_t = None
         self._sync_seam_pair()
         return True
@@ -684,6 +709,11 @@ class CompareController:
         """The stretch the Δ readouts are anchored at ("C3", "S1"), or None for a whole-lap
         compare."""
         return None if self._anchor is None else self._anchor.label
+
+    @property
+    def anchor(self) -> PassAnchor | None:
+        """The pass the compare is anchored at, its readout rule and its windows, or None."""
+        return self._anchor
 
     def _drop_anchor(self) -> None:
         """Not "this pass" any more: back to the whole-lap Δ under the plain caption, and the

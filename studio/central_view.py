@@ -2441,7 +2441,7 @@ class CentralView(QWidget):
             # A sector's Δ is neutral inside the split's own step (`sector_level_s`, the one its
             # compare is offered past); a corner keeps the seam's timing step.
             self.compare.set_pass_anchor(
-                self._corner_label(cid), caption, *sides, held_neutral=held_neutral,
+                self._corner_label(cid), caption, *sides, held_neutral=held_neutral, key=cid,
                 **({} if sector_level_s is None else {"noun": "sector",
                                                       "level_s": sector_level_s}))
         if sector_col(cid) is None:      # a sector has no apex to ring

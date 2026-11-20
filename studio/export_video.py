@@ -4101,7 +4101,7 @@ class Renderer:
         # the painter's budget below read the widened spec.
         spec = with_finish_frame(spec, self._fps)
         self._spec = spec
-        self._times = frame_times(spec.t0, spec.t1, self._fps)
+        self._times = self._frame_plan(spec)
         # The painter is handed the SAME fps, because its pill budget replays these very frame
         # times to learn what it will draw (see `_burned_runs`).
         self._painter = self._make_painter()
@@ -4163,14 +4163,15 @@ class Renderer:
         return self._aborted is not None
 
     # ----------------------------------------------------------------- extension seams
-    # The six hooks below exist for ONE subclass: `export_compare.CompareRenderer`, which renders
+    # The seven hooks below exist for ONE subclass: `export_compare.CompareRenderer`, which renders
     # two distance-locked laps into one frame. Everything that makes this class hard to get right
     # — the stall watchdog, the cooperative cancel, the teardown order that stops a decoder from
     # blocking on a closed pipe, the VideoToolbox->libx264 retry, the out-of-space refusal — is
     # identical for one pane or two, and a second renderer that copied it would be a second place
     # for all of those to rot. What genuinely differs is five things: the frame's SHAPE, WHO paints
     # it, WHERE its pixels come from, HOW a frame is assembled, and WHICH processes the render owns
-    # (plus which class a retry must respawn as). So those are the hooks and the rest is shared.
+    # (plus which class a retry must respawn as, and how many frames a compare at one pass plans).
+    # So those are the hooks and the rest is shared.
     # Each default here reproduces the single-lap behaviour exactly.
 
     def _resolve_geometry(self, src_w: int, src_h: int) -> FrameGeometry:
@@ -4214,6 +4215,11 @@ class Renderer:
         """(frames composited so far, frames planned) — what a cancel or a failure got through,
         for the session log's end line."""
         return int(self._i), len(self._times)
+
+    def _frame_plan(self, spec: ExportSpec) -> np.ndarray:
+        """The media time of every output frame: the window's own frames. A compare AT ONE PASS
+        plans the longer of its two panes' clips on pane A's grid (`export_compare.PassPair`)."""
+        return frame_times(spec.t0, spec.t1, self._fps)
 
     def _make_painter(self):
         """The object that paints the overlays onto each composited frame."""

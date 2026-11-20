@@ -69,6 +69,10 @@ export. `_even` / `_even_down` are the encoder's even-dimension rule. `_FINISH_F
 how far past the line a lap clip's source must reach for its finish frame, and a compare clip ends
 on its finish exactly as a lap clip does. This module is `export_video`'s subclass, not its
 neighbour.
+
+ONE EXCEPTION TO THE LOCK: a compare AT ONE PASS ("This pass", `PassPair`) plays each pane's own
+pass clip at real speed, as the live pass compare does, for as long as the longer clip runs; its
+two linear decodes, its clock crossings, pane A's sound and the shared renderer are the ones above.
 """
 
 from __future__ import annotations
@@ -82,7 +86,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QFontMetricsF, QImage, QPainter, QPen
 
 from . import theme, units
-from ._signal import fmt_time, lap_label
+from ._signal import PRINT_DECIMALS, fmt_time, lap_label
 from .export_palette import EXPORT
 from .export_video import (
     _FINISH_FRAME_REACH_S,
@@ -116,9 +120,11 @@ from .export_video import (
     estimate_render_seconds,
     fits_one_frame,
     footage_duration,
+    frame_count,
     guard_validate_window,
     lap_window_for_export,
     overlay_unit,
+    pass_window_for_export,
     probe_video_size,
     readout_pill_width,
     resolve_fps,
@@ -449,6 +455,120 @@ def lock_to_track(session_a, lap_a: int, session_b, lap_b: int, media_times_a) -
                        elapsed_b=elapsed_b, speed_a=speed_a, speed_b=speed_b)
 
 
+# --------------------------------------------------------------------------- a compare at one pass
+# "Export comparison video ▸ This pass": the compare the driver was LOOKING AT when he started it
+# from a pass ("Compare with my typical pass", a Coaching row's Compare). Before it, that export
+# rendered the two whole laps (DECISIONS §19/§20). It is the live pass compare, frame for frame:
+#
+#   * EACH PANE PLAYS ITS OWN PASS CLIP, started together at its clip start, at real speed —
+#     `Session.stretch_clip` on the media clock (`pass_window_for_export`, the window a single
+#     pass export and the Quickest row play): the lead-in, the pass, 1 s after its exit. That is
+#     what the panes do on screen (`CentralView.compare_pass_with_typical` seeks both to their clip
+#     starts and plays). It is NOT the track lock above, which would play pane B faster or slower
+#     than real time and stretch or squeeze its lead-in and tail: the export shows the two clips
+#     the driver watched, and the gap the plate states is the seam's, counted at pane A's place.
+#   * THE SHORTER CLIP HOLDS ITS LAST FRAME until the longer one ends: each pane on screen pauses
+#     itself at its own clip end, and the frame it pauses on is the one it holds. Ending the file
+#     with pane A's clip, as the whole-lap compare ends on lap A, was the other choice: on the
+#     demo's 17 offered corner pairs pane B's clip is the longer in 9 (by up to 2.85 s), and
+#     though its exit always fell inside pane A's clip there, nothing bounds that (each lead-in is
+#     clamped on its own lap), so a slower pane B could be cut before its own exit. The audio is
+#     pane A's own clip's; it stops where pane A's picture stops.
+#   * THE Δ PLATE IS THE SEAM'S RULE, CALLED: `compare_controller.PassAnchor.value` at pane A's
+#     frame — no number before the entry, the gap since the entry inside it, the passes' printed
+#     gap held after the exit — neutral and arrowless inside the stretch's step
+#     (`PassAnchor.reads_level`), and the held gap neutral for a typical-pass compare
+#     (`held_neutral`). No new threshold, and nothing the live compare does not show.
+#   * NO LAP CLOCK AND NO TRACK BAR: mid-lap, a running lap clock reads as a lap time and the bar
+#     as the whole lap. Each pane's plate names its lap and the pass, and from that pane's own exit
+#     on its pass time, as a single pass clip's strip does ("LAP 13   C3 · 2.32 s").
+@dataclass(frozen=True)
+class PassPair:
+    """The pass a compare export is OF: its label ("C3", "S2") and the live compare's readout rule
+    (`compare_controller.PassAnchor`, read for `value` / `held` / `reads_level` / `held_neutral` /
+    `pass_s`, never imported: the anchor is handed in)."""
+
+    label: str
+    rule: object
+
+
+@dataclass(frozen=True)
+class ClipTrack:
+    """Per output frame of a pass compare: where each pane is in its own clip. `t_a` / `t_b` are
+    TELEMETRY times (held at the clip's last frame once that pane's clip has ended); `t_b_media`
+    is pane B's frame on the media clock, which `_PaneStream` reads."""
+
+    t_a: np.ndarray
+    t_b: np.ndarray
+    t_b_media: np.ndarray
+    speed_a: np.ndarray
+    speed_b: np.ndarray
+
+
+def pass_frame_counts(spec, fps: float) -> tuple[int, int]:
+    """(pane A's, pane B's) clip in frames at `fps`: what each pane's decoder delivers."""
+    return (frame_count(spec.t0, spec.t1, fps), frame_count(spec.t_b0, spec.t_b1, fps))
+
+
+def lock_to_clips(session, spec, media_times_a, fps: float) -> ClipTrack:
+    """Each output frame's place in both pass clips: frame i is frame i of each pane's own clip,
+    or that clip's last frame once it has ended (the held frame). Both panes are of `session`
+    (a pass compare is one recording's), each converted back onto the telemetry clock the
+    readout rule and the speeds speak."""
+    times = np.asarray(media_times_a, dtype=float)
+    n_a, n_b = pass_frame_counts(spec, fps)
+    n = len(times)
+    t_a = np.empty(n, dtype=float)
+    t_b = np.empty(n, dtype=float)
+    t_b_media = np.empty(n, dtype=float)
+    speed_a = np.full(n, np.nan, dtype=float)
+    speed_b = np.full(n, np.nan, dtype=float)
+    for i in range(n):
+        tm_a = float(spec.t0) + min(i, n_a - 1) / float(fps)
+        tm_b = float(spec.t_b0) + min(i, n_b - 1) / float(fps)
+        t_a[i] = _telemetry_time(session, tm_a)
+        t_b[i] = _telemetry_time(session, tm_b)
+        t_b_media[i] = tm_b
+        sa, sb = _speed_at(session, t_a[i]), _speed_at(session, t_b[i])
+        if sa is not None:
+            speed_a[i] = sa
+        if sb is not None:
+            speed_b[i] = sb
+    return ClipTrack(t_a=t_a, t_b=t_b, t_b_media=t_b_media, speed_a=speed_a, speed_b=speed_b)
+
+
+def build_pass_frames(session, spec, track: ClipTrack) -> list[CompareFrame]:
+    """Every string a pass compare draws, per frame: the plates and the Δ by `PassAnchor`'s rule."""
+    pp: PassPair = spec.pass_pair
+    rule = pp.rule
+    arrow = bool(getattr(spec.config, "delta_arrow", True))
+    unit = spec.config.speed_unit
+    pass_s = rule.pass_s
+    d_fmt = PRINT_DECIMALS
+
+    def plate(side: int, label: str, t: float) -> str:
+        text = f"{label}   {pp.label}"
+        if rule.held(side, t):            # the pane is past its own exit: its pass time
+            text += f" · {pass_s[side]:.{d_fmt}f} s"
+        return text
+
+    frames = []
+    for i in range(len(track.t_a)):
+        ta, tb = float(track.t_a[i]), float(track.t_b[i])
+        d = rule.value(0, ta, session.delta_between(spec.lap_id, spec.lap_b, ta))
+        neutral = (d is None or (rule.held_neutral and rule.held(0, ta))
+                   or rule.reads_level(d))
+        sa, sb = _finite(track.speed_a[i]), _finite(track.speed_b[i])
+        frames.append(CompareFrame(
+            fraction=float("nan"), delta=d,
+            caption_a=plate(0, spec.label_a, ta), caption_b=plate(1, spec.label_b, tb),
+            speed_a_kmh=sa, speed_b_kmh=sb,
+            speed_a=theme.speed_number(sa, 0, unit), speed_b=theme.speed_number(sb, 0, unit),
+            delta_run=theme.format_delta_run(d, units=False, arrow=arrow and not neutral),
+            neutral=neutral))
+    return frames
+
+
 # --------------------------------------------------------------------------- the spec
 @dataclass
 class CompareSpec(ExportSpec):
@@ -469,6 +589,9 @@ class CompareSpec(ExportSpec):
     cross: bool = False
     label_a: str = ""
     label_b: str = ""
+    # A compare AT ONE PASS (`build_pass_compare_spec`): then `t0`/`t1` and `t_b0`/`t_b1` are the
+    # two passes' own clips, and the render is clip-locked rather than track-locked (`PassPair`).
+    pass_pair: PassPair | None = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -569,6 +692,38 @@ def build_compare_spec(session_a, out_path: str, lap_a: int, lap_b: int,
                        ends_on_finish=True)
 
 
+def build_pass_compare_spec(session, out_path: str, lap_a: int, lap_b: int, anchor,
+                            config: CompareConfig | None = None, src_path: str | None = None,
+                            label_a: str = "", label_b: str = "") -> CompareSpec:
+    """The `CompareSpec` of the live compare AT ONE PASS (`PassPair`): lap `lap_a`'s pass (pane A)
+    beside lap `lap_b`'s through the stretch `anchor` names (`compare_controller.PassAnchor`, its
+    `key`), each pane's window its own pass clip (`pass_window_for_export`, the clip the pane
+    played) and its source resolved over that window — a concat across a chapter seam the clip
+    straddles, in either pane or both. One recording's two laps: the live pass compare is never
+    cross-recording. Raises ValueError when either pass has no clip."""
+    cfg = config or CompareConfig()
+    key = getattr(anchor, "key", None)
+    if key is None or getattr(anchor, "pass_s", None) is None:
+        raise ValueError(f"the compare at {anchor.label} names no pass to export")
+    wins = []
+    for lap in (lap_a, lap_b):
+        win = pass_window_for_export(session, lap, int(key))
+        if win is None:
+            raise ValueError(f"lap {lap_label(lap)} has no clip through {anchor.label} to export")
+        wins.append(win)
+    (a0, _ae, _ax, a1), (b0, _be, _bx, b1) = wins
+    source_a = _source_for(session, a0, a1, src_path)
+    try:
+        source_b = _source_for(session, b0, b1, src_path)
+    except Exception:
+        source_a.cleanup()
+        raise
+    return CompareSpec(out_path=out_path, lap_id=lap_a, t0=a0, t1=a1, source=source_a,
+                       config=cfg, lap_b=lap_b, source_b=source_b, t_b0=b0, t_b1=b1,
+                       label_a=label_a, label_b=label_b,
+                       pass_pair=PassPair(label=anchor.label, rule=anchor))
+
+
 # --------------------------------------------------------------------------- pane B's stream
 class _PaneStream:
     """Pane B's decoder, and the frame-stepping that IS the distance lock.
@@ -653,7 +808,7 @@ class CompareFrame:
     and the pill budget wants the string, measured over every frame."""
 
     fraction: float
-    delta: float
+    delta: float | None
     caption_a: str
     caption_b: str
     speed_a_kmh: float | None
@@ -661,6 +816,10 @@ class CompareFrame:
     speed_a: str
     speed_b: str
     delta_run: str
+    # A pass compare's Δ drawn neutral whatever its size (`build_pass_frames`: no number yet, inside
+    # the stretch's step, or a typical-pass compare's held gap). A whole-lap frame keeps the
+    # timing-step colour rule alone (`burned_delta_colour`).
+    neutral: bool = False
 
 
 # Layout fractions, all of the PANE's short side (`overlay_unit`), so a pane composes the same way
@@ -694,10 +853,13 @@ class ComparePainter:
     be constructed."""
 
     def __init__(self, geo: CompareGeometry, cfg: CompareConfig, frames: list[CompareFrame],
-                 prefix: str):
+                 prefix: str, progress: bool = True):
         self._geo = geo
         self._cfg = cfg
         self._prefix = prefix
+        # The track-position bar: a whole-lap compare's. A pass compare has no one position (each
+        # pane plays its own clip) and a lap fraction would read as the whole lap.
+        self._progress = progress
         unit = overlay_unit(geo.pane_w, geo.pane_h)
         self._unit = unit
         self._margin = unit * _MARGIN_FRAC
@@ -757,7 +919,8 @@ class ComparePainter:
                 self._paint_caption(p, rect, side, caption)
                 self._paint_speed(p, rect, side, speed)
             self._paint_delta(p, frame)
-            self._paint_progress(p, frame.fraction)
+            if self._progress:
+                self._paint_progress(p, frame.fraction)
         finally:
             p.end()
 
@@ -823,8 +986,9 @@ class ComparePainter:
         # The single-lap strip's colour rule (`burned_delta_colour`): white while the printed gap
         # is inside the timing step, so two laps the timing cannot separate never read as one
         # behind. The number, its sign and its arrow still print; only the colour is level.
-        _draw_text(p, QPointF(x, base), frame.delta_run, self._delta_font,
-                   burned_delta_colour(frame.delta, self._cfg.palette), halo=2.6 * k)
+        colour = (EXPORT.neutral if frame.neutral
+                  else burned_delta_colour(frame.delta, self._cfg.palette))
+        _draw_text(p, QPointF(x, base), frame.delta_run, self._delta_font, colour, halo=2.6 * k)
 
     def _paint_progress(self, p: QPainter, fraction: float) -> None:
         """The track-position bar: how far round the lap BOTH panes are. It is the lock made
@@ -915,6 +1079,10 @@ class CompareRenderer(Renderer):
         # sweep, and it must answer "nothing yet" from the first moment this object exists rather
         # than raising on a half-built one.
         self._pane_b: _PaneStream | None = None
+        # A compare at one pass (`PassPair`): pane A's last decoded frame, held once its own clip
+        # has ended, and how many frames its decoder fell short of that clip.
+        self._last_a: bytes | None = None
+        self._held_a = 0
         # Pane B's window gets the SAME up-front refusal pane A's does. Without it, a bad B window
         # is discovered only as a decoder that emits nothing, minutes into a render.
         guard_validate_window(spec.spec_b())
@@ -932,12 +1100,25 @@ class CompareRenderer(Renderer):
         # one — pane A's — because each decoder fills half the picture.
         return FrameGeometry(self._geo.out_w, self._geo.out_h, self._geo.filter_a)
 
+    def _frame_plan(self, spec: ExportSpec) -> np.ndarray:
+        """A compare at one pass runs as long as the LONGER of its two clips, on pane A's grid
+        (`PassPair`: the shorter one holds its last frame); a whole-lap compare is lap A's."""
+        if getattr(spec, "pass_pair", None) is None:
+            return super()._frame_plan(spec)
+        return float(spec.t0) + np.arange(max(pass_frame_counts(spec, self._fps))) / self._fps
+
     def _make_painter(self) -> ComparePainter:
+        prefix = f"{self._spec.label_a} vs {self._spec.label_b}"
+        if self._spec.pass_pair is not None:
+            self._n_a = pass_frame_counts(self._spec, self._fps)[0]
+            self._lock = lock_to_clips(self._session, self._spec, self._times, self._fps)
+            self._frames = build_pass_frames(self._session, self._spec, self._lock)
+            return ComparePainter(self._geo, self._spec.config, self._frames, prefix,
+                                  progress=False)
         self._lock = lock_to_track(self._session, self._spec.lap_id,
                                    self._session_b, self._spec.lap_b, self._times)
         self._frames = build_frames(self._spec, self._lock)
-        return ComparePainter(self._geo, self._spec.config, self._frames,
-                              f"{self._spec.label_a} vs {self._spec.label_b}")
+        return ComparePainter(self._geo, self._spec.config, self._frames, prefix)
 
     def _extra_procs(self) -> tuple:
         proc = self._pane_b.proc if self._pane_b is not None else None
@@ -970,9 +1151,14 @@ class CompareRenderer(Renderer):
         the composite -> paint -> encode path would otherwise copy it three times per frame (stack,
         `tobytes`, and the painter's own `bytearray`). Writing the two panes straight into one
         mutable buffer that `_compose_frame` then paints in place leaves ONE."""
-        raw_a = self._dec.stdout.read(self._pane_bytes)
-        if not raw_a or len(raw_a) < self._pane_bytes:
-            return None
+        if self._spec.pass_pair is not None:
+            raw_a = self._pass_frame_a()
+            if raw_a is None:
+                return None
+        else:
+            raw_a = self._dec.stdout.read(self._pane_bytes)
+            if not raw_a or len(raw_a) < self._pane_bytes:
+                return None
         raw_b = self._pane_b.frame_at(
             self._pane_b.index_for(float(self._lock.t_b_media[self._i])))
         if raw_b is None:
@@ -995,6 +1181,19 @@ class CompareRenderer(Renderer):
             out[:self._geo.pane_h] = a
             out[self._geo.pane_h:] = b
         return buf
+
+    def _pass_frame_a(self) -> bytes | None:
+        """Pane A's picture at a pass compare's frame `self._i`: its decoder's next frame while
+        its own clip runs, then that clip's last frame, held (`PassPair`). None only when the
+        decoder produced nothing at all — the zero-frame failure every render raises."""
+        if self._i < self._n_a:
+            raw = self._dec.stdout.read(self._pane_bytes)
+            if raw and len(raw) == self._pane_bytes:
+                self._last_a = raw
+                return raw
+            if self._last_a is not None:
+                self._held_a += 1          # the decoder came up short of its own clip
+        return self._last_a
 
     def _compose_frame(self, raw: bytearray) -> bytes:
         """Paint the compare overlay onto the two-pane frame and hand back bytes PACKED at
@@ -1023,11 +1222,16 @@ class CompareRenderer(Renderer):
         return self._geo
 
     @property
-    def lock(self) -> LockedTrack:
-        """The resample this render is using — the per-frame track fraction and pane-B media time.
-        Exposed so a caller (or a test) can check the lock against the two sessions independently
-        instead of trusting the picture."""
+    def lock(self) -> LockedTrack | ClipTrack:
+        """The resample this render is using — the per-frame track fraction and pane-B media time
+        (a pass compare's: each pane's place in its own clip). Exposed so a caller (or a test) can
+        check the lock against the two sessions independently instead of trusting the picture."""
         return self._lock
+
+    @property
+    def frames(self) -> list[CompareFrame]:
+        """What every output frame says (plates, speeds, the Δ and whether it is neutral)."""
+        return self._frames
 
     @property
     def held_frames(self) -> int:
