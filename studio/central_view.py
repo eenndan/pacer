@@ -2524,6 +2524,11 @@ class CentralView(QWidget):
                                      caption, v.level_s if sector_col(cid) is not None else None,
                                      held_neutral=True):
             return False
+        page = getattr(self, "corners_page", None)
+        if page is not None:
+            # The Quickest highlight names the pass compared, not one picked before it: the arrow
+            # keys move the highlight, and ⌘K then compares the pass still studied.
+            page.quickest.highlight_pass(lap_id, cid)
         self.video.seek_pane(0, clip_a[0])
         self.video.seek_pane(1, clip_b[0])
         self.video.play()
