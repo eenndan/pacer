@@ -3211,6 +3211,30 @@ _MAIN_RANKED = {"demo": [1, 2, 7, 4], "seed 20260924, 14 laps": [7, 2, 4], "seed
 _LEVEL_SESSIONS: dict = {}
 
 
+def _telemetry_picture(path, truth, first_payload, n_payloads, ffmpeg):
+    """`synth_gopro.generate(video=)` for the sessions below, which are read for their telemetry
+    only: the default placeholder's frame count, rate and track timescale, at 16x16, not 320x180.
+    The picture was 60 % of these 42 recordings' time (48.7 -> 18.4 s, 2026-11-20), and x264's
+    threads made it more of a 3-core CI runner's. Every session these caches hold reads the same
+    either way: coaching rows, lap times, best lap and timing flags compared on all 42 that day."""
+    import subprocess
+
+    from studio.dev import synth_gopro as sg
+    subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "color=c=0x1d2330:s=16x16:r=30000/1001",
+                    "-frames:v", str(n_payloads * sg.FRAMES_PER_PAYLOAD), "-c:v", "libx264",
+                    "-preset", "ultrafast", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+                    "-x264-params", "keyint=300:min-keyint=300:scenecut=0",
+                    "-video_track_timescale", "30000", "-an", "-n", path],
+                   check=True, capture_output=True)
+
+
+def _generate(out_dir: str, seed: int, laps: int):
+    """One chapter of the synthetic GoPro under `_telemetry_picture`."""
+    from studio.dev import synth_gopro as sg
+    return sg.generate(out_dir, seed, laps, chapters=1, video=_telemetry_picture)
+
+
 def _level_sessions() -> dict:
     """The three sessions above, generated once per process (a TemporaryDirectory kept alive with
     them: the sessions read their files lazily)."""
@@ -3218,7 +3242,6 @@ def _level_sessions() -> dict:
         import tempfile
 
         from studio.dev import make_demo as md
-        from studio.dev import synth_gopro as sg
         from studio.session import Session
         tmp = tempfile.TemporaryDirectory(prefix="coach_level_")
         _LEVEL_SESSIONS["_tmp"] = tmp
@@ -3226,7 +3249,7 @@ def _level_sessions() -> dict:
         md.make(demo, render=False)
         _LEVEL_SESSIONS["demo"] = Session.load([demo])
         for name, seed, laps in (("seed 20260924, 14 laps", 20260924, 14), ("seed 7, 12 laps", 7, 12)):
-            rec = sg.generate(os.path.join(tmp.name, str(seed)), seed, laps, chapters=1)
+            rec = _generate(os.path.join(tmp.name, str(seed)), seed, laps)
             _LEVEL_SESSIONS[name] = Session.load(rec.paths)
     return {k: v for k, v in _LEVEL_SESSIONS.items() if not k.startswith("_")}
 
@@ -3663,7 +3686,6 @@ def _theme_sweep() -> dict:
     if not _THEME_SWEEP:
         import tempfile
 
-        from studio.dev import synth_gopro as sg
         from studio.session import Session
         _THEME_SWEEP["demo"] = list(_level_sessions()["demo"].coaching_opportunities().rows)
         for name, s in _sweep_sessions().items():
@@ -3671,7 +3693,7 @@ def _theme_sweep() -> dict:
         with tempfile.TemporaryDirectory(prefix="theme_sweep_") as tmp:
             for seed in range(1, 13):
                 for laps in (14, 20):
-                    rec = sg.generate(os.path.join(tmp, f"s{seed}_l{laps}"), seed, laps, chapters=1)
+                    rec = _generate(os.path.join(tmp, f"s{seed}_l{laps}"), seed, laps)
                     _THEME_SWEEP[f"seed {seed}, {laps} laps"] = list(
                         Session.load(rec.paths).coaching_opportunities().rows)
     return _THEME_SWEEP
@@ -3817,14 +3839,12 @@ def _sweep_sessions() -> dict:
     if not _SWEEP_SESSIONS:
         import tempfile
 
-        from studio.dev import synth_gopro as sg
         from studio.session import Session
         tmp = tempfile.TemporaryDirectory(prefix="coach_sweep_")
         _SWEEP_SESSIONS["_tmp"] = tmp
         for seed in range(1, 9):
             for laps in (6, 10):
-                rec = sg.generate(os.path.join(tmp.name, f"s{seed}_l{laps}"), seed, laps,
-                                  chapters=1)
+                rec = _generate(os.path.join(tmp.name, f"s{seed}_l{laps}"), seed, laps)
                 _SWEEP_SESSIONS[f"seed {seed}, {laps} laps"] = Session.load(rec.paths)
     return {k: v for k, v in _SWEEP_SESSIONS.items() if not k.startswith("_")}
 

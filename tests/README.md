@@ -19,6 +19,13 @@ alone, as CTest runs it, mean of two rounds at load 5–13 (195 registrations), 
 `test_export_broadcast` 90.6 → 63.1 s, `test_central_view_realqt` 78.8 → 54.4 s,
 `test_race_controller` 71.5 → 59.5 s, `test_export_gates` 47.5 → 35.0 s, `test_export_ghost`
 36.1 → 32.9 s and `test_export_corner_cards` 27.1 → 17.9 s: 351.6 → 262.8 s in all.
+In CI (macos-15, 3 vCPU, `-j4`, 206 registrations, no footage, no soak) the test step took
+969–1031 s on 2026-11-20 (two green pull-request runs; 773–1141 s across that day's runs, the
+same suite 1.5× apart between runner VMs), with 3.9 of 4 lanes busy: the floor is the sum of the
+test-seconds over four, not the slowest test. The same day `test_coaching` (302–342 → 187 s) and
+`test_export_broadcast` (234–240 → 152 s) were cut in CI, each with the same checks, and a
+cost-first start order was measured and dropped: it started the four heaviest window suites
+together, which then ran 33 % slower.
 
 **Inner loops, not gates.** `pixi run test-core`, between edits to the core math, runs the 11
 registrations that kill every one of the 34 core defects the 2026-09-28 review planted (re-run
