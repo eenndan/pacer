@@ -116,6 +116,12 @@ NO_PASS_TO_LOOP = "Loop needs a pass playing: play one from the Corners tab's Qu
 # ...and in a compare, where two passes can be on screen: Loop is off there on purpose.
 LOOP_OFF_IN_COMPARE = ("Loop is off in a compare: two passes of different lengths would drift "
                        "apart. C goes back to one lap, where L loops a pass")
+# Coaching ▸ Compare vs reference recording with none loaded: the two ways to load one, by their
+# real menu and Library names (it once sent the driver to a "File ▸ Load reference" that never
+# existed).
+NO_REFERENCE_TO_COMPARE = ("Load a reference recording first (Coaching ▸ Load reference "
+                           "recording…, or Use as reference on a Library row), then compare "
+                           "against it.")
 # How long a RELOAD may run before the working UI is replaced by the "Loading telemetry…" card
 # (ms). The load runs off the UI thread, so a live session stays usable while its successor is
 # read; blanking it instantly meant even a 0.36 s reload flashed the whole window to an
@@ -929,11 +935,13 @@ class StudioWindow(QMainWindow):
         load hands back lists the session just analysed at the top."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
-        # No session on screen any more: its PB card goes with it (the status line keeps a load
-        # failure's own words, which a caller may have just put there).
-        ctl = getattr(self, "library_ctl", None)
-        if ctl is not None:
-            ctl.clear_pb_card()
+        # No session on screen any more: what was said about it for a few seconds goes with it —
+        # its PB card AND a status-line confirmation ("lap card copied…"), which stayed over the
+        # welcome (w19 QA). No caller puts its own words on the status line BEFORE this (a
+        # cancel's "Load cancelled." comes after; a failure's words are the welcome's own), and a
+        # welcome re-read over the welcome (`_refresh_welcome`) has no session to end.
+        if not isinstance(self.centralWidget(), WelcomeView):
+            self._end_session_transients()
         self._welcome_error = (error, error_path)
         self.setCentralWidget(self._welcome_view(error, error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
@@ -4461,7 +4469,8 @@ class StudioWindow(QMainWindow):
         """Reference load succeeded (UI thread, queued signal): adopt the loaded Session as the
         reference (the guard + apply half — set_reference_session — that load_reference already splits
         out) and refresh the derived views. Ignores a STALE result (a newer reference load superseded
-        this one). A guard refusal keeps the local best lap and surfaces the reason.
+        this one). A guard refusal keeps the baseline it had (the local best lap, or the reference
+        already loaded) and surfaces the reason.
 
         A reference is attached to a SESSION, so one that lands while a PRIMARY load is still in
         flight has nowhere to go: `self.session` is the outgoing session, and a reload that succeeds
@@ -4537,8 +4546,7 @@ class StudioWindow(QMainWindow):
         if not hasattr(self, "session") or self.session.reference_session() is None:
             QMessageBox.information(
                 self, f"{APP_NAME} — no reference recording",
-                "Load a reference recording first (File ▸ Load reference recording…), then "
-                "compare against it.")
+                NO_REFERENCE_TO_COMPARE)
             return
         # The compare controller lives on the live central view — which is None between views (a
         # reload's loading card is up), so this is asked for, not assumed. Same message either way:

@@ -1222,6 +1222,72 @@ def test_a_refusal_between_two_sessions_of_one_day_names_the_sessions_not_the_da
     print("ok same day: the refusal names the sessions, the rule still refuses")
 
 
+def test_three_sessions_of_one_day_are_counted_and_the_offer_names_each_day_once():
+    """cool/reference-reasons-and-wording (w19 QA on #683): the session in front of the driver and
+    two focus baselines, all on 13 Sep. The collapsed line read "either session on 13 Sep" (three
+    sessions) and "the earlier session on 13 Sep" (two); the offer's hover listed "13 Sep, 13 Sep
+    and today" and "Mark today dry" sat on a 13 Sep session. Each phrase now counts the sessions
+    it speaks for, and the hover names exactly the sessions the button writes (`unrecorded`)."""
+    today = datetime.date.today().isoformat()
+    past = "2026-09-13"
+    dry = session_record.blank_record() | {"conditions": "dry"}
+    tail = "comparable; a coach will put up to 4 s a lap on conditions alone."
+
+    def report(then_date, now_date, records):
+        now = {**_now(), "date": now_date}
+        items = [_item(cid=4, fp="GX0060", date=then_date),
+                 _item(cid=7, fp="GX0058", date=then_date)]
+        rep = F.verdict(items, now, [_sample(4.4)] * 2, records)
+        assert {o.blocker for o in rep.outcomes} == {F.BLOCK_NO_RECORD}, rep.outcomes
+        return rep
+
+    def offer(rep):
+        """(the line, the offer, the fingerprints the button writes)."""
+        return F.report_lines(rep), F.mark_dry_prompt(rep), [fp for fp, _ in rep.unrecorded]
+
+    lines, prompt, writes = offer(report(past, past, _records()))
+    assert lines == ["C4 and C7 — can't say. There's no session record for any of the 3 sessions "
+                     f"on 13 Sep, so nothing says the 3 sessions were {tail} File ▸ Session "
+                     "record… writes one."], lines
+    assert writes == ["GX0060", "GX0058", "GX0062"]
+    assert prompt[:2] == ("All 3 dry?", "Mark all 3 dry")
+    assert "for all 3 sessions on 13 Sep saying" in prompt[2], prompt[2]
+
+    lines, prompt, writes = offer(report(past, past, _records(("GX0062", dry))))
+    assert lines[0].startswith("C4 and C7 — can't say. There's no session record for the earlier "
+                               "sessions on 13 Sep, so nothing says the 3 sessions were"), lines
+    assert writes == ["GX0060", "GX0058"]
+    assert prompt[:2] == ("Both dry?", "Mark both dry")
+    assert "for both sessions on 13 Sep saying" in prompt[2], prompt[2]
+
+    lines, prompt, writes = offer(report(past, past, _records(("GX0060", dry))))
+    assert "no session record for 1 of the 2 earlier sessions on 13 Sep and this session," \
+        in lines[0], lines
+    assert writes == ["GX0058", "GX0062"] and "for both sessions on 13 Sep saying" in prompt[2]
+
+    # Only this session waits: a 13 Sep session is never "today".
+    lines, prompt, writes = offer(report(past, past, _records(("GX0060", dry), ("GX0058", dry))))
+    assert "no session record for this session," in lines[0], lines
+    assert writes == ["GX0062"]
+    assert prompt[:2] == ("Dry on 13 Sep?", "Mark 13 Sep dry"), prompt
+    assert "for 13 Sep saying" in prompt[2] and "today" not in " ".join(prompt), prompt
+
+    # On the calendar's today, it is today.
+    lines, prompt, writes = offer(report(today, today, _records()))
+    assert "any of the 3 sessions today, so nothing says the 3 sessions were" in lines[0], lines
+    assert "for all 3 sessions today saying" in prompt[2], prompt[2]
+    _, prompt, _ = offer(report(today, today, _records(("GX0060", dry), ("GX0058", dry))))
+    assert prompt[:2] == ("Dry today?", "Mark today dry"), prompt
+
+    # Mixed: two baselines of 13 Sep, the session in front of the driver a later day ("today",
+    # as every line about an earlier day calls it).
+    _, prompt, writes = offer(report(past, "2026-09-20", _records()))
+    assert writes == ["GX0060", "GX0058", "GX0062"]
+    assert prompt[:2] == ("All 3 dry?", "Mark all 3 dry")
+    assert "for the 2 sessions on 13 Sep and today's saying" in prompt[2], prompt[2]
+    print("ok three sessions of one day: counted, and each day named once")
+
+
 def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
     """The window IS the item's identity, so an item whose window cannot be measured is not
     repairable. `test_one_malformed_item_is_dropped_not_the_whole_list` names a backwards window but

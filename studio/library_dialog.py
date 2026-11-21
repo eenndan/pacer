@@ -328,6 +328,11 @@ USE_AS_REFERENCE_TIP = ("Compare the open session against this recording's best 
                         "the lap table and the map measure against it (Coaching ▸ Clear reference "
                         "undoes it)")
 USE_AS_REFERENCE_REFUSED = "Not available: {reason}"
+# ...and with NO row selected. A no-laps row can't be selected at all (it stays out of reach, see
+# `_fill_rows`), so this is the button's state whenever the row the driver points at is one: it
+# names the same missing thing the row menu's "Not available: no valid laps" does (w19 QA: the
+# greyed button hovered empty).
+USE_AS_REFERENCE_NO_ROW = "select a recording with valid laps"
 
 
 # The progress-summary trend word per library.track_summary["trend"]. "single"/"none" add nothing
@@ -1588,7 +1593,7 @@ class LibraryDialog(QDialog):
             return
         if entry is None:
             btn.setEnabled(False)
-            btn.setToolTip("")
+            btn.setToolTip(USE_AS_REFERENCE_REFUSED.format(reason=USE_AS_REFERENCE_NO_ROW))
             return
         reason = self._reference_reason(entry)
         btn.setVisible(reason != _library.REFERENCE_NO_SESSION)

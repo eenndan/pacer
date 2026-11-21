@@ -713,6 +713,35 @@ def test_a_reference_driven_the_other_way_round_is_refused():
     print(f"test_a_reference_driven_the_other_way_round_is_refused OK: {reason!r}")
 
 
+def test_a_refusal_names_the_reference_it_keeps():
+    """cool/reference-reasons-and-wording: a refusal adopts nothing, so with a reference already
+    loaded THAT reference stays the baseline — and the notice says so, rather than "keeping the
+    local best lap" (w19 QA: a second Library pick refused while the first stayed). Every guard's
+    sentence carries the tail, so two of them are checked here: the way round and the identity."""
+    primary, first = _way_round_pair(-1, -1)
+    assert primary.set_reference_session(first, source_label="recording 7114") is None
+    kept = primary.reference_label()
+    assert kept == "recording 7114", kept
+    _, reversed_ref = _way_round_pair(-1, 1)
+    reason = primary.set_reference_session(reversed_ref, source_label="recording 7110")
+    assert reason is not None and "driven the other way round" in reason, reason
+    assert reason.endswith("keeping the loaded reference (recording 7114)"), reason
+    assert "local best" not in reason, reason
+    assert primary.reference_label() == kept, "a refused pick never replaces the loaded reference"
+    give_paths(primary, "/recordings/GX017115.MP4")
+    same = make_session({4: odometer(400, 0.148, 0.0, 900.0)}, best=4, valid=[4],
+                        track=primary.track_name)
+    give_paths(same, "/recordings/GX017115.MP4")
+    reason = primary.set_reference_session(same)
+    assert reason is not None and "already have open" in reason, reason
+    assert "keeping the loaded reference (recording 7114)." in reason, reason
+    # ...and with none loaded, the tail is the local best lap, as it always was.
+    primary.clear_reference()
+    reason = primary.set_reference_session(reversed_ref)
+    assert reason is not None and reason.endswith("keeping the local best lap"), reason
+    print(f"test_a_refusal_names_the_reference_it_keeps OK: {reason!r}")
+
+
 def test_a_reference_driven_the_same_way_round_is_admitted():
     for way in (1, -1):
         primary, ref = _way_round_pair(way, way)
@@ -1283,6 +1312,93 @@ def test_the_librarys_reasons_are_the_loaders_own_words():
     empty = make_session({}, best=None, valid=[])
     assert library.REFERENCE_NO_LAPS in primary.set_reference_session(empty)
     assert not primary.has_reference()
+
+
+def _tiny_picture(path, truth, first_payload, n_payloads, ffmpeg):
+    """The synthetic GoPro's picture at 16x16: these recordings are read for telemetry only."""
+    import subprocess
+
+    from studio.dev import synth_gopro as sg
+    subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "color=c=0x1d2330:s=16x16:r=30000/1001",
+                    "-frames:v", str(n_payloads * sg.FRAMES_PER_PAYLOAD), "-c:v", "libx264",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-video_track_timescale", "30000", "-an", "-n", path],
+                   check=True, capture_output=True)
+
+
+def test_the_library_never_greys_a_row_for_a_reason_the_loader_would_not_give():
+    """cool/reference-reasons-and-wording, on REAL recordings through the real loader: the named
+    demo circuit (A) and an unnamed circuit ~160 km away (B), each driven both ways round. For every
+    pair, a row the Library greys is one the loader refuses FOR THE SAME REASON; a row it offers is
+    the loader's to decide. On main an unnamed other-circuit row driven the other way was greyed as
+    "driven the other way round", and the loader refused it as "different location"."""
+    import datetime as dt
+
+    from studio import chapters, library
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+
+    B = (45.2, -29.6)
+    plan = {  # name: (origin, mirror, reverse) — mirrored = the other way round from plain
+        "A": (make_demo.DEMO_ORIGIN, False, False), "A2": (make_demo.DEMO_ORIGIN, False, False),
+        "A_rev": (make_demo.DEMO_ORIGIN, False, True),
+        "B": (B, True, False), "B2": (B, True, False), "B_rev": (B, True, True),
+    }
+    keep = (sg.RECORDING_NUMBER, sg.START_UTC)
+    s, e = {}, {}
+    with tempfile.TemporaryDirectory(prefix="ref_reasons_") as tmp:
+        try:
+            for n, (name, (origin, mirror, reverse)) in enumerate(plan.items()):
+                sg.RECORDING_NUMBER = 7300 + n
+                sg.START_UTC = dt.datetime(2026, 10, 1 + n, 10, 0, tzinfo=dt.UTC)
+                rec = sg.generate(os.path.join(tmp, name), 300 + n, 5, chapters=1, origin=origin,
+                                  mirror=mirror, reverse=reverse, video=_tiny_picture)
+                s[name] = rec.paths
+        finally:
+            sg.RECORDING_NUMBER, sg.START_UTC = keep
+
+        def load(name):
+            return Session.load(chapters.discover_siblings(s[name][0]))
+        for name in plan:
+            e[name] = library._norm_entry(load(name).library_entry(s[name]))
+        assert e["A"]["track"] == e["A_rev"]["track"] == "Synthetic demo circuit"
+        assert e["B"]["track"] is None and e["B_rev"]["track"] is None
+        assert e["A"]["rotation"] == e["B_rev"]["rotation"] == -e["A_rev"]["rotation"] \
+            == -e["B"]["rotation"] != 0
+        renamed = {**e["A2"], "track": "Track B"}   # a second NAMED circuit, as a row would read
+
+        other_way = library.REFERENCE_OTHER_WAY
+        location = "different location"
+        cases = [  # (open, row, the Library's reason, a phrase of the loader's refusal | None)
+            ("A", "A2", None, None),                                    # named = , same way
+            ("A", "A_rev", other_way, other_way),                       # named = , other way
+            ("A", "renamed", library.REFERENCE_OTHER_TRACK, library.REFERENCE_OTHER_TRACK),
+            ("A", "B_rev", None, location),                 # unnamed row, other place, same way
+            ("A", "B", None, location),                     # unnamed row, other place, other way
+            ("B", "B2", None, None),                        # unnamed, same place, same way
+            ("B", "B_rev", None, other_way),                # unnamed, same place, other way
+            ("B", "A_rev", None, location),                 # unnamed open, other place, same way
+            ("B", "A", None, location),                     # unnamed open, other place, other way
+        ]
+        for opened, row, library_says, loader_says in cases:
+            entry = renamed if row == "renamed" else e[row]
+            why = library.reference_refusal(entry, e[opened])
+            primary = load(opened)
+            ref = load("A2" if row == "renamed" else row)
+            if row == "renamed":
+                ref.track_name = "Track B"
+            refusal = primary.set_reference_session(ref)
+            if library_says is None:
+                assert why is None, (opened, row, why)
+            else:
+                assert why is not None and why.startswith(library_says), (opened, row, why)
+                assert refusal is not None and library_says in refusal, (opened, row, refusal)
+            if loader_says is None:
+                assert refusal is None, (opened, row, refusal)
+            else:
+                assert refusal is not None and loader_says in refusal, (opened, row, refusal)
+    print("ok the Library's reasons: every greyed row is the loader's refusal, word for word")
 
 
 def test_a_reference_is_named_by_its_day_and_its_best_lap():

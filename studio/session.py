@@ -129,6 +129,9 @@ def _same_inputs(a, b) -> bool:
 # collide with a real lap id (>= 0). Exposed so plots_view can request/label the reference
 # curve without importing the ReferenceLap type.
 REFERENCE_ID = -1
+# The tail every reference refusal ends with while no reference is loaded; `set_reference_session`
+# names the loaded one instead when there is one.
+KEEPING_LOCAL_BEST = "keeping the local best lap"
 
 # Per-lap columns `_lap_columns` caches: (times, xs, ys, full_speed m/s, cum_distances).
 LapColumns = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
@@ -564,7 +567,23 @@ class Session:
     def set_reference_session(self, ref: Session, source_label: str = "") -> str | None:
         """Adopt an already-loaded `Session` as the reference (the guard + extraction half of
         `load_reference`, split out so tests can pass a synthetic reference Session without a
-        telemetry file). Returns None on success or the refusal reason."""
+        telemetry file). Returns None on success or the refusal reason.
+
+        A REFUSAL SAYS WHAT STAYS. Every guard's sentence ends "keeping the local best lap", which
+        is true only while no reference is loaded: a refusal returns before anything is adopted,
+        so with one loaded it is THAT reference the session keeps measuring against (w19 QA: a
+        second Library pick refused while the first stayed the baseline, the notice naming the
+        local best lap). The tail is rewritten here, once, for every guard."""
+        kept = self.reference_label() if self.has_reference() else None
+        reason = self._adopt_reference_session(ref, source_label)
+        if reason is not None and kept:
+            reason = (reason.replace(KEEPING_LOCAL_BEST, f"keeping the loaded reference ({kept})")
+                      .replace(KEEPING_LOCAL_BEST.capitalize(),
+                               f"Keeping the loaded reference ({kept})"))
+        return reason
+
+    def _adopt_reference_session(self, ref: Session, source_label: str) -> str | None:
+        """`set_reference_session`'s guards and adoption; a refusal adopts nothing."""
         # SEGMENT IT AS ITS OWNER DID, before any guard reads a lap off it. `Session.load` returns
         # telemetry with the loader's AUTO-FITTED start line; the line the user confirmed for that
         # recording lives in its sidecar and was, until QA W9-01, applied only by the primary
