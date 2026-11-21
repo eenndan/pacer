@@ -707,8 +707,8 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 # coaching. The two nearest codes are [x] (not available) and [z] (not applicable) and the lap is
 # NEITHER: it was measured, its time exists, the app shows it in the strip. It is simply not IN
 # the statistics. There is no standard symbol for "measured, shown, and deliberately not counted",
-# so ⊘ and its sentence stay, and the exports state the count in words (they never wrote an
-# excluded lap as a row in the first place). Naming this is the point of the table above: the
+# so ⊘ and its sentence stay, and the exports state the count and each lap's reason in words
+# (laps.csv in a trailer row, never a lap row; the report as a muted row). Naming this is the point of the table above: the
 # standard covers four of pacer's five quality conditions, and forcing the fifth would have made
 # the vocabulary less true, not more standard.
 #

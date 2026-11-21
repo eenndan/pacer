@@ -250,6 +250,47 @@ def test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that():
     print("test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that OK")
 
 
+def test_an_excluded_lap_is_named_in_the_csv_trailer_and_the_report():
+    """cool/csv-says-why-excluded: an EXCLUDED lap (⊘: stopped, off the band, not closed) had no
+    row and no note anywhere in laps.csv — on `redflag_stop` the file ran laps 1-6 then 8-14 and
+    nothing said lap 7 existed. The lap rows keep their promise (one row per VALID lap: a reader
+    summing `time_s` must not sum the stopped lap), so each excluded lap is a labelled TRAILER row
+    in lap order, with its time, and its kind (`excluded-<reason>`), distance and reason in the
+    note — ASCII, like every trailer row. The report's table shows it as a muted row with the
+    reason, in lap order, and its heading counts both."""
+    s = make_session()
+    s._valid_cache = [1, 2]
+    s._excluded_cache = [0]
+    s._excluded_reasons_cache = {0: "stopped"}
+    headers, rows = export_data.laps_table(s)
+    assert [lap_id for lap_id, _c in rows] == [1, 2], rows   # the lap rows: valid laps only
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "laps.csv")
+        export_data.write_laps_csv(path, s)
+        raw = open(path, "rb").read()
+    raw.decode("ascii")
+    table = list(csv.reader(raw.decode("ascii").splitlines()))
+    blank = table.index([])
+    assert [r[0] for r in table[1:blank]] == ["2", "3"], table[1:blank]
+    excl = [r for r in table[blank:] if r and r[0].startswith("summary: excluded lap")]
+    lap0 = s.excluded_lap_rows()[0]
+    assert excl == [["summary: excluded lap 1", f"{lap0['time']:.3f}", "",
+                     f"excluded-stopped: {lap0['dist']:.0f} m, the kart stopped during it"]], excl
+    # The report: the muted row sits FIRST (lap order), with its time, distance and reason.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "report.html")
+        export_data.write_report_html(path, s)
+        page = open(path, encoding="utf-8").read()
+    assert "Laps (2 valid · 1 excluded)" in page, page[page.find("<h2>Laps"):][:80]
+    laps = page[page.find('<table class="laps">'):]
+    laps = laps[:laps.find("</table>")]
+    body = [tr for tr in laps.split("<tr")[1:] if "<td" in tr]
+    assert body[0].startswith(' class="muted">') and "<td>1</td>" in body[0], body[0]
+    assert f"<td>{lap0['time']:.3f}</td>" in body[0] and "the kart stopped during it" in body[0]
+    assert len(body) == 3, body
+    print("test_an_excluded_lap_is_named_in_the_csv_trailer_and_the_report OK")
+
+
 def test_the_display_table_prints_the_apps_precision_from_the_raw_values():
     """cool/report-laps-precision: `display=True` (the report's copy) prints each kind of value at
     the app's precision — lap time 3, distance 0, speeds 1, splits and corner times PRINT_DECIMALS —
@@ -1162,6 +1203,7 @@ if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report()
     test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that()
+    test_an_excluded_lap_is_named_in_the_csv_trailer_and_the_report()
     test_the_display_table_prints_the_apps_precision_from_the_raw_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()
