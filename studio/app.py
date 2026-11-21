@@ -3672,18 +3672,19 @@ class StudioWindow(QMainWindow):
         d = PRINT_DECIMALS
         if v.is_typical:
             return f"; its {label} pass ({v.pass_s:.{d}f}) is your typical pass there"
+        # The typical pass's lap and time sit right beside "your typical pass", never after the
+        # luck clause (0.21.0 QA: "(lap 1, 2.40)" trailed a whole clause away from what it named).
+        typical = (f"your typical pass (lap {lap_label(v.typical_lap_id)}, "
+                   f"{v.typical_pass_s:.{d}f})")
         if v.level and v.luck_s > 0 and not is_level(v.gap_s, v.level_s):
             # level only through the quickest pass's luck (`stats.quickest_luck_s`): say so
-            how = (f"level with your typical pass within {with_luck(v.level_s, v.luck_s):.3f} s, "
-                   f"the step plus what the quickest of {plural(v.n, 'pass', 'passes')} reads quick "
-                   "by luck alone")
+            how = (f"level with {typical} within {with_luck(v.level_s, v.luck_s):.3f} s, the step "
+                   f"plus luck for the quickest of {plural(v.n, 'pass', 'passes')}")
         elif v.level:
-            how = "level with your typical pass"
+            how = f"level with {typical}"
         else:
-            how = "quicker than your typical pass" if v.gap_s > 0 else (
-                "slower than your typical pass")
-        return (f"; its {label} pass ({v.pass_s:.{d}f}) is {how} (lap "
-                f"{lap_label(v.typical_lap_id)}, {v.typical_pass_s:.{d}f})")
+            how = f"{'quicker' if v.gap_s > 0 else 'slower'} than {typical}"
+        return f"; its {label} pass ({v.pass_s:.{d}f}) is {how}"
 
     def _reveal_jump_corner(self, cid: int, compare_ended: bool = False):
         """Point at the row the jump landed on: scroll corner `cid` to the middle of the Corners

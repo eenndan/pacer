@@ -2691,9 +2691,10 @@ CORNER_DELTA_LEVEL_NOTE = (f"A gap under {PB_PRECISION_S:.2f} s is inside timing
                            f"is not coloured as a difference. {stats_service.STEP_COVERS_PASS}")
 # ...and against another recording's lap, whose step is `stats.corner_delta_step(True)` (the same
 # step at the one reference: one lap's corner time against another recording's reads less apart).
+# The bound is said ONCE, by STEP_COVERS_REFERENCE (0.21.0 QA: a second "reads up to that far
+# apart" of the step itself gave the hover two bounds, 0.07 and 0.06 s, for one difference).
 CORNER_DELTA_REF_LEVEL_NOTE = (
-    f"A gap under {stats_service.corner_delta_step(True):.2f} s is not coloured: one lap's corner "
-    "time against one lap of another recording reads up to that far apart with nothing changed. "
+    f"A gap under {stats_service.corner_delta_step(True):.2f} s is not coloured as a difference. "
     f"{stats_service.STEP_COVERS_REFERENCE}")
 
 
