@@ -555,6 +555,8 @@ class Session:
         the reference's OWN saved timing lines before any guard reads a lap off it, so a
         recording is banded on the segmentation its owner confirmed rather than on the loader's
         auto-fitted guess."""
+        if data_quality.no_start_line(self):   # nothing to compare with: don't even read it
+            return data_quality.NO_GPS_NO_REFERENCE
         try:
             ref = Session.load(paths)
         except Exception as exc:  # noqa: BLE001 — a bad reference must never break the session
@@ -574,7 +576,13 @@ class Session:
         is true only while no reference is loaded: a refusal returns before anything is adopted,
         so with one loaded it is THAT reference the session keeps measuring against (w19 QA: a
         second Library pick refused while the first stayed the baseline, the notice naming the
-        local best lap). The tail is rewritten here, once, for every guard."""
+        local best lap). The tail is rewritten here, once, for every guard.
+
+        A recording with no GPS (`data_quality.no_start_line`) takes none, whatever is offered: it
+        has no location to match and no best lap to measure against, so the track guard's
+        "different location; keeping the local best lap" would name two things it does not have."""
+        if data_quality.no_start_line(self):
+            return data_quality.NO_GPS_NO_REFERENCE
         kept = self.reference_kept()
         reason = self._adopt_reference_session(ref, source_label)
         if reason is not None and kept != KEEPING_LOCAL_BEST:
@@ -2180,8 +2188,8 @@ class Session:
         (`load.load_recording`, the ChapterMap offsets) and `_gps9_times` re-anchors the run that
         starts at the join to that media start, so the kept-point times step by one fix across it,
         never by the missing chapter's minutes. The join is placed on the telemetry axis from its
-        offset through the recording's two-clock map (the GPS lag is a latency of the picture,
-        not of the data, so it is left out). A lap holds a join when its first point is before it
+        offset through the STAMP map (`without_gps_lag`, declared in tests/test_media_clock.py
+        CROSSINGS: the offset is a footage stamp, not an event in the picture). A lap holds a join when its first point is before it
         and its last after it. Memoized against the `valid_lap_ids` list, like `off_line_metres`."""
         valid = self.valid_lap_ids()
         memo = getattr(self, "_gap_notes_memo", None)
@@ -2192,8 +2200,10 @@ class Session:
         parts = getattr(cmap, "chapters", None) or []
         joins = chapters.gap_joins([c.path for c in parts]) if len(parts) > 1 else []
         if joins:
-            clock = media_clock.clock_of(cmap).without_gps_lag()
-            at = [(float(clock.to_telemetry(parts[k].offset)), missing) for k, missing in joins]
+            # The STAMP map (media_clock 'WHICH MAP'): a chapter offset is a footage stamp — where
+            # the data stream of the next chapter starts — not an event in the picture.
+            at = [(float(media_clock.clock_of(cmap).without_gps_lag().to_telemetry(
+                parts[k].offset)), missing) for k, missing in joins]
             for i in valid:
                 t = self._lap_point_times(i)
                 if len(t) < 2:

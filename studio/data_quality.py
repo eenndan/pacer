@@ -121,6 +121,11 @@ NO_LAPS_ALT_ACTION = "If it is the wrong recording, open another with ⌘O."
 # over an empty map). The cause is known, so it is stated instead — with what still works. Also
 # the hover of the map's line tools, which a recording with no trace disables.
 NO_LAPS_NO_GPS_BODY = "This recording has no GPS, so no lap can be timed; the video still plays."
+# ...and why such a recording takes no REFERENCE: a reference is matched by location and measured
+# against a best lap, and it has neither. Picking the demo used to answer "these don't look like
+# the same track (different location); keeping the local best lap" — no location, no best lap.
+# The hover of the reference items it disables, and the refusal for any other way in.
+NO_GPS_NO_REFERENCE = "This recording has no GPS, so there is nothing to compare a reference with."
 
 
 def no_laps_body(crossings: int | None = None) -> str:
