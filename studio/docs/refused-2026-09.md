@@ -2801,7 +2801,7 @@ read's false-call share to 5 %, measured on these days.
 
 ---
 
-## 39. A luck allowance on Coaching's time lost, the biggest-loss moment, the share card's opportunity and the sector-best hover — refused (cool/luck-other-surfaces)
+## 39. A luck allowance on the ideal lap's gap, Coaching's time lost, the biggest-loss moment, the share card's opportunity and the sector-best hover — refused (cool/luck-other-surfaces)
 
 **The idea.** v0.21.0 (#670) gave the quickest of n passes its luck where a gap is read off it
 (`stats.quickest_luck_s`). DECISIONS §24 listed the other surfaces that read a figure off a selected
@@ -2817,9 +2817,12 @@ bias, or make the figure clear the step plus it.
   ranked row.
 - **The Stats sector hover.** "… +x.xx s against the sector best (… s, lap N)" is a split minus
   the column's quickest.
+- **The ideal lap's gap.** "on the table · vs your best" is the best lap minus a SUM OF MINIMA,
+  one per corner and straight, each the quickest any clean lap was timed through it. The minimum
+  keeps every piece's luckiest timing, so the gap reads too large. The idea was to print that bias
+  beside the gap (#673, closed on review).
 
-The ideal lap's gap, the fifth surface on §24's list, was measured the same way and its allowance
-shipped (cool/luck-ideal-gap, #673). The other four are below.
+The first four are one table; the ideal lap, the largest, has its own below.
 
 **How it was measured.** `studio/dev/probes/selection_surfaces.py`. Each figure is read through the
 app's own accessor (`coaching_opportunities`, `session_moments`, `share_card.card_data`,
@@ -2843,7 +2846,45 @@ that lap left out: a day without an off is the one where selection decides it.
 The ideal lap's gap, on the same days: +0.173 s, 37 % of the 0.467 s shown, past 0.07 s on 40 of
 40 days.
 
-**What stops it.**
+**The ideal lap's gap: measured, and still no figure.** Same probe and days. For n under 14,
+each day draws 24 seeded sets of n laps, the best lap the quickest of them as timed, and both
+composites are re-taken over the same admitted and resolved cells, on the app and on the truth.
+
+| n laps | 2 | 3 | 4 | 5 | 7 | 9 | 11 | 13 | 14 |
+|---|---|---|---|---|---|---|---|---|---|
+| gap shown, C's noise (40 days) | 0.143 | 0.219 | 0.275 | 0.312 | 0.371 | 0.404 | 0.437 | 0.457 | 0.467 s |
+| true gap | 0.092 | 0.141 | 0.176 | 0.200 | 0.237 | 0.260 | 0.277 | 0.289 | 0.294 s |
+| **bias, C's noise** (se ≤ 0.002; 0.008 at 14) | **0.051** | **0.078** | **0.099** | **0.112** | **0.134** | **0.145** | **0.159** | **0.168** | **0.173 s** |
+| **bias, B's noise** (synthetic 4.0, 10 days, se ≤ 0.007; 0.021 at 14) | **0.183** | **0.264** | **0.342** | **0.385** | **0.445** | **0.489** | **0.527** | **0.554** | **0.569 s** |
+
+- At 14 laps the bias is 37 % of the gap shown at C's noise (0.11–0.27 s over days, 5–95 %),
+  past 0.07 s on 40 of 40 days and past half the true gap on 23. At B's noise it is 64 % of a
+  0.887 s gap, past half the true gap on 10 of 10 days.
+- **By piece count, at 14 laps and C's noise.** MEASURED by merging adjacent pieces of the same
+  laps into a coarser partition of the same circuit: 15 pieces 0.173 s, 8 pieces 0.089 s, 5 pieces
+  0.032 s, steeper than in proportion. A track with more pieces than the demo's 15 cannot be cut
+  from these days: MODELLED only, by an independent Gaussian sum of minima built from these days'
+  per-piece driving and noise (diagonal, which reads 0.103 s at 15 pieces against the measured
+  0.173): 0.050 / 0.103 / 0.200 s at 9 / 15 / 25 pieces.
+- **Beyond 14 laps** nothing was measured (a synthetic day is 14 laps). The same model reads
+  0.196 s at 30 laps and 0.221 s at 62, against 0.164 s at 14.
+- On days with one lap's C4 planted quicker by a true 0.10 / 0.15 / 0.20 s (8 each) the bias is
+  +0.165 / +0.160 / +0.158 s: it does not go away when there is something to find.
+
+**Why no figure, even so.** No single number is true across recordings, piece counts and lap
+counts: the same 14 laps read 0.17 s at C's noise and 0.57 s at B's, a coarser cut of the same
+laps reads half or a fifth of it, and a lap count under five reads down to half of the five-lap value. A
+figure fitted at one of them, as #673 printed ("about 0.17 s", held below five laps, scaled by
+piece count), overstates or understates the rest by up to a factor of three, and no recording can
+say which noise it was driven at (falsification-2026-09.md §1, its last paragraph). This upholds
+that standing rule: a synthetic minimum's bias "transfers only as far as the synthetic noise model
+does, so no surface may print it (review §7)". **What shipped instead** is one figure-free clause
+at the end of the ideal lap's sample sentence (`corner_model.IDEAL_NOISE_CLAUSE`: the Stats line
+under the tiles, the report and laps.csv), which says what the tiles' hover already says: "GPS
+noise lowers it too: a minimum keeps each piece's luckiest timing, so part of the gap is timing
+luck, not time to find, and no single recording can measure how much."
+
+**What stops the other four.**
 
 1. **The bias is under the step on every surface but the hover, and the hover's own step is
    0.30 s.** On the corner surfaces the selection is +0.008 to +0.019 s. No Coaching row, first row
@@ -2857,7 +2898,7 @@ The ideal lap's gap, on the same days: +0.173 s, 37 % of the 0.467 s shown, past
    - Each says "vs your best lap", "over your typical pass" or "against the sector best", which is
      true as timed. Subtracting an allowance would print a number no two cells on screen give.
    - The ideal lap is the exception, because it says "on the table" and is a sum over 15 minima:
-     there the bias is a third of the figure.
+     there the bias is a third of the figure, which is why its sample line now says so in words.
 3. **The hover's 423 cells past 0.07 s are mostly the split's own noise, not selection.**
    - The error's sd is 0.050 s against a bias of 0.032 s. With the bias removed and the same
      spread, about one cell in twelve would still pass 0.07 s (a normal approximation, not
@@ -2872,8 +2913,8 @@ The ideal lap's gap, on the same days: +0.173 s, 37 % of the 0.467 s shown, past
      question to the owner (should Coaching rank corners that lose under 0.07 s?). Subtracting a
      constant 0.008 s from every row leaves the order as it was.
 
-**What moves because of this refusal: nothing in the app.** The four surfaces keep their figures and
-their words.
+**What moves because of this refusal.** The four surfaces keep their figures and their words. The
+ideal lap keeps its figures; its sample sentence gains the figure-free clause above.
 
 **Re-run it:** `pixi run python -m studio.dev.probes.selection_surfaces` (or one process per
 `--set-index`, then `--summarize` over their logs).
@@ -2884,7 +2925,10 @@ their words.
 - a re-measured sector step near 0.10 s (§26's clause), under which the hover's +0.032 s would be a
   third of the step;
 - or a surface that starts calling these figures "on the table" or "available", as the ideal lap
-  does.
+  does;
+- for the ideal lap: a way to read a recording's own noise level and its piece count's effect, so
+  that a figure is true of the session it is printed on (falsification-2026-09.md §1's
+  per-recording estimator failed that check).
 
 ---
 

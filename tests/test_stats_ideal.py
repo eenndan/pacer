@@ -436,7 +436,9 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
       (1) the sentence is the one TRUTH-3's recorded verdict calls for, pinned verbatim;
       (2) it carries no figure, and no tooltip, caption or line of the block prints a bias figure
           or a value from the truth matrix's table (a synthetic's seconds are not a recording's,
-          review §7); the tiles print the raw ideal, no correction;
+          review §7); the tiles print the raw ideal, no correction. The sample line's own noise
+          clause (`corner_model.IDEAL_NOISE_CLAUSE`, cool/luck-other-surfaces) carries no numeral at
+          all and says what the tooltips say: no single recording can measure how much;
       (3) every "time you have already demonstrated" is followed by it.
     Each check carries a plant it must catch."""
     _app()
@@ -481,8 +483,16 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
         return (re.findall(r"\d+(?:\.\d+)?\s*ms\b", text)
                 + [f"{v:.3f}" for v in table if re.search(rf"(?<![\d.]){v:.3f}(?!\d)", text)])
     assert not re.search(r"\d", IDEAL_NOISE_SENTENCE), IDEAL_NOISE_SENTENCE
+    from studio.corner_model import IDEAL_NOISE_CLAUSE
+    assert not re.search(r"\d", IDEAL_NOISE_CLAUSE), IDEAL_NOISE_CLAUSE
+    for words in ("no single recording can measure", "luck"):
+        assert words in IDEAL_NOISE_CLAUSE, (words, IDEAL_NOISE_CLAUSE)
+    assert "no single recording can measure" in IDEAL_NOISE_SENTENCE, "the two must agree"
     v = StatsView(_fake_view_session())
     sb = v.session.ideal_segment_bests()
+    # the sample line ends with the clause: the one noise sentence it carries
+    assert v.ideal.sample.text().endswith(" " + IDEAL_NOISE_CLAUSE), v.ideal.sample.text()
+    assert v.ideal.sample.text() == sb.sample.sentence(), v.ideal.sample.text()
     surfaces = {"IDEAL_SAMPLE_TOOLTIP": IDEAL_SAMPLE_TOOLTIP,
                 "the ideal tile": (v.ideal.t_theoretical.toolTip() + "\n"
                                    + v.ideal.t_theoretical.caption.text()),
@@ -495,6 +505,8 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
     assert v.ideal.t_theoretical.value.text() == fmt_time(sb.total), (
         v.ideal.t_theoretical.value.text(), fmt_time(sb.total))
     assert v.ideal.t_gap.value.text() == f"{best - sb.total:.2f} s", v.ideal.t_gap.value.text()
+    planted = IDEAL_NOISE_CLAUSE.replace("part of the gap", "about 0.17 s of the gap")
+    assert planted != IDEAL_NOISE_CLAUSE and re.search(r"\d", planted), "clause plant not caught"
     row3 = next(r for r in tm.ROWS if (r.stat, r.level) == ("ideal.mean_bias", 2.0))
     for plant in (f"{round(1000 * row3.measured)} ms", f"{row3.measured:.3f} s"):
         planted = IDEAL_SAMPLE_TOOLTIP.replace("tends to read too fast",

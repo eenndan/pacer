@@ -55,7 +55,10 @@ seeds' truth runs from −9 to −136 ms.
 −3.6 ms on the held-out ones, within ±12 ms either way. It reads fast from noise 1 upward. The
 pooled calibration in `tests/test_truth_matrix.py` puts the owner's lap σ at synthetic noise 2 to
 7, where the synthetic minimum reads fast by tenths of a second. That transfers only as far as the
-synthetic noise model does, so no surface may print it (review §7).
+synthetic noise model does, so no surface may print it (review §7). Re-measured on 40 synthetic
+days at recording C's noise (cool/luck-other-surfaces), the gap to the ideal reads 0.17 s too large
+at 14 laps, 0.57 s at B's noise, and moves with lap and piece count, so the rule holds and a printed
+figure was refused again: refused-2026-09.md §39.
 
 ## 2. One falsification line per headline number (output b)
 

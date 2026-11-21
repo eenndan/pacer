@@ -79,7 +79,6 @@ sidecar.save = lambda *a, **k: None   # nothing is ever written beside a recordi
 SECTOR_STRAIGHTS = (1, 3, 5)
 DRAWS = 24                 # seeded draws of n laps per day and n below the full count
 TRUE_LEVEL_S = 0.03        # a true gap this small is no difference a driver could act on
-CHECK_SEEDS = (401, 402, 403, 404)   # the small set tests/test_stats_ideal.py re-measures
 
 
 def _r(x) -> float | None:
@@ -213,16 +212,23 @@ def _composite(app, true, mask, rows) -> tuple[float, float] | None:
     return ai, ti
 
 
-def ideal_rows(day: dict, n: int, rng) -> list[dict]:
+def _merged(a: np.ndarray, group: int, reduce=np.add.reduceat) -> np.ndarray:
+    """`a`'s columns merged `group` adjacent pieces at a time (the last group takes the rest): the
+    same laps over a coarser partition of the same circuit."""
+    return a if group == 1 else reduce(a, np.arange(0, a.shape[1], group), axis=1)
+
+
+def ideal_rows(day: dict, n: int | None, rng, group: int = 1) -> list[dict]:
     """Per draw of n of the day's laps: the app's gap (quickest as timed − app composite), the true
-    gap (that lap's true time − true composite), each composite's error and each gap's."""
+    gap (that lap's true time − true composite), each composite's error and each gap's. `group` > 1
+    merges adjacent pieces first (`_merged`): fewer pieces, same circuit, same laps."""
     rec = day.get("ideal")
     if not rec or rec["single_donor"]:
         return []
     ids = rec["lap_ids"]
-    app = np.array(rec["app"], float)
-    true = np.array(rec["true"], float)
-    mask = np.array(rec["mask"], bool)
+    app = _merged(np.array(rec["app"], float), group)
+    true = _merged(np.array(rec["true"], float), group)
+    mask = _merged(np.array(rec["mask"], bool), group, np.logical_and.reduceat)
     lap_app = {int(k): v for k, v in day["lap_app"].items()}
     lap_true = {int(k): v for k, v in day["lap_true"].items()}
     usable = [r for r, i in enumerate(ids) if i in lap_app and np.isfinite(true[r]).all()]
@@ -265,14 +271,14 @@ def summarize_ideal(days: list[dict]) -> dict:
     by_n: dict[int, list[dict]] = {}
     for d in free:
         rng = np.random.default_rng([d["seed"], 77])
-        for n in range(stats.MATRIX_MIN_LAPS, 15):
+        for n in range(2, 15):
             by_n.setdefault(n, []).extend(ideal_rows(d, n, rng))
     bias = {n: {"draws": len(v), **{k: _stats([x[k] for x in v])["mean"] for k in
                                     ("gap_app", "gap_true", "ideal_err", "best_err")},
                 "gap_err": _stats([x["gap_app"] - x["gap_true"] for x in v])}
             for n, v in sorted(by_n.items()) if v}
     # fit the gap's bias a + b·blom(n), weighted by draws (n with ≥ 100 draws)
-    ns = [n for n in bias if bias[n]["draws"] >= 100] or list(bias)
+    ns = [n for n in bias if bias[n]["draws"] >= 100 and n >= stats.MATRIX_MIN_LAPS] or list(bias)
     w = np.array([bias[n]["draws"] for n in ns], float)
     x = np.array([blom(n) for n in ns])
     y = np.array([bias[n]["gap_err"]["mean"] for n in ns])
@@ -302,7 +308,14 @@ def summarize_ideal(days: list[dict]) -> dict:
                      "true_gap": _stats([x["gap_true"] for x in v])["mean"],
                      "gap_err": _stats([x["gap_app"] - x["gap_true"] for x in v])["mean"]}
                  for g, v in sorted(planted.items())}
-    return {"bias_by_n": bias,
+    pieces = {}
+    for group in (1, 2, 3):
+        rows = [r[0] for r in (ideal_rows(d, None, None, group) for d in free) if r]
+        k = len(range(0, free[0]["ideal"]["segments"], group)) if free else 0
+        pieces[k] = {"days": len(rows),
+                     "gap_err": _stats([x["gap_app"] - x["gap_true"] for x in rows]),
+                     "app_gap": _stats([x["gap_app"] for x in rows])["mean"] if rows else None}
+    return {"bias_by_n": bias, "by_pieces_at_full_count": pieces,
             "fit": {"a": round(float(a), 4), "b": round(float(b), 4), "n": [min(ns), max(ns)],
                     "residual_by_n": {int(n): round(float(r_), 4) for n, r_ in zip(ns, res,
                                                                                    strict=True)}},
@@ -463,26 +476,9 @@ def summarize_card(days: list[dict]) -> dict:
     return {"days": n, "card_gap_is_ideal_gap": same_gap, "card_top_is_coaching_lead": same_top}
 
 
-def measure_ideal_bias(work: str, noise: float, seeds, ns) -> dict[int, float]:
-    """{n: the ideal gap's mean app − truth} over habit-free days at `seeds` — the test's check."""
-    days = []
-    for k, seed in enumerate(seeds):
-        days.append(day_record(work, noise, seed, k + 1))
-        for name in os.listdir(work):
-            shutil.rmtree(os.path.join(work, name), ignore_errors=True)
-    by_n = summarize_ideal(days)["bias_by_n"]
-    return {n: by_n[n]["gap_err"]["mean"] for n in ns if n in by_n}
-
-
 def summarize(days: list[dict]) -> dict:
-    """Every surface's figures, and at the reference noise whether the fit the app ships is this
-    probe's (`stats._IDEAL_LUCK_FIT`)."""
-    out = _summarize(days)
-    fit = out["ideal"]["fit"]
-    if {d["noise"] for d in days} == {REFERENCE_NOISE} and len(days) >= 40:
-        shipped = getattr(stats, "_IDEAL_LUCK_FIT", None)   # None on a tree before the fit
-        out["ideal"]["app_fit_is_this_fit"] = shipped == (fit["a"], fit["b"])
-    return out
+    """Every surface's figures (refused-2026-09.md §39 is their table)."""
+    return _summarize(days)
 
 
 def _summarize(days: list[dict]) -> dict:

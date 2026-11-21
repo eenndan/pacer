@@ -202,6 +202,16 @@ MAX_DONOR_SPAN_DEV = 0.05
 # all three fixtures the best lap is admitted on all 25 segments, so its decomposition drops no
 # row. Measured 2026-09-17; the full refusal is in studio/docs/refused-2026-09.md.
 
+# THE NOISE CLAUSE THE SAMPLE SENTENCE ENDS WITH (cool/luck-other-surfaces). The sample line was
+# where the gap is read and said nothing of GPS noise; only the tiles' hover did
+# (stats_ideal.IDEAL_NOISE_SENTENCE). This says the same thing in one plain clause, with NO FIGURE:
+# the gap's selection bias was measured (studio/dev/probes/selection_surfaces.py: +0.17 s at 14
+# laps at recording C's noise, +0.57 s at B's, and it moves with piece and lap count), and no one
+# figure is true across them — refused-2026-09.md §39, upholding falsification-2026-09.md §1.
+IDEAL_NOISE_CLAUSE = ("GPS noise lowers it too: a minimum keeps each piece's luckiest timing, so "
+                      "part of the gap is timing luck, not time to find, and no single recording "
+                      "can measure how much.")
+
 
 class IdealSample(NamedTuple):
     """WHAT THE IDEAL LAP WAS MINIMISED OVER — the four counts any surface printing the composite
@@ -370,7 +380,7 @@ class IdealSample(NamedTuple):
                 f"{plural(self.corners, 'corner')} and {plural(self.straights, 'straight')} Pacer "
                 "found here. Both counts set it: the ideal is the minimum over those laps of those "
                 "pieces, so more laps find a lower one and a different set of corners cuts it "
-                "differently.")
+                "differently. " + IDEAL_NOISE_CLAUSE)
 
 
 @dataclass(frozen=True)
