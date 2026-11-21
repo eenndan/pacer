@@ -1445,8 +1445,16 @@ def reference_refusal(entry: dict, open_entry: dict | None) -> str | None:
     """Why the Library row `entry` can't be the reference of the session whose own entry is
     `open_entry` (None: no session open), or None when it may be offered. Only what a ROW can know:
     the same outing (by fingerprint, or by a shared chapter file), its footage gone, a different
-    NAMED track, a way round KNOWN to differ (``other_way``), no laps. An unnamed track on either
-    side is offered — the loader matches it by location."""
+    NAMED track, no laps, a way round KNOWN to differ (``other_way``) on the SAME named track —
+    the loader's own order (`Session.set_reference_session`), so a row never shows a reason the
+    loader would not give for that recording.
+
+    AN UNNAMED TRACK ON EITHER SIDE IS NEVER REFUSED FOR ITS WAY ROUND. The loader decides that
+    pair by location before direction (`Session._track_admits_reference`), and a row stores no
+    location to repeat the test with — so a new circuit's other-way row could be the same tarmac
+    (refused for direction) or a circuit 160 km away (refused for location), and only the loader can
+    tell which (w19 QA: an unnamed other-circuit row was greyed as "driven the other way round" and
+    the loader refused it as "different location"). It is offered, and the loader says why."""
     if open_entry is None:
         return REFERENCE_NO_SESSION
     fp = entry.get("fingerprint")
@@ -1462,12 +1470,12 @@ def reference_refusal(entry: dict, open_entry: dict | None) -> str | None:
     track, open_track = entry.get("track"), open_entry.get("track")
     if track and open_track and track != open_track:
         return f"{REFERENCE_OTHER_TRACK} ({track})"
-    rotation = rotation_of(open_entry)
-    if other_way(entry, rotation):
-        return (f"{REFERENCE_OTHER_WAY} ({ROTATION_WORDS[rotation_of(entry)]}; the open session "
-                f"runs {ROTATION_WORDS[rotation]})")
     if not entry.get("lap_count"):
         return REFERENCE_NO_LAPS
+    rotation = rotation_of(open_entry)
+    if track and track == open_track and other_way(entry, rotation):
+        return (f"{REFERENCE_OTHER_WAY} ({ROTATION_WORDS[rotation_of(entry)]}; the open session "
+                f"runs {ROTATION_WORDS[rotation]})")
     return None
 
 

@@ -533,6 +533,24 @@ def test_a_reference_landing_during_a_primary_reload_does_not_raise_in_its_queue
     print("test_a_reference_landing_during_a_primary_reload_does_not_raise_in_its_queued_slot OK")
 
 
+def test_compare_vs_reference_with_none_loaded_names_the_real_menu():
+    """cool/reference-reasons-and-wording: the notice named "File ▸ Load reference recording…";
+    the item is the Coaching menu's. It names the menu the item really lives in, read off the real
+    menu bar, and the Library's route."""
+    win, _view = _window(build_menu=True)
+    try:
+        win.session.reference_session = lambda: None
+        DIALOGS.clear()
+        win._enter_cross_compare()
+        coaching = next(a.menu() for a in win.menuBar().actions()
+                        if a.menu() is not None and win._ref_action in a.menu().actions())
+        said = DIALOGS[-1][1]
+        assert f"{coaching.title().replace('&', '')} ▸ {win._ref_action.text()}" in said, said
+        assert "Use as reference on a Library row" in said and "File ▸" not in said, said
+    finally:
+        _teardown(win)
+
+
 def test_a_reference_that_lands_while_a_new_recording_is_opening_is_refused_not_swallowed():
     """A reference is attached to a SESSION, so one that lands while a PRIMARY load is in flight has
     nowhere to go: `self.session` is the outgoing session, and the reload replaces it.

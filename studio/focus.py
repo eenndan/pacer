@@ -645,12 +645,18 @@ class Report:
     track: str | None
     outcomes: list[Outcome] = field(default_factory=list)
     # The sessions a BLOCK_NO_RECORD refusal is waiting on, as (fingerprint, "19 Jul" | "today"):
-    # the earlier days first in list order, today last, each once. Exactly what the focus block's
-    # one-click "Mark both dry" offers to write — and nothing it may not (`mark_dry_prompt`).
+    # the earlier days first in list order, today last, each once. A label is its session's DAY
+    # (`_day_label`); the session in front of the driver is "today" beside earlier days, as every
+    # line here calls it, and its own date beside sessions of that date. Exactly what the focus
+    # block's one-click "Mark both dry" offers to write — and nothing it may not
+    # (`mark_dry_prompt`).
     unrecorded: tuple[tuple[str, str], ...] = ()
     # Why no corner of THIS session may join the list (`baseline_refusal`: its timing, or a baseline
     # on the list recorded after it), or "" when one may.
     baseline_refusal: str = ""
+    # The session in front of the driver (its fingerprint), so a line about several corners can
+    # tell it apart from their baselines in `unrecorded`.
+    now_fingerprint: str = ""
 
     @property
     def active(self) -> bool:
@@ -809,10 +815,79 @@ def _same_day(item: FocusItem, now_ctx: dict) -> str:
     return "today" if then == datetime.date.today() else f"on {_when(item.date)}"
 
 
-def _no_record_sentence(detail: str, same_day: bool) -> str:
-    """BLOCK_NO_RECORD's reason, after "can't say." — one sentence for a corner and for a list."""
-    alike = ("the two sessions were comparable" if same_day
-             else "the two days were comparable")
+def _day_label(date: str | None) -> str:
+    """A session's day in the mark offer's words: "today" when it is the calendar's today, else
+    `_when`'s "13 Sep"."""
+    day = _day(date)
+    return "today" if day is not None and day == datetime.date.today() else _when(date)
+
+
+def _on_day(label: str) -> str:
+    """"today" / "on 13 Sep" for a `_day_label`."""
+    return label if label == "today" else f"on {label}"
+
+
+def sessions_named(labels: list[str]) -> str:
+    """The sessions behind `labels` (`Report.unrecorded`'s day labels, earlier days first) as one
+    phrase, each day said once: "13 Sep and today", "both sessions on 13 Sep", "all 3 sessions on
+    13 Sep", "the 2 sessions on 13 Sep and today's". Listing every label read "13 Sep, 13 Sep and
+    today" for two sessions of one race day (w19 QA)."""
+    days: dict[str, int] = {}
+    for label in labels:
+        days[label] = days.get(label, 0) + 1
+    if len(days) == 1:
+        (label, n), = days.items()
+        if n == 1:
+            return label
+        if n == 2:
+            return f"both sessions {_on_day(label)}"
+        return f"all {n} sessions {_on_day(label)}"
+    if all(n == 1 for n in days.values()):
+        names = list(days)
+        return ", ".join(names[:-1]) + f" and {names[-1]}"
+    parts = []
+    for label, n in days.items():
+        if n == 1:
+            parts.append("today's" if label == "today" else f"the session on {label}")
+        else:
+            parts.append(f"the {n} sessions {_on_day(label)}")
+    return ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+
+def _same_day_detail(report: Report, outcomes: list[Outcome]) -> str:
+    """BLOCK_NO_RECORD's detail for SEVERAL corners whose baselines all share the session's date,
+    counted over every session they involve: with two focus baselines from earlier that day, the
+    per-corner "either session on 13 Sep" spoke of three sessions, and "the earlier session" of
+    two (w19 QA)."""
+    on = _on_day(_day_label(outcomes[0].item.date))
+    waiting = {fp for fp, _label in report.unrecorded}
+    baselines = {o.item.fingerprint for o in outcomes}
+    n_all, n_blank = len(baselines), len(waiting & baselines)
+    now_has_record = report.now_fingerprint not in waiting
+    if n_blank == n_all and not now_has_record:
+        sessions = n_all + 1                      # the baselines and this one
+        if sessions == 2:
+            return f"either session {on}"
+        return f"any of the {sessions} sessions {on}"
+    parts = []
+    if n_blank == n_all:
+        parts.append(f"the earlier session {on}" if n_all == 1 else f"the earlier sessions {on}")
+    elif n_blank:
+        parts.append(f"{n_blank} of the {n_all} earlier sessions {on}")
+    if not now_has_record:
+        parts.append("this session")
+    return " and ".join(parts)
+
+
+def _no_record_sentence(detail: str, same_day: bool, sessions: int = 2) -> str:
+    """BLOCK_NO_RECORD's reason, after "can't say." — one sentence for a corner and for a list
+    (`sessions`: how many sessions of one day the line spans; two for a corner)."""
+    if not same_day:
+        alike = "the two days were comparable"
+    elif sessions == 2:
+        alike = "the two sessions were comparable"
+    else:
+        alike = f"the {sessions} sessions were comparable"
     return (f"There's no session record for {detail}, so nothing says {alike}; a coach will put "
             f"up to 4 s a lap on conditions alone.")
 
@@ -844,7 +919,7 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         block, detail = _blocker(item, now_ctx, rec_then, rec_now)
         if block:
             if block == BLOCK_NO_RECORD and item.fingerprint and session_record.is_empty(rec_then):
-                unrecorded.setdefault(item.fingerprint, _when(item.date))
+                unrecorded.setdefault(item.fingerprint, _day_label(item.date))
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
                                     blocker=block, detail=detail,
                                     same_day=block == BLOCK_NO_RECORD
@@ -884,12 +959,18 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
             kind = OUTCOME_IMPROVED if delta < 0 else OUTCOME_SLOWER
         outcomes.append(Outcome(item=item, kind=kind, now=now, delta=float(delta),
                                 karts=session_record.kart_pair(rec_then, rec_now)))
-    if any(o.blocker == BLOCK_NO_RECORD for o in outcomes) and now_fp \
-            and session_record.is_empty(rec_now):
-        unrecorded.setdefault(now_fp, "today")
+    waiting = [o for o in outcomes if o.blocker == BLOCK_NO_RECORD]
+    if waiting and now_fp and session_record.is_empty(rec_now):
+        # "today" is this module's word for the session in front of the driver beside an EARLIER
+        # DAY ("13 Sep and today"). Beside sessions of its OWN date only, it is that date — unless
+        # the date is the calendar's today: "Mark today dry" on a 13 Sep session named a day it
+        # was not (w19 QA), and the refusal line above it already says "this session".
+        same_day = all(o.same_day for o in waiting)
+        unrecorded.setdefault(now_fp, _day_label(now_ctx.get("date")) if same_day
+                              else "today")
     return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes,
                   unrecorded=tuple(unrecorded.items()),
-                  baseline_refusal=baseline_refusal(now_ctx, items))
+                  baseline_refusal=baseline_refusal(now_ctx, items), now_fingerprint=now_fp)
 
 
 # ------------------------------------------------------------------------------------- the words
@@ -1040,9 +1121,8 @@ def mark_dry_prompt(report: Report | None) -> tuple[str, str, str] | None:
         question, button = "Both dry?", "Mark both dry"
     else:
         question, button = f"All {len(names)} dry?", f"Mark all {len(names)} dry"
-    whom = names[0] if len(names) == 1 else ", ".join(names[:-1]) + f" and {names[-1]}"
-    hover = (f"Writes a session record for {whom} saying the conditions were Dry — and nothing "
-             f"else. File ▸ Session record… adds the rest, or corrects it.")
+    hover = (f"Writes a session record for {sessions_named(names)} saying the conditions were "
+             f"Dry — and nothing else. File ▸ Session record… adds the rest, or corrects it.")
     return question, button, hover
 
 
@@ -1076,7 +1156,13 @@ def report_lines(report: Report) -> list[str]:
         first = outcomes[0]
         who = _corner_list(outcomes)
         if first.blocker == BLOCK_NO_RECORD:
-            return [f"{who} — can't say. {_no_record_sentence(first.detail, first.same_day)} "
+            detail, sessions = first.detail, 2
+            baselines = {o.item.fingerprint for o in outcomes}
+            if all(o.same_day for o in outcomes) and len(baselines) > 1:
+                # One line for every session it spans: the baselines and this one.
+                detail, sessions = _same_day_detail(report, outcomes), len(baselines) + 1
+            return [f"{who} — can't say. "
+                    f"{_no_record_sentence(detail, first.same_day, sessions)} "
                     f"File ▸ Session record… writes one."]
         if first.blocker == BLOCK_CONDITIONS:
             return [f"{who} — can't say: {first.detail}."]

@@ -688,8 +688,15 @@ def test_the_pb_card_ends_with_the_session_it_celebrated():
             win.library_ctl.show_pb_moment({"kind": "first", "track": track, "best": 45.1})
             _settle(0.3)
             assert len(cards(win)) == 1
+            # ...and the status line's confirmation about it (w19 QA: it stayed over the welcome).
+            win.statusBar().showMessage("lap card copied — paste it into a chat", STATUS_MS)
             win._show_welcome()
             assert not cards(win) and win._pb_toast is None
+            assert win.statusBar().currentMessage() == "", win.statusBar().currentMessage()
+            # A welcome re-read over the welcome keeps what a caller just said there.
+            win.statusBar().showMessage("Load cancelled.", STATUS_MS)
+            win._refresh_welcome()
+            assert win.statusBar().currentMessage() == "Load cancelled."
         finally:
             win.close()
             win.deleteLater()

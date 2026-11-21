@@ -3851,6 +3851,37 @@ def test_a_row_is_offered_as_the_reference_only_when_it_can_be_one():
         assert why(junk, open_entry) == library.REFERENCE_NO_LAPS
         # A session that does not know its own way round refuses nothing for direction.
         assert why(rev, {**open_entry, "rotation": 0}) is None
+        # The loader's order: no laps before the way round (`Session.set_reference_session`).
+        assert why({**junk, "rotation": 1}, open_entry) == library.REFERENCE_NO_LAPS
+
+        # cool/reference-reasons-and-wording: named/unnamed x same/other way. The way round is a
+        # reason only on the SAME named track: with an unnamed track on either side the loader
+        # decides by location first, and a row stores no location (w19 QA: a circuit 160 km away
+        # was greyed as "driven the other way round"; the loader refused it as "different
+        # location"). The location axis is the loader's, so it is not in a row's words — both
+        # places give the row the same answer; tests/test_cross_reference.py runs the real
+        # loader on the whole matrix.
+        def row(stem, track, rotation):
+            e = _entry(stem, track=track, paths=[clip(f"{stem}.MP4")])
+            e["rotation"] = rotation
+            return e
+        open_unnamed = row("GX017130", None, -1)
+        the_other_way = ("driven the other way round (anticlockwise; the open session runs "
+                         "clockwise)")
+        matrix = [  # (open session, row, the Library's reason)
+            (open_entry, row("GX017131", "Demo", -1), None),
+            (open_entry, row("GX017132", "Demo", 1), the_other_way),
+            (open_entry, row("GX017133", "Track B", -1), "a different track (Track B)"),
+            (open_entry, row("GX017134", "Track B", 1), "a different track (Track B)"),
+            (open_entry, row("GX017135", None, -1), None),
+            (open_entry, row("GX017136", None, 1), None),
+            (open_unnamed, row("GX017137", "Demo", -1), None),
+            (open_unnamed, row("GX017138", "Demo", 1), None),
+            (open_unnamed, row("GX017139", None, -1), None),
+            (open_unnamed, row("GX017140", None, 1), None),
+        ]
+        for opened, e, want in matrix:
+            assert why(e, opened) == want, (opened.get("track"), e["track"], e["rotation"])
     print("ok use as reference: the enablement matrix")
 
 
@@ -3920,6 +3951,14 @@ def test_the_reference_button_repeats_the_row_menu_and_closes_the_library():
         assert dlg.reference_btn.toolTip() == "Not available: a different track (Track B)"
         dlg.reference_btn.click()
         assert used == [], "a greyed button handed the row over"
+        # No row selected — the button's state for a no-laps row, which can't be selected: greyed
+        # with a reason, never an empty hover (w19 QA), and the reason names what the row menu's
+        # "no valid laps" names.
+        dlg.table.clearSelection()
+        assert not dlg.reference_btn.isEnabled()
+        assert dlg.reference_btn.toolTip() == (
+            "Not available: select a recording with valid laps"), dlg.reference_btn.toolTip()
+        assert library.REFERENCE_NO_LAPS.removeprefix("no ") in dlg.reference_btn.toolTip()
         _select_stem(dlg, "GX017103")
         assert dlg.reference_btn.isEnabled() and dlg.reference_btn.toolTip() == USE_AS_REFERENCE_TIP
         # Button order: the everyday acts on the row, then Open, then Close last.

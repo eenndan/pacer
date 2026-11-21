@@ -125,9 +125,10 @@ number matters: the ideal is a sum of per-segment minima, so it drops the longer
 
 Scrub the lap and the **GoPro video** follows. **Load a reference recording** (**Coaching ▸ Load
 reference recording…**) to play your lap **next to** the best lap of *another* recording of the
-same track — yours from last month, or a friend's GoPro file. Picking another lap while
-comparing ends the comparison and says so. **R** sets every clean lap off together on the map;
-**⇧R** follows the pack.
+same track — yours from last month, or a friend's GoPro file. Or pick it by its day: a row's
+**Use as reference** in the **Session Library** (step 7) loads that session. Picking another lap
+while comparing ends the comparison and says so. **R** sets every clean lap off together on the
+map; **⇧R** follows the pack.
 
 ## 7 · Come back faster
 
