@@ -67,8 +67,10 @@ from ._signal import (
     _lap_closure,
     exclusion_detail,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
+    lap_label,
     nearest_on_polyline,
     polyline_line_crossing,
+    short_laps,
 )
 from .load import load_recording
 
@@ -978,7 +980,7 @@ class Session:
             reference_id=REFERENCE_ID,
             best_lap_id=self.best_lap_id,
             valid_lap_ids=self.valid_lap_ids,
-            lap_has_dropout=self.lap_has_dropout,
+            lap_out_of_bests=self.lap_out_of_bests,
             lap_columns=self._lap_columns,
             lap_arrays=self._lap_arrays,
             lap_time_dist=self._lap_time_dist,
@@ -1011,7 +1013,7 @@ class Session:
         # pure-Python tests), reached via these get/set accessors + the shared _UNSET sentinel.
         return bests_service.Bests(
             valid_lap_ids=self.valid_lap_ids,
-            lap_has_dropout=self.lap_has_dropout,
+            lap_out_of_bests=self.lap_out_of_bests,
             lap_time=lambda i: self.laps.lap_time(i),
             lap_sector_splits=self.lap_sector_splits,
             # The EFFECTIVE count (placed lines minus the session-wide collapsed ones), because it
@@ -2108,6 +2110,37 @@ class Session:
         the views stay pacer-free, so they consume this flag via the app."""
         return {lap_id for lap_id in self.valid_lap_ids() if self.lap_has_dropout(lap_id)}
 
+    def short_lap_metres(self) -> dict[int, float]:
+        """``{lap_id: metres short}`` of every VALID lap far shorter than the session's usual lap —
+        a lap that cut the track (`_signal.short_laps`, whose block says how far is "far"). Such a
+        lap stays counted and listed; `lap_out_of_bests` keeps it from winning anything.
+
+        Memoized against the `valid_lap_ids` list it was computed from (held by identity), so a
+        re-segment, which replaces that list, recomputes without an invalidation of its own. A
+        `laps` without distances (a test double) has no short laps."""
+        valid = self.valid_lap_ids()
+        memo = getattr(self, "_short_memo", None)
+        if memo is not None and memo[0] is valid:
+            return memo[1]
+        get_dist = getattr(getattr(self, "laps", None), "get_lap_distance", None)
+        out = short_laps({i: float(get_dist(i)) for i in valid}) if get_dist is not None else {}
+        self._short_memo = (valid, out)
+        return out
+
+    def short_lap_notes(self) -> dict[int, str]:
+        """``{lap_id: why}`` for each short lap — the sentence the lap table's ⚠ hover says."""
+        return {i: f"Lap {lap_label(i)} is {m:.0f} m shorter than your other laps, so it is kept "
+                   "out of the bests." for i, m in self.short_lap_metres().items()}
+
+    def lap_out_of_bests(self, lap_id: int) -> bool:
+        """May this valid lap NOT be the best lap, the Δ reference, a purple split or an ideal-lap
+        segment? True for a GPS dropout (`lap_has_dropout`: its distance is reconstructed) and for a
+        lap that cut the track (`short_lap_metres`: it was not the same circuit). Both laps are
+        still listed and timed, flagged ⚠. The one predicate the bests service and the corner model
+        are built on, so the headline best, the ideal lap and the purple cells exclude the same
+        laps."""
+        return self.lap_has_dropout(lap_id) or lap_id in self.short_lap_metres()
+
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
         line, and the one anything outside Session should call. Consumers: the default sector
@@ -2784,10 +2817,11 @@ class Session:
 
     def consistency_lap_ids(self) -> list[int]:
         """The lap set every consistency statistic runs over: VALID laps with no GPS
-        dropout, in session order — the ⚠ rule (a dropout lap's time/splits are
-        low-confidence, so it is excluded from σ/medians exactly as it is excluded from
-        the corner-detection profile in _corner_basis)."""
-        return [i for i in self.valid_lap_ids() if not self.lap_has_dropout(i)]
+        dropout that did not cut the track, in session order — the ⚠ rule
+        (`lap_out_of_bests`: a dropout lap's time/splits are low-confidence, and a cut lap did
+        not drive the same circuit, so each is excluded from σ/medians exactly as it is excluded
+        from the corner-detection profile in _corner_basis)."""
+        return [i for i in self.valid_lap_ids() if not self.lap_out_of_bests(i)]
 
     def lap_time_trend(self) -> list[tuple[int, float]]:
         """(lap_id, lap_time s) per consistency lap, in session order — the panel's trend

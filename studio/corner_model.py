@@ -659,8 +659,8 @@ class CornerModel:
     """Corner detection + per-corner per-lap stats over Session-bound primitives.
 
     All inputs are Session-bound callables (Session owns the pacer side + its memoized lap sets /
-    per-lap caches / active reference): `best_lap_id` / `valid_lap_ids` / `lap_has_dropout` are the
-    memoized lap-set accessors; `lap_columns` / `lap_arrays` / `lap_time_dist` are the per-lap
+    per-lap caches / active reference): `best_lap_id` / `valid_lap_ids` / `lap_out_of_bests` are the
+    memoized lap-set accessors (`lap_out_of_bests`: a GPS dropout or a lap that cut the track); `lap_columns` / `lap_arrays` / `lap_time_dist` are the per-lap
     array fetches; `reference` returns the active cross-recording ReferenceLap (or None). The corner
     math is just numpy on those arrays. `reference_id` is Session.REFERENCE_ID, the sentinel the
     reference stats are parked under.
@@ -669,7 +669,7 @@ class CornerModel:
     def __init__(self, *, reference_id: int,
                  best_lap_id: Callable[[], int | None],
                  valid_lap_ids: Callable[[], list[int]],
-                 lap_has_dropout: Callable[[int], bool],
+                 lap_out_of_bests: Callable[[int], bool],
                  lap_columns: Callable[[int], tuple],
                  lap_arrays: Callable[[int], tuple],
                  lap_time_dist: Callable[[int], tuple | None],
@@ -677,7 +677,7 @@ class CornerModel:
         self._reference_id = reference_id
         self._best_lap_id = best_lap_id
         self._valid_lap_ids = valid_lap_ids
-        self._lap_has_dropout = lap_has_dropout
+        self._lap_out_of_bests = lap_out_of_bests
         self._lap_columns = lap_columns
         self._lap_arrays = lap_arrays
         self._lap_time_dist = lap_time_dist
@@ -1222,9 +1222,10 @@ class CornerModel:
     # ------------------------------------------------------------------ ideal lap (D1)
     def _clean_lap_ids(self) -> list[int]:
         """The laps ANY "best" in this service may be drawn from: `Session.consistency_lap_ids()`
-        — VALID and DROPOUT-FREE, the same set every consistency statistic runs on. A dropout
-        lap's distance is speed-integral reconstructed, so its segment boundaries (and therefore
-        its segment TIMES) are exactly the ones that must not be allowed to win a segment.
+        — VALID and not ⚠ (`Session.lap_out_of_bests`), the same set every consistency statistic
+        runs on. A dropout lap's distance is speed-integral reconstructed, so its segment
+        boundaries (and therefore its segment TIMES) are exactly the ones that must not be allowed
+        to win a segment; a lap that cut the track skipped part of the circuit they tile.
 
         The BEST lap is appended when the dropout rule excluded it — the same guarantee
         `basis()` makes for the detection profile. It is what keeps `total <= best lap time`
@@ -1236,7 +1237,7 @@ class CornerModel:
         session bests — the purple cells, whose own docstring claimed parity with the per-sector
         bests — ran on the raw valid set. One name, one rule, and the odd one out cannot drift
         back."""
-        ids = [i for i in self._valid_lap_ids() if not self._lap_has_dropout(i)]
+        ids = [i for i in self._valid_lap_ids() if not self._lap_out_of_bests(i)]
         best = self._best_lap_id()
         if best is not None and best not in ids:
             ids.append(best)

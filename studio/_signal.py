@@ -51,6 +51,59 @@ LAP_BAND_LO, LAP_BAND_HI = 0.5, 1.6  # "real lap" = lap_time within [lo, hi] x m
 # `_band_lap_ids`); the time band is unchanged.
 LAP_DIST_BAND_LO, LAP_DIST_BAND_HI = 0.90, 1.10
 
+# --- A LAP THAT CUT THE TRACK IS COUNTED, BUT IT IS NOT A BEST ---------------------------------------
+# The ±10 % band above is wide enough to keep a lap that went straight across the infield: on the
+# synthetic demo circuit (studio/dev/make_demo) a chord across one corner, 60 m either side of its
+# apex, makes a 929 m lap of a 961 m circuit — 3.29 % short and ~1 s quicker, so it was crowned best
+# lap, PB, Δ reference and ideal-lap segment owner. Such a lap is still a lap the driver ran, so it
+# stays COUNTED and listed with its time; it is only kept out of the bests (Session.lap_out_of_bests),
+# and the lap table flags it ⚠ with the metres it is short.
+#
+# Only SHORT laps: a long lap is slower, so it cannot wrongly win. A lap is short when it is shorter
+# than the session's median valid-lap distance by more than
+#     max(SHORT_LAP_SPREAD_K × robust σ, SHORT_LAP_FLOOR_FRAC × median),
+# robust σ = 1.4826 × the median absolute deviation of the valid-lap distances. Measured through the
+# real loader on synthetic recordings (studio/dev/synth_gopro, the demo circuit, 14 laps each):
+#
+#   session (shortest legitimate lap below its median)          robust σ        shortest legit
+#   clean receiver                                              0.65 m          0.07 %
+#   3× / 6× GPS noise (noise lengthens a lap, never shortens)  2.1 / 4.2 m     0.21 / 0.49 %
+#   one lap 4 m inside through three corners (defensive)        0.67 m          0.77 %
+#   2 m inside through EVERY corner (two whole laps + 4 part)  9.9 m           1.38 %
+#   3 m inside through EVERY corner (two whole laps + 4 part)  14.8 m          2.07 %
+#   the same at 6× GPS noise                                   13.0 m          1.64 %
+#   one lap cut across one corner (the defect)                 0.38 m          3.29 % SHORT
+#
+#   * SHORT_LAP_FLOOR_FRAC sits midway between the widest legitimate line measured (a whole lap
+#     3 m inside the usual line through every corner, 2.07 %) and one corner cut (3.29 %): 2.7 %,
+#     0.6 % of a lap (~6 m on this circuit) clear of each. A cut that saves less than that — a kerb
+#     taken wider, a chicane straightened — cannot be told from a tighter line, and is not flagged.
+#   * SHORT_LAP_SPREAD_K raises the bar in a session whose laps genuinely vary (3 robust σ, the usual
+#     outlier fence): in the "every corner 3 m inside" session it sets the bar at 44 m against those
+#     laps' 20 m, and it decides nothing on a consistent session, where the floor is the larger term.
+#     So a lap that does not stand out from its own session's spread is never flagged — including,
+#     by design, a cut in a session whose lines already vary that much.
+#   * SHORT_LAP_MIN_LAPS: with three laps or fewer there is no "usual" lap to be short of — the
+#     median of three is one of them — so no lap is flagged.
+# On the synthetic season of 18 sessions (5-14 laps each) it flags no lap.
+SHORT_LAP_MIN_LAPS = 4
+SHORT_LAP_SPREAD_K = 3.0
+SHORT_LAP_FLOOR_FRAC = 0.027
+
+
+def short_laps(dists: dict[int, float]) -> dict[int, float]:
+    """``{lap_id: metres short}`` of every lap in `dists` (lap id -> distance, m, of the VALID laps)
+    shorter than the session's median by more than the threshold above. Non-finite or non-positive
+    distances neither vote nor get flagged; fewer than SHORT_LAP_MIN_LAPS usable laps flag none."""
+    usable = {i: float(d) for i, d in dists.items() if math.isfinite(d) and d > 0}
+    if len(usable) < SHORT_LAP_MIN_LAPS:
+        return {}
+    arr = np.fromiter(usable.values(), float)
+    med = float(np.median(arr))
+    sigma = 1.4826 * float(np.median(np.abs(arr - med)))
+    bar = max(SHORT_LAP_SPREAD_K * sigma, SHORT_LAP_FLOOR_FRAC * med)
+    return {i: med - d for i, d in usable.items() if med - d > bar}
+
 # --- A LAP THAT STOPPED IS NOT A SLOW LAP -------------------------------------------------------
 # The time band above is wide on purpose (it has to fit any track length from one median), and
 # WIDE IS THE WHOLE PROBLEM at its top end: 1.6x a ~69 s kart lap is ~110 s, so a lap carrying a

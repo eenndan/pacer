@@ -1887,6 +1887,74 @@ def test_best_excludes_dropout_lap_then_falls_back():
     print("test_best_excludes_dropout_lap_then_falls_back OK")
 
 
+# Valid-lap distances (m) measured through the real loader on synthetic recordings of the demo
+# circuit (`_signal`'s SHORT_LAP block quotes them): one lap cut across a corner, and a session
+# whose laps 3 and 7 run 3 m inside the usual line through EVERY corner (2, 4, 6, 8 partly) and
+# 9-11 run 3 m wide.
+_CUT_SESSION_M = [961.0, 960.8, 960.8, 960.5, 960.5, 962.5, 960.3, 960.6, 960.7, 929.1, 960.9,
+                  961.1, 960.4, 960.4]
+_INSIDE_LINE_SESSION_M = [961.3, 961.0, 949.6, 940.0, 950.1, 962.5, 949.8, 940.2, 951.1, 971.6,
+                          982.8, 971.5, 959.8, 960.0]
+
+
+def test_short_laps_flags_a_cut_lap_and_no_line():
+    """The rule itself (`_signal.short_laps`): the cut lap (31.6 m, 3.29 % under the median) is
+    flagged; no lap of the inside-line session is (its shortest is 2.07 % under), nor a lap that
+    runs LONG however far; three laps or fewer flag nothing, there being no usual lap to be short
+    of."""
+    from studio._signal import SHORT_LAP_MIN_LAPS, short_laps
+    cut = short_laps(dict(enumerate(_CUT_SESSION_M)))
+    assert list(cut) == [9] and abs(cut[9] - 31.6) < 0.05, cut
+    assert short_laps(dict(enumerate(_INSIDE_LINE_SESSION_M))) == {}
+    long_lap = {i: 960.0 + 0.3 * i for i in range(8)} | {8: 1050.0}
+    assert short_laps(long_lap) == {}
+    few = dict(enumerate([960.0, 961.0, 900.0]))
+    assert SHORT_LAP_MIN_LAPS == len(few) + 1 and short_laps(few) == {}
+    assert list(short_laps(few | {3: 960.5})) == [2]
+    # A distance that is not one (a stream with no odometer) neither votes nor is flagged.
+    assert short_laps({0: float("nan"), 1: 0.0, 2: 960.0, 3: 961.0, 4: 900.0}) == {}
+    print("test_short_laps_flags_a_cut_lap_and_no_line OK")
+
+
+def _cut_lap_session(dists):
+    """A bare session of straight-line laps whose distances are `dists` and whose times scale with
+    them (a lap 3 % short is 3 % quicker), every lap clean of dropouts."""
+    from studio.session import _UNSET
+    laps = {}
+    for i, d in enumerate(dists):
+        t = np.arange(int(round(d / 2.0))) * 0.1 + 100.0 * i     # 20 m/s, 0.1 s fixes, no gap
+        laps[i] = (t, np.linspace(0.0, d, len(t)))
+    s = bare_session(laps, valid=list(laps))
+    for i, (t, dd) in laps.items():
+        seed_cols(s, i, t, dd)
+    s.laps = SimpleNamespace(lap_time=lambda lid: dists[lid] / 20.0,
+                             get_lap_distance=lambda lid: dists[lid],
+                             sectors=SimpleNamespace(sector_lines=[]))
+    s._best_cache = _UNSET
+    return s
+
+
+def test_a_lap_that_cut_the_track_is_listed_but_never_the_best():
+    """THE DEFECT (discovery, wave 21): a lap straight across the infield, 3.3 % short and so ~1 s
+    quicker, was crowned best lap — and with it the PB, the Δ reference and the session-best split.
+    It is still a valid, listed lap; it is only kept out of the bests, with the sentence the lap
+    table's ⚠ hover says. A session whose laps only take different lines loses nothing."""
+    s = _cut_lap_session(_CUT_SESSION_M)
+    assert 9 in s.valid_lap_ids(), "the cut lap stays a counted lap"
+    assert s.best_lap_id() != 9, "a lap that cut the track was crowned best"
+    assert s.best_lap_id() == min((i for i in range(14) if i != 9), key=lambda i: _CUT_SESSION_M[i])
+    assert s.lap_out_of_bests(9) and not s.lap_out_of_bests(0)
+    assert 9 not in s.consistency_lap_ids()
+    assert s.short_lap_notes() == {
+        9: "Lap 10 is 32 m shorter than your other laps, so it is kept out of the bests."}
+    assert s.session_best_splits()[0] > s.lap_sector_splits(9)[0], "the cut lap owns purple"
+
+    lines = _cut_lap_session(_INSIDE_LINE_SESSION_M)
+    assert lines.short_lap_metres() == {}
+    assert lines.best_lap_id() == 3, "a lap on a tighter line is a legitimate best"
+    print("test_a_lap_that_cut_the_track_is_listed_but_never_the_best OK")
+
+
 def _straight_into_braking(n=201, peak=150):
     """A straight along +x, 2.5 m a fix: the speed builds slowly to `peak` (engine-limited), then
     falls fast (the braking zone) — the shape every real lap's fastest place has."""
