@@ -66,6 +66,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 from studio import chapters, prefs, theme  # noqa: E402
 from studio import export_video as ev  # noqa: E402
+from studio._signal import fmt_time  # noqa: E402
 from studio.overlay import broadcast, corner_cards, ghost  # noqa: E402
 
 theme.apply_theme(_APP)
@@ -409,6 +410,44 @@ def test_the_dialog_names_the_pass_and_says_why_run_up_is_off():
     assert lap_notes == [win.exports._EXPORT_STYLE_DESC[broadcast.STYLE_CLASSIC],
                          f"Selected lap {lap + 1}  ·  0:44.950"], lap_notes
     assert lap_tip == "", lap_tip
+
+
+def test_the_dialog_names_the_lap_the_export_row_renders():
+    """The line above the form names what WILL render, from the same `scope_lap_ids` as the
+    hint's "Renders …". It said "Selected lap 1 · …" whatever the Export row, so on "Best lap"
+    it showed another lap's time above "Renders lap 13." (discovery 11)."""
+    win = _window()
+    s = win.session
+    best = s.best_lap_id()
+    other = next(i for i in s.valid_lap_ids() if i != best)
+    before, primary = win.view.table.selected_lap_ids(), win.view._corner_lap
+    win.view.table.select([other])
+    win.view._on_laps_selected([other])               # the lap pick the table reports
+    _settle(0.05)
+    got = {}
+
+    def act(dlg, rows):
+        combo = rows["Export"]
+        for i in range(combo.count()):
+            combo.setCurrentIndex(i)
+            got[combo.itemText(i)] = [
+                lab.text() for lab in dlg.findChildren(QLabel) if lab.property("role") == "Note"]
+        return QDialog.Rejected
+    try:
+        _export(win, win.exports.export_overlay_video, act)
+    finally:
+        win.view.table.select(before)
+        win.view._corner_lap = primary
+        _settle(0.05)
+    texts = {k: v[1] for k, v in got.items()}
+    keys = list(texts)
+    this, best_row, every, session = (texts[k] for k in keys[:4])
+    assert this == f"Selected lap {other + 1}  ·  {fmt_time(s.lap_time(other))}", texts
+    assert best_row == f"Best lap {best + 1}  ·  {fmt_time(s.lap_time(best))}", texts
+    n = len(s.valid_lap_ids())
+    assert every == f"All laps  ·  {n} laps, one file each", texts
+    assert session.startswith("Full session  ·  "), texts
+    assert not any("Selected lap" in t for t in (best_row, every, session)), texts
 
 
 def _rows(dlg):

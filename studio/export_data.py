@@ -103,6 +103,30 @@ INTERPOLATED_NOTE = (
 # app's live surfaces call Δideal.
 SUMMARY_MARKER = "summary"
 SUMMARY_ROWS = (("Theoretical best", "theoretical_best"), ("Best rolling", "best_rolling_lap"))
+#: An EXCLUDED lap's trailer label ("summary: excluded lap 7") and the kind its note opens with:
+#: `excluded-` + the `_signal.EXCLUDED_*` reason ("excluded-stopped", "excluded-band",
+#: "excluded-open"), the lowercase-hyphen family of the `flag` column's words.
+EXCLUDED_LABEL = "excluded lap"
+EXCLUDED_KIND_PREFIX = "excluded-"
+
+
+def excluded_trailer(session) -> list[tuple[str, str, str]]:
+    """``(lap label, time_s, note)`` per EXCLUDED lap (⊘, `Session.excluded_lap_rows`), in lap
+    order — laps.csv's trailer rows for the laps its lap rows leave out. The lap rows stay one per
+    VALID lap (a reader summing `time_s` must not sum a stopped lap), so the excluded ones are
+    named here, the way the ideal lap's sample is: before this, `redflag_stop` exported laps 1-6
+    then 8-14 and nothing said lap 7 existed. The note is the kind, the odometer distance and the
+    ⊘ strip's own reason (`_signal.exclusion_detail`, ASCII): "excluded-stopped: 978 m, the kart
+    stopped during it". getattr-guarded: a double with no excluded laps writes nothing."""
+    rows = getattr(session, "excluded_lap_rows", list)() or []
+    reasons = getattr(session, "excluded_lap_reasons", dict)() or {}
+    out = []
+    for r in sorted(rows, key=lambda r: r["idx"]):
+        kind = f"{EXCLUDED_KIND_PREFIX}{reasons.get(r['idx'], 'unknown')}"
+        why = r.get("why")
+        note = f"{kind}: {_DISPLAY.dist(r['dist'])} m" + (f", {why}" if why else "")
+        out.append((lap_label(r["idx"]), _f3(r["time"]), note))
+    return out
 
 
 class SummaryRow(NamedTuple):
@@ -458,12 +482,17 @@ def write_laps_csv(path: str, session) -> None:
     matched every corner emits nothing.
 
     AND THE `dist_m` NOTE (TRUTH2-ODO): the column is the lap odometer, which reads short of the
-    distance driven, so any file with a lap row carries `stats.ODOMETER_NOTE` under that label."""
+    distance driven, so any file with a lap row carries `stats.ODOMETER_NOTE` under that label.
+
+    AND ONE ROW PER EXCLUDED LAP (`excluded_trailer`), after the summary rows: the lap rows above
+    are the VALID laps only, and a lap the app lists under ⊘ is named here with its time, kind and
+    reason rather than nowhere. A session with no excluded lap writes none (the file is unchanged)."""
     headers, rows = laps_table(session)
     summary = laps_summary(session)
     key = quality_key(headers, rows)
     broke = data_quality.break_in_series(session)
     interpolated = any_interpolated(headers, rows)
+    excluded = excluded_trailer(session)
 
     def body(f):
         w = csv.writer(f)
@@ -473,6 +502,8 @@ def write_laps_csv(path: str, session) -> None:
         w.writerow([SUMMARY_MARKER, "time_s", "over_laps", "note"])
         for row in summary:
             w.writerow([f"{SUMMARY_MARKER}: {row.label}", row.value, row.over_laps, row.note])
+        for label, time_s, note in excluded:
+            w.writerow([f"{SUMMARY_MARKER}: {EXCLUDED_LABEL} {label}", time_s, "", note])
         if rows:
             w.writerow([f"{SUMMARY_MARKER}: {DIST_COLUMN}", "", "", stats_service.ODOMETER_NOTE])
         for code, meaning in key:
@@ -1314,10 +1345,28 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
     """The Laps table (`laps_table`'s rows at the app's precision, `display=True`, under
     `report_laps_header`'s words) and the notes that decode it."""
     esc = html.escape
-    out = ['<section class="wide">', f"<h2>Laps ({len(rows)})</h2>",
+    # The EXCLUDED laps (⊘) as muted rows in lap order — the Laps tab's strip, in words: lap,
+    # time, distance, then the reason across the columns it has no number for. Not ranked, never
+    # green; a session without one prints exactly the table it always did.
+    excluded = sorted(getattr(session, "excluded_lap_rows", list)() or [], key=lambda r: r["idx"])
+    count = (f"{len(rows)} valid · {len(excluded)} excluded" if excluded else f"{len(rows)}")
+    out = ['<section class="wide">', f"<h2>Laps ({count})</h2>",
            '<table class="laps">' + _laps_head(headers)]
-    for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
-        cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
+    muted = {r["idx"]: (
+        f"<td>{esc(lap_label(r['idx']))}</td><td>{esc(_DISPLAY.time(r['time']))}</td>"
+        f"<td>{esc(_DISPLAY.dist(r['dist']))}</td>"
+        f'<td style="text-align: left" colspan="{max(len(headers) - 3, 1)}">'
+        f"{esc('excluded' + (': ' + r['why'] if r.get('why') else ''))}</td>")
+        for r in excluded}
+    merged = (sorted([*rows, *((i, None) for i in muted)], key=lambda x: x[0]) if muted
+              else rows)   # no excluded lap: the rows exactly as `laps_table` ordered them
+    for lap_id, cells in merged:
+        if cells is None:
+            out.append(f'<tr class="muted">{muted[lap_id]}</tr>')
+            continue
+        # the best lap reads green, like the app's table — and, like the app's table, not while
+        # provisional
+        cls = ' class="best"' if lap_id == cue_lap else ""
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
     out.append("</table>")
     # The distance column's note, as laps.csv's trailer carries it: the odometer reads short.
