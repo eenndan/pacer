@@ -68,12 +68,11 @@ def test_the_sector_step_is_the_house_rule_on_the_split_sigma_measured_at_the_on
     ref = stats.PUBLISHED_NOISE_SIGMAS[library.REFERENCE_RECORDING]
     assert stats.SPLIT_SIGMA_S == ref.split == stats.REFERENCE_SIGMAS.split
     assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
-    # the column's second parameter: read at a receiver drift that decorrelates over 30 s, the
-    # least favourable drift model measured under which the de-drift still clearly helps
+    # the column's second parameter, an assumption: a receiver drift that decorrelates over 30 s
     assert stats.SPLIT_DRIFT_TAU_S == 30.0
-    # the house rule on that σ (0.13 s) raised to the measured call floor (cool/sector-dedrift)
-    assert stats.house_step(ref.split) == 0.13 and stats.SECTOR_CALL_FLOOR_S == 0.15
-    assert stats.SECTOR_LEVEL_S == max(stats.house_step(ref.split), stats.SECTOR_CALL_FLOOR_S)
+    # the house rule on that σ (0.13 s) rounded up by the named sampling headroom (cool/sector-dedrift)
+    assert stats.house_step(ref.split) == stats.SECTOR_HOUSE_STEP_S == 0.13
+    assert stats.SECTOR_LEVEL_S == round(0.13 + stats.SPLIT_SAMPLING_HEADROOM_S, 2) == 0.15
     # the lap step is the same formula on the lap σ (library.PB_PRECISION_S's comment: 0.0247 s)
     assert round(stats.DIFF_2SIGMA_K * 0.0247, 2) == stats.PB_PRECISION_S
     acc = _flat("docs", "ACCURACY.md")
@@ -175,6 +174,98 @@ def test_a_lap_s_rigid_receiver_shift_does_not_move_its_splits_and_its_time_neve
     assert moved < 0.005 and moved_before > 0.04, (moved, moved_before)
     print(f"a planted 1.5 m receiver shift moves the lap's splits by {moved * 1000:.1f} ms "
           f"(as timed before: {moved_before * 1000:.1f} ms)")
+
+
+def test_a_lap_that_runs_wide_for_a_stretch_does_not_tilt_its_sector_shift():
+    """The independent review of cool/sector-dedrift: PLANT an 8 m lateral excursion over 150 m of
+    one counted lap (lap metres 250-400, a raised-cosine bump to the left of its trace), well
+    clear of the sector lines at C1's and C5's apexes. Its splits must not move by more than the
+    no-excursion noise: the robust timing shift (`corners.robust_shift`, stations trimmed at the
+    session's residual scale) moves them by a few ms, while the least-squares shift the corner
+    cells use (`CornerModel._fitted_shift`) would tilt by about a metre and move them by tens of
+    ms. Measured on the review's own recording (seed 23): least squares 0.197 s, robust 0.006 s
+    at these lines, against a split error sd of 0.062 s with no excursion."""
+    import shutil
+
+    import numpy as np
+
+    from studio import chapters
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    from studio.dev.probes import sector_split_sigma as probe
+    from studio.dev.probes.focus_cross_session import _generate
+    from studio.session import Session
+    work = tempfile.mkdtemp(prefix="split_excursion_test_")
+    try:
+        s = Session.load(chapters.discover_siblings(
+            _generate(work, stats.REFERENCE_SIGMAS.noise, 401, 1, None)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    truth = sg.simulate(401, 14, origin=make_demo.DEMO_ORIGIN)
+    start, _ = s.timing_lines_latlon()
+    apex = {k.cid: k.apex_s for k in truth.circuit.corners}
+    assert s.apply_timing_lines_latlon(start, [truth.line_at(apex[1]), truth.line_at(apex[5])],
+                                       confirmed=True)
+    ids = s.consistency_lap_ids()
+    lap = ids[len(ids) // 2]
+    assert all(not 200.0 < d < 450.0 for d in s.sector_boundary_distances(lap)), "lines too near"
+    geom = s.corners.geometry()
+
+    def ls_splits():
+        return probe.splits_with(s, lap, lambda lid: tuple(
+            float(v) for v in s.corners._fitted_shift(s.corners.geometry(), lid)))
+
+    kept, kept_ls = s.lap_sector_splits(lap), ls_splits()
+    assert geom is not None and s.sector_drift_status(lap) == "applied"
+    orig = s._lap_columns
+
+    def plant(amp, length):
+        def planted(lid):
+            t, xs, ys, v, cum = orig(lid)
+            if lid != lap:
+                return t, xs, ys, v, cum
+            u = np.clip((cum - 250.0) / length, 0.0, 1.0)
+            w = amp * np.sqrt(np.sin(np.pi * u))
+            hx, hy = np.gradient(xs), np.gradient(ys)
+            n = np.hypot(hx, hy)
+            n[n == 0] = 1.0
+            return t, xs - w * hy / n, ys + w * hx / n, v, cum
+        s._lap_columns = s.corners._lap_columns = planted
+        s.corners.invalidate_stats()
+        s._sector_collapse_cache = None
+
+    def unplant():
+        del s._lap_columns
+        s.corners._lap_columns = orig
+        s.corners.invalidate_stats()
+        s._sector_collapse_cache = None
+
+    plant(8.0, 150.0)
+    try:
+        moved = max(abs(a - b) for a, b in zip(s.lap_sector_splits(lap), kept, strict=True))
+        moved_ls = max(abs(a - b) for a, b in zip(ls_splits(), kept_ls, strict=True))
+        status = s.sector_drift_status(lap)
+        step0 = s.sector_split_provenance(lap, 0).steps[0]
+    finally:
+        unplant()
+    assert moved < 0.02 and moved_ls > 0.05, (moved, moved_ls, status)
+    assert status == "applied" and step0.label == "receiver drift" \
+        and step0.text.startswith("trace moved by"), step0
+    # 20 m over 400 m leaves too little of the lap for a trustworthy shift: THAT lap is timed as
+    # measured (its splits are the uncorrected ones) while the session stays de-drifted, and its
+    # provenance says so
+    plant(20.0, 400.0)
+    try:
+        status_far = s.sector_drift_status(lap)
+        same = s.lap_sector_splits(lap) == probe.uncorrected_splits(s, lap)
+        step_far = s.sector_split_provenance(lap, 0).steps[0]
+        others = {s.sector_drift_status(i) for i in ids if i != lap}
+    finally:
+        unplant()
+    assert status_far == "untrusted" and same and others == {"applied"}, (status_far, others)
+    assert step_far.text.startswith("not de-drifted"), step_far
+    print(f"a planted 8 m × 150 m excursion moves the lap's splits by {moved * 1000:.1f} ms "
+          f"({status}; least squares: {moved_ls * 1000:.1f} ms); 20 m × 400 m: {status_far}")
 
 
 def test_a_stretch_key_is_a_corner_cid_or_a_negative_sector_key():
@@ -403,12 +494,14 @@ def test_two_and_four_lines_list_their_sectors_below_the_corners():
             tip = page.level_label.toolTip()
             # the split's σ (mid-straight, and the worst placement, with the measured limit), the
             # step once, and what a noisier recording would need (the split column's B and A)
-            assert ("σ 0.03 s with lines mid-straight, up to 0.05 s with a line at the measured "
-                    "track's slowest corners") in tip, tip
-            assert tip.count("within 0.15 s") == 1, tip
+            assert "σ about 0.03 s with lines mid-straight, up to 0.05 s at slow corners" in tip, tip
+            assert tip.count("closer than 0.15 s read level") == 1, tip
             assert stats.split_covers_note() in tip and "up to 0.28 s" in tip \
                 and "0.46 s at the noisiest" in tip, tip
-            assert "tie" in tip
+            # the sector part is short and claims nothing about wrong calls (cool/sector-dedrift's
+            # review: the pass menu still makes a few wrong-sign offers at this step)
+            sector_part = tip.split("A sector split", 1)[1]
+            assert len("A sector split" + sector_part) <= 350 and "wrong" not in sector_part, tip
             tip = q.table.item(8, 3).toolTip()
             assert "within 0.15 s" in tip and "timing noise" in tip, tip
             # the group's rule above S1, and ▶ says "sector"
@@ -551,13 +644,13 @@ def test_a_sector_pass_beside_its_typical_follows_the_corners_rule():
                                   c.gap_s, c.level, c.is_typical), (lap, v, c)
         assert v.cid == stats.sector_key(0) and v.level_s == 0.30
     # lap 0's 10.00 against the typical 10.30 (lap 4). Lap 0 is the QUICKEST of 5, so the step
-    # carries the quickest's luck (`stats.quickest_luck_s`, 0.022 s for a sector at n = 5, fitted
+    # carries the quickest's luck (`stats.quickest_luck_s`, 0.030 s for a sector at n = 5, fitted
     # at the split step's own placement, cool/sector-dedrift): 0.30 apart is level under
-    # 0.30 + 0.022, and exactly the step plus the luck apart is NOT level
+    # 0.30 + 0.030, and exactly the step plus the luck apart is NOT level
     v = m.pass_vs_typical(0, 0, 0.30)
-    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.022, True), v
-    assert not m.pass_vs_typical(0, 0, 0.278).level            # 0.278 + 0.022 = 0.300
-    assert m.pass_vs_typical(0, 0, 0.279).level                # the step decides it
+    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.03, True), v
+    assert not m.pass_vs_typical(0, 0, 0.270).level            # 0.270 + 0.030 = 0.300
+    assert m.pass_vs_typical(0, 0, 0.271).level                # the step decides it
     # a pass that is not the quickest carries no luck: lap 3's 10.20, 0.10 under the typical
     assert m.pass_vs_typical(0, 3, 0.10).luck_s == 0.0 and not m.pass_vs_typical(0, 3, 0.10).level
     assert m.pass_vs_typical(0, 4, 0.30).is_typical
@@ -574,7 +667,7 @@ def test_compare_with_the_typical_pass_is_offered_on_a_sector_row_only_past_the_
     """The demo with 2, 3 and 4 lines: each sector row's Compare item is enabled exactly where its
     quickest split and its typical split are NOT level under 0.15 s plus the luck (S1 alone with 2, 3
     and 4 lines, a true gap of 0.45-0.52 s on the demo's truth; S2's 0.18 s with 2 lines sits a
-    millisecond inside 0.15 + 0.031), and greyed with its own computed reason
+    long way inside 0.15 + its 0.043 luck), and greyed with its own computed reason
     everywhere else. On main every sector row was greyed "Not for sectors yet"."""
     prefs.set_corners_view("quickest")
     win = _window(2)

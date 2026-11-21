@@ -693,6 +693,9 @@ class CornerModel:
         # corners.SessionGeometry or None — see geometry()
         self._geometry_cache: corners.SessionGeometry | None | _Unset = _UNSET
         self._shift_cache: dict[int, np.ndarray] = {}  # lap id -> its fitted rigid shift
+        # lap id -> (its robust timing shift or None, why) — see sector_shift; plus the session's
+        # residual scale under the key None
+        self._timing_cache: dict = {}
         # (the ReferenceLap it was built for, its warp) — see reference_alignment
         self._ref_align_cache: tuple | None = None
         # A fresh token per invalidation (`invalidate` and `invalidate_stats` replace it): a memo
@@ -712,6 +715,7 @@ class CornerModel:
         self._align_cache.clear()
         self._geometry_cache = _UNSET
         self._shift_cache.clear()
+        self._timing_cache.clear()
         self._ref_align_cache = None
         self.generation = object()
 
@@ -736,6 +740,7 @@ class CornerModel:
         self._align_cache.clear()
         self._geometry_cache = _UNSET
         self._shift_cache.clear()
+        self._timing_cache.clear()
         self._ref_align_cache = None
         self.generation = object()
 
@@ -805,19 +810,45 @@ class CornerModel:
             return 0.0, 0.0
         return geom.relative_shift(self._fitted_shift(geom, lap_id), best)
 
-    def consensus_shift(self, lap_id: int) -> tuple[float, float]:
-        """The rigid translation that moves `lap_id` onto the session's CONSENSUS line
-        (`SessionGeometry.shift`, fitted on demand for a lap outside the consensus set, as
-        `lap_shift` does) — the frame the sector splits are crossed in (`Session._sector_drift`).
-        Unlike `lap_shift` it is not relative to the reference lap: a split is crossed with lines
-        drawn on the map, not matched against another lap's trace, and the consensus frame's mean
-        over the clean laps is about zero, so one lap's receiver error does not move a whole
-        column. (0, 0) when there is no geometry, or when the lap has no usable trace."""
+    # Why a lap's splits were or were not de-drifted (`sector_shift`), said in its provenance.
+    SHIFT_APPLIED = "applied"
+    SHIFT_NO_GEOMETRY = "no geometry"
+    SHIFT_UNTRUSTED = "untrusted"
+
+    def sector_shift(self, lap_id: int) -> tuple[tuple[float, float], str]:
+        """The rigid translation that moves `lap_id` onto the session's CONSENSUS line before its
+        trace is crossed with the sector lines (`Session._sector_drift`), and why: SHIFT_APPLIED,
+        or (0, 0) with SHIFT_NO_GEOMETRY (no session geometry: every lap is timed as measured) or
+        SHIFT_UNTRUSTED (this lap's robust refit kept too little of the lap, or too few headings,
+        or the lap has no usable trace: THIS lap is timed as measured while the rest of the session
+        is de-drifted, and its provenance says so).
+
+        ROBUST, NOT `lap_shift`'s least squares (`corners.robust_shift`): a split turns a tilt of
+        the shift straight into time, and one wide stretch of a lap tilts a least-squares shift
+        (an 8 m excursion over 150 m: about 1 m, and 0.14 s at a slow line). The stations are
+        trimmed at the SESSION's residual scale (`SessionGeometry.residual_scale`). Not relative
+        to the reference lap either: a split is crossed with lines drawn on the map, not matched
+        against another lap's trace, and the consensus frame's mean over the clean laps is about
+        zero, so one lap's receiver error does not move a whole column. The corner cells keep
+        `lap_shift`, untouched. Memoized per lap with the geometry."""
         geom = self.geometry()
         if geom is None or self._best_lap_id() is None:
-            return 0.0, 0.0
-        t = self._fitted_shift(geom, lap_id)
-        return float(t[0]), float(t[1])
+            return (0.0, 0.0), self.SHIFT_NO_GEOMETRY
+        lap_id = int(lap_id)
+        got = self._timing_cache.get(lap_id)
+        if got is None:
+            if None not in self._timing_cache:
+                self._timing_cache[None] = geom.residual_scale()
+            off = geom.lap_offsets.get(lap_id)
+            if off is None:
+                _t, xs, ys, _v, cum = self._lap_columns(lap_id)
+                off = (geom.offsets(xs, ys, cum) - geom.consensus
+                       if len(cum) >= 2 and float(cum[-1]) > 0 else None)
+            t = None if off is None else geom.timing_shift(off, self._timing_cache[None])
+            got = (((0.0, 0.0), self.SHIFT_UNTRUSTED) if t is None
+                   else ((float(t[0]), float(t[1])), self.SHIFT_APPLIED))
+            self._timing_cache[lap_id] = got
+        return got
 
     def _fitted_shift(self, geom, lap_id: int) -> np.ndarray:
         """`lap_id`'s own fitted translation against the consensus, memoized per lap."""

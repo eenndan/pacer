@@ -84,7 +84,8 @@ METHODS: dict[str, str] = {
         "interpolation. Each boundary's odometer is where the lap's GPS chord crosses that sector "
         "line, extended past its ends so a short line that a lap geometrically misses still "
         "produces a split, with the lap's trace first moved by its receiver drift (one shift per "
-        "lap onto the session's consensus line, as the corner times use)."
+        "lap onto the session's consensus line, fitted robustly) where one could be fitted; the "
+        "first step says whether it was."
     ),
     "corner_best.min_over_laps": (
         "A corner best is the quickest time any clean lap spent inside that corner. One lap's "
@@ -639,13 +640,28 @@ def lap_time(*, lap_id: int, value: float, fmt, fixes: LapFixes,
     )
 
 
+def _drift_text(shift, status: str) -> str:
+    """The provenance line for a lap's sector de-drift (`sector_split`'s `drift`)."""
+    if status == "applied":
+        return (f"trace moved by ({-shift[0]:+.3f}, {-shift[1]:+.3f}) m onto the session's "
+                "consensus line before the lines were crossed")
+    if status == "untrusted":
+        return ("not de-drifted: this lap's shift could not be fitted robustly (a long stretch off "
+                "the usual line, or too little trace), so it is crossed as measured while the "
+                "session's other laps are de-drifted")
+    return "not de-drifted: the session has too few clean laps to fit a receiver shift"
+
+
 def sector_split(*, lap_id: int, sector: int, of: int, value: float, fmt,
-                 fixes: LapFixes, d0: float, d1: float, clock: str) -> Provenance:
+                 fixes: LapFixes, d0: float, d1: float, clock: str,
+                 drift: tuple | None = None) -> Provenance:
     """Provenance for one sub-sector split of one lap.
 
     `d0`/`d1` are the sub-sector's opening and closing odometer boundaries on THIS lap, as
     `Session.sector_boundary_distances` placed them — the panel takes those as given (it says so)
-    and shows what happens after them."""
+    and shows what happens after them. `drift` is ((dx, dy), status) — the receiver shift taken off
+    this lap's trace before the lines were crossed and `Session.sector_drift_status`'s word for it —
+    and is shown as the first step, so a lap timed as measured inside a de-drifted session says so."""
     rows = fixes.window(d0, d1, pad=1)
     t_at = elapsed_at([d0, d1], fixes.dists, fixes.elapsed)
     sub = elapsed_at([d0, d1], fixes.dists[rows], fixes.elapsed[rows])
@@ -663,6 +679,7 @@ def sector_split(*, lap_id: int, sector: int, of: int, value: float, fmt,
             f"The GPS fixes between {d0:.1f} m and {d1:.1f} m on lap {lap_label(lap_id)}, "
             f"plus the fix bracketing each boundary", rows, roles=roles),),
         steps=(
+            *(() if drift is None else (Step("receiver drift", _drift_text(*drift)),)),
             Step("opening boundary", f"d = {d0:.4f} m  ->  elapsed {t_at[0]:.9f} s"),
             Step("closing boundary", f"d = {d1:.4f} m  ->  elapsed {t_at[1]:.9f} s"),
             Step("split", f"{t_at[1]:.9f} - {t_at[0]:.9f} = {t_at[1] - t_at[0]:.9f} s",

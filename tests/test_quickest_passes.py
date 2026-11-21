@@ -3070,8 +3070,8 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
     assert (luck(1, 5, "next"), luck(1, 14, "next")) == (0.014, 0.019)
     # a sector's, fitted at the split step's own placement on the de-drifted splits
     # (studio/dev/probes/sector_split_sigma, cool/sector-dedrift)
-    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.022, 0.031)
-    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.023, 0.027)
+    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.030, 0.043)
+    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.029, 0.032)
     assert luck(1, 1, "next") == 0.0 and luck(1, 0, "typical") == 0.0
     base = [3.30, 3.31, 3.32, 3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39, 3.40, 3.41, 3.42]
     for next_gap, alone in ((0.075, False), (0.088, False), (0.089, True), (0.30, True)):
@@ -3096,14 +3096,19 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
     assert v.luck_s == 0.0 and round(v.gap_s, 2) == 0.08 and not v.level, v
 
 
+SECTOR_LUCK_SEEDS = tuple(range(401, 431))    # thirty days for the sector luck re-measure
+
+
 def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     """`quickest_bias.measure_bias` on six habit-free days at the reference noise (CHECK_SEEDS,
     about 40 s): at n = 5, 9 and 13 each measured bias lands within 0.006 s of the shipped
     `quickest_luck_s` — the corners' typical and next gaps (six days scatter: the four ten-day seed
     sets ran within ±0.005 s of the pooled fit at these n); and the sectors', re-measured by
-    `sector_split_sigma.measure_luck` on the same six days at the split step's own placement, within
-    0.020 s (its six-day scatter, below). A hand-typed constant, or a probe whose statistic
-    drifted, fails here."""
+    `sector_split_sigma.measure_luck` on THIRTY days (seeds 401-430, `SECTOR_LUCK_SEEDS`) at the
+    sector luck's basis placement, within 2.5 standard errors of that sample per cell and with the
+    pooled ratio measured / shipped within ±0.15 (2.4 standard errors), which a fit 30 % off in
+    either direction fails (checked on these very days below). A hand-typed constant, or a probe
+    whose statistic drifted, fails here."""
     import shutil
 
     from studio import (
@@ -3125,12 +3130,11 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     work = tempfile.mkdtemp(prefix="quickest_bias_check_")
     try:
         got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
-        # a sector's luck is fitted at the split step's own placement, the worst measured: the
-        # 26 m sector across C5 ("short_c5") at the split column's drift time constant
-        # (`stats.SPLIT_DRIFT_TAU_S`, measure_luck's default), whose worst sector is the σ the
-        # split step is built on
-        got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS,
-                                                  "short_c5", probe.CHECK_N)
+        # a sector's luck is fitted to the upper envelope over the 13 placements (studio/stats.py's
+        # luck block), which three slow lines (244, 578, 730 m) set at every n, at the split
+        # column's drift time constant (`stats.SPLIT_DRIFT_TAU_S`, measure_luck's default)
+        got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE, SECTOR_LUCK_SEEDS,
+                                                  "three_slow", probe.CHECK_N)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         sidecar.save = keep[0]
@@ -3140,18 +3144,28 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
             os.environ.pop(app_support.DIR_ENV, None)
         else:
             os.environ[app_support.DIR_ENV] = keep[2]
-    # A sector's luck at its basis placement (a 26 m sector across C5, τ 30 s) scatters far more
-    # over six days: the 12 groups of six of the 80 τ 30 s days read 0.015-0.044 s (typical) and
-    # 0.010-0.044 s (next) at n = 13 around the fit's 0.030 / 0.026, and these six (401-406) are the
-    # most extreme of them, 0.044 / 0.044. So it is held to 0.020, the largest deviation any group
-    # showed (0.018), rounded up; the luck fitted before (0.066 s at n = 13) fails it.
-    for kind, key, tol in (("corners", 1, 0.006), ("sectors", -1, 0.020)):
-        for n in probe.CHECK_N:
-            typ, nxt = got[kind][n]
-            for gap, measured in (("typical", typ), ("next", nxt)):
-                shipped = stats.quickest_luck_s(key, n, gap)
-                assert abs(measured - shipped) <= tol, (kind, n, gap, measured, shipped)
-    print(f"ok luck re-measured: {got}")
+    for n in probe.CHECK_N:
+        typ, nxt = got["corners"][n]
+        for gap, measured in (("typical", typ), ("next", nxt)):
+            shipped = stats.quickest_luck_s(1, n, gap)
+            assert abs(measured - shipped) <= 0.006, ("corners", n, gap, measured, shipped)
+    # THE SECTORS' (cool/sector-dedrift review). Thirty days scatter by about 0.0022-0.0033 s per
+    # cell (n = 5 / 9 / 13, typical / next; scaled from 18-day draws out of the 80 the fit pools,
+    # the widest at n = 13, typical) and their six-cell mean by about 6 % of it: so each cell is
+    # held to 0.009 s (2.5 SE of the widest) and the ratio of the sums to ±0.15 (2.4 SE). These
+    # thirty read 7 % over the fit (ratio 1.07, about 1.2 SE).
+    pairs = [(got["sectors"][n][i], stats.quickest_luck_s(-1, n, gap))
+             for n in probe.CHECK_N for i, gap in enumerate(("typical", "next"))]
+    for measured, shipped in pairs:
+        assert abs(measured - shipped) <= 0.009, ("sectors", pairs)
+    ratio = sum(m for m, _ in pairs) / sum(sh for _, sh in pairs)
+    assert abs(ratio - 1.0) <= 0.15, ("sectors", ratio, pairs)
+    # its teeth, on these very days: a fit 30 % high or low fails one of the two
+    for k in (0.7, 1.3):
+        off = [(m, sh * k) for m, sh in pairs]
+        assert (abs(sum(m for m, _ in off) / sum(sh for _, sh in off) - 1.0) > 0.15
+                or any(abs(m - sh) > 0.009 for m, sh in off)), ("a fit off by", k, pairs)
+    print(f"ok luck re-measured: {got} (sector ratio {ratio:.3f})")
 
 
 def test_the_demo_has_no_star_and_two_typical_offers_once_luck_is_allowed_for():

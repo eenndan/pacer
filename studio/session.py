@@ -2133,8 +2133,9 @@ class Session:
 
     def _sector_drift(self, lap_id: int) -> tuple[float, float]:
         """The receiver shift taken off `lap_id`'s trace BEFORE it is crossed with the sector lines
-        (`_project_sector_lines`): its rigid translation onto the session's consensus line,
-        `CornerModel.consensus_shift` — the same per-lap fit the corner cells already remove.
+        (`_project_sector_lines`): its robust rigid translation onto the session's consensus line,
+        `CornerModel.sector_shift` — the per-lap fit the corner cells remove, refitted with a
+        wide stretch of the lap trimmed so that running wide cannot tilt it.
 
         WHY. A lap crosses the start line twice and its receiver's slowly drifting position error
         cancels; a split crosses two DIFFERENT lines and keeps (that error · heading) / speed at
@@ -2142,15 +2143,21 @@ class Session:
         `stats.SECTOR_LEVEL_S`'s block). A translation does not change the trace's odometer, so the
         lap's start and finish — and its time — are untouched, and its splits still sum to it.
 
-        THE FALLBACK: with no session geometry (fewer than `corners.DRIFT_MIN_LAPS` clean laps,
-        too few stations answering) this is (0, 0) for every lap of the session, and its splits
-        are crossed as measured — one method per session, never mixed in a column. Fewer clean laps
-        than `corners.DRIFT_MIN_LAPS` is also too few for a SPLITS grid (`stats.MATRIX_MIN_LAPS`),
-        so no level step is read there; a geometry that fails with enough laps (a degenerate
-        reference lap) keeps the uncorrected splits under the de-drifted step, a stated limit
-        (docs/ACCURACY.md). getattr-guarded for the bare-Session test path."""
+        THE FALLBACKS (`sector_drift_status`): with no session geometry (fewer than
+        `corners.DRIFT_MIN_LAPS` clean laps, too few stations answering) every lap of the session
+        is crossed as measured; fewer clean laps than that is also too few for a SPLITS grid
+        (`stats.MATRIX_MIN_LAPS`). Inside a session WITH a geometry, a lap with no trustworthy
+        shift (`corners.robust_shift` refused it: too few stations left after the trim, too few
+        headings, or no usable trace) is crossed as measured while the rest are de-drifted, so its
+        column mixes the two for that lap — its provenance says which. getattr-guarded for the
+        bare-Session test path."""
         cm = getattr(self, "corners", None)
-        return (0.0, 0.0) if cm is None else cm.consensus_shift(lap_id)
+        return (0.0, 0.0) if cm is None else cm.sector_shift(lap_id)[0]
+
+    def sector_drift_status(self, lap_id: int) -> str:
+        """Why `lap_id`'s splits were or were not de-drifted (`CornerModel.sector_shift`'s word)."""
+        cm = getattr(self, "corners", None)
+        return "no geometry" if cm is None else cm.sector_shift(lap_id)[1]
 
     def _project_sector_lines(self, lap_id: int, lines: list[tuple[float, float, float, float]]
                               ) -> tuple[list[float], float] | None:
@@ -2420,7 +2427,8 @@ class Session:
             lap_id=lap_id, sector=sector, of=len(splits), value=float(splits[sector]),
             fmt="{:.2f}".format, fixes=fixes,          # the S-column's own 2 dp
             d0=float(edges[sector]), d1=float(edges[sector + 1]),
-            clock=self.timing_quality.clock)
+            clock=self.timing_quality.clock,
+            drift=(self._sector_drift(lap_id), self.sector_drift_status(lap_id)))
 
     def corner_best_provenance(self, cid: int):
         """What produced one corner's session-best time.

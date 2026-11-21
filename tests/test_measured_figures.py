@@ -1381,10 +1381,6 @@ _NOT_A_GPS_STEP = {
 _ANCHORS = {
     "REFERENCE_LAP_SIGMA_S": ("library.py", "docs/ACCURACY.md row C's σ (test_the_pb_floor_…)"),
     "PB_PRECISION_S": ("library.py", "house rule on REFERENCE_LAP_SIGMA_S (test_the_pb_floor_…)"),
-    # cool/sector-dedrift: not a σ but a measured CALL record at the one reference's noise — the
-    # smallest split step with no wrong-sign quickest-row offer and no ★ on a pair truly under
-    # 0.03 s on both drift grids (sector_split_sigma's `calls`; test_the_sector_step_is_…)
-    "SECTOR_CALL_FLOOR_S": ("stats.py", "the split step's measured call floor (test_the_sector_step_…)"),
 }
 
 
@@ -1428,11 +1424,14 @@ def _is_reference_sigma(node: ast.expr) -> bool:
             and ast.unparse(node.value).split(".")[-1] == "REFERENCE_SIGMAS")
 
 
+_HEADROOM_EXPR = "round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 2)"
+
+
 def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
     """Every step-like constant in `defs` that does not derive from the one reference. A value may
     only be: a bare alias of an accepted step (PB_PRECISION_S included); a σ read as
     `REFERENCE_SIGMAS.<field>`; `house_step(<accepted σ name>)`; or `max(<accepted step>,
-    PB_PRECISION_S or another anchor)`. Anchors and exempt names are accepted only in their home file, and a step name
+    PB_PRECISION_S)`. Anchors and exempt names are accepted only in their home file, and a step name
     defined twice fails unless every definition is a bare alias of PB_PRECISION_S."""
     steps = [(rel, n, v) for rel, n, v in defs if _STEP_NAME.match(n)
              and not (isinstance(v, ast.Constant) and isinstance(v.value, str))]
@@ -1476,17 +1475,30 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
                 and ok(_name_of(arg), (*seen, name)))
         elif isinstance(value, ast.Call) and _name_of(value.func) == "max" \
                 and len(value.args) == 2 and not value.keywords:
-            # the wider of two accepted steps: PB_PRECISION_S, or an anchor of its own (a call floor)
             names = [_name_of(a) for a in value.args]
-            good = (None not in names
-                    and any(a == "PB_PRECISION_S" or a in _ANCHORS for a in names)
+            good = (None not in names and "PB_PRECISION_S" in names
                     and all(ok(a, (*seen, name)) for a in names))
         else:
             good = False
         return good
 
+    # THE ONE HEADROOM (cool/sector-dedrift): the split step is its house rule rounded up by a named
+    # sampling headroom, and only that exact expression, in stats.py, may use it.
+    headroom = "SPLIT_SAMPLING_HEADROOM_S"
+    for rel, n, v in defs:
+        uses = any(isinstance(x, ast.Name) and x.id == headroom
+                   or isinstance(x, ast.Attribute) and x.attr == headroom for x in ast.walk(v))
+        if n == headroom and (os.path.basename(rel) != "stats.py" or len(every[n]) > 1):
+            problems.append(f"{rel}: {n} belongs to stats.py only, defined once")
+        elif uses and not (n == "SECTOR_LEVEL_S" and os.path.basename(rel) == "stats.py"
+                           and ast.unparse(v) == _HEADROOM_EXPR):
+            problems.append(f"{rel}: {n} = {ast.unparse(v)} — {headroom} is SECTOR_LEVEL_S's alone, "
+                            f"as `{_HEADROOM_EXPR}`")
     for rel, n, v in steps:
         home = (_ANCHORS.get(n) or _NOT_A_GPS_STEP.get(n) or (None,))[0]
+        if n == "SECTOR_LEVEL_S" and os.path.basename(rel) == "stats.py" \
+                and ast.unparse(v) == _HEADROOM_EXPR and len(by_name[n]) == 1:
+            continue    # SECTOR_HOUSE_STEP_S is checked as a step of its own
         if home is not None and os.path.basename(rel) != home:
             problems.append(f"{rel}: {n} = {ast.unparse(v)} — {n} belongs to {home} only")
         elif not ok(n):
@@ -1559,6 +1571,19 @@ _GUARD_PLANTS = (
     ("studio/lap_table.py", "QUICK_LEVEL_S = round(DIFF_2SIGMA_K * 0.0435, 2)"),
     ("studio/lap_table.py", "SECTOR_LEVEL_S = 0.30"),
     ("studio/focus.py", "CORNER_DAY_SIGMA_S = 0.0351"),
+    # the independent review of cool/sector-dedrift: a "floor" anchor that any max() could borrow
+    ("studio/stats.py", "SECTOR_CALL_FLOOR_S = 0.30"),
+    ("studio/lap_table.py", "X_LEVEL_S = max(REFERENCE_CORNER_LEVEL_S, SECTOR_CALL_FLOOR_S)"),
+    ("studio/focus.py", "CORNER_X_LEVEL_S = max(CROSS_SESSION_LEVEL_S, stats.SECTOR_CALL_FLOOR_S)"),
+    ("studio/lap_table.py", "X_LEVEL_S = max(SECTOR_CALL_FLOOR_S, SECTOR_CALL_FLOOR_S)"),
+    ("studio/stats.py", "X_LEVEL_S = max(REFERENCE_LAP_SIGMA_S, SECTOR_CALL_FLOOR_S)"),
+    ("studio/stats.py", "SPLIT_MARGIN_FLOOR_S = 0.30\nX_LEVEL_S = max(SECTOR_HOUSE_STEP_S, SPLIT_MARGIN_FLOOR_S)"),
+    # the sampling headroom borrowed, re-sized, re-defined or bent
+    ("studio/lap_table.py", "X_LEVEL_S = round(REFERENCE_CORNER_LEVEL_S + SPLIT_SAMPLING_HEADROOM_S, 2)"),
+    ("studio/focus.py", "CORNER_X_LEVEL_S = CROSS_SESSION_LEVEL_S + stats.SPLIT_SAMPLING_HEADROOM_S"),
+    ("studio/lap_table.py", "SPLIT_SAMPLING_HEADROOM_S = 0.10"),
+    ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 1)"),
+    ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + 0.10, 2)"),
 )
 
 
@@ -1609,10 +1634,10 @@ def test_the_accuracy_step_table_is_the_published_noise_table():
     # one statistic with its own, wider step (cool/sector-step-one-reference), its own cell
     assert max(stats.house_step(s) for k, s in vars(ref).items()
                if s < 1 and k != "split") <= library.PB_PRECISION_S
-    # the split step is the house rule on its cell, or the measured call floor where that is wider
-    # (cool/sector-dedrift: no wrong-sign quickest-row offer, no ★ on a pair truly under 0.03 s)
-    assert stats.SECTOR_LEVEL_S == max(stats.house_step(ref.split), stats.SECTOR_CALL_FLOOR_S) \
-        > library.PB_PRECISION_S
+    # the split step is the house rule on its cell rounded up by the one named sampling headroom
+    # (cool/sector-dedrift)
+    assert stats.SECTOR_LEVEL_S == round(stats.house_step(ref.split)
+                                         + stats.SPLIT_SAMPLING_HEADROOM_S, 2) > library.PB_PRECISION_S
     assert f"**The app uses {library.REFERENCE_RECORDING}'s row**" in acc
     assert "The lap column uses each recording's published per-lap σ" in " ".join(acc.split())
     # what the app says where it reads "level" is this table's arithmetic, each surface its own
