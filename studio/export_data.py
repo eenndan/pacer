@@ -65,6 +65,9 @@ OFF_LINE_FLAG = "off-line"
 # ...and a lap timed across a missing chapter (`Session.chapter_gap_notes`): its time is short by
 # the chapter that is not in the folder. Wins over the other two, as its ⚠ sentence does.
 GAP_FLAG = "chapter-gap"
+#: Each `flag` value as the ⚠ kind it names (`data_quality.WARN_REASON` words it), in key order.
+FLAG_KIND = {DROPOUT_FLAG: data_quality.WARN_DROPOUT, OFF_LINE_FLAG: data_quality.WARN_OFF_LINE,
+             GAP_FLAG: data_quality.WARN_CHAPTER_GAP}
 
 # laps.csv's per-lap distance column. It is the lap odometer, which reads short of the distance
 # driven (`stats.ODOMETER_NOTE`), so the file's trailer carries that note under this label, the
@@ -351,6 +354,15 @@ def quality_key(headers, rows) -> list[tuple[str, str]]:
     col = list(headers).index("quality")
     present = {m for _lap_id, cells in rows if len(cells) > col for m in cells[col].split()}
     return data_quality.mark_key(present)
+
+
+def flag_key(headers, rows) -> list[tuple[str, str]]:
+    """`(flag, reason)` for every `flag` value `rows` carry, in `FLAG_KIND` order, worded from
+    `data_quality.WARN_REASON` — the key the report puts under the column. Read off the ROWS like
+    `quality_key`, so it lists only the kinds present, and nothing on a clean session."""
+    col = list(headers).index("flag")
+    present = {cells[col] for _lap_id, cells in rows if len(cells) > col}
+    return [(f, data_quality.WARN_REASON[kind]) for f, kind in FLAG_KIND.items() if f in present]
 
 
 def any_interpolated(headers, rows) -> bool:
@@ -1242,6 +1254,9 @@ def _front(session, unit, card: bytes | None, ideal_gap: str | None = None,
 # corner's pair sits under ONE "C1" over "time (s)" / "apex (km/h)". The machine names stay the
 # CSV's (`laps_table`), and every one of them maps to exactly one column here (`report_laps_header`).
 REPORT_QUALITY_HEAD = "Quality"
+# The `flag` column's head: it was "GPS" from when the column could only say "gps-dropout", and
+# then read an off-line or chapter-gap lap as a GPS fault. It names what every value means.
+REPORT_FLAG_HEAD = "Not counted"
 REPORT_INTERPOLATED_HEAD = "Interpolated"   # the app's word for a corner edge not matched on track
 # INTERPOLATED_NOTE in the page's column words (the CSV trailer keeps its own, ASCII, verbatim).
 REPORT_INTERPOLATED_NOTE = (
@@ -1267,7 +1282,7 @@ def report_laps_header(headers) -> list[tuple[str | None, str]]:
         elif stem == "entry" and last in units.UNITS:
             out.append((None, f"Entry ({units.speed_label(last)})"))
         elif h == "flag":
-            out.append((None, "GPS"))
+            out.append((None, REPORT_FLAG_HEAD))
         elif h == "quality":
             out.append((None, REPORT_QUALITY_HEAD))
         elif h == INTERPOLATED_COLUMN:
@@ -1327,6 +1342,13 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
         out.append(f'<p class="note">Quality markers in the {REPORT_QUALITY_HEAD} column '
                    "(UK Government Analysis Function symbols): "
                    + "; ".join(f"<b>{esc(code)}</b> {esc(meaning)}" for code, meaning in key)
+                   + ".</p>")
+    # …and the ⚠ column's, naming only the kinds the rows carry, in data_quality's words.
+    flags = flag_key(headers, rows)
+    if flags:
+        out.append(f'<p class="note">Laps in the {REPORT_FLAG_HEAD} column are '
+                   f'{data_quality.NOT_COUNTED}: '
+                   + "; ".join(f"<b>{esc(flag)}</b> {esc(reason)}" for flag, reason in flags)
                    + ".</p>")
     # …and the same for the C5 disclosure column, for the same reason and on the same terms: a
     # reader of the page has no other way to know that a corner cell beside it is a guess.

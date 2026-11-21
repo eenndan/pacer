@@ -85,7 +85,7 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QFontMetricsF, QImage, QPainter, QPen
 
-from . import theme, units
+from . import data_quality, theme, units
 from ._signal import PRINT_DECIMALS, fmt_time, lap_label
 from .export_palette import EXPORT
 from .export_video import (
@@ -592,6 +592,9 @@ class CompareSpec(ExportSpec):
     # A compare AT ONE PASS (`build_pass_compare_spec`): then `t0`/`t1` and `t_b0`/`t_b1` are the
     # two passes' own clips, and the render is clip-locked rather than track-locked (`PassPair`).
     pass_pair: PassPair | None = None
+    # Pane B's ⚠ set (pane A's is the inherited `not_counted`), each from ITS OWN session: a lap
+    # in it is tagged on its pane and the gap is neutral (`build_frames`).
+    not_counted_b: frozenset = frozenset()
 
     def __post_init__(self):
         super().__post_init__()
@@ -689,7 +692,9 @@ def build_compare_spec(session_a, out_path: str, lap_a: int, lap_b: int,
     return CompareSpec(out_path=out_path, lap_id=lap_a, t0=a0, t1=a1, source=source_a,
                        config=cfg, lap_b=lap_b, source_b=source_b, t_b0=b0, t_b1=b1,
                        cross=session_b is not session_a, label_a=label_a, label_b=label_b,
-                       ends_on_finish=True)
+                       ends_on_finish=True,
+                       not_counted=data_quality.not_counted_ids(session_a),
+                       not_counted_b=data_quality.not_counted_ids(session_b))
 
 
 def build_pass_compare_spec(session, out_path: str, lap_a: int, lap_b: int, anchor,
@@ -1027,6 +1032,13 @@ def build_frames(spec: CompareSpec, lock: LockedTrack) -> list[CompareFrame]:
     cfg = spec.config
     arrow = bool(getattr(cfg, "delta_arrow", True))
     unit = cfg.speed_unit
+    # A ⚠ lap on either pane (kept out of the bests): its pane names it "LAP 10 · ⚠ not counted"
+    # and the gap is neutral and arrowless on every frame, as a one-lap clip's Δ is
+    # (export_video._frame_strip_runs; why on the frame: data_quality's frame block).
+    tag = f" · {data_quality.FRAME_NOT_COUNTED}"
+    tag_a = tag if getattr(spec, "lap_id", None) in getattr(spec, "not_counted", ()) else ""
+    tag_b = tag if getattr(spec, "lap_b", None) in getattr(spec, "not_counted_b", ()) else ""
+    neutral = bool(tag_a or tag_b)
     frames = []
     for i in range(len(lock.fraction)):
         d = float(lock.delta[i])
@@ -1035,8 +1047,8 @@ def build_frames(spec: CompareSpec, lock: LockedTrack) -> list[CompareFrame]:
         frames.append(CompareFrame(
             fraction=float(lock.fraction[i]),
             delta=d,
-            caption_a=f"{spec.label_a}   {fmt_time(float(lock.elapsed_a[i]))}",
-            caption_b=f"{spec.label_b}   {fmt_time(float(lock.elapsed_b[i]))}",
+            caption_a=f"{spec.label_a}{tag_a}   {fmt_time(float(lock.elapsed_a[i]))}",
+            caption_b=f"{spec.label_b}{tag_b}   {fmt_time(float(lock.elapsed_b[i]))}",
             speed_a_kmh=sa,
             speed_b_kmh=sb,
             # lap_id 0 (never None) so the formatter prints the number: every compare frame is
@@ -1045,8 +1057,9 @@ def build_frames(spec: CompareSpec, lock: LockedTrack) -> list[CompareFrame]:
             speed_b=theme.speed_number(sb, 0, unit),
             # No ▲/▼ on a level gap: the arrow would claim the direction the white disclaims (the
             # live compare seam drops it too). The sign still prints.
-            delta_run=theme.format_delta_run(d, units=False,
-                                             arrow=arrow and not burned_delta_is_level(d)),
+            delta_run=theme.format_delta_run(d, units=False, arrow=arrow and not neutral
+                                             and not burned_delta_is_level(d)),
+            neutral=neutral,
         ))
     return frames
 

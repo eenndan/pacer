@@ -47,7 +47,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME, export_compare, export_data, export_video, prefs, share_card, theme
+from . import (
+    APP_NAME,
+    data_quality,
+    export_compare,
+    export_data,
+    export_video,
+    prefs,
+    share_card,
+    theme,
+)
 from ._signal import fmt_hms, lap_label, plural
 from .overlay import LAYOUT_PREFIX, broadcast, corner_cards, ghost
 from .session import fmt_time
@@ -720,6 +729,16 @@ class ExportController:
         except Exception:  # noqa: BLE001 — an unreadable pref never blocks an export
             return default
         return value if isinstance(value, int) and 0 <= value < count else default
+
+    @staticmethod
+    def _not_counted_line(session, lap) -> str:
+        """`data_quality.not_counted_line` for an export dialog, "" when it cannot be read: a
+        caption never blocks the export it describes."""
+        try:
+            return data_quality.not_counted_line(session, lap) if session is not None else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _ghost_reason(self, scope: str, lap: int) -> str | None:
         """Why this scope can draw no ghost (the checkbox's disabled tooltip), or None. All laps
         asks only the session-wide rules: each lap's file then answers for itself, and the best
@@ -1111,7 +1130,14 @@ class ExportController:
         # lap_time is a cheap pacer-free accessor (no ffprobe).
         dur = self.win.session.lap_time(lap) if hasattr(self.win, "session") else float("nan")
         lap_text = f"Selected lap {lap_label(lap)}  ·  {fmt_time(dur)}"
+        # A ⚠ lap says so here, where the export is chosen (the clip tags it too): it stays
+        # exportable — it is his footage — but never reads as a lap that counts.
+        why = self._not_counted_line(self.win.session if hasattr(self.win, "session") else None,
+                                     lap)
+        if why:
+            lap_text += f"  ·  {why}"
         lap_line = QLabel(lap_text)
+        lap_line.setWordWrap(bool(why))        # the reason is a sentence: it wraps, never clips
         lap_line.setProperty("role", "Note")
         col.addWidget(lap_line)
         # With the pass row chosen the line names the pass, never the lap's time (a pass clip
@@ -1679,6 +1705,16 @@ class ExportController:
         form.setHorizontalSpacing(theme.SPACE_M)
         form.setVerticalSpacing(theme.SPACE_S)
         pair = self.compare_pair()
+        # A ⚠ lap in the pair, each from its own recording, as the single-lap picker's lap line.
+        if pair is not None:
+            for lap, session in ((pair[0], getattr(self.win, "session", None)),
+                                 (pair[1], pair[2] or getattr(self.win, "session", None))):
+                why = self._not_counted_line(session, lap)
+                if why:
+                    note = QLabel(f"Lap {lap_label(lap)}  ·  {why}")
+                    note.setWordWrap(True)
+                    note.setProperty("role", "Note")
+                    col.addWidget(note)
         anchor = self.compare_pass() if pair is not None else None
         scope_combo = None
         if anchor is not None:

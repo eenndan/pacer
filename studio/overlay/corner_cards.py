@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QFontMetricsF, QImage, QPainter, QPen
 
-from studio import library, theme, units
+from studio import data_quality, library, theme, units
 from studio._signal import fmt_signed
 from studio.export_palette import EXPORT
 from studio.overlay import LAYER_TOP, STAMP, ElementContext
@@ -139,6 +139,9 @@ def card_rows(session, lap_id: int, unit: str | None, palette: str | None) -> li
     word = baseline_word(session)
     baseline = is_baseline_lap(session, lap_id, stats)
     step = level_step(session)
+    # A ⚠ lap (kept out of the bests) is no gain or loss against the best: its gaps print neutral,
+    # as the strip's and the bar's do (export_video._frame_strip_runs).
+    uncounted = lap_id in data_quality.not_counted_ids(session)
     # Deferred, like every export_video read here: export_video imports this package.
     from studio import export_video as ev
     out = []
@@ -154,7 +157,7 @@ def card_rows(session, lap_id: int, unit: str | None, palette: str | None) -> li
             delta, colour = f"≈ {word}", EXPORT.neutral
         else:
             delta = f"{fmt_signed(st.delta, 2)} s vs {word}"
-            colour = ev.export_delta_colour(st.delta, palette)
+            colour = EXPORT.neutral if uncounted else ev.export_delta_colour(st.delta, palette)
         out.append(Card(cid=st.cid, t_exit=float(entry) + float(st.time), label=f"C{st.cid}",
                         speed=f"{units.convert_speed(st.apex_speed, unit):.1f}",
                         unit=units.speed_label(unit), delta=delta, colour=colour))

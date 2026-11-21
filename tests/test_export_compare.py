@@ -44,6 +44,7 @@ _APP = themed_app()
 from _synthetic import bare_session, odometer  # noqa: E402
 from PySide6.QtGui import QFontMetricsF  # noqa: E402
 
+from studio import data_quality  # noqa: E402
 from studio import export_compare as ec  # noqa: E402
 from studio import export_video as ev  # noqa: E402
 from studio import media_clock as mc  # noqa: E402
@@ -492,6 +493,30 @@ def test_every_pill_holds_the_ink_it_will_draw():
     box = p.delta_box()
     assert box.x() > p._margin + max(p._caption_w, p._readout_w), "the gap pill overlaps a corner"
     print(f"ok pill budget: {len(frames)} frames, no run exceeds its pill")
+
+
+def test_a_lap_kept_out_of_the_bests_says_so_and_its_gap_is_neutral():
+    """Discovery 11: a lap out of the bests (the ⚠ set) burned "LAP 10 vs LAP 13 Δ −0.73 ▲" in
+    green, as if it beat the best. Its pane now reads "LAP 4 · ⚠ not counted" and the gap is the
+    neutral white with no arrow on every frame (data_quality's frame block); a clean pair keeps
+    its colour rule, its arrow and its plates exactly as before."""
+    s, a, b = _two_lap_session()
+    _times, lock = _lock_for(s, a, b)
+    clean = ec.build_frames(ec.build_compare_spec(s, "/out.mp4", a, b, src_path_a="/a.MP4",
+                                                  src_path_b="/b.MP4"), lock)
+    assert not any(f.neutral for f in clean) and any("▲" in f.delta_run or "▼" in f.delta_run
+                                                     for f in clean)
+    s.lap_warnings = lambda: {a: "Lap 4 left the line your other laps drive by 34 m, so …"}
+    spec = ec.build_compare_spec(s, "/out.mp4", a, b, src_path_a="/a.MP4", src_path_b="/b.MP4")
+    frames = ec.build_frames(spec, lock)
+    tag = "⚠ not counted"                     # data_quality.FRAME_NOT_COUNTED, checked last
+    assert all(f.caption_a.startswith(f"LAP 4 · {tag}   ") for f in frames), frames[0].caption_a
+    assert all(tag not in f.caption_b for f in frames)
+    assert all(f.neutral and "▲" not in f.delta_run and "▼" not in f.delta_run for f in frames)
+    # The gap's NUMBER is unchanged: only its colour and its arrow are withheld.
+    assert [f.delta for f in frames] == [f.delta for f in clean]
+    assert data_quality.FRAME_NOT_COUNTED == tag
+    print("ok a ⚠ lap in a compare: tagged on its pane, its gap neutral and arrowless")
 
 
 # --------------------------------------------------------------------------- the drive loop

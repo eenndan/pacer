@@ -656,6 +656,10 @@ class ExportSpec:
     # the corner's entry and exit, not a start and finish line, so `lap_t0`/`lap_t1` are the timed
     # span the overlay waits for — the strip names the corner, and its time once the kart is out.
     pass_subject: PassSubject | None = None
+    # The ⚠ set (`data_quality.not_counted_ids`), resolved once by the spec builders: a lap in
+    # it is kept out of the bests, so its Δ is drawn neutral and a one-lap clip tags its name
+    # (`_frame_strip_runs`; why on the frame and not on a full-session clip: data_quality).
+    not_counted: frozenset = frozenset()
 
     def __post_init__(self):
         # Back-compat: a caller that passed only `src_path` (the legacy single-file API + the
@@ -3317,7 +3321,17 @@ def _frame_strip_runs(session, vals: OverlayValues, spec: ExportSpec,
     `_strip_runs` exactly as every lap and session export has called it."""
     if spec.pass_subject is not None:
         return _pass_strip_runs(vals, spec)
-    return _strip_runs(session, vals, spec.lap_t0, spec.is_best_at(vals.lap_id), palette)
+    runs = _strip_runs(session, vals, spec.lap_t0, spec.is_best_at(vals.lap_id), palette)
+    if runs is None or vals.lap_id not in spec.not_counted:
+        return runs
+    # A ⚠ lap (kept out of the bests): its Δ is never a gain or a loss against a best it can
+    # never be, so it is the neutral white (Broadcast's bar takes the same colour); a ONE-LAP clip
+    # also names it "LAP 10 · ⚠ not counted" on every frame (data_quality's frame block).
+    label, tail, colour, frac = runs
+    if not spec.follow_laps:
+        head, sep, clock = label.partition("   ")
+        label = f"{head} · {data_quality.FRAME_NOT_COUNTED}{sep}{clock}"
+    return label, tail, EXPORT.neutral if tail else colour, frac
 
 
 def _burned_runs(session, spec: ExportSpec, fps: float) -> tuple[list[str], list[str], list[str]]:
@@ -3405,7 +3419,7 @@ def _paint_readout(p: QPainter, box: QRectF, vals: OverlayValues,
 
 def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: float,
                  palette: str | None = None, is_best: bool = False,
-                 pass_spec: ExportSpec | None = None) -> None:
+                 pass_spec: ExportSpec | None = None, spec: ExportSpec | None = None) -> None:
     """Lap/sector strip (top-left): "LAP n   m:ss.mmm" then the Δ, over a vivid amber time-progress
     fill, on the same slim dark pill as the readout (fitted to its text — `strip_pill_width`).
 
@@ -3416,12 +3430,14 @@ def _paint_strip(p: QPainter, box: QRectF, session, vals: OverlayValues, t0: flo
     `_strip_runs` owns WHAT this frame says — the lap-scoped gating, the clamped clock and the
     tail — because the pill budget has to ask the same question and get the same answer. `t0` is
     the LAP's start, used only when the session cannot supply a lap window. `pass_spec`: a pass
-    clip's spec, whose runs are `_pass_strip_runs`'."""
+    clip's spec, whose runs are `_pass_strip_runs`'. `spec` (the renderer's): the runs are then
+    `_frame_strip_runs`', the ones the pill budget measured, the ⚠ lap's tag and neutral Δ included."""
     k = box.height() / 44.0
     p.setBrush(_c(EXPORT.halo, 165))
     p.setPen(QPen(_c(EXPORT.text, 55), 1.0 * k))
     p.drawRoundedRect(box, 8 * k, 8 * k)
-    runs = (_pass_strip_runs(vals, pass_spec) if pass_spec is not None
+    runs = (_frame_strip_runs(session, vals, spec, palette) if spec is not None
+            else _pass_strip_runs(vals, pass_spec) if pass_spec is not None
             else _strip_runs(session, vals, t0, is_best, palette))
     if runs is None:
         return
@@ -3507,6 +3523,12 @@ class OverlayPainter:
         # aspect, which on the only shape this used to render was 16:9. A degenerate/absent trace
         # falls back to the capped box.
         map_lap = None if spec.follow_laps else spec.lap_id
+        # A ⚠ lap's own line is no picture of the track: a dropout's gap is a straight line drawn
+        # across the hole, a cut skips part of the circuit. Its inset draws the best lap's line
+        # instead (the counted lap the map's reference loop and its C-labels come from); the kart
+        # dot still follows THIS lap, read off the session trace at the frame's time.
+        if map_lap in spec.not_counted and spec.best_lap_id is not None:
+            map_lap = spec.best_lap_id
         mh = cfg.map_h_frac * self._u
         mw = _inset_width(session, map_lap, mh, mh * cfg.map_max_aspect)
         map_rect = QRectF(out_w - m - mw, out_h - m - mh, mw, mh)
@@ -3671,7 +3693,8 @@ class OverlayPainter:
         if "strip" not in skip:
             _paint_strip(p, self._strip_rect, self._session, vals, self._spec.lap_t0,
                          self._spec.config.palette, self._spec.is_best_at(vals.lap_id),
-                         pass_spec=self._spec if self._spec.pass_subject is not None else None)
+                         pass_spec=self._spec if self._spec.pass_subject is not None else None,
+                         spec=self._spec)
         # ...and the honesty stamp under it, on EVERY frame including the lead-in and the run-off:
         # what it qualifies is the recording, not a moment in it, and a caveat that came and went
         # would be a caveat a single-frame grab or a re-cut could drop.
@@ -5074,7 +5097,7 @@ def build_lap_spec(session, out_path: str, lap_id: int,
     return ExportSpec(out_path=out_path, lap_id=lap_id, t0=t0, t1=t1,
                       source=source, config=config or OverlayConfig(),
                       is_best=best_id is not None and int(best_id) == int(lap_id),
-                      best_lap_id=best_id,
+                      best_lap_id=best_id, not_counted=data_quality.not_counted_ids(session),
                       lead_in=lap_t0 - t0, lead_out=t1 - lap_t1, ends_on_finish=t1 <= lap_t1)
 
 
@@ -5220,7 +5243,8 @@ def build_session_spec(session, out_path: str,
     # session's trace", which is the right picture for a clip that runs over every lap.
     return ExportSpec(out_path=out_path, lap_id=-1, t0=0.0, t1=float(total),
                       source=source, config=config or OverlayConfig(),
-                      follow_laps=True, best_lap_id=best_id)
+                      follow_laps=True, best_lap_id=best_id,
+                      not_counted=data_quality.not_counted_ids(session))
 
 
 def scope_lap_ids(session, scope: str, lap_id: int | None) -> list[int]:

@@ -233,6 +233,35 @@ def test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report():
     print("test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report OK")
 
 
+def test_the_report_heads_the_flag_column_not_counted_and_keys_the_kinds_present():
+    """Discovery 11: the report headed the ⚠ column "GPS" (from when it could only say
+    gps-dropout), so an off-line or chapter-gap lap read as a GPS fault, with no key. It is now
+    "Not counted", with one key line under the table naming only the kinds the rows carry in
+    data_quality's words. A ⚠ row is never the green best row. A session with no ⚠ lap carries no
+    key."""
+    s = make_session()
+    s.off_line_metres = lambda: {0: 34.2}           # lap 1 cut across the infield
+    headers, rows = export_data.laps_table(s)
+    assert export_data.report_laps_header(headers)[headers.index("flag")] == (None, "Not counted")
+    assert export_data.flag_key(headers, rows) == [
+        ("gps-dropout", "GPS dropout"), ("off-line", "left the line the other laps drive")]
+    text = _report_text(s)
+    assert "<th rowspan=\"2\">GPS</th>" not in text and ">Not counted</th>" in text
+    assert ("Laps in the Not counted column are not counted in your bests: <b>gps-dropout</b> "
+            "GPS dropout; <b>off-line</b> left the line the other laps drive.") in text, text[-3000:]
+    assert "chapter-gap" not in text                 # only the kinds present
+    root = ET.fromstring(text)
+    (table,) = [t for t in root.iter("table") if t.get("class") == "laps"]
+    col = headers.index("flag")
+    best_rows = [tr for tr in table.findall("tr") if tr.get("class") == "best"]
+    assert best_rows and all(tr.findall("td")[col].text in (None, "") for tr in best_rows)
+    clean = make_session()
+    clean.dropout_lap_ids = lambda: set()
+    h, r = export_data.laps_table(clean)
+    assert export_data.flag_key(h, r) == [] and "column are not counted" not in _report_text(clean)
+    print("test_the_report_heads_the_flag_column_not_counted_and_keys_the_kinds_present OK")
+
+
 def test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that():
     """A lap timed across a missing chapter (`Session.chapter_gap_notes`) is in the ⚠ set with a
     sentence, but it did not leave the line: its flag is its own word, which wins over off-line
@@ -1161,6 +1190,7 @@ def test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column():
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report()
+    test_the_report_heads_the_flag_column_not_counted_and_keys_the_kinds_present()
     test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that()
     test_the_display_table_prints_the_apps_precision_from_the_raw_values()
     test_laps_table_degenerate_schema()
