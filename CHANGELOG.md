@@ -6,6 +6,66 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-11-21
+
+### Highlights
+
+- **A missing GPS fix at the line is flagged.** A lap with a fix missing within the smoother's
+  reach of its start/finish crossing wears the GPS-dropout ⚠ and is kept out of the bests; a lap
+  that cut the track still reads "off the line" (#712, #714)
+- **Most laps flagged means GPS quality low.** When more than half the laps wear that ⚠, the
+  session says so and judges no PB, focus list or debrief on it (#712)
+- **"GPS quality low" is judged inside your laps.** Fixes rejected on the out-lap or in-lap no
+  longer withhold a PB; driving that lost its GPS outside the laps is named (#709)
+- **Exports say "⚠ not counted".** A ⚠ lap's clip and compare carry the tag with a neutral Δ, the
+  export dialogs name the reason, and the dialog's top line names the lap it renders (#708, #711)
+- **laps.csv and the report name excluded laps.** Each goes in the CSV's trailer with its reason,
+  and in the report as a muted row; each ⚠ lap is counted once, under its own reason (#704, #705)
+- **9:16 exports stay clear of the apps' bands**: nothing in the top 8 % or bottom 18 % (#710)
+- **Wording fixes.** A missing export folder says so, and the lap strip says a slow lap is
+  "clipped at" its scale, not "cut at" it (#706, #707)
+
+### Changed
+
+- When most laps wear the GPS-dropout ⚠, the session reads "GPS quality low" and says why; no PB,
+  focus list or debrief is judged on it, and its Library row is marked degraded. (#712)
+- A 9:16 vertical export keeps every overlay clear of the top 8 % and bottom 18 % of the frame,
+  where social apps put their own buttons and captions; landscape and square exports are unchanged.
+  (#710)
+- "GPS quality low" is judged on the fixes inside your laps, first to last crossing: a receiver
+  still acquiring on the out-lap no longer withholds a session's PB, focus list and debrief. (#709)
+- The status bar names rejected driving outside your laps when it alone would have read low. (#709)
+
+### Fixed
+
+- A lap that cut across the infield is flagged off the line again when most laps miss a GPS fix
+  at the line; it was crowned best lap. Such a lap reads "left the line", not "GPS dropout". (#714)
+- When every lap is ⚠, the best lap is never one off the line or timed across a missing chapter.
+  (#714)
+- One GPS fix missing at a start/finish line draws one dropout mark, not two. (#714)
+- "GPS fixes rejected … outside your laps" still shows when most laps miss a fix at the line.
+  (#714)
+- A lap with a GPS fix missing just before or after its start/finish line now wears the dropout ⚠
+  and stays out of the bests: the missing fix could move its time by tens of ms, unflagged. (#712)
+- A ⚠ lap's clip and compare say "⚠ not counted", draw its Δ neutral (never a green "faster than
+  best"), and its minimap draws the best lap's line; the export dialogs name the reason. (#711)
+- The report's ⚠ column is headed "Not counted" (was "GPS"), with a key for the kinds present.
+  (#711)
+- The overlay export dialog's top line names the lap it will render: "Best lap 13 · 0:44.950" with
+  Export set to Best lap, not the selected lap's time; All laps and Full session say so too. (#708)
+- A video export whose folder was moved, renamed or unmounted before it rendered says so ("The
+  folder you chose isn't there any more…") instead of "The encoder stopped partway through". (#707)
+- The lap-strip card's legend says a slow lap's bar is "clipped at" the scale line, not "cut at" it:
+  the same card marks a lap that cut the track, so a slow lap no longer reads as a cut one. (#706)
+- laps.csv names each excluded lap in its trailer with its time, distance and why
+  (`excluded-stopped`, `excluded-band`, `excluded-open`); the lap rows are still the valid laps.
+  (#705)
+- The report's Laps table shows an excluded lap as a muted row with its reason, in lap order. (#705)
+- A lap timed across a missing chapter is no longer also counted as a GPS dropout in DATA TRUST and
+  the report's summary: each ⚠ lap is counted once, under the reason it wears. (#704)
+- The Lap Race card names a GPS-dropout lap it leaves out as "GPS dropout", not "no on-track match";
+  which laps race is unchanged. (#704)
+
 ## [0.24.0] — 2026-11-21
 
 A minor release: 13 pull requests, #689 to #696, #698 and #700 to #703. Its theme: recordings that
@@ -2836,7 +2896,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/eenndan/pacer/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/eenndan/pacer/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/eenndan/pacer/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/eenndan/pacer/compare/v0.21.0...v0.22.0
