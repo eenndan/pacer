@@ -3328,13 +3328,15 @@ QUICKEST_SECTOR_COL_TIPS = {
 LEVEL_NOTE_TIP = ("Two passes closer than this are level: the timing cannot tell them apart. "
                   f"{stats_service.STEP_COVERS_PASS}")
 # A split is timed at two sector lines and carries more GPS noise than a lap time (docs/ACCURACY.md):
-# its step is wider (stats.SECTOR_LEVEL_S), and on the sessions it was measured on nearly every
-# sector is a tie, which the legend says rather than leaving a row of "N more laps" unexplained.
-SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time (σ "
-                         "{sigma:.2f} s at the cleanest recording's noise, docs/ACCURACY.md), so "
-                         "two splits are level within {step:.2f} s, twice the noise of their "
-                         "difference, the rule the lap step follows. Most sectors are then a tie: "
-                         "the row names the quickest lap and plays each level lap in turn.")
+# its step is wider (stats.SECTOR_LEVEL_S, set by the noisiest line placement measured), and on the
+# sessions it was measured on most sectors are a tie, which the legend says rather than leaving a
+# row of "N more laps" unexplained.
+SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time (σ up to "
+                         "{sigma:.2f} s at the cleanest recording's noise, most with a line at a "
+                         "slow corner, docs/ACCURACY.md), so two splits are level within "
+                         "{step:.2f} s, twice the noise of their difference, the rule the lap step "
+                         "follows. Most sectors are then a tie: the row names the quickest lap and "
+                         "plays each level lap in turn.")
 
 
 def level_note(level_s: float, sector_s: float | None = None) -> str:

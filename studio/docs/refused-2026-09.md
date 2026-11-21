@@ -2060,6 +2060,21 @@ as the app measures them and as the generator's truth has them.
 (the gate then falls under the true margins above), or footage whose new-best margins clear the
 gate on more than a few laps in a session.
 
+**Re-measured (cool/sector-step-one-reference), and the refusal stands.** The 0.11 s above is one
+of the truth matrix's three recordings (seed 2); the other two read 0.022 and 0.059 s. On the
+40-day grid every other step is measured on
+(`studio/dev/probes/sector_split_sigma.py`), at recording C's noise (1.9), one split's σ is
+0.035–0.041 s with the lines mid-straight (the golden placement: 0.041 s pooled, 0.050 s at its
+interior sector) and 0.066 s at the two slowest apexes (0.088 s at their worst sector). So the
+first half of the clause is met for a mid-straight line, but the σ depends on where the lines
+are: it is the receiver's slowly drifting position error, which a lap cancels and a split between
+two differently placed lines keeps. A chip, like every split surface, has one gate for every
+sector a driver can draw, and the split step is now 0.25 s (2√2 × 0.088 s): about the gate this
+section measured, and above the true margins of most sessions. What would reopen it: splits
+de-drifted at the source (each lap's rigid receiver shift removed before the lines are crossed,
+as the corner cells already do), which on the same grid leaves 0.038 s at the worst sector of any
+placement, a gate of 0.11 s.
+
 ---
 
 ## 27. Per-corner cells on the share card — refused (W3 design pass)

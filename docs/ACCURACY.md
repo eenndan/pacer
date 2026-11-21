@@ -168,9 +168,23 @@ with every technique evaluated and rejected on evidence, is in
 at the nearest fix. On a synthetic recording (row 2 of
 [`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)) the interior split's σ is under 1 ms
 noise-free, but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: several times a lap's.
-No official timing has checked a split. (The truth matrix names its noise levels by its own
-three-seed calibration, which reads C's per-lap σ as noise 2.1 and B's as 4.4; the 40-day grid
-below reproduces C's at noise 1.9 and B's at 4.0. Same recordings, two calibrations.)
+"Up to" is the worst of that row's three recordings (the other two read 0.02 and 0.06 s at C's
+noise). Pooled over many days, the split's σ is two to four times a corner pass's, and it depends
+on where the lines are drawn. On the 40-day synthetic grid below, at recording C's noise
+([`studio/dev/probes/sector_split_sigma.py`](../studio/dev/probes/sector_split_sigma.py), seven
+line placements), one split against another of the same recording carries σ 0.035–0.041 s with
+lines mid-straight, 0.047–0.050 s at a corner's apex or exit, and 0.066 s at the two slowest
+apexes; its worst sector there reads 0.088 s. What dominates is the receiver's slowly drifting
+position error: a lap crosses the same line twice and cancels it, a split crosses two lines of
+different heading and speed and keeps it, most at a slow line. One step has to serve every sector
+a driver can draw, so the app's is set by that worst sector: one split's σ is 0.088 s at
+recording C's GPS noise, and the step is 0.25 s (2√2σ), the last column below. A mid-straight
+sector would need only 0.14 s. Taking each lap's rigid receiver shift out before crossing the
+lines (the correction the corner cells already make) would leave 0.038 s at the worst sector of
+any placement, a step of 0.11 s; that change is proposed, not made. No official timing has checked
+a split. (The truth matrix names its noise levels by its own three-seed calibration, which reads
+C's per-lap σ as noise 2.1 and B's as 4.4; the 40-day grid below reproduces C's at noise 1.9 and
+B's at 4.0. Same recordings, two calibrations.)
 
 **What the 0.07 s step covers.** The app reads two of its timings as level when they are closer
 than one step, 0.07 s: twice the noise of a difference of two lap times (2√2σ) at recording C's
@@ -183,19 +197,22 @@ same rule, 2√2σ, gives each recording's noise these steps. The lap column use
 published per-lap σ (the table at the top); the corner columns, which no official timing has
 checked, use the σ measured on the synthetic grid at the matching noise:
 
-| Published recording (per-lap σ) | Synthetic GPS noise (per-lap σ) | Lap | Corner pass | Corner typical, two days | Corner, against another recording's lap |
-|---|---|---|---|---|---|
-| C (0.0247 s) | 1.9 (0.0253 s) | 0.07 s | 0.06 s | 0.05 s | 0.06 s |
-| B (0.0527 s) | 4.0 (0.0532 s) | 0.15 s | 0.12 s | 0.10 s | 0.12 s |
-| A (0.0871 s) | 6.5 (0.0863 s) | 0.25 s | 0.20 s | 0.16 s | 0.21 s |
+| Published recording (per-lap σ) | Synthetic GPS noise (per-lap σ) | Lap | Corner pass | Corner typical, two days | Corner, against another recording's lap | Sector split |
+|---|---|---|---|---|---|---|
+| C (0.0247 s) | 1.9 (0.0253 s) | 0.07 s | 0.06 s | 0.05 s | 0.06 s | 0.25 s |
+| B (0.0527 s) | 4.0 (0.0532 s) | 0.15 s | 0.12 s | 0.10 s | 0.12 s | 0.53 s |
+| A (0.0871 s) | 6.5 (0.0863 s) | 0.25 s | 0.20 s | 0.16 s | 0.21 s | 0.87 s |
 
-**The app uses C's row**, so every one of these differences is level under 0.07 s, the widest of
-C's cells. A noisier recording can differ by more than that from the GPS alone, up to B's and A's
-rows, and the app says so where it reads "level". A corner pass is one pass against another of
-the same recording (the Corners table's Δbest, Quickest passes); the corner typical is the focus
-list's two days; the last column is the Corners table's Δref and the export's corner cards with a
-reference recording loaded. A corner pass carries about 0.8 × a lap's σ at every noise, so it
-never needs a wider step than a lap.
+**The app uses C's row**, so every lap and corner difference is level under 0.07 s, the widest of
+those cells, and two sector splits under 0.25 s, their own cell: the worst sector of the worst
+line placement measured (the paragraph above; with lines mid-straight the split column would read
+0.14 / 0.30 / 0.48 s). A noisier recording can differ by more than that from the GPS alone, up
+to B's and A's rows, and the app says so where it reads "level". A corner pass is one pass against
+another of the same recording (the Corners table's Δbest, Quickest passes); the corner typical is
+the focus list's two days; the next column is the Corners table's Δref and the export's corner
+cards with a reference recording loaded; the sector split is Quickest passes' sector rows and a
+sector's "Compare with my typical pass". A corner pass carries about 0.8 × a lap's σ at every
+noise, so it never needs a wider step than a lap.
 
 **A corner's typical time on two different days** is what the focus list compares, and each
 recording brings its own bias that more laps of it do not remove. On 40 synthetic race days of one
