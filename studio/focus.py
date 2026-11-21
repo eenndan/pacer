@@ -630,6 +630,8 @@ class Outcome:
     karts: tuple[str, str] | None = None  # (then, now) kart numbers when a VERDICT crossed two
                                     #   different karts (`session_record.kart_pair`) — said, not
                                     #   refused: a fleet kart changes every session
+    same_day: bool = False          # a BLOCK_NO_RECORD refusal between two sessions of ONE date:
+                                    #   its words are "the two sessions", not "the two days"
 
     @property
     def has_verdict(self) -> bool:
@@ -777,16 +779,42 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
     # PR #258's like-for-like pair, in its own order: "nothing written down" first, because a
     # record that does not exist cannot also disagree.
     if session_record.is_empty(rec_then) or session_record.is_empty(rec_now):
+        then_blank, now_blank = session_record.is_empty(rec_then), session_record.is_empty(rec_now)
+        on = _same_day(item, now_ctx)
+        if on:
+            # Two sessions of ONE date (a race day): "13 Sep and today" named one day twice, so it
+            # names the sessions instead. The rule is unchanged — a record is still required.
+            return BLOCK_NO_RECORD, (f"either session {on}" if then_blank and now_blank
+                                     else f"the earlier session {on}" if then_blank
+                                     else "this session")
         missing = []
-        if session_record.is_empty(rec_then):
+        if then_blank:
             missing.append(_when(item.date))
-        if session_record.is_empty(rec_now):
+        if now_blank:
             missing.append("today")
         return BLOCK_NO_RECORD, " and ".join(missing)
     differences = session_record.comparable(rec_then, rec_now)
     if differences:
         return BLOCK_CONDITIONS, ", ".join(differences)
     return BLOCK_NONE, ""
+
+
+def _same_day(item: FocusItem, now_ctx: dict) -> str:
+    """"today" or "on 13 Sep" when the baseline and the session in front of the driver were
+    recorded on ONE calendar date, else "". "today" only when that date is the machine's own
+    calendar day (the local clock `Session.session_date` reads a date on)."""
+    then, now = _day(item.date), _day(now_ctx.get("date"))
+    if then is None or then != now:
+        return ""
+    return "today" if then == datetime.date.today() else f"on {_when(item.date)}"
+
+
+def _no_record_sentence(detail: str, same_day: bool) -> str:
+    """BLOCK_NO_RECORD's reason, after "can't say." — one sentence for a corner and for a list."""
+    alike = ("the two sessions were comparable" if same_day
+             else "the two days were comparable")
+    return (f"There's no session record for {detail}, so nothing says {alike}; a coach will put "
+            f"up to 4 s a lap on conditions alone.")
 
 
 def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | None],
@@ -818,7 +846,9 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
             if block == BLOCK_NO_RECORD and item.fingerprint and session_record.is_empty(rec_then):
                 unrecorded.setdefault(item.fingerprint, _when(item.date))
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
-                                    blocker=block, detail=detail))
+                                    blocker=block, detail=detail,
+                                    same_day=block == BLOCK_NO_RECORD
+                                    and bool(_same_day(item, now_ctx))))
             continue
         if now is None or now.n_laps < MIN_CORNER_LAPS:
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
@@ -949,9 +979,7 @@ def outcome_sentence(o: Outcome) -> str:
             return (f"{label} — no verdict: its baseline is from {o.detail}, after this session; "
                     "verdicts compare later sessions.")
         if o.blocker == BLOCK_NO_RECORD:
-            return (f"{label} — can't say. There's no session record for {o.detail}, so nothing "
-                    f"says the two days were comparable; a coach will put up to 4 s a lap on "
-                    f"conditions alone.")
+            return f"{label} — can't say. {_no_record_sentence(o.detail, o.same_day)}"
         if o.blocker == BLOCK_CONDITIONS:
             return f"{label} — can't say: {o.detail}."
         if o.blocker == BLOCK_FEW_LAPS:
@@ -1048,9 +1076,8 @@ def report_lines(report: Report) -> list[str]:
         first = outcomes[0]
         who = _corner_list(outcomes)
         if first.blocker == BLOCK_NO_RECORD:
-            return [f"{who} — can't say. There's no session record for {first.detail}, so nothing "
-                    f"says the two days were comparable; a coach will put up to 4 s a lap on "
-                    f"conditions alone. File ▸ Session record… writes one."]
+            return [f"{who} — can't say. {_no_record_sentence(first.detail, first.same_day)} "
+                    f"File ▸ Session record… writes one."]
         if first.blocker == BLOCK_CONDITIONS:
             return [f"{who} — can't say: {first.detail}."]
         if first.blocker == BLOCK_LAYOUT:
