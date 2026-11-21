@@ -3070,8 +3070,8 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
     assert (luck(1, 5, "next"), luck(1, 14, "next")) == (0.014, 0.019)
     # a sector's, fitted at the split step's own placement on the de-drifted splits
     # (studio/dev/probes/sector_split_sigma, cool/sector-dedrift)
-    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.020, 0.027)
-    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.019, 0.022)
+    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.022, 0.031)
+    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.023, 0.027)
     assert luck(1, 1, "next") == 0.0 and luck(1, 0, "typical") == 0.0
     base = [3.30, 3.31, 3.32, 3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39, 3.40, 3.41, 3.42]
     for next_gap, alone in ((0.075, False), (0.088, False), (0.089, True), (0.30, True)):
@@ -3102,7 +3102,8 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     `quickest_luck_s` — the corners' typical and next gaps (six days scatter: the four ten-day seed
     sets ran within ±0.005 s of the pooled fit at these n); and the sectors', re-measured by
     `sector_split_sigma.measure_luck` on the same six days at the split step's own placement, within
-    0.010 s. A hand-typed constant, or a probe whose statistic drifted, fails here."""
+    0.020 s (its six-day scatter, below). A hand-typed constant, or a probe whose statistic
+    drifted, fails here."""
     import shutil
 
     from studio import (
@@ -3125,9 +3126,11 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     try:
         got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
         # a sector's luck is fitted at the split step's own placement, the worst measured: the
-        # three slow lines ("three_slow"), whose worst sector is the σ SECTOR_LEVEL_S is built on
+        # 26 m sector across C5 ("short_c5") at the split column's drift time constant
+        # (`stats.SPLIT_DRIFT_TAU_S`, measure_luck's default), whose worst sector is the σ the
+        # split step is built on
         got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS,
-                                                  "three_slow", probe.CHECK_N)
+                                                  "short_c5", probe.CHECK_N)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         sidecar.save = keep[0]
@@ -3137,10 +3140,12 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
             os.environ.pop(app_support.DIR_ENV, None)
         else:
             os.environ[app_support.DIR_ENV] = keep[2]
-    # A sector's luck at the worst placement scatters more over six days (about ±0.02 s between
-    # groups of six on the 40-day grid before the de-drift; these six land within 0.004 s of the
-    # de-drifted fit), so it is held to 0.010.
-    for kind, key, tol in (("corners", 1, 0.006), ("sectors", -1, 0.010)):
+    # A sector's luck at its basis placement (a 26 m sector across C5, τ 30 s) scatters far more
+    # over six days: the 12 groups of six of the 80 τ 30 s days read 0.015-0.044 s (typical) and
+    # 0.010-0.044 s (next) at n = 13 around the fit's 0.030 / 0.026, and these six (401-406) are the
+    # most extreme of them, 0.044 / 0.044. So it is held to 0.020, the largest deviation any group
+    # showed (0.018), rounded up; the luck fitted before (0.066 s at n = 13) fails it.
+    for kind, key, tol in (("corners", 1, 0.006), ("sectors", -1, 0.020)):
         for n in probe.CHECK_N:
             typ, nxt = got[kind][n]
             for gap, measured in (("typical", typ), ("next", nxt)):

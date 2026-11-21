@@ -3335,8 +3335,9 @@ SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner ti
                          "each lap's receiver drift taken off before it is timed: at the "
                          "cleanest recording's noise, σ {mid:.2f} s with lines mid-straight, up "
                          "to {sigma:.2f} s with a line at the measured track's slowest corners "
-                         "(docs/ACCURACY.md). So two splits are level within {step:.2f} s, twice "
-                         "the noise of their difference, the rule the lap step follows, and most "
+                         "(docs/ACCURACY.md). So two splits are level within {step:.2f} s, at "
+                         "least twice the noise of their difference (the rule the lap step "
+                         "follows, widened where a narrower step measured wrong calls), and most "
                          "sectors are then a tie: the row names the quickest lap and plays each "
                          "level lap in turn. {covers}")
 

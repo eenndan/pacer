@@ -2076,18 +2076,21 @@ slower hairpin than that is unmeasured. What would reopen it: splits de-drifted 
 
 **De-drifted at the source (cool/sector-dedrift): the clause's first half is met; the refusal
 stands until the chips are re-run.** Each lap's trace is now moved by its own receiver shift onto
-the session's consensus line before the sector lines are crossed. On the same grid one split's σ
-is 0.038 s at the worst sector of any placement (0.023–0.025 s pooled mid-straight), so the split
-step is now 0.11 s, and the σ is "well under a tenth of a second at recording C's noise" at every
-placement measured. That is the evidence this section asked for, and it makes the chip worth
-re-measuring, not built. The table above is the probe's own run on the de-drifted splits at its
-old gates (a test re-runs it): ungated, the `synth_gopro` chips coloured wrongly fell from 16 to 12
-of 117 at noise 2 and from 24 to 20 at 4.5, the demo's went from 2 to 3 and 4 to 5 of 39; gated,
-nothing moved. `clip_refusals.py` still gates on truth matrix row 2's σ and was not run at a 0.11 s
-gate, so how many chips would colour, and how many of them wrongly, is
-unmeasured. The de-drift's own limit carries over: it removes the drift that is one vector over a
-lap, and on a receiver whose error changes faster than the grid's (`sector_dedrift.py`: a 30 s
-time constant) the worst sector reads 0.056 s, a 0.16 s gate. Not built here.
+the session's consensus line before the sector lines are crossed. On the same grid, read at a
+receiver drift that decorrelates over 30 s (`stats.SPLIT_DRIFT_TAU_S`, the less favourable drift
+model), one split's σ is 0.048 s at the worst sector of any placement (0.026–0.029 s pooled
+mid-straight; 0.038 s at the grid's own 90 s drift), and the split step is now 0.15 s (the house
+rule's 0.13 s raised to a measured call floor). So the σ is "well under a tenth of a second at
+recording C's noise" at every placement measured. That is the evidence this section asked for,
+and it makes the chip worth re-measuring, not built. The table above is the probe's own run on the
+de-drifted splits at its old gates (a test re-runs it): ungated, the `synth_gopro` chips coloured
+wrongly fell from 16 to 12 of 117 at noise 2 and from 24 to 20 at 4.5, the demo's went from 2 to 3
+and 4 to 5 of 39; gated, nothing moved. The gate is still row 2's σ AS MEASURED BEFORE the
+de-drift, held as a named constant (`clip_refusals.ROW2_SIGMA_BEFORE_DEDRIFT`, 0.1066 and 0.2414 s)
+now that row 2 itself reads 0.024 and 0.051 s: the chips were not run at a de-drifted gate, so how
+many would colour, and how many of them wrongly, is unmeasured. The de-drift's own limit carries
+over: it removes the drift that is one vector over a lap, and on a receiver whose error changes
+faster (`sector_dedrift.py`: a 10 s time constant) the worst sector reads 0.079 s. Not built here.
 
 ---
 

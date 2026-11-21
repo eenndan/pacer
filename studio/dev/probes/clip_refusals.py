@@ -510,22 +510,18 @@ def card_cells(s: Session) -> dict:
             "corners": len(vs_typical)}
 
 
-# ─── the truth matrix's split σ ─────────────────────────────────────────────────────────────────
+# ─── the split σ the chips are gated on ───────────────────────────────────────────────────────────
+# Truth matrix row 2's interior split σ at each chip noise AS IT WAS MEASURED for §26, on the splits
+# as timed before cool/sector-dedrift (each lap's receiver shift is now taken off before the sector
+# lines are crossed, and row 2 reads 0.024 / 0.051 s). Held here, not read from the matrix, so §26's
+# gated counts cannot move silently with that row: the chips were NOT re-run at a de-drifted gate,
+# and doing so is what §26's new-evidence paragraph asks for next.
+ROW2_SIGMA_BEFORE_DEDRIFT = {2.0: 0.106567, 4.5: 0.241378}
+
+
 def _row2_sigma() -> dict[float, float]:
-    """Row 2's interior split σ at each chip noise, read out of tests/test_truth_matrix.py with
-    `ast` (importing it would generate its nine recordings)."""
-    import ast
-    path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tests", "test_truth_matrix.py")
-    out = {}
-    for node in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
-        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Row":
-            try:
-                stat, level, measured = (ast.literal_eval(a) for a in node.args[:3])
-            except ValueError:
-                continue
-            if stat == "sector.interior_sd" and float(level) in CHIP_NOISES:
-                out[float(level)] = float(measured)
-    return out
+    """The gate's σ at each chip noise (`ROW2_SIGMA_BEFORE_DEDRIFT`)."""
+    return {lv: ROW2_SIGMA_BEFORE_DEDRIFT[lv] for lv in CHIP_NOISES}
 
 
 def figures(work: str) -> dict:

@@ -2473,8 +2473,8 @@ class CentralView(QWidget):
     # pass (#621's `set_compare` ends the pass), and two panes looping on different lengths would
     # drift apart. A SECTOR's pass (a Quickest passes sector row, `stats.sector_key`) is the same
     # compare, beside the SPLITS grid's typical split, offered past the split's own wider step
-    # (`stats.SECTOR_LEVEL_S`): on the demo with 2, 3 or 4 sector lines, at the sectors whose
-    # typical pass is truly 0.15 s or more slower (that step's block in stats.py names them).
+    # (`stats.SECTOR_LEVEL_S`): on the demo with 2, 3 or 4 sector lines, at S1 alone — every
+    # other sector's quickest is level with its typical (that step's block in stats.py).
     def typical_compare_refusal(self, lap_id: int, cid: int) -> str | None:
         """Why lap `lap_id`'s pass through `cid` cannot be compared with the typical pass, or None."""
         why = self.lap_pass_refusal(lap_id, cid)

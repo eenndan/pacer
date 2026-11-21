@@ -650,16 +650,17 @@ def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: f
 #   corner, typical       0.0127 0.0155 0.0174 0.0184 0.0199 s    −0.0049 + 0.0147·blom
 #   corner, next          0.0144 0.0158 0.0170 0.0176 0.0188 s    +0.0034 + 0.0091·blom
 #
-# A SECTOR'S LUCK is fitted where the split step is (cool/sector-step-one-reference): at the worst
-# line placement measured (`SECTOR_LEVEL_S`'s comment; studio/dev/probes/sector_split_sigma.py,
-# the same 40 days plus the planted ones, three slow lines at 244, 578 and 730 m), so step and luck
-# share one basis, on the de-drifted splits (cool/sector-dedrift). A noisier split makes a luckier
+# A SECTOR'S LUCK is fitted where the split column is (cool/sector-step-one-reference,
+# cool/sector-dedrift): on the de-drifted splits at the split column's drift time constant
+# (`SPLIT_DRIFT_TAU_S`, 30 s), at its worst line placement (`SECTOR_LEVEL_S`'s comment;
+# studio/dev/probes/sector_split_sigma.py --drift-tau 30, the same 40 days plus the planted ones,
+# a 26 m sector across C5), so column and luck share one basis. A noisier split makes a luckier
 # quickest: the golden mid-straight lines read about two thirds of it.
 #
 #   n                     5      9      14                          fit a + b·blom(n)
-#   sector, typical       0.0202 0.0240 0.0280 s                    +0.0037 + 0.0136·blom
-#   sector, next          0.0194 0.0219 0.0221 s                    +0.0130 + 0.0054·blom
-#   (golden mid-straight: typical 0.0115 / 0.0143 / 0.0172, next 0.0126 / 0.0152 / 0.0167)
+#   sector, typical       0.0214 0.0291 0.0301 s                    +0.0007 + 0.0178·blom
+#   sector, next          0.0221 0.0249 0.0270 s                    +0.0135 + 0.0077·blom
+#   (golden mid-straight: typical 0.0139 / 0.0177 / 0.0204, next 0.0158 / 0.0176 / 0.0192)
 #   (before the de-drift, at the hairpin: typical +0.0019 + 0.0385·blom, next +0.0327 + 0.0103·blom)
 #
 # blom(n) is the expected largest of n standard normals (Blom's approximation): the selection of
@@ -678,8 +679,8 @@ def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: f
 _QUICKEST_LUCK_FIT = {
     ("corner", "typical"): (-0.0049, 0.0147),
     ("corner", "next"): (0.0034, 0.0091),
-    ("sector", "typical"): (0.0037, 0.0136),
-    ("sector", "next"): (0.0130, 0.0054),
+    ("sector", "typical"): (0.0007, 0.0178),
+    ("sector", "next"): (0.0135, 0.0077),
 }
 
 
@@ -2243,60 +2244,79 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 # `CornerModel.consensus_shift`: the fit the corner cells already remove) and only then crossed
 # with the sector lines; the lap's own start and finish do not move.
 #
+# HOW MUCH THAT REMOVES DEPENDS ON HOW FAST THE DRIFT DECORRELATES, which no recording has
+# measured: the de-drift takes off the part that is one vector over a lap. So the split column has
+# a SECOND parameter, `SPLIT_DRIFT_TAU_S`: it is read at a drift that decorrelates over about half
+# a minute (an OU time constant of 30 s), the least favourable of the drift models measured under
+# which de-drifting still clearly helps (studio/dev/probes/sector_dedrift.py: a third of σ at
+# 30 s, a seventh at 10 s). A real-recording consistency check, unpublished because no split truth
+# exists for it, did not contradict the synthetic and is why the less favourable model was chosen.
+#
 # MEASURED (studio/dev/probes/sector_split_sigma.py: the 40-day grid, 13 line placements, six of
 # them the PR #675 review's; σ of one split against another of the same recording, pooled over days
-# and sets; at the reference's noise 1.9), de-drifted, and as timed before:
+# and sets; at the reference's noise 1.9), de-drifted at τ 30 s (`--drift-tau 30`), the grid's own
+# τ 90 s (the favourable case), and as timed before at τ 30 s:
 #
-#   placement                        line speed   pooled σ   worst sector σ   2√2σ worst   before
-#   golden (mid-straights 2 and 5)   25, 20 m/s   0.0248     0.0298           0.08         0.0498
-#   mid3 / mid4 (mid-straights)      20-25 m/s    0.023      0.030            0.09         0.050
-#   a 10 m sector mid-straight                    0.0225     0.0300           0.08         0.0447
-#   entry (5 m before the brakes)    24, 23 m/s   0.0238     0.0289           0.08         0.0490
-#   apex (C3, C6)                    19, 20 m/s   0.0257     0.0299           0.08         0.0574
-#   exit (5 m out of C2, C5)         21, 16 m/s   0.0278     0.0324           0.09         0.0632
-#   C1 apex to 5 m out of C5                      0.0306     0.0332           0.09         0.0574
-#   a 26 m sector across C5                       0.0316     0.0338           0.10         0.0725
-#   C4 apex to just past C5's                     0.0310     0.0333           0.09         0.0801
-#   244 m and 726 m (the review's worst pair)     0.0317     0.0365           0.10         0.0872
-#   hairpin (apexes of C1 and C5)    15, 13 m/s   0.0325     0.0371           0.10         0.0881
-#   three slow lines (244, 578, 730 m)            0.0323     0.0377           0.11         0.0762
+#   placement                        line speed   τ 30 s pooled / worst   τ 90 s worst   before
+#   golden (mid-straights 2 and 5)   25, 20 m/s   0.0287 / 0.0342         0.0298         0.0510
+#   mid3 / mid4 (mid-straights)      20-25 m/s    0.028 / 0.034           0.030          0.054
+#   a 10 m sector mid-straight                    0.0256 / 0.0352         0.0300         0.0466
+#   entry (5 m before the brakes)    24, 23 m/s   0.0277 / 0.0331         0.0289         0.0513
+#   apex (C3, C6)                    19, 20 m/s   0.0311 / 0.0354         0.0299         0.0593
+#   exit (5 m out of C2, C5)         21, 16 m/s   0.0347 / 0.0389         0.0324         0.0667
+#   C4 apex to just past C5's                     0.0387 / 0.0410         0.0333         0.0855
+#   244 m and 726 m (the review's worst pair)     0.0395 / 0.0435         0.0365         0.0860
+#   hairpin (apexes of C1 and C5)    15, 13 m/s   0.0396 / 0.0439         0.0371         0.0860
+#   C1 apex to 5 m out of C5                      0.0381 / 0.0442         0.0332         0.0649
+#   three slow lines (244, 578, 730 m)            0.0422 / 0.0445         0.0377         0.0794
+#   a 26 m sector across C5          14, 15 m/s   0.0405 / 0.0475         0.0338         0.0815
 #
-# Out of sample (seed sets 4-7, seeds 801-1110) the worst sector of any placement reads 0.0355 s
-# (three slow lines; 2√2σ 0.10), the hairpin's 0.0350 (0.0817 before). At B's and A's noise the
-# worst sector reads 0.0796 and 0.1308 s (0.1873 and 0.3062 before), three slow lines at both.
+# Out of sample (seed sets 4-7, seeds 801-1110) the worst sector reads 0.0442 s at τ 30 s (the
+# hairpin), 0.0355 at τ 90 s. At B's and A's noise, τ 30 s: 0.0989 and 0.1624 s (τ 90 s: 0.0796 and
+# 0.1308; before the de-drift, at the shipped generator's τ 90 s: 0.1873 and 0.3062).
 #
-# ONE STEP serves every sector a driver can draw, and the app does not know which kind of line he
-# drew, so it is the house rule on the WORST sector of the worst placement measured: 2√2 × 0.0377 →
-# 0.11 s. A mid-straight sector is over-covered (its own rule gives 0.08 s).
+# THE HOUSE RULE on the worst sector of the worst placement at τ 30 s: 2√2 × 0.0475 → 0.13 s
+# (0.11 s at τ 90 s). THE STEP IS 0.15 s, the measured call floor (`SECTOR_CALL_FLOOR_S`): at 0.13
+# and 0.14 s the τ 30 s grid offered "Compare with my typical pass" on a quickest row of the wrong
+# sign (1 of 401 and 1 of 318 offers, in sample), and 0.15 s is the smallest step with none, and no
+# ★ on a pair truly under 0.03 s, on both drift grids in and out of sample.
 # THE LIMITS: the synthetic circuit's slowest point is 13.5 m/s (C5's apex), and a line at a slower
-# hairpin is not covered. The de-drift removes the part of the drift that is ONE VECTOR OVER A LAP,
-# and the grid's receiver drifts with a 90 s time constant, which no real recording has validated;
-# studio/dev/probes/sector_dedrift.py re-draws it (10 days each, worst sector before → after): τ 30 s
-# 0.088 → 0.056, τ 10 s 0.093 → 0.079 (a 0.16 s and a 0.22 s step), a rigid offset per lap 0.099 →
-# 0.034; on noise with no drift (white only) the fitted shift ADDS error, 0.0202 → 0.0207, and a
-# rotation or scale of the trace, which no translation fits, gains nothing (0.081 → 0.084, 0.106 →
-# 0.104). A session with no geometry (fewer than `corners.DRIFT_MIN_LAPS` clean laps) keeps its
-# splits as measured (`Session._sector_drift`'s fallback). (Before #675 the anchor was truth matrix
-# row 2's 0.1066 s → 0.30 s; #675 set 0.25 s on the splits as timed before the de-drift.)
+# hairpin is not covered. With slower drift than 30 s the true σ is smaller (0.04 s at 90 s); with
+# faster drift the step UNDER-COVERS: at τ 10 s the worst sector reads 0.079 s (10 days), a 0.22 s
+# rule. On noise with no drift (white only) the fitted shift adds error, 0.0202 → 0.0207 s, and a
+# rotation or scale of the trace, which no translation fits, gains nothing. A session with no
+# geometry (fewer than `corners.DRIFT_MIN_LAPS` clean laps) keeps its splits as measured
+# (`Session._sector_drift`'s fallback). (Before #675 the anchor was truth matrix row 2's 0.1066 s →
+# 0.30 s; #675 set 0.25 s on the splits as timed before the de-drift.)
 #
 # THE LUCK MOVES WITH THE STEP. A gap read off the quickest pass (the ★, the quickest row's typical
-# offer) clears the step plus `quickest_luck_s`, and a sector's luck is fitted at this same basis
-# placement on the de-drifted splits (its block: 0.020 / 0.024 / 0.027 s at n = 5 / 9 / 14 on the
-# typical gap; out of sample the three slow lines read 0.032 at n = 14, the other placements at or
-# under the fit).
+# offer) clears the step plus `quickest_luck_s`, fitted at the column's basis (its block: 0.022 /
+# 0.027 / 0.031 s at n = 5 / 9 / 14 on the typical gap; out of sample, at n = 14, five placements
+# read over it on the typical gap by up to 6 ms — three slow lines 0.037, C1-C5 exit and exit 0.034,
+# hairpin 0.033, maxg 0.032 — and three slow lines 2 ms over it on the next gap).
 #
-# What 0.11 s with that luck does at the reference noise, on habit-free days at all 13 placements
-# (1,720 sectors, 24,080 pass-menu cells each), in sample (sets 0-3) / out (sets 4-7): the ★ on 25 /
-# 30 sectors, none on a pair truly under 0.03 s, 9 / 9 with a true margin under the step it claims;
-# "Compare with my typical pass" on 626 / 594 quickest rows, 3 / 1 truly under 0.03 s, none of the
-# wrong sign; the pass menu's offer (no luck: the pass is not the quickest) on 4,736 / 4,384 cells,
-# 39 / 55 truly under 0.03 s and 5 / 7 of the wrong sign — the house rule's 2σ tail, which a step
-# so much nearer the true gaps a driver can act on meets more often than 0.25 s did (0.25 s on the splits
-# as timed before offered 22 / 48 quickest rows, none truly under 0.03 s). On days with one lap's C4
-# planted quicker the golden quickest row offers it on 7 / 6 / 8 of 8 days at a true 0.10 / 0.15 /
-# 0.20 s gain (4 of 8 at 0.20 s before). The demo with 2, 3 or 4 mid-straight lines wears no ★ and offers the
-# compare on 2 lines S1 and S2, 3 lines S1-S3, 4 lines S1 and S3: every one a true gap of 0.15 s or
-# more on the demo's truth (S1 0.45-0.52 s, the others 0.15-0.19 s).
+# What 0.15 s with that luck does at the reference noise, habit-free days at all 13 placements
+# (1,720 sectors and 24,080 pass-menu cells per sample), against what 0.25 s did on the splits as
+# timed before with its luck (main after #675), each "in sample / out of sample":
+#
+#                                        τ 90 s grid               τ 30 s grid
+#                                        0.15 s     main           0.15 s     main
+#   ★ (truly < 0.03 s: none anywhere)    6 / 10     1 / 0          5 / 4      0 / 0
+#     … true margin under the step       0 / 4      1 / 0          0 / 1      0 / 0
+#   quickest-row typical offers          255 / 236  22 / 48        257 / 272  32 / 32
+#     … truly under 0.03 s               0 / 0      0 / 0          1 / 0      0 / 0
+#     … of the wrong sign                0 / 0      0 / 0          0 / 0      0 / 0
+#   pass-menu offers (no luck term)      2777/2591  1440/1389      2815/2676  1406/1344
+#     … truly under 0.03 s               0 / 7      1 / 4          5 / 9      1 / 3
+#     … of the wrong sign                0 / 0      0 / 2          3 / 2      1 / 4
+#   planted C4 0.10 / 0.15 / 0.20 s,
+#     golden quickest-row offer (of 8)   7 / 6 / 7  2 / 2 / 4      7 / 6 / 8  3 / 2 / 6
+#
+# So the menu's tail on the τ 30 s grid is a few cells worse than main's (5 and 9 truly under
+# 0.03 s against 1 and 3); 0.18 s would match main's record there (1 / 3 and 1 / 1 wrong-sign in
+# and out), at about half the offers 0.15 s makes. The demo with 2, 3 or 4 mid-straight lines wears
+# no ★ and offers the compare on S1 alone, as before (a true gap of 0.45-0.52 s); only its level
+# sets shrink (2 lines: S2 level with 4 laps, not 9).
 DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
 
 
@@ -2338,18 +2358,32 @@ class NoiseSigmas:
 
 
 PUBLISHED_NOISE_SIGMAS = {
-    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205, 0.0377),
-    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435, 0.0796),
-    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730, 0.1308),
+    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205, 0.0475),
+    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435, 0.0989),
+    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730, 0.1624),
 }
 REFERENCE_SIGMAS = PUBLISHED_NOISE_SIGMAS[REFERENCE_RECORDING]
+# The split column's SECOND parameter (cool/sector-dedrift): the receiver drift's time constant the
+# split σ is read at. The reference noise fixes how large the receiver's error is; how fast it
+# decorrelates decides how much of it the de-drift removes, which no recording has measured. The
+# split column is read at 30 s, the least favourable of the drift models measured under which the
+# de-drift still clearly helps (the step's block above; studio/dev/probes/sector_split_sigma.py
+# --drift-tau, whose summary pins it).
+SPLIT_DRIFT_TAU_S = 30.0
 
 # The split step (the block above `house_step`): the reference row's split column.
 SPLIT_SIGMA_S = REFERENCE_SIGMAS.split
-SECTOR_LEVEL_S = house_step(SPLIT_SIGMA_S)
+# THE CALL FLOOR (the step's block above). The house rule on that σ gives 0.13 s, and at 0.13 and
+# 0.14 s the τ 30 s grid offered "Compare with my typical pass" on a quickest row of the WRONG sign
+# (1 of 401 and 1 of 318, in sample). 0.15 s is the smallest step at which, on both drift grids in
+# and out of sample, no quickest row offers it on a pair of the wrong sign and no ★ stands on a pair
+# truly under 0.03 s; sector_split_sigma's `calls` re-measure it. The step is the wider of the two.
+SECTOR_CALL_FLOOR_S = 0.15
+SECTOR_HOUSE_STEP_S = house_step(SPLIT_SIGMA_S)
+SECTOR_LEVEL_S = max(SECTOR_HOUSE_STEP_S, SECTOR_CALL_FLOOR_S)
 # The golden (mid-straight) placement's pooled split σ at the reference noise (sector_split_sigma),
 # said in the sector hover beside the worst placement's: what a split usually carries.
-SPLIT_MID_STRAIGHT_S = 0.0248
+SPLIT_MID_STRAIGHT_S = 0.0287
 
 
 def split_covers_note() -> str:

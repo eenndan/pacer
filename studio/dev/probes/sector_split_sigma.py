@@ -49,14 +49,17 @@ the summary checks (`luck_basis.app_fit_is_this_fit`).
 MEASURED (defaults: 40 habit-free + 24 planted days per noise, at 1.9, 4.0 and 6.5; about an hour
 as two processes; `--set-index 4,5,6,7 --plant-days 0` out of sample). The app's splits are
 de-drifted since cool/sector-dedrift (`Session._sector_drift`); row field 3 is the same lap timed
-as before (`uncorrected_splits`, summary `pair_uncorrected`). At the reference noise 1.9 the split
-σ is 0.023-0.025 s pooled mid-straight (golden 0.0248, worst sector 0.0298) and 0.031-0.033 s at
-the slow lines; the worst sector of all 13 placements, three slow lines' 0.0377 s, is
-`stats.PUBLISHED_NOISE_SIGMAS`' split column (B 0.0796, A 0.1308; the same placement at each),
-which the summary checks (`worst_split`). The luck fit there: typical +0.0037 + 0.0136·blom(n),
-next +0.0130 + 0.0054·blom(n). Out of sample the worst sector reads 0.0355 s. As timed before:
-0.0408 s golden pooled and 0.0881 s at the hairpin's worst sector (B 0.1873, A 0.3062), #675's
-figures to the digit. The full table and the decisions are in `stats.SECTOR_LEVEL_S`'s comment.
+as before (`uncorrected_splits`, summary `pair_uncorrected`). `--drift-tau 30` re-draws the
+receiver's drift with a 30 s time constant (`sector_dedrift`'s error model), the split column's
+basis (`stats.SPLIT_DRIFT_TAU_S`; the summary says `is_table_*` only at that τ). At the reference
+noise and τ 30 s the split σ is 0.026-0.029 s pooled mid-straight and 0.040-0.042 s at the slow
+lines; the worst sector of all 13 placements, a 26 m sector across C5's 0.0475 s, is
+`stats.PUBLISHED_NOISE_SIGMAS`' split column (B 0.0989, A 0.1624), and the luck fit there is
+typical +0.0007 + 0.0178·blom(n), next +0.0135 + 0.0077·blom(n); out of sample 0.0442 s. At the
+shipped generator's τ 90 s: worst 0.0377 s (three slow lines; B 0.0796, A 0.1308), out of sample
+0.0355. As timed before at τ 90 s: 0.0408 s golden pooled and 0.0881 s at the hairpin's worst
+sector (B 0.1873, A 0.3062), #675's figures to the digit. The full tables, the call floor and the
+decisions are in `stats.SECTOR_LEVEL_S`'s comment.
 
 `--matrix` instead re-runs truth matrix row 2's own recordings (three seeds, noise 2, two chapters,
 the default origin, golden placement) and reports each seed's per-lap interior-split errors over
@@ -64,7 +67,7 @@ every valid lap and over the SPLITS grid's counted laps: where the matrix's σ c
 
 ARGV CONTRACT: named flags only. `--noises 1.9,4.0,6.5` (default NOISES), `--sets N` (default 4),
 `--set-index J[,J…]` (only those sets; 4-7 are out of sample: seeds 801-1110), `--days N` (default 10), `--plant-days N` (per gain per set, default
-2), `--matrix`. Every recording is generated into ONE `mkdtemp` under $TMPDIR and removed before
+2), `--drift-tau S` (the receiver drift's time constant; default the shipped generator), `--matrix`. Every recording is generated into ONE `mkdtemp` under $TMPDIR and removed before
 exit; the app-support store is jailed and the sidecar write stubbed. Output is stdout: one
 `{"day": …}` line per day, then the summary. `--summarize FILE[,FILE…]` READS such logs and prints
 the summary; it writes nothing.
@@ -103,7 +106,7 @@ sidecar.save = lambda *a, **k: None   # nothing is ever written beside a recordi
 NOISES = (1.9, 4.0, 6.5)          # recordings C, B and A (stats.PUBLISHED_NOISE_SIGMAS)
 PLANT_SEED = 3011                 # quickest_bias's planted days, so the two probes plant alike
 TRUE_LEVEL_S = 0.03               # a true gap this small is no difference a driver could act on
-STEPS = (0.07, 0.10, 0.11, 0.12, 0.14, 0.25, 0.30)
+STEPS = (0.07, 0.10, 0.12, 0.13, 0.14, 0.15, 0.16, 0.18, 0.25, 0.30)
 
 
 def _configs(c) -> dict[str, list[float]]:
@@ -172,14 +175,25 @@ def placements(s: Session, truth) -> dict:
     return out
 
 
-def day_record(work: str, noise: float, seed: int, day_no: int, plant: float | None = None) -> dict:
+def day_record(work: str, noise: float, seed: int, day_no: int, plant: float | None = None,
+               drift_tau: float | None = None) -> dict:
     habit = None if plant is None else sg.Habit(cid=PLANT_CID, grip=PLANTS[plant], brake=1.0,
                                                 clean_laps=(PLANT_LAP,))
-    path = _generate(work, noise, seed, day_no, habit)
+    if drift_tau is None:
+        path = _generate(work, noise, seed, day_no, habit)
+    else:
+        # the receiver's drift re-drawn with this time constant (sector_dedrift's error model;
+        # every other term of the recording is the shipped generator's)
+        from studio.dev.probes import sector_dedrift
+        sector_dedrift._patch(f"tau{drift_tau:g}")
+        try:
+            path = _generate(work, noise, seed, day_no, habit)
+        finally:
+            sg._gps_rows = sector_dedrift._ORIG_GPS_ROWS
     s = Session.load(chapters.discover_siblings(path))
     truth = sg.simulate(seed, 14, origin=make_demo.DEMO_ORIGIN, habit=habit)
     return {"noise": noise, "seed": seed, "plant": plant, "set": (seed - BASE_SEED) // SET_STRIDE
-            if plant is None else None, "placements": placements(s, truth)}
+            if plant is None else None, "drift_tau": drift_tau, "placements": placements(s, truth)}
 
 
 # ------------------------------------------------------------------------------- the summary
@@ -339,12 +353,13 @@ def luck(days, name: str) -> dict:
             "at_n": {n: (by_n[n]["typical"], by_n[n]["next"]) for n in (5, 9, top) if n in by_n}}
 
 
-def measure_luck(work: str, noise: float, seeds, name: str, ns) -> dict[int, tuple[float, float]]:
+def measure_luck(work: str, noise: float, seeds, name: str, ns,
+                 drift_tau: float | None = stats.SPLIT_DRIFT_TAU_S) -> dict[int, tuple[float, float]]:
     """{n: (typical bias, next bias)} at placement `name` over habit-free days at `seeds` — the
     small fixed re-measure tests/test_quickest_passes.py checks the shipped sector luck against."""
     days = []
     for k, seed in enumerate(seeds):
-        days.append(day_record(work, noise, seed, k + 1))
+        days.append(day_record(work, noise, seed, k + 1, drift_tau=drift_tau))
         for entry in os.listdir(work):
             shutil.rmtree(os.path.join(work, entry), ignore_errors=True)
     by_n = qb.bias_by_n(_luck_days(days, name), "sectors")
@@ -356,7 +371,13 @@ def summarize(days: list[dict]) -> dict:
     for noise in sorted({d["noise"] for d in days}):
         mine = [d for d in days if d["noise"] == noise]
         free = [d for d in mine if d["plant"] is None]
-        rec = {"habit_free_days": len(free), "planted_days": len(mine) - len(free)}
+        taus = {d.get("drift_tau") for d in mine}
+        # the table and the shipped luck are read at ONE drift time constant,
+        # `stats.SPLIT_DRIFT_TAU_S`; a grid at another (None: the shipped generator's 90 s) is a
+        # comparison and never "is the table"
+        tau_is_basis = taus == {stats.SPLIT_DRIFT_TAU_S}
+        rec = {"habit_free_days": len(free), "planted_days": len(mine) - len(free),
+               "drift_tau": sorted(taus, key=str)}
         names = list(free[0]["placements"]) if free else []
         for name in names:
             some = next((d["placements"][name] for d in free if d["placements"].get(name)), None)
@@ -374,15 +395,16 @@ def summarize(days: list[dict]) -> dict:
                                   "step": stats.house_step(worst[0])}
             for rec_name, row in stats.PUBLISHED_NOISE_SIGMAS.items():
                 if row.noise == noise:
-                    rec["worst_split"][f"is_table_{rec_name}"] = row.split == worst[0]
+                    rec["worst_split"][f"is_table_{rec_name}"] = (row.split == worst[0]
+                                                                 and tau_is_basis)
         # The quickest pass's luck, at the reference noise: per placement, and the fit at the
         # step's own basis placement, which is what `stats.quickest_luck_s` ships for a sector.
         if worst is not None and noise == stats.REFERENCE_SIGMAS.noise:
             rec["luck"] = {n: luck(mine, n) for n in names}
             basis = rec["luck"][worst[1]]
-            rec["luck_basis"] = {"placement": worst[1], **basis, "app_fit_is_this_fit": all(
-                stats._QUICKEST_LUCK_FIT[("sector", g)] == tuple(basis["fit"][g])
-                for g in ("typical", "next"))}
+            rec["luck_basis"] = {"placement": worst[1], **basis, "app_fit_is_this_fit": tau_is_basis
+                                 and all(stats._QUICKEST_LUCK_FIT[("sector", g)]
+                                         == tuple(basis["fit"][g]) for g in ("typical", "next"))}
         out[f"noise {noise:g}"] = rec
     return out
 
@@ -429,6 +451,7 @@ def main() -> int:
     ap.add_argument("--plant-days", type=int, default=2)
     ap.add_argument("--matrix", action="store_true")
     ap.add_argument("--summarize", default="")
+    ap.add_argument("--drift-tau", type=float, default=None)
     a = ap.parse_args()
     if a.summarize:
         days = []
@@ -455,7 +478,7 @@ def main() -> int:
                 jobs += [(PLANT_SEED + SET_STRIDE * j + 10 * gi + k, 1000 * j + 100 + 10 * gi + k,
                           g) for gi, g in enumerate(PLANTS) for k in range(a.plant_days)]
                 for seed, day_no, plant in jobs:
-                    rec = day_record(work, noise, seed, day_no, plant)
+                    rec = day_record(work, noise, seed, day_no, plant, a.drift_tau)
                     print(json.dumps({"day": rec}), flush=True)
                     days.append(rec)
                     for name in os.listdir(work):

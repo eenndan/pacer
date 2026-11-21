@@ -98,8 +98,9 @@ def _error_model(variant: str):
             return np.zeros(n), np.zeros(n)
         if variant in ("white", "white2"):
             return wx * k, wy * k
-        if variant in ("base", "tau10", "tau30", "tau300"):
-            tau = {"base": 90.0, "tau10": 10.0, "tau30": 30.0, "tau300": 300.0}[variant]
+        if variant == "base" or variant.startswith("tau"):
+            # "tauN": the shipped OU drift with an N-second time constant ("base": 90 s)
+            tau = 90.0 if variant == "base" else float(variant[3:])
             return (_ou(rng, n, 0.35, tau) + wx) * k, (_ou(rng, n, 0.35, tau) + wy) * k
         if variant == "rigid":
             lap = np.floor(s_abs / circuit.length).astype(int)
