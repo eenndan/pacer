@@ -62,6 +62,9 @@ DROPOUT_FLAG = "gps-dropout"
 # ...and a lap that left the line the other laps drive (a cut: `Session.off_line_metres`), the
 # other half of the ⚠ set — kept out of the bests, so it is no clean row either.
 OFF_LINE_FLAG = "off-line"
+# ...and a lap timed across a missing chapter (`Session.chapter_gap_notes`): its time is short by
+# the chapter that is not in the folder. Wins over the other two, as its ⚠ sentence does.
+GAP_FLAG = "chapter-gap"
 
 # laps.csv's per-lap distance column. It is the lap odometer, which reads short of the distance
 # driven (`stats.ODOMETER_NOTE`), so the file's trailer carries that note under this label, the
@@ -222,7 +225,8 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
     columns:
 
       lap, time_s, dist_m, entry_kmh, flag      the table's base columns; `flag` is the ⚠
-                                                marker (DROPOUT_FLAG / OFF_LINE_FLAG / "")
+                                                marker (DROPOUT_FLAG / OFF_LINE_FLAG /
+                                                GAP_FLAG / "")
       S1_s … SN_s                               per-sub-sector splits — present only when
                                                 sector lines exist (like the app's table);
                                                 a partial lap's missing splits stay blank
@@ -278,6 +282,7 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
     corner_list = session.corners.corner_list()
     dropout_ids = session.dropout_lap_ids()
     warned = data_quality.lap_warnings(session)   # the ⚠ set: dropouts (None), off-line laps
+    gap = data_quality.gap_lap_ids(session)       # ...and the laps timed across a missing chapter
 
     sfx, speed = _speed_column(unit)
 
@@ -297,7 +302,8 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
         # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
         cells = [lap_label(lap_id), fmt.time(r["time"]), fmt.dist(r["dist"]),
                  fmt.speed(speed(r["entry"])),
-                 "" if lap_id not in warned else OFF_LINE_FLAG if warned[lap_id] else DROPOUT_FLAG]
+                 "" if lap_id not in warned else GAP_FLAG if lap_id in gap
+                 else OFF_LINE_FLAG if warned[lap_id] else DROPOUT_FLAG]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
             cells.append(fmt.split(splits[i]) if i < len(splits) else fmt.missing)
@@ -652,9 +658,12 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         lap_bits.append(f"{len(excluded)} excluded ({why})" if why else f"{len(excluded)} excluded")
     if dropouts:
         lap_bits.append(f"{len(dropouts)} with a GPS dropout")
-    off_line = [i for i, why in data_quality.lap_warnings(session).items() if why]
+    gap = data_quality.gap_lap_ids(session)
+    off_line = [i for i, why in data_quality.lap_warnings(session).items() if why and i not in gap]
     if off_line:
         lap_bits.append(f"{len(off_line)} off the line")
+    if gap:
+        lap_bits.append(f"{len(gap)} across a missing chapter")
     rows = [("laps", " · ".join(lap_bits) if valid else "")]
     tot = st.totals() if st is not None else None
     note = ""

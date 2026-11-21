@@ -384,6 +384,28 @@ def test_a_lap_that_left_the_line_is_not_a_clean_lap_and_says_why():
     print("test_a_lap_that_left_the_line_is_not_a_clean_lap_and_says_why OK")
 
 
+def test_a_lap_timed_across_a_missing_chapter_is_hatched_with_its_own_words():
+    """A lap timed across a missing chapter carries a ⚠ sentence like an off-line lap, but the
+    legend must not say it left the line: it gets its own kind and its own words."""
+    s = FakeSession({0: 60.0, 1: 60.3, 2: 41.8, 3: 60.5})
+    why = "Lap 3 was timed across a missing chapter (chapter 2, GX020001.MP4), so …"
+    s.lap_warnings = lambda: {2: why}
+    s.chapter_gap_notes = lambda: {2: why}
+    s.best_lap_id = lambda: 0
+    d = ls.lapstrip_data(s)
+    gap = [b for b in d.bars if b.lap_id == 2][0]
+    assert gap.kind == ls.KIND_GAP and gap.tone == ls.TONE_QUICKER, gap
+    assert d.clean_laps == 3
+    words = dict(ls.legend_entries(d))[ls.TONE_QUICKER]
+    assert words.endswith("quicker, across a missing chapter (not counted)"), words
+    assert "left the line" not in " ".join(w for _k, w in ls.legend_entries(d))
+    s.times[2] = 60.6
+    assert dict(ls.legend_entries(ls.lapstrip_data(s)))[ls.KIND_GAP] == \
+        "timed across a missing chapter: not counted"
+    ls.render_lapstrip(ls.lapstrip_data(s))
+    print("test_a_lap_timed_across_a_missing_chapter_is_hatched_with_its_own_words OK")
+
+
 # --------------------------------------------------------------- render + export
 def test_renders_every_shape_at_the_lap_cards_size():
     for s in (long_session(), FakeSession({0: 60.0, 1: 60.4, 2: 61.0}),
