@@ -423,9 +423,19 @@ def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
 #     held 20 m), so
 #     the hold stays short.
 #   * CORRIDOR_MIN_LAPS = 4: with three laps or fewer there is no consensus to leave.
+#   * CORRIDOR_MAX_SHARE = 2/5: the rule only ever flags a clear MINORITY of the laps measured.
+#     The consensus is a per-station median, so it is the line only while a clear majority drives
+#     it. With half the laps cutting the same corner it lands BETWEEN the two lines and every lap
+#     reads ~17 m off it; with 3 cutters of 5 it IS the cut and the two honest laps read off it.
+#     So the flagged laps must be FEWER than two-fifths of those measured, or nothing is flagged:
+#     the session has no single line to measure against. That band is symmetric about one half —
+#     cutters under 40 % are flagged, a cutting majority leaves the honest laps flagged only when
+#     it passes 60 % (and then the cut is the line the laps drive), and from 40 to 60 % nothing is
+#     flagged. Two cutters of five are therefore not flagged; one of four and three of eight are.
 CORRIDOR_MAX_M = 10.0
 CORRIDOR_SUSTAIN_M = 10.0
 CORRIDOR_MIN_LAPS = 4
+CORRIDOR_MAX_SHARE = 0.4
 
 
 def corridor_residuals(ref_trace, lap_traces: dict) -> tuple[float, dict[int, np.ndarray]] | None:

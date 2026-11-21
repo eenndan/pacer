@@ -881,6 +881,17 @@ def session_marks(session) -> list[str]:
     return [m for m in MARK_ORDER if m in out]
 
 
+def lap_warnings(session) -> dict[int, str | None]:
+    """The ⚠ set with each lap's reason (`Session.lap_warnings`): None for a GPS dropout, the
+    off-line sentence for a lap that left the line the other laps drive. A lighter double with
+    only `dropout_lap_ids` reads as dropouts alone; one with neither has no ⚠ lap."""
+    ask: Callable[[], dict[int, str | None]] | None = getattr(session, "lap_warnings", None)
+    if callable(ask):
+        return dict(ask())
+    drop: Callable[[], Iterable[int]] | None = getattr(session, "dropout_lap_ids", None)
+    return {i: None for i in (drop() if callable(drop) else ())}
+
+
 def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:
     """Every quality code that applies to ONE lap row — the session-wide ones plus this lap's own.
 

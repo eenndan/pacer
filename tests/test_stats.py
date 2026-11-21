@@ -2375,6 +2375,28 @@ def test_stats_view_trust_card_names_the_sessions_own_problems():
     print("test_stats_view_trust_card_names_the_sessions_own_problems OK")
 
 
+def test_stats_view_flags_a_lap_that_left_the_line():
+    """ONE ⚠ set (Session.lap_warnings): a lap that left the line the other laps drive (a cut) is
+    out of the bests like a dropout lap, so the PER LAP table marks it ⚠ with ITS sentence, and the
+    DATA TRUST card says it — the Laps tab is not the only page that knows."""
+    _app()
+    from studio.stats_panel import StatsView
+
+    sess = _fake_view_session(excluded=())
+    why = "Lap 1 left the line your other laps drive by 34 m, so it is kept out of the bests."
+    sess.lap_warnings = lambda: {0: why, 1: None}         # lap id 1 stays the fixture's dropout
+    v = StatsView(sess)
+    assert v.lap_table.item(0, 0).text() == "1 ⚠", v.lap_table.item(0, 0).text()
+    assert v.lap_table.item(0, 0).toolTip() == why
+    assert "GPS dropout" in v.lap_table.item(1, 0).toolTip()   # the dropout keeps its own words
+    rows = {t: (val, c) for t, val, c in v.trust.card.rows()}
+    assert rows.get("Off the line") == (
+        "lap 1 left the line the other laps drive — flagged ⚠ and left out of bests, σ and pace",
+        True), rows
+    assert rows["GPS dropout"][0].startswith("inside 1 of 2 laps"), rows
+    print("test_stats_view_flags_a_lap_that_left_the_line OK")
+
+
 def test_stats_view_trust_card_names_a_break_in_series():
     """The card's fourth trust-breaking fact, and the one it had no name for.
 

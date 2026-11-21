@@ -1978,6 +1978,28 @@ def test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap():
     print("test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap OK")
 
 
+def test_no_majority_no_line_rule():
+    """When the laps cutting one corner are not a clear minority (`corners.CORRIDOR_MAX_SHARE`),
+    the session has no single line to measure against: with half the laps cutting, the median
+    consensus lands BETWEEN the two lines and every lap read ~17 m off it (the cut lap then won
+    again through the all-flagged fallback, and every honest lap wore a false ⚠); with 3 cutters of
+    5 the consensus IS the cut and the two honest laps were flagged. Nothing is flagged then."""
+    from studio.dev import synth_gopro as sg
+    c4 = next(k for k in sg.build_circuit().corners if k.cid == 4).apex_s
+    for n, cutters in ((4, {2, 3}), (6, {3, 4, 5}), (5, {2, 3, 4})):
+        specs = [{"chord_about": c4} if i in cutters else {} for i in range(n)]
+        times = {i: 44.2 + 0.01 * i if i in cutters else 45.2 + 0.01 * i for i in range(n)}
+        s, _c = _corridor_session(specs, times)
+        assert s.off_line_metres() == {}, (n, sorted(cutters), s.off_line_metres())
+        assert s.off_line_notes() == {}
+    # ...while one cutter in four, two in six or three in eight is a minority and still flagged.
+    for n, cutters in ((4, {3}), (6, {4, 5}), (8, {5, 6, 7})):
+        specs = [{"chord_about": c4} if i in cutters else {} for i in range(n)]
+        s, _c = _corridor_session(specs, {i: 45.0 for i in range(n)})
+        assert set(s.off_line_metres()) == cutters, (n, s.off_line_metres())
+    print("test_no_majority_no_line_rule OK")
+
+
 def test_sustained_max_holds_a_stretch_not_a_fix():
     """One stray station is not an excursion; a stretch is, across the lap's seam too; NaN (no
     answer) breaks a stretch rather than extending it."""

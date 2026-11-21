@@ -1325,7 +1325,7 @@ class LapTable(QWidget):
         # rewrites, which go through _lap_cell_text).
         self._best_split: list = []
         self._dropout_ids: set = set()
-        # lap id -> why a lap that left the line is out of the bests (Session.off_line_notes): it
+        # lap id -> why a lap that left the line is out of the bests (Session.lap_warnings): it
         # wears the same ⚠ as a dropout lap (and is in `_dropout_ids`), with this as its hover.
         self._off_line_tips: dict = {}
         self._best_lap_id = None
@@ -2030,14 +2030,13 @@ class LapTable(QWidget):
         # Per-lap splits + per-column session-best (same accessor the footer sums, so cells/footer agree).
         splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
         best_split = self.session.session_best_splits()
-        dropout_ids = self.session.dropout_lap_ids()
-        # A lap that left the line the other laps drive (a cut) is out of the bests for the same
-        # reason a dropout lap is — it cannot be compared — so it joins the ⚠ set every rule below
-        # keys on (no ★, no purple, not the Δ bar scale, no slow-lap note) and only its hover
-        # differs. A double without the read has none.
-        off_line = getattr(self.session, "off_line_notes", None)
-        self._off_line_tips = off_line() if callable(off_line) else {}
-        dropout_ids = set(dropout_ids) | set(self._off_line_tips)
+        # THE ⚠ SET (Session.lap_warnings): a GPS dropout, or a lap that left the line the other
+        # laps drive (a cut) — out of the bests for the same reason, it cannot be compared — so
+        # every rule below keys on it (no ★, no purple, not the Δ bar scale, no slow-lap note),
+        # and only the hover differs: an off-line lap says its own sentence.
+        warned = data_quality.lap_warnings(self.session)
+        self._off_line_tips = {i: why for i, why in warned.items() if why}
+        dropout_ids = set(warned)
 
         # Sorting must be OFF while we populate (else rows reorder mid-fill and setItem(r,…)
         # lands on the wrong row); re-enabled after, preserving the user's chosen sort.

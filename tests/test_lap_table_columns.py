@@ -1098,7 +1098,7 @@ def test_the_gap_adds_up_to_the_printed_times():
 
 
 def test_a_lap_that_left_the_line_wears_the_flag_and_says_why():
-    """A lap that left the line the other laps drive (Session.off_line_notes: a cut) is out of
+    """A lap that left the line the other laps drive (Session.lap_warnings: a cut) is out of
     the bests like a ⚠ dropout lap, so it wears the same ⚠, its hover says how far it went and why
     it is not the best, and it sets no bar scale — the +1.5 s lap 8 here, which would stretch the
     scale to 1.5 s if it counted."""
@@ -1106,7 +1106,7 @@ def test_a_lap_that_left_the_line_wears_the_flag_and_says_why():
     sess = _TowerSession()
     sess.dropout_lap_ids = lambda: set()
     why = "Lap 9 left the line your other laps drive by 14 m, so it is kept out of the bests."
-    sess.off_line_notes = lambda: {8: why}
+    sess.lap_warnings = lambda: {8: why}
     table = LapTable(sess)
     tb = table.table
     r = table._row_for_lap(8)

@@ -3121,7 +3121,9 @@ and nothing is flagged. Neither outcome depends on whether anyone cut.
 is a rule that measures WHERE the lap went, not how long it was. A line moves a few metres across
 the track; a cut leaves it. `corners.CORRIDOR_MAX_M` measures each lap's lateral distance from the
 session's consensus line (receiver drift removed). A lap whose distance stays above 10 m for 10 m
-of track is kept out of the bests. Its block in `studio/corners.py` carries the measurements: up to
+of track is kept out of the bests, as long as such laps are under two-fifths of the session
+(`CORRIDOR_MAX_SHARE`). With more of them, the median consensus is no single line, and nothing is
+flagged. Its block in `studio/corners.py` carries the measurements: up to
 4.8 m for legitimate laps (7.0 m under a 3 m receiver jump between laps), and 13.5–34.2 m for
 infield cuts on 410 m, 601 m and 971 m layouts.
 

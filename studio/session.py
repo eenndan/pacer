@@ -2155,6 +2155,9 @@ class Session:
                 k = math.ceil(corners_alg.CORRIDOR_SUSTAIN_M / step)
                 held = {i: corners_alg.sustained_max(r, k) for i, r in resid.items()}
                 out = {i: m for i, m in held.items() if m > corners_alg.CORRIDOR_MAX_M}
+                # No clear majority on one line, no line to leave (CORRIDOR_MAX_SHARE).
+                if len(out) >= corners_alg.CORRIDOR_MAX_SHARE * len(traces):
+                    out = {}
         self._off_line_memo = (valid, out)
         return out
 
@@ -2163,6 +2166,16 @@ class Session:
         True of a cut and of an off alike: it says where the lap went, not why."""
         return {i: f"Lap {lap_label(i)} left the line your other laps drive by {m:.0f} m, so it is "
                    "kept out of the bests." for i, m in self.off_line_metres().items()}
+
+    def lap_warnings(self) -> dict[int, str | None]:
+        """THE ⚠ SET, with why: ``{lap_id: reason}`` for every valid lap kept out of the bests —
+        None for a GPS dropout (each surface keeps its own dropout words) and the `off_line_notes`
+        sentence for a lap that left the line. The two are disjoint: a dropout lap is never
+        measured for the line. Every surface that marks a ⚠ lap reads this (through
+        `data_quality.lap_warnings`), so none can call a cut lap clean."""
+        out: dict[int, str | None] = {i: None for i in self.dropout_lap_ids()}
+        out.update(self.off_line_notes())
+        return out
 
     def lap_out_of_bests(self, lap_id: int) -> bool:
         """May this valid lap NOT be the best lap, the Δ reference, a purple split, an ideal-lap
