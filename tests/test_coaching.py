@@ -2473,8 +2473,8 @@ def test_u2_count_decided_coaching_copy_keeps_its_next_action_and_reconciles_tot
     assert "Drive a few more laps" in got, got
     assert "1 of its 2 laps had a GPS dropout" in got, got
     plain = _panel_state_text(_LapAccountSession(n_clean=2, valid=[0, 1], dropout=[]))
-    assert plain == ("Not enough clean laps yet.\n\nCoaching needs 3 clean (valid, GPS-dropout-"
-                     "free) laps; this session has 2. Drive a few more laps in your next "
+    assert plain == ("Not enough clean laps yet.\n\nCoaching needs 3 clean laps (valid; no GPS "
+                     "dropout, not off the line, not timed across a missing chapter); this session has 2. Drive a few more laps in your next "
                      "session."), plain
     print("ok U2: count-decided copy keeps 'drive more' and reconciles a dropout")
 
@@ -3491,7 +3491,8 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     from studio import coaching_panel as cp
     main_scope = (
         "The biggest realistic time gains vs your own best lap, across the WHOLE session "
-        "(the median over your clean, GPS-dropout-free laps) — these rows do NOT follow the "
+        "(the median over your clean laps: no GPS dropout, not off the line, not timed across a "
+        "missing chapter) — these rows do NOT follow the "
         "lap you select; the Corners tab is the per-lap view. The total is your top 3 corners "
         "that cleared the evidence gate; corners that did not are listed below with the reason. "
         "Coaching ▸ Opportunities (or the panel's maximize button) shows this page full-window, "

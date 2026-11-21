@@ -2080,10 +2080,19 @@ class CentralView(QWidget):
         """"C3", or "S2" for a sector's key (`Session.stretch_label`)."""
         return self.session.stretch_label(cid)
 
+    def _uncounted_why(self, lap_id: int, otherwise: str) -> str:
+        """Why `lap_id` has no counted cell, in the words the Quickest hover uses: its ⚠ kind
+        (`data_quality.lap_warning_kinds`), else ⊘ excluded, else `otherwise`."""
+        kind = data_quality.lap_warning_kinds(self.session).get(lap_id)
+        if kind is not None:
+            return f"⚠ {data_quality.WARN_REASON[kind]}"
+        excluded = getattr(self.session, "excluded_lap_ids", list)() or ()
+        return "⊘ excluded" if lap_id in excluded else otherwise
+
     def lap_pass_refusal(self, lap_id: int, cid: int) -> str | None:
         """Why lap `lap_id`'s pass through corner `cid` cannot be played as a measured pass, or
         None when it can. The rule is the CORNERS BY LAP grid's: a lap that is a row of it (⊘
-        excluded and ⚠ dropout laps are not), with a time through the corner, matched on track at
+        excluded and ⚠ laps are not: `_uncounted_why` names which), with a time through the corner, matched on track at
         both edges — the cells the Quickest view counts. A pass is never played on a time the
         grid itself declines to compare. A sector's (`cid` a stats.sector_key) is the SPLITS
         grid's: a row of it with that split."""
@@ -2092,7 +2101,8 @@ class CentralView(QWidget):
             if self.session.split_matrix() is None:
                 return f"No sector splits to play here: {label} needs a few clean laps first"
             if self.session.stretch_time(lap_id, cid) is None:
-                return f"Lap {lap} has no counted {label} split (⊘ excluded, ⚠ GPS dropout or blank)"
+                why = self._uncounted_why(lap_id, "blank")
+                return f"Lap {lap} has no counted {label} split ({why})"
             if self.session.stretch_clip(lap_id, cid) is None:
                 return f"Lap {lap}'s {label} has no clip"
             return None
@@ -2100,7 +2110,8 @@ class CentralView(QWidget):
         if matrix is None or cid not in matrix.cids:
             return f"No corner times to play here: {label} needs a few clean laps first"
         if lap_id not in matrix.lap_ids:
-            return (f"Lap {lap} is not counted in the corner times (⊘ excluded or ⚠ GPS dropout), "
+            return (f"Lap {lap} is not counted in the corner times "
+                    f"({self._uncounted_why(lap_id, 'not a row of the grid')}), "
                     "so its passes are not played")
         r, c = matrix.lap_ids.index(lap_id), matrix.cids.index(cid)
         if matrix.cells[r][c] is None:

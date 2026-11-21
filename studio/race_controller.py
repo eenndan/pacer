@@ -27,7 +27,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from . import lap_race
+from . import data_quality, lap_race
 from ._signal import lap_label, plural, too_brief_note
 
 #: How many packs the card lists (plus the selected lap's, wherever it is).
@@ -36,7 +36,7 @@ PACKS_SHOWN = 5
 MAX_STEP_S = 0.25
 #: The excluded reasons as the card's muted line says them.
 _EXCLUDED_WORDS = {
-    lap_race.EXCLUDED_DROPOUT: ("GPS dropout", "GPS dropouts"),
+    **data_quality.WARN_COUNTED,      # the three ⚠ kinds, worded where every surface reads them
     lap_race.EXCLUDED_NOT_CLEAN: ("not a clean lap", "not clean"),
     lap_race.EXCLUDED_UNMATCHED: ("no on-track match", "with no on-track match"),
 }

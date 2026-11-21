@@ -233,6 +233,23 @@ def test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report():
     print("test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report OK")
 
 
+def test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that():
+    """A lap timed across a missing chapter (`Session.chapter_gap_notes`) is in the ⚠ set with a
+    sentence, but it did not leave the line: its flag is its own word, which wins over off-line
+    and over a dropout, and the report counts it as what it is, never "off the line"."""
+    s = make_session()
+    why = "Lap 2 was timed across a missing chapter (chapter 2, GX020001.MP4), so …"
+    s.chapter_gap_notes = lambda: {1: why}
+    headers, rows = export_data.laps_table(s)
+    by_id = dict(rows)
+    col = headers.index("flag")
+    assert by_id[1][col] == export_data.GAP_FLAG == "chapter-gap", by_id[1][col]
+    assert by_id[2][col] == export_data.DROPOUT_FLAG and by_id[0][col] == ""
+    laps_row = dict(export_data.stats_summary(s)[0].rows)["laps"]
+    assert "1 across a missing chapter" in laps_row and "off the line" not in laps_row, laps_row
+    print("test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that OK")
+
+
 def test_the_display_table_prints_the_apps_precision_from_the_raw_values():
     """cool/report-laps-precision: `display=True` (the report's copy) prints each kind of value at
     the app's precision — lap time 3, distance 0, speeds 1, splits and corner times PRINT_DECIMALS —
@@ -1007,6 +1024,11 @@ def test_a_degraded_recording_stamps_the_slow_lap_notes_like_the_laps_table():
     start = body.index("SLOW LAPS")
     slow = body[start:body.index("Laps (", start)]
     assert stamp in slow, slow
+    # A ⚠ lap gets no slow note, held as the Laps table holds it — the whole ⚠ set, a lap that
+    # left the line included (Session.lap_warnings), not the dropout half alone.
+    assert export_data._slow_laps_section(s)
+    s.lap_warnings = lambda: {n.lap_id: "left the line" for n in notes}
+    assert export_data._slow_laps_section(s) == []
     print("ok report-story: a degraded recording stamps SLOW LAPS as the Laps table does")
 
 
@@ -1139,6 +1161,7 @@ def test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column():
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
     test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report()
+    test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that()
     test_the_display_table_prints_the_apps_precision_from_the_raw_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()

@@ -860,8 +860,8 @@ SIGMA_TOOLTIP = stats_service.SIGMA_TOOLTIP
 sigma_caption = stats_service.sigma_caption
 
 
-PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid, no GPS dropout — the same "
-                "set every σ statistic uses). Spread = median − best: what the typical lap "
+PACE_TOOLTIP = ("Lap-time distribution over the clean laps (valid; "
+                f"{data_quality.CLEAN_LAP_TERMS} — the same set every σ statistic uses). Spread = median − best: what the typical lap "
                 "gives away to your demonstrated pace.")
 # The two stitched TARGETS (moved here from the Laps tab's SESSION-BESTS footer, which cost the
 # lap grid 63px — two lap rows — on every recording). Each now sits with the data it is derived
@@ -1257,7 +1257,8 @@ class StatsView(QWidget):
         col.addWidget(section_heading("SESSION"))
         self.t_laps = Tile("laps")
         self.t_laps.setToolTip(f"Valid laps · {EXCLUDED_MARK} band-excluded · "
-                               f"{DROPOUT_MARK} laps with a GPS dropout")
+                               f"{DROPOUT_MARK} laps kept out of the bests ("
+                               + ", ".join(data_quality.WARN_REASON.values()) + ")")
         # "GPS TRACE", NOT "recorded" (LOOK-5, QA 2026-09-26): this is the kept GPS trace's span,
         # first fix to last, and the DATA TRUST card's GPS-quality line directly below spans the
         # FOOTAGE — 41:34 here against 44:44 there on MK_18_09, whose first 3:05 had no fix. Two
@@ -2225,7 +2226,9 @@ class StatsView(QWidget):
         self.no_gmeter_note.setVisible(
             bool(valid) and not getattr(session, "has_gmeter", False))
         excluded = getattr(session, "excluded_lap_ids", list)() or []
-        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        # THE ⚠ SET (Session.lap_warnings): every lap kept out of the bests — the laps
+        # the per-lap table and DATA TRUST card below flag, so the count agrees with them.
+        dropouts = data_quality.lap_warnings(session)
         # SPACE BETWEEN THE COUNT AND ITS MARK, and it is not a nudge (D1-04). This tile shipped
         # "24⊘": measured on the live composite the ⊘ and the 4 merged into ONE 40x19 ink run with
         # no gap, and at EMPHASIS=15 the ⊘ fills the whole 19 px box against 13 px digits — 1.46x
@@ -3071,15 +3074,20 @@ class StatsView(QWidget):
                          "corner edge was not matched on track, so the time is shown but never "
                          "marked or counted in the typical.")
         excluded = len(getattr(session, "excluded_lap_ids", list)() or [])
-        dropouts = len(session.dropout_lap_ids()) if hasattr(session, "dropout_lap_ids") else 0
+        # The ⚠ set, each kind named: the grid runs over `consistency_lap_ids`, which leaves out
+        # every ⚠ lap (a dropout, off the line, timed across a missing chapter) alike.
+        kinds = list(data_quality.lap_warning_kinds(session).values())
         left = []
         if excluded:
             left.append(f"{excluded} {EXCLUDED_MARK} excluded")
-        if dropouts:
-            left.append(f"{dropouts} {DROPOUT_MARK} GPS-dropout")
+        for kind, adjective in data_quality.WARN_ADJECTIVE.items():
+            if kinds.count(kind):
+                left.append(f"{kinds.count(kind)} {DROPOUT_MARK} {adjective}")
         if left:
-            parts.append(f"Not in the grid: {' and '.join(left)} "
-                         f"lap{'' if excluded + dropouts == 1 else 's'} (see the Laps tab).")
+            listed = (left[0] if len(left) == 1 else
+                      f"{', '.join(left[:-1])} and {left[-1]}")
+            parts.append(f"Not in the grid: {listed} "
+                         f"lap{'' if excluded + len(kinds) == 1 else 's'} (see the Laps tab).")
         return " ".join(parts)
 
     @staticmethod

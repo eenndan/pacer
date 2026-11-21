@@ -121,6 +121,11 @@ NO_LAPS_ALT_ACTION = "If it is the wrong recording, open another with ⌘O."
 # over an empty map). The cause is known, so it is stated instead — with what still works. Also
 # the hover of the map's line tools, which a recording with no trace disables.
 NO_LAPS_NO_GPS_BODY = "This recording has no GPS, so no lap can be timed; the video still plays."
+# ...and why such a recording takes no REFERENCE: a reference is matched by location and measured
+# against a best lap, and it has neither. Picking the demo used to answer "these don't look like
+# the same track (different location); keeping the local best lap" — no location, no best lap.
+# The hover of the reference items it disables, and the refusal for any other way in.
+NO_GPS_NO_REFERENCE = "This recording has no GPS, so there is nothing to compare a reference with."
 
 
 def no_laps_body(crossings: int | None = None) -> str:
@@ -883,13 +888,55 @@ def session_marks(session) -> list[str]:
 
 def lap_warnings(session) -> dict[int, str | None]:
     """The ⚠ set with each lap's reason (`Session.lap_warnings`): None for a GPS dropout, the
-    off-line sentence for a lap that left the line the other laps drive. A lighter double with
+    off-line sentence for a lap that left the line the other laps drive, and the missing-chapter
+    sentence for a lap timed across one (`gap_lap_ids` tells it from off-line). A lighter double with
     only `dropout_lap_ids` reads as dropouts alone; one with neither has no ⚠ lap."""
     ask: Callable[[], dict[int, str | None]] | None = getattr(session, "lap_warnings", None)
     if callable(ask):
         return dict(ask())
     drop: Callable[[], Iterable[int]] | None = getattr(session, "dropout_lap_ids", None)
     return {i: None for i in (drop() if callable(drop) else ())}
+
+
+def gap_lap_ids(session) -> set[int]:
+    """The laps of the ⚠ set timed across a missing chapter (`Session.chapter_gap_notes`) — the
+    ones whose `lap_warnings` sentence is about the clock, not the line, so a surface that counts
+    "off the line" laps by their sentence leaves these out and names them as what they are. A
+    double without the accessor has none."""
+    ask: Callable[[], dict[int, str]] | None = getattr(session, "chapter_gap_notes", None)
+    return set(ask()) if callable(ask) else set()
+
+
+# THE ⚠ REASON KINDS, and every way a surface words them — one table, so the race card, the export
+# ghost, Quickest passes, the Stats page and the status line cannot word a lap's reason three
+# ways (or call a lap timed across a missing chapter "off the line").
+WARN_DROPOUT = "dropout"
+WARN_OFF_LINE = "off line"
+WARN_CHAPTER_GAP = "chapter gap"
+#: kind → the reason after a ⚠: "lap 10 (⚠ left the line the other laps drive)".
+WARN_REASON = {WARN_DROPOUT: "GPS dropout",
+               WARN_OFF_LINE: "left the line the other laps drive",
+               WARN_CHAPTER_GAP: "timed across a missing chapter"}
+#: kind → (one lap, several laps) in a count: "1 GPS dropout (L6)", "2 off the line (L3, L9)".
+WARN_COUNTED = {WARN_DROPOUT: ("GPS dropout", "GPS dropouts"),
+                WARN_OFF_LINE: ("off the line", "off the line"),
+                WARN_CHAPTER_GAP: ("timed across a missing chapter",
+                                   "timed across a missing chapter")}
+#: kind → the compound adjective before "lap": "1 ⚠ off-the-line lap".
+WARN_ADJECTIVE = {WARN_DROPOUT: "GPS-dropout", WARN_OFF_LINE: "off-the-line",
+                  WARN_CHAPTER_GAP: "missing-chapter"}
+#: What a CLEAN lap is — the complement of the ⚠ set (`Session.lap_out_of_bests`), for the copy
+#: that defines the laps a number runs over.
+CLEAN_LAP_TERMS = "no GPS dropout, not off the line, not timed across a missing chapter"
+
+
+def lap_warning_kinds(session) -> dict[int, str]:
+    """``{lap_id: kind}`` over the ⚠ set (`lap_warnings`): `WARN_CHAPTER_GAP` for a lap timed
+    across a missing chapter (its sentence wins in `Session.lap_warnings`), `WARN_DROPOUT` for a
+    GPS dropout, `WARN_OFF_LINE` for a lap that left the line."""
+    gaps = gap_lap_ids(session)
+    return {i: (WARN_CHAPTER_GAP if i in gaps else WARN_DROPOUT if why is None else WARN_OFF_LINE)
+            for i, why in lap_warnings(session).items()}
 
 
 def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:

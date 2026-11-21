@@ -480,8 +480,11 @@ class CompareController:
         # B = best; if A already is best, pick the next-fastest valid lap as B.
         b = best if best is not None and best in valid else None
         if b is None or b == a:
+            # The next-best lap, so never a ⚠ lap (a dropout, or a cut that left the line and is
+            # quicker for it: `lap_out_of_bests`) while a clean one exists.
+            out = getattr(self.session, "lap_out_of_bests", lambda _i: False)
             others = sorted((lid for lid in valid if lid != a),
-                            key=self.session.lap_time)
+                            key=lambda lid: (bool(out(lid)), self.session.lap_time(lid)))
             b = others[0] if others else a
         self.enter_pair(a, b)
 

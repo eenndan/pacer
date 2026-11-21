@@ -2780,8 +2780,15 @@ class StudioWindow(QMainWindow):
             action = getattr(self, name, None)
             if action is not None:
                 self._gate_action(action, has, reason)
+        # A recording with no GPS takes no reference (no location to match, no best lap to measure
+        # against): both reference loaders go off, saying so, instead of loading one to refuse it.
+        no_gps = has and data_quality.no_start_line(self.session)
+        if no_gps and getattr(self, "_ref_action", None) is not None:
+            self._gate_action(self._ref_action, False, data_quality.NO_GPS_NO_REFERENCE)
         pb = getattr(self, "_pb_compare_action", None)
-        if pb is not None:
+        if pb is not None and no_gps:
+            self._gate_action(pb, False, data_quality.NO_GPS_NO_REFERENCE)
+        elif pb is not None:
             row = getattr(getattr(self, "library_ctl", None), "previous_pb", None)
             probe = getattr(self, "_pb_footage_probe", None)
             if has and row is not None and probe is not None and probe[0] is row and probe[1]:
@@ -4425,7 +4432,7 @@ class StudioWindow(QMainWindow):
         paths = chapters.discover_siblings(path)
         self._start_reference_load(paths)
 
-    def _start_reference_load(self, paths: list[str]):
+    def _start_reference_load(self, paths: list[str]) -> bool | None:
         """Spawn the off-thread reference Session.load for `paths` (the file-picker-free half of
         _load_reference_file, so tests drive it without a dialog). Reuses the primary open's
         SessionLoadWorker; a lightweight status-bar "Loading reference…" replaces the whole-view
@@ -4440,7 +4447,16 @@ class StudioWindow(QMainWindow):
         started a worker unconditionally, so N rapid picks ran N concurrent full Session.loads — each
         one a ~1.4–4 s numpy/C++ read of a whole recording — and kept exactly one result. The token
         machine made that *correct*, which is why it never showed up as a bug; it is why the "must
-        not run alongside a second reference load" guard the docstring promised has to be real."""
+        not run alongside a second reference load" guard the docstring promised has to be real.
+
+        A recording with no GPS refuses here, before any read, through the channel every other
+        refusal takes (its menu items are already off; this is the belt for any other way in), and
+        returns False so a caller that marks a gesture as running does not."""
+        if hasattr(self, "session") and data_quality.no_start_line(self.session):
+            _log.warning("reference not loaded — %s", data_quality.NO_GPS_NO_REFERENCE)
+            QMessageBox.information(self, f"{APP_NAME} — reference not loaded",
+                                    data_quality.NO_GPS_NO_REFERENCE)
+            return False
         print(f"studio: loading reference recording — {len(paths)} chapter(s)…", flush=True)
         self.statusBar().showMessage("Loading reference…", STATUS_MS)
         # Bump the token: any in-flight reference worker started earlier is now stale; its result is
@@ -4617,7 +4633,8 @@ class StudioWindow(QMainWindow):
         if again:
             return  # this gesture's load is already running; a second click would only restart it
         # The row's own paths, not their siblings: the recording as it was when it set that best.
-        self._start_reference_load([p for p in row.get("paths") or [] if p])
+        if self._start_reference_load([p for p in row.get("paths") or [] if p]) is False:
+            return  # refused before any load: no gesture left running
         self._pb_compare_token = self._ref_load_token
 
     def _enter_pb_compare(self):

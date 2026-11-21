@@ -252,6 +252,14 @@ def test_provisional_estimated_and_excluded():
     assert race_controller.excluded_line({1: lap_race.EXCLUDED_NOT_CLEAN}) == \
         "1 lap not raced: 1 not a clean lap (L2)."
     assert race_controller.excluded_line({}) is None
+    # A lap that left the line (a cut) is out of the bests, so out of the race, said in words.
+    assert race_controller.excluded_line({9: lap_race.EXCLUDED_OFF_LINE,
+                                          4: lap_race.EXCLUDED_DROPOUT}) == \
+        "2 laps not raced: 1 GPS dropout (L5), 1 off the line (L10).", \
+        race_controller.excluded_line({9: lap_race.EXCLUDED_OFF_LINE, 4: lap_race.EXCLUDED_DROPOUT})
+    assert race_controller.excluded_line({4: lap_race.EXCLUDED_CHAPTER_GAP}) == \
+        "1 lap not raced: 1 timed across a missing chapter (L5).", \
+        race_controller.excluded_line({4: lap_race.EXCLUDED_CHAPTER_GAP})
     # QA EVAL-3: a lap no table lists is a crossing too brief to be a lap, said in the Laps tab's
     # own sentence — not counted as a lap the reader then cannot find.
     from studio.lap_table import too_brief_note

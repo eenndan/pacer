@@ -65,7 +65,7 @@ import shiboken6
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QFileDialog
 
-from . import chapters, demo, focus, library, session_record, sidecar, track_db
+from . import chapters, data_quality, demo, focus, library, session_record, sidecar, track_db
 from . import marks as marks_model
 from .library_dialog import LibraryDialog
 from .overlays import PBToast
@@ -84,6 +84,11 @@ NAME_WAIT_LINE = ("This circuit has no name yet, so there is no personal best to
 # says what is kept instead, which is nothing (`update_library`, `_save_focus`).
 DEMO_DEBRIEF_LINE = ("This is the synthetic demo, so nothing is saved: no Library row, no personal "
                      "best, and a focus list that lasts only while the demo is open.")
+
+# The no-GPS refusal as a Library row's reason: lower-case and stopless, as the row hover puts every
+# reason after "Not available: " (`library_dialog.USE_AS_REFERENCE_REFUSED`).
+_NO_GPS_ROW_REASON = (data_quality.NO_GPS_NO_REFERENCE[:1].lower()
+                      + data_quality.NO_GPS_NO_REFERENCE[1:].rstrip("."))
 
 
 # THE VERDICT'S WORDING AND ITS LANDING, decided here and only shown by the window (QA r4 CODE-3,
@@ -735,6 +740,11 @@ class LibraryController:
         # The open session as a library row sees it, read ONCE per open: every row's "Use as
         # reference" asks the same question of it (`library.reference_refusal`).
         open_entry = self._reference_target(index)
+        # ...and an open recording with no GPS refuses every row with one reason (the row hover
+        # reads "Not available: <reason>"): no location to match, no best lap to measure against.
+        no_gps = (_NO_GPS_ROW_REASON if hasattr(self.win, "session")
+                  and getattr(self.win, "_loading_token", None) is None
+                  and data_quality.no_start_line(self.win.session) else None)
         dlg = LibraryDialog(index, open_recording=self.win._load, parent=self.win,
                             forget_recording=self._forget_recording,
                             clear_library=self._clear_library,
@@ -764,7 +774,8 @@ class LibraryController:
                             # A row as the open session's reference, through the window's one
                             # reference loader (its own refusals still apply, with their notice).
                             use_as_reference=self.use_row_as_reference,
-                            reference_refusal=lambda e: library.reference_refusal(e, open_entry))
+                            reference_refusal=lambda e: no_gps or library.reference_refusal(
+                                e, open_entry))
         dlg.exec()
         # Nothing below reads the dialog. Parented to the window and held alive by its own
         # lambdas, it was never freed: every open left ~113 widgets (7 menus among them) behind.

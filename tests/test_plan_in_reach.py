@@ -197,6 +197,72 @@ def test_the_pb_compare_has_a_menu_door_while_a_previous_pb_is_known():
     print("ok PB compare: a Coaching menu door, gated on the row this session's PB beat")
 
 
+def test_a_recording_with_no_gps_offers_no_reference():
+    """Discovery (wave 21, after #694): on a recording with no GPS, Coaching ▸ Load reference
+    recording… stayed enabled, and picking the demo answered "these don't look like the same track
+    (different location); keeping the local best lap" — the open recording has neither a location
+    nor a best lap. Both reference doors in the menu are off with the reason on their hover, the
+    Library refuses every row with it, and any other way in refuses with it before reading a file."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio import data_quality, library_controller
+    from studio.session import Session
+
+    want = data_quality.NO_GPS_NO_REFERENCE
+    karma = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "3rdparty", "gpmf-parser", "samples", "karma.mp4")
+    with tempfile.TemporaryDirectory(prefix="reach_") as folder, _fresh_app_support():
+        a, b = _two_recordings(folder)
+        win = _window(karma)
+        told = []
+        info = QMessageBox.information
+        QMessageBox.information = staticmethod(lambda _p, _t, text, *a_, **k: told.append(text))
+        dialog = library_controller.LibraryDialog
+        try:
+            assert data_quality.no_start_line(win.session)
+            win.library_ctl.previous_pb = {"fingerprint": "GX9002", "track": "x", "best": 60.0,
+                                           "paths": [b]}
+            win._sync_coaching_menu()
+            for act in (win._ref_action, win._pb_compare_action):
+                assert not act.isEnabled() and act.toolTip() == want, (act.text(), act.toolTip())
+            loads = []
+            win._start_reference_worker = lambda token, paths: loads.append(paths)
+            assert win._start_reference_load([b]) is False
+            assert told == [want] and loads == [], (told, loads)
+            assert win.session.load_reference([b]) == want
+            assert win.session.set_reference_session(Session.load([b])) == want
+            assert not win.session.has_reference()
+            # The Library: every row refused with the same reason.
+            seen = {}
+
+            class _Dialog:
+                def __init__(self, *_a, **kw):
+                    seen.update(kw)
+
+                def exec(self):
+                    return 0
+
+                def deleteLater(self):
+                    pass
+            library_controller.LibraryDialog = _Dialog
+            win.library_ctl.open_library()
+            why = seen["reference_refusal"]({"fingerprint": "GX9002", "paths": [b], "lap_count": 9})
+            assert why == "this recording has no GPS, so there is nothing to compare a reference " \
+                          "with", why
+        finally:
+            library_controller.LibraryDialog = dialog
+            QMessageBox.information = info
+            _close(win)
+        # The control: a recording WITH GPS keeps both doors' own gates.
+        win = _window(a)
+        try:
+            win._sync_coaching_menu()
+            assert win._ref_action.isEnabled(), win._ref_action.text()
+        finally:
+            _close(win)
+    print("ok no GPS: no reference door, and every way in refuses with the reason")
+
+
 def test_a_reference_pick_leaves_file_open_where_it_was():
     from PySide6.QtWidgets import QFileDialog
 
