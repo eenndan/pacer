@@ -102,7 +102,7 @@ import numpy as np
 from . import _jsonstore, app_support, library, session_record
 from ._signal import plural
 from .coaching import MIN_CORNER_LAPS, SPREAD_MARGIN
-from .stats import REFERENCE_SIGMAS, STEP_COVERS_NOTE, house_step
+from .stats import REFERENCE_SIGMAS, STEP_COVERS_FOCUS, house_step
 
 _log = logging.getLogger(__name__)
 
@@ -979,10 +979,12 @@ def outcome_sentence(o: Outcome) -> str:
     if step_only:
         # The FLOOR, never the gap, as the PB line words it (`library._precision_clause`): "0.07 s
         # apart, inside 0.07 s" would print a 0.0699 s gap as the very size it is said to be under.
-        # The why in a driver's words, once: two recordings of the same driving differ that much
-        # (`level_step` covers it) — the two figures stay in the bracket, so he can see both.
+        # v0.20.1's words: at the one reference two recordings of the same driving differ on a
+        # corner by up to 0.05 s (`CROSS_SESSION_LEVEL_S`), so "within what two recordings differ
+        # by" would be false for a 0.06 s gap; the hover says what the step covers instead
+        # (`report_line_tips`). The two figures stay in the bracket, so he can see both.
         return (f"{label} — no change you can act on: under {level_step():.2f} s apart, within "
-                f"what two recordings of the same driving differ by ({body}).")
+                f"timing precision ({body}).")
     if o.kind == OUTCOME_UNCHANGED:
         return (f"{label} — no change you can act on: {abs(o.delta):.2f} s apart, inside the "
                 f"corner's own {spread:.2f} s spread ({body}).")
@@ -1074,14 +1076,14 @@ def report_lines(report: Report) -> list[str]:
 
 
 def report_line_tips(report: Report) -> list[str]:
-    """One hover per `report_lines` line: what the step covers (`stats.STEP_COVERS_NOTE`) on a line
+    """One hover per `report_lines` line: what the step covers (`stats.STEP_COVERS_FOCUS`) on a line
     that is level by the step alone — the one place this list reads "level" — and "" elsewhere,
     including every collapsed line (those never carry a step)."""
     lines = report_lines(report)
     outcomes = list(report.outcomes)
     if len(lines) != len(outcomes):
         return [""] * len(lines)
-    return [STEP_COVERS_NOTE if _level_by_step_alone(o) else "" for o in outcomes]
+    return [STEP_COVERS_FOCUS if _level_by_step_alone(o) else "" for o in outcomes]
 
 
 def _level_by_step_alone(o: Outcome) -> bool:

@@ -1,3 +1,3 @@
-### Changed
-- Focus list: a corner under 0.07 s from its baseline day says why that is no change you can act
-  on (within what two recordings of the same driving differ by), with digits enough to show it.
+### Fixed
+- Focus list: a corner level with its baseline day (under 0.07 s) prints both times with digits
+  enough that their printed gap never reaches the 0.07 s it is said to be under.

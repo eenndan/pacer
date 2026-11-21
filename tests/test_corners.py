@@ -768,7 +768,7 @@ def test_corner_delta_ref_is_neutral_under_the_reference_lap_corner_step():
     wider. At the one reference recording's noise (C) the rule is 0.06 s, so Δref reads the same
     0.07 s step Δbest does: under it the figure is still printed, neutral; at and past it, coloured
     — decided on the printed value — exactly as against a lap of this recording. The header's
-    hover says what the step covers (`stats.STEP_COVERS_NOTE`)."""
+    hover says what the step covers (`stats.STEP_COVERS_REFERENCE`)."""
     _qapp()
     import dataclasses
 
@@ -807,7 +807,7 @@ def test_corner_delta_ref_is_neutral_under_the_reference_lap_corner_step():
     tip = table.table.horizontalHeaderItem(2).toolTip()
     assert table.table.horizontalHeaderItem(2).text() == "Δref"
     assert f"A gap under {step:.2f} s is not coloured" in tip and "another recording" in tip, tip
-    assert stats.STEP_COVERS_NOTE in tip, tip
+    assert stats.STEP_COVERS_REFERENCE in tip, tip
     # Against another recording's lap and against this recording's (no reference, or a reference
     # that is its own): one step, one colouring.
     for session in (other, _StubSession(cs_n, by_lap, bests),
