@@ -1268,7 +1268,7 @@ def _populated_opps():
 
 
 _FULL_WINDOW = (1432, 808)   # the lap panel maximized on the 1440x900 default window
-_PAGES: list = []            # built pages stay alive for the whole run (a dropped one is deleted)
+_PAGES: list = []            # built pages stay alive until their test ends (`_close_pages`)
 
 
 def _full_window_page(opp, directions=None, size=_FULL_WINDOW):
@@ -1291,6 +1291,18 @@ def _full_window_page(opp, directions=None, size=_FULL_WINDOW):
     page.show()
     _settle()
     return page
+
+
+def _close_pages():
+    """Close every page `_full_window_page` showed: the test that built them calls this last. Held
+    (a dropped page is deleted mid-expression) and left SHOWN, a 1432×808 top-level stayed over
+    the later tests' windows — under `pytest`, which runs the file in order, the debrief hero's
+    hover test moved the mouse onto it and read the wrong cursor."""
+    while _PAGES:
+        page = _PAGES.pop()
+        page.close()
+        page.deleteLater()
+    _settle()
 
 
 def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
@@ -1330,6 +1342,7 @@ def test_the_full_window_page_has_the_modals_columns_and_jump_emits():
     go.click()
     assert calls == [(opp.rows[0].cid, opp.rows[0].entry_dist)], calls
     print(f"ok page: {t.rowCount()} rows full-window, bars + Jump shown, Jump -> {calls[0]}")
+    _close_pages()
 
 
 def _direction(cid, rho, p=0.01, n_laps=20, family=1, p_holm=None):
@@ -1451,6 +1464,7 @@ def test_the_page_prints_no_braking_metres_only_the_direction_where_it_holds():
     assert not any("Braking" in page.table.item(r, _PANEL_COL_REASON).text()
                    for r in range(page.table.rowCount())), "the debrief carries no braking line"
     print("ok L7 page: no metres on any row; the direction line where the laps hold it, with n")
+    _close_pages()
 
 
 def test_full_window_reason_column_outweighs_the_bars_and_jump():
@@ -1471,6 +1485,7 @@ def test_full_window_reason_column_outweighs_the_bars_and_jump():
     assert not t.horizontalScrollBar().isVisible(), "the full-window columns must fit the viewport"
     print(f"ok page: reason column {reason_px}px of a {viewport_px}px viewport beside the bars + "
           "Jump")
+    _close_pages()
 
 
 def test_m4_phasebar_tooltip_does_not_claim_time_lost_and_guards_sign_flip():
@@ -3499,6 +3514,7 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     assert "No corner clears its own lap-to-lap spread, so there is no total" in tip0, tip0
     assert "The total is" not in tip0, tip0
     print("ok scope hover: top 3 unchanged, top 2 / worst corner / no total where true")
+    _close_pages()
 
 
 # --------------------------------------------------- W8: coaching says only what the page shows

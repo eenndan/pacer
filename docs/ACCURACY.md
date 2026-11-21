@@ -255,18 +255,16 @@ shown uncoloured. At recording A's noise the same rule gives 0.21 s, and 0.07 s 
 35280 cells whose true gap is under 0.03 s (875 at C's). The same lap's corner time against a lap
 of its own recording carries the same σ.
 
-**One lap's apex speed** — the minimum speed through a corner — against another lap's is what the
-Corners table's Δapex column shows, in km/h. It is measured on the same grid
-([`studio/dev/probes/apex_speed_sigma.py`](../studio/dev/probes/apex_speed_sigma.py)), with every
-apex given a V 3 km/h deep at ±10 m, where one or two fixes carry the minimum (the generator's flat
-arc, where many share it, reads about 13 % less). On 40 synthetic race days of one driver with
-nothing changed, every clean lap against its day's best, at GPS noise 1.9, recording C's, one
-lap's apex speed carries σ 0.362 km/h (0.348–0.380 km/h over four seed sets), so the rule gives
-1.02 km/h (2√2σ); against another recording's lap σ 0.366 km/h, 1.04 km/h. At recording B's noise
-the rule gives 2.01 km/h, at A's 3.15 km/h. A Δapex under its step is shown uncoloured. It is not
-the speed chart's 1.75 km/h gain gate, which is twice the noise of two traces compared sample by
-sample, a per-sample σ of 0.62 km/h measured on recording A. No official timing has checked a
-speed.
+**Two speeds.** The Corners table's Δapex column differences two laps' apex speeds, km/h. An apex
+speed is the lowest GPS fix in the corner, so its noise is at most one fix's, and one fix's speed
+noise is measured on a real recording: σ 0.62 km/h per sample (recording A's 10 Hz speed against
+its 0.5 s average, the median of 24 laps). So apex gaps are coloured from twice the noise of a
+difference of two readings, 2√2 × 0.62 = 1.75 km/h, on the table as on the speed chart's gain
+shading: one threshold. On the synthetic grid
+([`studio/dev/probes/apex_speed_sigma.py`](../studio/dev/probes/apex_speed_sigma.py), 40 days at
+recording C's noise) one apex speed carries σ 0.32–0.54 km/h depending on the apex's shape, from a
+flat arc to a straight-sided V where one fix carries the minimum, never more than one fix's
+0.67 km/h there. No official timing has checked a speed.
 
 ## Why this matters
 

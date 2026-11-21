@@ -946,17 +946,19 @@ def test_gain_shading_takes_its_sign_from_the_maps_delta_rate():
 
 
 def test_gain_shading_leaves_the_speed_noise_unshaded():
-    """A speed gap inside twice the noise of the DIFFERENCE of two traces (plots_view.GAIN_GATE_KMH
-    = 2·√2 × chart_stats.SPEED_NOISE_KMH, 1.75 km/h) is not a place one lap gains: the last third,
+    """A speed gap inside twice the noise of the DIFFERENCE of two traces (chart_stats.GAIN_GATE_KMH
+    = the house rule 2·√2 × chart_stats.SPEED_SIGMA_KMH, 1.75 km/h — the app's one speed-gap step,
+    which the Corners table's Δapex reads too) is not a place one lap gains: the last third,
     1.2 km/h apart — past ONE trace's 0.62 km/h noise — carries no fill at all."""
-    from studio import chart_stats
+    from studio import chart_stats, stats
     sess = _PairSession()
     v = _pair_view()
     xs = sess._laps[0][0]
     gap = np.abs(sess._laps[1][1] - sess._laps[0][1])
     assert np.all(v._gain_sign[xs > 700] == 0), v._gain_sign[xs > 700]
-    assert np.all(v._gain_sign[gap <= plots_view.GAIN_GATE_KMH] == 0)
-    assert abs(plots_view.GAIN_GATE_KMH - 2 * np.sqrt(2) * chart_stats.SPEED_NOISE_KMH) < 1e-12
+    assert np.all(v._gain_sign[gap <= chart_stats.GAIN_GATE_KMH] == 0)
+    assert chart_stats.GAIN_GATE_KMH == stats.house_step(chart_stats.SPEED_SIGMA_KMH) == 1.75
+    assert not hasattr(plots_view, "GAIN_GATE_KMH")   # one definition, read by chart and table
     v.deleteLater()
     print("test_gain_shading_leaves_the_speed_noise_unshaded OK")
 

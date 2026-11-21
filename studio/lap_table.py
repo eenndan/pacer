@@ -74,7 +74,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, motion, prefs, provenance_panel, story, theme, units
+from . import chart_stats, data_quality, motion, prefs, provenance_panel, story, theme, units
 from . import stats as stats_service
 from ._signal import (
     DIST_DECIMALS,
@@ -2720,30 +2720,33 @@ def corner_delta_colour(delta: float, step: float = PB_PRECISION_S) -> str | Non
     return theme.delta_colour(delta)
 
 
-def apex_level_note(unit: str | None, cross_recording: bool = False) -> str:
-    """The Δapex header's one sentence: the step (`stats.apex_speed_step`) in the display unit, and
-    where it comes from."""
-    step = units.convert_speed(stats_service.apex_speed_step(cross_recording), unit)
-    other = "another recording's lap" if cross_recording else "another lap"
-    return (f"A gap under {step:.2f} {units.speed_label(unit)} is not coloured: a lap's apex speed "
-            f"and {other}'s differ by up to that from the GPS alone, at the cleanest recording's "
-            "noise.")
+def _apex_gate(unit: str | None) -> float:
+    """The speed-gap step (`chart_stats.GAIN_GATE_KMH`) in the display unit, AS THE HOVER PRINTS IT
+    (two decimals): the cell's printed figure is compared with this, so the two never disagree."""
+    return round(units.convert_speed(chart_stats.GAIN_GATE_KMH, unit), 2)
 
 
-def apex_delta_colour(delta_kmh: float, unit: str | None, cross_recording: bool = False
-                      ) -> str | None:
-    """The Corners table's Δapex colour: neutral (None) under the apex-speed step, else the shared
+def apex_level_note(unit: str | None) -> str:
+    """The Δapex header's one sentence: the speed-gap step in the display unit, and where it is
+    from. One step for both baselines: an apex speed's noise is at most one fix's."""
+    return (f"A gap under {_apex_gate(unit):.2f} {units.speed_label(unit)} is not coloured: two "
+            "speed readings differ by up to that from the GPS alone (measured on a real "
+            "recording), the same threshold the speed chart shades from.")
+
+
+def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
+    """The Corners table's Δapex colour: neutral (None) under the speed-gap step, else the shared
     ahead/behind colour for a FASTER (green) or slower (red) apex (cool/apex-delta-at-noise).
 
     It was `theme.delta_colour(-Δ)`, whose 0.005 dead band is a TIME tolerance in seconds applied
-    to km/h, so "+0.0" could print green. The step is the house rule on the measured σ of one lap's
-    apex speed (`stats.apex_speed_step`: against another lap of this recording, or of another
-    recording's with a reference loaded). Decided on the PRINTED value (`fmt_signed(·, 1)` in the
-    display unit, as the cell prints it, against the step in that unit), so a "0.0" is never
-    coloured and a printed figure at the step is."""
+    to km/h, so "+0.0" could print green. The step is the speed chart's gain gate,
+    `chart_stats.GAIN_GATE_KMH` (1.75 km/h, the house rule on the speed noise measured on a real
+    recording), against a lap of this recording or another's: an apex speed is the lowest fix in
+    the corner, so its noise is at most one fix's. Decided on the PRINTED value (`fmt_signed(·, 1)`
+    in the display unit, as the cell prints it) against the gate as the hover prints it, so "0.0"
+    is never coloured and the first coloured figure is the first printed one at or past the gate."""
     printed = float(fmt_signed(units.convert_speed(delta_kmh, unit), 1).replace("−", "-"))
-    step = units.convert_speed(stats_service.apex_speed_step(cross_recording), unit)
-    if abs(printed) < step - 1e-9:
+    if abs(printed) < _apex_gate(unit) - 1e-9:
         return None
     return theme.delta_colour(-delta_kmh)
 
@@ -2772,7 +2775,7 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
         delta_tip = (f"Δ vs the same corner on the reference recording's lap — {ref_label} "
                      f"(seconds; − is faster). {CORNER_DELTA_REF_LEVEL_NOTE}")
         apex_tip = (f"Δ apex speed vs the reference recording's lap — {ref_label} "
-                    f"({u}; + is faster). {apex_level_note(unit, True)}")
+                    f"({u}; + is faster). {apex_level_note(unit)}")
     else:
         delta_tip = ("Δ vs the best lap's same corner (seconds; − is faster). "
                      f"{CORNER_DELTA_LEVEL_NOTE}")
@@ -2881,7 +2884,7 @@ class CornerTable(QWidget):
 
     Session-best corner time is purple+bold; the Δ time column is coloured only outside its step
     (`corner_delta_colour`: timing precision, or the reference-lap corner step for Δref), Δapex
-    only at or past the apex-speed step (`apex_delta_colour`).
+    only at or past the speed chart's gain gate (`apex_delta_colour`).
     Read-only/unsorted — track order is the meaning. A row click emits ``corner_clicked``
     so the app can ring that corner's apex on the map (B4: the Stats CORNERS and Coaching
     rows already did this — these rows were the odd surface out)."""
@@ -3223,8 +3226,7 @@ class CornerTable(QWidget):
         # Per-corner grip utilisation (%); [] when there's no g signal → the column shows a dash.
         grip = self.session.driving.lap_corner_grip(self._lap_id) if stats else []
         # The Δ column's level step: wider against another recording's lap (Δref).
-        cross = reference_from_another_recording(self.session)
-        step = stats_service.corner_delta_step(cross)
+        step = stats_service.corner_delta_step(reference_from_another_recording(self.session))
         self.table.setRowCount(len(stats))
         self._cids = [c.cid for c in corner_list]  # row -> cid for the map-ring click (B4)
         for r, st in enumerate(stats):
@@ -3244,10 +3246,10 @@ class CornerTable(QWidget):
                  (fmt_signed(st.delta, 2), corner_delta_colour(st.delta, step))),
                 (f"{conv(st.apex_speed, u):.{SPEED_DECIMALS}f}", None),
                 # Apex-speed Δ: FASTER through the corner is better (green), coloured only at
-                # or past the apex-speed step, on the printed figure (`apex_delta_colour`).
+                # or past the speed-gap step, on the printed figure (`apex_delta_colour`).
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (fmt_signed(conv(st.apex_speed_delta, u), 1),
-                  apex_delta_colour(st.apex_speed_delta, u, cross))),
+                  apex_delta_colour(st.apex_speed_delta, u))),
                 (f"{conv(st.entry_speed, u):.{SPEED_DECIMALS}f}", None),
                 (f"{conv(st.exit_speed, u):.{SPEED_DECIMALS}f}", None),
                 (grip_pct, None),

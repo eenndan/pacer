@@ -1360,10 +1360,12 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
 # studio/dev/) off the code — plain and annotated assignments — and hold each to ONE of three forms
 # derived from that one reference, or to a stated reason it is not a GPS-noise step pinned to its
 # home file; a new step that names its own σ or recording, or a second definition of a step name,
-# fails here (`_step_problems`, whose planted defeats are below). A step in km/h (`_KMH`, the
-# apex-speed step of cool/apex-delta-at-noise) is held to the same forms: its σ is a km/h column of
-# the same per-recording table, read at the same one reference.
-_STEP_NAME = re.compile(r"^_?[A-Z0-9_]*(LEVEL|STEP|PRECISION|TIE|SIGMA|FLOOR)(_S|_KMH)?$")
+# fails here (`_step_problems`, whose planted defeats are below).
+# A step in speed (`_KMH` / `_MPH`, e.g. the speed-gap GATE of cool/apex-delta-at-noise) is held to
+# the same forms, and a step never crosses units: its σ, alias or max is in its own unit, a speed
+# step derives from the speed anchor only, and the per-recording table (seconds) feeds time only.
+_STEP_NAME = re.compile(r"^_?[A-Z0-9_]*(LEVEL|STEP|PRECISION|TIE|SIGMA|FLOOR|(?<![A-Z0-9])GATE)"
+                        r"(_S|_KMH|_MPH)?$")
 # Constants under a step-like name that are no GPS-noise "level" step: home file, and why.
 _NOT_A_GPS_STEP = {
     "ESTIMATED_CLOCK_TIE_S": ("lap_race.py", "the media clock's published bound, not GPS noise"),
@@ -1378,12 +1380,20 @@ _NOT_A_GPS_STEP = {
     "SPIKE_STEP": ("load.py", "a GPS spike threshold in metres, not a time"),
     "IDEAL_GAIN_FLOOR": ("stats_ideal.py", "the ideal lap's listing floor, measured in stats_ideal"),
     "GG_RING_STEP": ("stats_panel.py", "a g-g chart ring spacing, not a time"),
+    "MERGE_GATE_S": ("driving.py", "a smoothing boxcar for the brake-merge g gate, no comparison"),
 }
 # The literal anchors, each tied to the one reference by its own test, in its home file.
 _ANCHORS = {
     "REFERENCE_LAP_SIGMA_S": ("library.py", "docs/ACCURACY.md row C's σ (test_the_pb_floor_…)"),
     "PB_PRECISION_S": ("library.py", "house rule on REFERENCE_LAP_SIGMA_S (test_the_pb_floor_…)"),
+    # the speed anchor: the one speed noise measured on a real recording (per sample, 24 laps)
+    "SPEED_SIGMA_KMH": ("chart_stats.py", "the 10 Hz speed residual measured on recording A"),
 }
+
+
+def _unit(name: str) -> str:
+    """The unit a constant's NAME says: km/h, mph, or (anything else) seconds."""
+    return "kmh" if name.endswith("_KMH") else "mph" if name.endswith("_MPH") else "s"
 
 
 def _step_defs(rel: str, text: str) -> list[tuple[str, str, ast.expr]]:
@@ -1433,7 +1443,8 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
     """Every step-like constant in `defs` that does not derive from the one reference. A value may
     only be: a bare alias of an accepted step (PB_PRECISION_S included); a σ read as
     `REFERENCE_SIGMAS.<field>`; `house_step(<accepted σ name>)`; or `max(<accepted step>,
-    PB_PRECISION_S)`. Anchors and exempt names are accepted only in their home file, and a step name
+    PB_PRECISION_S)`. A σ (a `SIGMA` name, or a `REFERENCE_SIGMAS` read) stands only under a σ
+    name: never as a step's alias or value, never inside the max. Anchors and exempt names are accepted only in their home file, and a step name
     defined twice fails unless every definition is a bare alias of PB_PRECISION_S."""
     steps = [(rel, n, v) for rel, n, v in defs if _STEP_NAME.match(n)
              and not (isinstance(v, ast.Constant) and isinstance(v.value, str))]
@@ -1463,23 +1474,31 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
 
     def _one_ok(name: str, rel: str, value: ast.expr, seen) -> bool:
         home = (_ANCHORS.get(name) or _NOT_A_GPS_STEP.get(name) or (None,))[0]
+        # A σ is a noise scale, not a step: only a σ name may be one, and where a step is required
+        # (any other name, either side of the max) a σ name is refused — `max(REFERENCE_LAP_SIGMA_S,
+        # PB_PRECISION_S)` read a 0.0178 s σ as if it were a step, and passed.
+        wants_step = "SIGMA" not in name
+        unit = _unit(name)
         if home is not None:
             good = os.path.basename(rel) == home and len(every[name]) == 1
         elif _is_reference_sigma(value):
-            good = True
+            good = not wants_step and unit == "s"     # the table's σs are seconds
         elif _name_of(value) is not None:
-            good = ok(_name_of(value), (*seen, name))
+            good = not (wants_step and "SIGMA" in _name_of(value)) \
+                and _unit(_name_of(value)) == unit and ok(_name_of(value), (*seen, name))
         elif isinstance(value, ast.Call) and _name_of(value.func) == "house_step" \
                 and len(value.args) == 1 and not value.keywords:
             arg = value.args[0]
-            good = _is_reference_sigma(arg) or (
-                _name_of(arg) is not None and _name_of(arg).endswith(("_SIGMA_S", "_SIGMA_KMH"))
-                and ok(_name_of(arg), (*seen, name)))
+            good = (_is_reference_sigma(arg) and unit == "s") or (
+                _name_of(arg) is not None
+                and _name_of(arg).endswith(("_SIGMA_S", "_SIGMA_KMH", "_SIGMA_MPH"))
+                and _unit(_name_of(arg)) == unit and ok(_name_of(arg), (*seen, name)))
         elif isinstance(value, ast.Call) and _name_of(value.func) == "max" \
                 and len(value.args) == 2 and not value.keywords:
             names = [_name_of(a) for a in value.args]
-            good = (None not in names and "PB_PRECISION_S" in names
-                    and all(ok(a, (*seen, name)) for a in names))
+            good = (unit == "s" and None not in names and "PB_PRECISION_S" in names
+                    and not any("SIGMA" in a for a in names)
+                    and all(_unit(a) == "s" and ok(a, (*seen, name)) for a in names))
         else:
             good = False
         return good
@@ -1520,8 +1539,7 @@ def test_every_level_step_derives_from_the_one_reference():
     names = {n for _r, n, _v in defs if _STEP_NAME.match(n)}
     assert {"PB_PRECISION_S", "CROSS_SESSION_LEVEL_S", "REFERENCE_CORNER_LEVEL_S",
             "SECTOR_LEVEL_S", "CORNER_DAY_SIGMA_S", "REFERENCE_CORNER_SIGMA_S",
-            "APEX_SPEED_SIGMA_KMH", "APEX_SPEED_LEVEL_KMH", "REFERENCE_APEX_SIGMA_KMH",
-            "REFERENCE_APEX_LEVEL_KMH"} <= names, names
+            "SPEED_SIGMA_KMH", "GAIN_GATE_KMH"} <= names, names
     problems = _step_problems(defs)
     assert not problems, "\n  ".join(["a step not derived from the one reference:", *problems])
     # every anchor and exemption still exists where it says (a stale entry hides nothing)
@@ -1588,15 +1606,29 @@ _GUARD_PLANTS = (
     ("studio/lap_table.py", "SPLIT_SAMPLING_HEADROOM_S = 0.10"),
     ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 1)"),
     ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + 0.10, 2)"),
-    # a km/h step (cool/apex-delta-at-noise): typed, from a σ of its own, from the chart's per-sample
-    # noise, a second definition, or a σ not read off the reference row
+    # a σ standing where a step is required (cool/test-hygiene-guards)
+    ("studio/stats.py", "X_LEVEL_S = max(REFERENCE_LAP_SIGMA_S, PB_PRECISION_S)"),
+    ("studio/focus.py", "CORNER_X_LEVEL_S = max(PB_PRECISION_S, CORNER_DAY_SIGMA_S)"),
+    ("studio/stats.py", "X_LEVEL_S = REFERENCE_LAP_SIGMA_S"),
+    ("studio/stats.py", "X_LEVEL_S = REFERENCE_SIGMAS.split"),
+    # a speed step (cool/apex-delta-at-noise): typed, from a σ of its own, a second definition of
+    # the gate or the anchor, a speed σ standing as a step, and every way across units (#684 review)
     ("studio/lap_table.py", "APEX_X_LEVEL_KMH = 1.75"),
     ("studio/lap_table.py", "APEX_X_LEVEL_KMH = house_step(0.31)"),
-    ("studio/lap_table.py", "APEX_X_SIGMA_KMH = 0.62\nAPEX_X_LEVEL_KMH = house_step(APEX_X_SIGMA_KMH)"),
-    ("studio/lap_table.py", "APEX_X_LEVEL_KMH = house_step(chart_stats.SPEED_NOISE_KMH)"),
-    ("studio/lap_table.py", "APEX_SPEED_LEVEL_KMH = 0.9"),
-    ("studio/stats.py", "APEX_X_SIGMA_KMH = PUBLISHED_NOISE_SIGMAS['A'].apex_kmh\n"
-                        "APEX_X_LEVEL_KMH = house_step(APEX_X_SIGMA_KMH)"),
+    ("studio/lap_table.py", "APEX_X_SIGMA_KMH = 0.36\nAPEX_X_LEVEL_KMH = house_step(APEX_X_SIGMA_KMH)"),
+    ("studio/lap_table.py", "GAIN_GATE_KMH = 1.75"),
+    ("studio/lap_table.py", "APEX_X_LEVEL_KMH = SPEED_SIGMA_KMH"),
+    ("studio/lap_table.py", "SPEED_SIGMA_KMH = 0.62"),
+    ("studio/stats.py", "X_LEVEL_S = house_step(SPEED_SIGMA_KMH)"),
+    ("studio/stats.py", "X_LEVEL_S = GAIN_GATE_KMH"),
+    ("studio/stats.py", "X_SIGMA_S = SPEED_SIGMA_KMH\nX_LEVEL_S = house_step(X_SIGMA_S)"),
+    ("studio/stats.py", "X_LEVEL_KMH = house_step(REFERENCE_SIGMAS.lap)"),
+    ("studio/stats.py", "X_LEVEL_KMH = max(GAIN_GATE_KMH, PB_PRECISION_S)"),
+    ("studio/stats.py", "X_LEVEL_KMH = PB_PRECISION_S"),
+    ("studio/stats.py", "X_SIGMA_KMH = REFERENCE_SIGMAS.lap\nX_LEVEL_KMH = house_step(X_SIGMA_KMH)"),
+    ("studio/lap_table.py", "X_LEVEL_MPH = house_step(SPEED_SIGMA_KMH)"),
+    ("studio/lap_table.py", "X_GATE_MPH = GAIN_GATE_KMH * 0.621"),
+    ("studio/lap_table.py", "APEX_GATE_KMH = 1.02"),
 )
 
 
@@ -1646,7 +1678,7 @@ def test_the_accuracy_step_table_is_the_published_noise_table():
     # every lap and corner cell of the reference row is within the timing step; the split is the
     # one statistic with its own, wider step (cool/sector-step-one-reference), its own cell
     assert max(stats.house_step(s) for k, s in vars(ref).items()
-               if s < 1 and k != "split" and not k.endswith("_kmh")) <= library.PB_PRECISION_S
+               if s < 1 and k != "split") <= library.PB_PRECISION_S
     # the split step is the house rule on its cell rounded up by the one named sampling headroom
     # (cool/sector-dedrift)
     assert stats.SECTOR_LEVEL_S == round(stats.house_step(ref.split)
