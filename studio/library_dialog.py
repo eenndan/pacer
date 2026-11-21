@@ -1750,14 +1750,17 @@ class LibraryDialog(QDialog):
         index, name = self._one_way(track, rotation)
         points = _library.pb_points(index, track)
         xs, ys, wet = [], [], []
-        for x, (date, _start, best), fp in zip(_pb_xs(points), points,
-                                               _library.pb_fingerprints(index, track), strict=True):
+        for x, (date, start, best), fp in zip(_pb_xs(points), points,
+                                              _library.pb_fingerprints(index, track), strict=True):
             if math.isfinite(x):
                 xs.append(x)
                 ys.append(best)
                 record = _records.get(self._records, fp) if fp else None
                 if (record or {}).get("conditions") == _PB_WET_TAG:
-                    wet.append((x, best, f"{date} · best {fmt_time(best)} · "
+                    # Named as its Library row names it (date + start time): two wet heats on one
+                    # day hovered the same "date · best · Wet" without it.
+                    when = _library.when_text({"date": date, "start_ms": start}) or date
+                    wet.append((x, best, f"{when} · best {fmt_time(best)} · "
                                          f"{_records.CONDITION_LABELS[_PB_WET_TAG]}"))
         self._pb_curve.setData(xs, ys)
         self._pb_wet.setData([w[0] for w in wet], [w[1] for w in wet], data=[w[2] for w in wet])

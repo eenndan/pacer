@@ -555,6 +555,8 @@ class Session:
         the reference's OWN saved timing lines before any guard reads a lap off it, so a
         recording is banded on the segmentation its owner confirmed rather than on the loader's
         auto-fitted guess."""
+        if data_quality.no_start_line(self):   # nothing to compare with: don't even read it
+            return data_quality.NO_GPS_NO_REFERENCE
         try:
             ref = Session.load(paths)
         except Exception as exc:  # noqa: BLE001 — a bad reference must never break the session
@@ -574,7 +576,13 @@ class Session:
         is true only while no reference is loaded: a refusal returns before anything is adopted,
         so with one loaded it is THAT reference the session keeps measuring against (w19 QA: a
         second Library pick refused while the first stayed the baseline, the notice naming the
-        local best lap). The tail is rewritten here, once, for every guard."""
+        local best lap). The tail is rewritten here, once, for every guard.
+
+        A recording with no GPS (`data_quality.no_start_line`) takes none, whatever is offered: it
+        has no location to match and no best lap to measure against, so the track guard's
+        "different location; keeping the local best lap" would name two things it does not have."""
+        if data_quality.no_start_line(self):
+            return data_quality.NO_GPS_NO_REFERENCE
         kept = self.reference_kept()
         reason = self._adopt_reference_session(ref, source_label)
         if reason is not None and kept != KEEPING_LOCAL_BEST:

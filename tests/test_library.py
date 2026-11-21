@@ -1861,8 +1861,13 @@ def test_a_wet_session_is_hollow_on_the_best_lap_chart_and_hovers_wet():
     conds = ["dry", "wet", "wet", "damp", ""]
     idx = library.empty_index()
     records = sr.empty_store()
+    # The two wet sessions are two heats of ONE day: only their start times tell their hovers apart.
+    heats = {1: 1780400000000, 2: 1780407200000}                   # two hours apart
     for i, (best, cond) in enumerate(zip(bests, conds, strict=True)):
-        e = _entry(f"W{i}", track="MK", date=f"2026-06-{i + 1:02d}", best=best, paths=[])
+        e = _entry(f"W{i}", track="MK", date="2026-06-02" if i in heats else f"2026-06-{i + 1:02d}",
+                   best=best, paths=[])
+        if i in heats:
+            e["start_ms"] = heats[i]
         library.upsert(idx, e)
         if cond:
             sr.put(records, e["fingerprint"],
@@ -1878,7 +1883,10 @@ def test_a_wet_session_is_hollow_on_the_best_lap_chart_and_hovers_wet():
     assert list(wet_x) == [list(_xs)[1], list(_xs)[2]], (wet_x, _xs)  # on their own points
     tips = [dlg._pb_wet.opts["tip"](x=p.pos().x(), y=p.pos().y(), data=p.data())
             for p in dlg._pb_wet.points()]
-    assert tips == ["2026-06-02 · best 0:47.900 · Wet", "2026-06-03 · best 0:47.600 · Wet"], tips
+    at = [library.clock_hhmm(heats[i]) for i in (1, 2)]           # local, as the Library rows
+    assert at[0] != at[1], at
+    assert tips == [f"2026-06-02 {at[0]} · best 0:47.900 · Wet",
+                    f"2026-06-02 {at[1]} · best 0:47.600 · Wet"], tips
     title = dlg._pb_title.text()
     assert title == ("Best lap by session — MK  (0:44.700 best over 5 sessions) · 2 PBs ringed"
                      " · ○ wet"), title
