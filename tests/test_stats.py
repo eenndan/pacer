@@ -2413,6 +2413,14 @@ def test_stats_view_flags_a_lap_that_left_the_line():
     assert rows.get("Missing chapter") == (
         "lap 1 was timed across a missing chapter — flagged ⚠ and left out of bests, σ and pace",
         True), rows
+    # ...and when its chapter join also reads as a GPS gap, the dropout row still counts only the
+    # dropout lap: each ⚠ lap under its ONE reported kind, so the rows add up to the LAPS tile's ⚠
+    # (it read "inside 2 of 2 laps" beside the "Missing chapter" row, DECISIONS §27).
+    sess.dropout_lap_ids = lambda: {0, 1}
+    v = StatsView(sess)
+    rows = {t: (val, c) for t, val, c in v.trust.card.rows()}
+    assert rows["GPS dropout"][0].startswith("inside 1 of 2 laps"), rows
+    assert v.t_laps.value.text() == "2 · 2 ⚠", v.t_laps.value.text()
     print("test_stats_view_flags_a_lap_that_left_the_line OK")
 
 

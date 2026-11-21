@@ -247,6 +247,14 @@ def test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that():
     assert by_id[2][col] == export_data.DROPOUT_FLAG and by_id[0][col] == ""
     laps_row = dict(export_data.stats_summary(s)[0].rows)["laps"]
     assert "1 across a missing chapter" in laps_row and "off the line" not in laps_row, laps_row
+    # ONE REASON PER LAP: the gap lap's chapter join also reads as a GPS gap (re-check of 0.24.0,
+    # DECISIONS §27: "9 valid · 2 with a GPS dropout · 1 off the line · 1 across a missing chapter"
+    # over 3 ⚠ laps). It is counted once, as the gap lap, so the parts add up to the ⚠ total.
+    s.dropout_lap_ids = lambda: {1, 2}
+    laps_row = dict(export_data.stats_summary(s)[0].rows)["laps"]
+    assert "1 with a GPS dropout" in laps_row and "1 across a missing chapter" in laps_row, \
+        laps_row
+    assert dict(export_data.laps_table(s)[1])[1][col] == export_data.GAP_FLAG
     print("test_a_lap_timed_across_a_missing_chapter_is_flagged_as_that OK")
 
 

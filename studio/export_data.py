@@ -65,6 +65,9 @@ OFF_LINE_FLAG = "off-line"
 # ...and a lap timed across a missing chapter (`Session.chapter_gap_notes`): its time is short by
 # the chapter that is not in the folder. Wins over the other two, as its ⚠ sentence does.
 GAP_FLAG = "chapter-gap"
+#: `data_quality.lap_warning_kinds` kind → its `flag` cell.
+_KIND_FLAG = {data_quality.WARN_DROPOUT: DROPOUT_FLAG, data_quality.WARN_OFF_LINE: OFF_LINE_FLAG,
+              data_quality.WARN_CHAPTER_GAP: GAP_FLAG}
 
 # laps.csv's per-lap distance column. It is the lap odometer, which reads short of the distance
 # driven (`stats.ODOMETER_NOTE`), so the file's trailer carries that note under this label, the
@@ -281,8 +284,8 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
     n_splits = n_sect + 1 if n_sect else 0  # N lines -> N+1 sub-sectors; 0 lines -> none
     corner_list = session.corners.corner_list()
     dropout_ids = session.dropout_lap_ids()
-    warned = data_quality.lap_warnings(session)   # the ⚠ set: dropouts (None), off-line laps
-    gap = data_quality.gap_lap_ids(session)       # ...and the laps timed across a missing chapter
+    # The ⚠ set, each lap under its ONE kind (the report and the strip count the same partition).
+    kinds = data_quality.lap_warning_kinds(session)
 
     sfx, speed = _speed_column(unit)
 
@@ -302,8 +305,7 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
         # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
         cells = [lap_label(lap_id), fmt.time(r["time"]), fmt.dist(r["dist"]),
                  fmt.speed(speed(r["entry"])),
-                 "" if lap_id not in warned else GAP_FLAG if lap_id in gap
-                 else OFF_LINE_FLAG if warned[lap_id] else DROPOUT_FLAG]
+                 _KIND_FLAG.get(kinds.get(lap_id, ""), "")]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
             cells.append(fmt.split(splits[i]) if i < len(splits) else fmt.missing)
@@ -649,7 +651,9 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     # under a tooltip that decodes the glyphs, and an exported line has no tooltip (§5.4 again).
     valid = list(session.valid_lap_ids()) if hasattr(session, "valid_lap_ids") else []
     excluded = getattr(session, "excluded_lap_ids", list)() or []
-    dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+    # Each ⚠ lap under its ONE kind (`laps_by_kind`), so the parts add up to the page's ⚠ count.
+    by_kind = data_quality.laps_by_kind(session)
+    dropouts = by_kind[data_quality.WARN_DROPOUT]
     lap_bits = [f"{len(valid)} valid"]
     if excluded:
         # The reason per lap, counted — "distance off the session median" was printed for every
@@ -658,8 +662,8 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         lap_bits.append(f"{len(excluded)} excluded ({why})" if why else f"{len(excluded)} excluded")
     if dropouts:
         lap_bits.append(f"{len(dropouts)} with a GPS dropout")
-    gap = data_quality.gap_lap_ids(session)
-    off_line = [i for i, why in data_quality.lap_warnings(session).items() if why and i not in gap]
+    gap = by_kind[data_quality.WARN_CHAPTER_GAP]
+    off_line = by_kind[data_quality.WARN_OFF_LINE]
     if off_line:
         lap_bits.append(f"{len(off_line)} off the line")
     if gap:
