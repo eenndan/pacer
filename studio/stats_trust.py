@@ -340,7 +340,10 @@ class TrustSection:
         # In-lap GPS dropouts: the ⚠ rule made visible — the count AND what it means for the
         # statistics on this page (those laps feed no best/σ/pace number). It moved UP here, with
         # the other three caveats: it is one, and it was the only one printed among the provenance.
-        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        # Each ⚠ lap is counted under its ONE kind (`laps_by_kind`), so these three rows add up to
+        # the LAPS tile's ⚠: a gap lap whose join also reads as a GPS gap is the gap lap only.
+        by_kind = data_quality.laps_by_kind(session)
+        dropouts = by_kind[data_quality.WARN_DROPOUT]
         if dropouts:
             rows.append(("GPS dropout",
                          f"inside {len(dropouts)} of {plural(len(valid), 'lap')} — "
@@ -349,9 +352,8 @@ class TrustSection:
         # of the same numbers the dropout row names. Its own words — it had no dropout.
         # A lap timed across a missing chapter wears the ⚠ with a sentence too, but about the
         # clock: it is named on its own row, never counted as off the line.
-        gap = data_quality.gap_lap_ids(session)
-        off_line = sorted(i for i, why in data_quality.lap_warnings(session).items()
-                          if why and i not in gap)
+        gap = by_kind[data_quality.WARN_CHAPTER_GAP]
+        off_line = by_kind[data_quality.WARN_OFF_LINE]
 
         def _laps(ids):
             nums = [str(i + 1) for i in sorted(ids)]
