@@ -2188,8 +2188,8 @@ class Session:
         (`load.load_recording`, the ChapterMap offsets) and `_gps9_times` re-anchors the run that
         starts at the join to that media start, so the kept-point times step by one fix across it,
         never by the missing chapter's minutes. The join is placed on the telemetry axis from its
-        offset through the recording's two-clock map (the GPS lag is a latency of the picture,
-        not of the data, so it is left out). A lap holds a join when its first point is before it
+        offset through the STAMP map (`without_gps_lag`, declared in tests/test_media_clock.py
+        CROSSINGS: the offset is a footage stamp, not an event in the picture). A lap holds a join when its first point is before it
         and its last after it. Memoized against the `valid_lap_ids` list, like `off_line_metres`."""
         valid = self.valid_lap_ids()
         memo = getattr(self, "_gap_notes_memo", None)
@@ -2200,8 +2200,10 @@ class Session:
         parts = getattr(cmap, "chapters", None) or []
         joins = chapters.gap_joins([c.path for c in parts]) if len(parts) > 1 else []
         if joins:
-            clock = media_clock.clock_of(cmap).without_gps_lag()
-            at = [(float(clock.to_telemetry(parts[k].offset)), missing) for k, missing in joins]
+            # The STAMP map (media_clock 'WHICH MAP'): a chapter offset is a footage stamp — where
+            # the data stream of the next chapter starts — not an event in the picture.
+            at = [(float(media_clock.clock_of(cmap).without_gps_lag().to_telemetry(
+                parts[k].offset)), missing) for k, missing in joins]
             for i in valid:
                 t = self._lap_point_times(i)
                 if len(t) < 2:

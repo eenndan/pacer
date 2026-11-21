@@ -583,6 +583,11 @@ CROSSINGS = {
     ("studio/session.py", "Session._build_rotation", "without_gps_lag"):
         (_S, "the lag is measured on the map it is not yet in, or it measures itself"),
     ("studio/rotation.py", "_cross_check", "to_media"): (_S, "the map `_build_rotation` hands in"),
+    ("studio/session.py", "Session.chapter_gap_notes", "without_gps_lag"):
+        (_S, "a chapter offset is a footage stamp: where the next chapter's data starts on the "
+             "telemetry axis (the p6 probe's seam rule), to find the lap timed across a gap"),
+    ("studio/session.py", "Session.chapter_gap_notes", "to_telemetry"):
+        (_S, "the call on that map"),
     ("studio/stats_trust.py", "video_sync_row", "without_gps_lag"):
         (_S, "states the rate fit on its own, apart from the lag"),
     # --- dev probes: two streams, two maps (`studio/dev/probes/_align.py`)
