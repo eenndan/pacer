@@ -1102,9 +1102,9 @@ def _corners_section(session, unit) -> list[str]:
 def _slow_laps_section(session) -> list[str]:
     """The Laps table's slow-lap notes (`Session.slow_lap_notes`): each note's own text — where
     its time went, corner by corner against the typical pass — and the rule that called it slow.
-    A ⚠ dropout lap gets none, held at the surface as the Laps table holds it."""
+    A ⚠ lap (any kind: `data_quality.lap_warnings`) gets none, held at the surface as the Laps table holds it."""
     read = getattr(session, "slow_lap_notes", None)
-    dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+    dropouts = set(data_quality.lap_warnings(session))
     every = cast("list[story.SlowLapNote]", read() if callable(read) else [])
     notes = [n for n in every if n.lap_id not in dropouts]
     if not notes:

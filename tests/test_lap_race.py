@@ -335,6 +335,32 @@ def test_a_dropout_lap_is_left_out_by_name():
     print("test_a_dropout_lap_is_left_out_by_name OK")
 
 
+def test_a_lap_that_left_the_line_is_left_out_by_name():
+    """The race field is the bests' clean set (`Session.lap_out_of_bests`), so the caption "each
+    clean lap on its own clock" is true: a lap that cut across the infield (`off_line_metres`) does
+    not race — release QA, wave 21: the cut lap led the pack and finished 0.73 s ahead of the best
+    lap — and `.excluded` names it with its own reason. The same goes for a caller's own field (the
+    export ghost's two laps)."""
+    s, _laps = _race_session(5)
+    from studio.session import _UNSET
+    s.off_line_metres = lambda: {0: 30.0}     # lap 0, the quickest, cut: never the best
+    s._best_cache = _UNSET
+    assert s.best_lap_id() != 0
+    rt = s.race_tracks()
+    assert 0 not in rt.ids and rt.excluded == {0: lap_race.EXCLUDED_OFF_LINE}, rt.excluded
+    assert set(rt.ids) == {1, 2, 3, 4}
+    assert s.race_tracks([0, s.best_lap_id()]) is None
+    # A lap timed across a missing chapter (#700) is out under ITS kind, never "off the line".
+    s.chapter_gap_notes = lambda: {2: "Lap 3 was timed across a missing chapter (…)"}
+    s._race_memo = None
+    s._best_cache = _UNSET
+    rt = s.race_tracks()
+    assert rt.excluded == {0: lap_race.EXCLUDED_OFF_LINE, 2: lap_race.EXCLUDED_CHAPTER_GAP}, \
+        rt.excluded
+    assert set(rt.ids) == {1, 3, 4}
+    print("test_a_lap_that_left_the_line_is_left_out_by_name OK")
+
+
 def test_an_unmatched_lap_is_left_out_by_name():
     """A lap no corner boundary could be matched on (driven 8 m outside the line: every boundary
     fails the spatial gate) has only the equal-fraction place — a guess — so it is left out."""

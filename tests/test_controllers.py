@@ -630,6 +630,25 @@ def test_compare_repoint_realigns_pair_and_refreezes_follow():
     print("test_compare_repoint_realigns_pair_and_refreezes_follow OK")
 
 
+def test_compare_on_the_best_lap_pairs_it_with_the_next_clean_lap_not_a_cut():
+    """enter() on the best lap pairs it with the next-best lap. A lap that cut across the infield
+    is quicker than the best and out of the bests (`Session.lap_out_of_bests`): it was picked as
+    the "next-fastest" partner (release QA, wave 21). It is not, while a clean lap exists."""
+    s, a, b = _make_session()
+    cut = 9
+    times = {a: s.lap_time(a), b: s.lap_time(b), cut: s.lap_time(b) - 0.7}
+    windows = {a: s.lap_window(a), b: s.lap_window(b), cut: (500.0, 500.0 + times[cut])}
+    s._valid_cache = [a, b, cut]
+    s.lap_time = lambda lid: times[lid]
+    s.lap_window = lambda lid: windows.get(lid)
+    s.lap_out_of_bests = lambda lid: lid == cut
+    _scrub, compare, _video, _plots, _map, _table, state, _playback = _make_controllers(s)
+    state["applied_t"] = sum(windows[b]) / 2      # the playhead inside the best lap
+    compare.enter()
+    assert (compare.lap_a, compare.lap_b) == (b, a), (compare.lap_a, compare.lap_b)
+    print("test_compare_on_the_best_lap_pairs_it_with_the_next_clean_lap_not_a_cut OK")
+
+
 def test_compare_tick_noop_until_pair_set():
     """tick() with no pinned pair (compare off / not entered) is a pure no-op — no badge/g work."""
     s, _a, _b = _make_session()

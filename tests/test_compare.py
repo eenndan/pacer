@@ -583,6 +583,9 @@ def _three_lap_compare():
     s.lap_window = lambda lid: windows.get(lid)
     s.lap_time = lambda lid: windows[lid][1] - windows[lid][0]
     s.lap_at_time = lambda t: next((lid for lid, (w0, w1) in windows.items() if w0 <= t <= w1), None)
+    # No trace columns to measure a dropout or the line on: no ⚠ lap in this field (the default
+    # pair's partner is the next CLEAN lap, `Session.lap_out_of_bests`).
+    s.lap_out_of_bests = lambda _lid: False
     video, plots = _RecordingVideo(), _RecordingPlots()
     c = CompareController(s, video, plots, _EmptyTable(), PlaybackState(), lambda: None)
     return c, video, plots, ids

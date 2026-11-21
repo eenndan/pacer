@@ -3439,6 +3439,29 @@ def step_name(qp) -> str:
     return SECTOR_STEP_NAME if stretch_noun(qp) == "sector" else CORNER_STEP_NAME
 
 
+def not_counted_tip(session, left, sectors: bool) -> str:
+    """The "N laps not counted" hover: each lap in `left` under its OWN reason — ⊘ excluded
+    (`excluded_lap_ids`), its ⚠ kind's words (`data_quality.lap_warning_kinds`: a GPS dropout,
+    left the line, timed across a missing chapter), else a corner edge not matched on track (or,
+    with `sectors`, a sector split missing). A list of every possible reason sent a reader hunting for a cut lap
+    under "GPS dropout" (release QA, wave 21)."""
+    excluded = set(getattr(session, "excluded_lap_ids", list)() or ())
+    kinds = data_quality.lap_warning_kinds(session)
+    rest = ("a corner edge not matched on track or a sector split missing" if sectors else
+            "a corner edge not matched on track")
+    groups: dict[str, list[int]] = {}
+    for i in left:
+        why = (f"{EXCLUDED_MARK} excluded" if i in excluded else
+               f"{DROPOUT_MARK} {data_quality.WARN_REASON[kinds[i]]}" if i in kinds else rest)
+        groups.setdefault(why, []).append(i)
+    parts = "; ".join(f"{'lap' if len(ids) == 1 else 'laps'} {', '.join(map(lap_label, ids))} "
+                      f"({why})" for why, ids in groups.items())
+    where = (" or sector" if sectors else "", "CORNERS BY LAP and SPLITS" if sectors
+             else "CORNERS BY LAP")
+    return (f"Not counted at one corner{where[0]} or more: {parts} — as in the Stats page's "
+            f"{where[1]}.")
+
+
 def quickest_level_text(qp) -> str:
     """The "Level with" cell for a `stats.QuickestPass`."""
     if qp.lap_id is None:
@@ -4217,16 +4240,9 @@ class QuickestPassTable(QWidget):
         if self.sectors is not None:
             left = tuple(sorted(set(left) | set(self.sectors.not_counted)))
         if left:
-            laps = ", ".join(lap_label(i) for i in left)
             self.not_counted.setText(f"{plural(len(left), 'lap')} not counted")
             self.not_counted.setToolTip(
-                f"Not counted at one corner or more: {'lap' if len(left) == 1 else 'laps'} {laps} "
-                "(⊘ excluded, ⚠ GPS dropout, or a corner edge not matched on track), as in "
-                "the Stats page's CORNERS BY LAP." if self.sectors is None else
-                f"Not counted at one corner or sector or more: "
-                f"{'lap' if len(left) == 1 else 'laps'} {laps} (⊘ excluded, ⚠ GPS dropout, a "
-                "corner edge not matched on track, or a sector split missing), as in the Stats "
-                "page's CORNERS BY LAP and SPLITS.")
+                not_counted_tip(self.session, left, self.sectors is not None))
             self.not_counted.setVisible(True)
         verified = getattr(self.session, "timing_verified", True)
         as_measured = getattr(self.session, "sector_as_measured_ids", frozenset)()
