@@ -3668,7 +3668,8 @@ class Session:
         if not items:
             # Nothing to re-measure, but whether today's corners may start a list is still asked.
             return focus.Report(track=list_track or entry.get("track"),
-                                baseline_refusal=focus.baseline_refusal(self.focus_trust(entry)))
+                                baseline_refusal=focus.baseline_refusal(self.focus_trust(entry)),
+                                now_day=focus.open_day(entry.get("date")))
         # Each item re-measured by the instrument its baseline was measured with.
         samples: list[focus.CornerSample | None] = [None] * len(items)
         for method in {i.method for i in items}:

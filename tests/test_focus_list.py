@@ -146,7 +146,7 @@ def test_no_session_record_on_either_side_refuses_the_verdict_and_carries_no_num
     o = report.outcomes[0]
     assert o.kind == F.OUTCOME_NO_VERDICT and o.blocker == F.BLOCK_NO_RECORD, o
     assert o.delta is None, "a blocked verdict must not carry a number at all"
-    assert "23 May" in o.detail and "today" in o.detail, o.detail
+    assert "23 May" in o.detail and "24 May" in o.detail, o.detail
     sentence = F.outcome_sentence(o)
     assert "1.0" not in sentence and "s faster" not in sentence, sentence
     assert "no session record" in sentence, sentence
@@ -503,11 +503,11 @@ def test_a_corner_that_turns_the_other_way_today_is_not_compared():
     assert same.blocker == F.BLOCK_NONE and same.has_verdict, same
     other = F.verdict([_layout_item(4, +1, 0.15, 0.20)], now, [_sample(4.2)], alike).outcomes[0]
     assert other.blocker == F.BLOCK_LAYOUT and other.delta is None, other
-    assert F.outcome_sentence(other) == ("C4 — can't say: the corner there today turns the other "
+    assert F.outcome_sentence(other) == ("C4 — can't say: the corner there on 24 May turns the other "
                                          "way — a different layout?"), F.outcome_sentence(other)
     none = F.verdict([_layout_item(5, -1, 0.70, 0.75)], now, [_sample(4.2)], alike).outcomes[0]
     assert none.blocker == F.BLOCK_LAYOUT and none.delta is None, none
-    assert F.outcome_sentence(none) == ("C5 — can't say: no corner was picked out there today — "
+    assert F.outcome_sentence(none) == ("C5 — can't say: no corner was picked out there on 24 May — "
                                         "a different layout?"), F.outcome_sentence(none)
     # The corner overlapping MOST decides: a window straddling both reads the left-hander here.
     straddle = F.verdict([_layout_item(6, +1, 0.19, 0.45)], now, [_sample(4.2)], alike).outcomes[0]
@@ -533,11 +533,11 @@ def test_a_corner_that_turns_the_other_way_today_is_not_compared():
     # Every corner refused that way: one line, and the headline names the layout.
     whole = F.verdict([_layout_item(4, +1, 0.15, 0.20), _layout_item(7, -1, 0.41, 0.45)], now,
                       [_sample(4.2), _sample(3.0)], alike)
-    assert F.report_lines(whole) == ["C4 and C7 — can't say: the corners there today turn the "
+    assert F.report_lines(whole) == ["C4 and C7 — can't say: the corners there on 24 May turn the "
                                      "other way — a different layout of the track?"], \
         F.report_lines(whole)
     assert F.report_headline(whole) == ("Focus list · 2 corners · no verdict — the layout looks "
-                                        "different today"), F.report_headline(whole)
+                                        "different on 24 May"), F.report_headline(whole)
     print(f"ok layout: {F.outcome_sentence(other)} / {F.report_headline(whole)}")
 
 
@@ -850,11 +850,11 @@ def test_the_mirrored_circuit_is_another_layout_and_gets_no_verdict():
             o.blocker == F.BLOCK_LAYOUT and o.detail == F.LAYOUT_REVERSED and o.delta is None
             for o in report.outcomes), [(o.item.label, o.kind, o.blocker) for o in report.outcomes]
         for o in report.outcomes:
-            assert F.outcome_sentence(o) == (f"{o.item.label} — can't say: today's laps run the "
+            assert F.outcome_sentence(o) == (f"{o.item.label} — can't say: 8 Jun's laps run the "
                                              f"other way round — a different layout?")
         n = len(report.outcomes)
         assert F.report_headline(report) == (f"Focus list · {n} corners · no verdict — the layout "
-                                             f"looks different today"), F.report_headline(report)
+                                             f"looks different on 8 Jun"), F.report_headline(report)
         assert len(F.report_lines(report)) == 1 and "a different layout" in F.report_lines(report)[0]
     print(f"ok mirrored: {F.report_headline(report)} / {F.report_lines(report)[0]}")
 
@@ -901,7 +901,7 @@ def test_which_way_round_a_lap_runs_is_read_off_its_corners_and_stored():
     clockwise = F.FocusItem(**{**vars(_layout_item(4, -1, 0.15, 0.20)), "rotation": -1})
     o = F.verdict([clockwise], now, [_sample(4.2)], alike).outcomes[0]
     assert (o.blocker, o.detail, o.delta) == (F.BLOCK_LAYOUT, F.LAYOUT_REVERSED, None), o
-    assert F.outcome_sentence(o) == ("C4 — can't say: today's laps run the other way round — a "
+    assert F.outcome_sentence(o) == ("C4 — can't say: 24 May's laps run the other way round — a "
                                      "different layout?"), F.outcome_sentence(o)
     # Either side not telling is not checked: an item stored before the field, a lap that did not.
     legacy = F.item_from_dict({k: v for k, v in F.item_to_dict(clockwise).items()
@@ -935,11 +935,11 @@ def test_the_same_tarmac_driven_the_other_way_round_gets_no_verdict():
         assert {(o.blocker, o.detail) for o in report.outcomes} == \
             {(F.BLOCK_LAYOUT, F.LAYOUT_REVERSED)}, [F.outcome_sentence(o) for o in report.outcomes]
         assert F.report_lines(report) == [
-            f"{F._corner_list(report.outcomes)} — can't say: today's laps run the other way round "
+            f"{F._corner_list(report.outcomes)} — can't say: 8 Jun's laps run the other way round "
             f"— a different layout of the track?"], F.report_lines(report)
         n = len(report.outcomes)
         assert F.report_headline(report) == (f"Focus list · {n} corners · no verdict — the layout "
-                                             f"looks different today"), F.report_headline(report)
+                                             f"looks different on 8 Jun"), F.report_headline(report)
     print(f"ok reversed: {len(hand_only)} windows the hand passed, all refused / "
           f"{F.report_lines(report)[0]}")
 
@@ -992,7 +992,7 @@ def test_a_corner_the_detector_drops_today_is_said_to_be_undetected():
         if o.item.cid == cid:
             assert (o.blocker, o.detail, o.delta) == (F.BLOCK_LAYOUT, F.LAYOUT_NO_CORNER, None), o
             assert F.outcome_sentence(o) == (f"C{cid} — can't say: no corner was picked out "
-                                             f"there today — a different layout?"), \
+                                             f"there on 8 Jun — a different layout?"), \
                 F.outcome_sentence(o)
         else:
             assert o.kind == F.OUTCOME_UNCHANGED, F.outcome_sentence(o)
@@ -1003,9 +1003,10 @@ def test_a_corner_the_detector_drops_today_is_said_to_be_undetected():
     assert all(o.kind == F.OUTCOME_UNCHANGED for o in back.outcomes), \
         [F.outcome_sentence(o) for o in back.outcomes]
     # Every corner of a list undetected today: the headline says that, not "a different layout".
-    alone = F.Report(track="Demo", outcomes=[o for o in report.outcomes if o.item.cid == cid])
+    alone = F.Report(track="Demo", outcomes=[o for o in report.outcomes if o.item.cid == cid],
+                     now_day=report.now_day)
     assert F.report_headline(alone) == ("Focus list · 1 corner · no verdict — no corner was "
-                                        "picked out there today"), F.report_headline(alone)
+                                        "picked out there on 8 Jun"), F.report_headline(alone)
     print(f"ok marginal: {F.outcome_sentence(next(o for o in report.outcomes if o.item.cid == cid))}")
 
 
@@ -1022,7 +1023,9 @@ def test_a_list_refused_for_mixed_layout_reasons_says_each_once():
     missing = _layout_item(5, -1, 0.70, 0.75)
 
     def line(*items):
-        report = F.verdict(list(items), now, [_sample(4.2)] * len(items), alike)
+        # Opened on the day it was recorded (24 May), so the open session is "today".
+        report = F.verdict(list(items), now, [_sample(4.2)] * len(items), alike,
+                           today=datetime.date(2026, 5, 24))
         assert {o.blocker for o in report.outcomes} == {F.BLOCK_LAYOUT}, report.outcomes
         (got,) = F.report_lines(report)
         return got
@@ -1169,7 +1172,7 @@ def test_a_stored_date_that_is_not_a_calendar_day_is_not_printed_as_one():
         assert F._when(bad) == "last time", (bad, F._when(bad))
     o = F.verdict([_item(date="2026-00-15")], _now(), [None], _records()).outcomes[0]
     assert o.blocker == F.BLOCK_NO_RECORD, o
-    assert o.detail == "last time and today", o.detail
+    assert o.detail == "last time and 24 May", o.detail
     print("ok dates: a stored date that is not a calendar day reads 'last time', never '15 Dec'")
 
 
@@ -1179,15 +1182,16 @@ def test_a_refusal_between_two_sessions_of_one_day_names_the_sessions_not_the_da
     says the two days were comparable" — one day named twice, and "two days" that were one. It now
     names the sessions ("either session on 13 Sep" / "the earlier session today" / "this session")
     and says "the two sessions". The RULE is unchanged: a record is still required on a same day,
-    so it is still a refusal, and different days still read exactly as before."""
-    today = datetime.date.today()
+    so it is still a refusal, and different days still read exactly as before. The clock is
+    injected (`today`), so no line depends on the day the test runs."""
+    today = datetime.date(2026, 10, 4)
     past = "2026-09-13"
     dry = session_record.blank_record() | {"conditions": "dry"}
 
     def lines(then_date, now_date, records, n=1):
         now = {**_now(), "date": now_date}
         items = [_item(cid=c, date=then_date) for c in (4, 7)[:n]]
-        rep = F.verdict(items, now, [_sample(4.4)] * n, records)
+        rep = F.verdict(items, now, [_sample(4.4)] * n, records, today=today)
         assert {o.blocker for o in rep.outcomes} == {F.BLOCK_NO_RECORD}, rep.outcomes
         assert all(o.delta is None and not o.has_verdict for o in rep.outcomes)
         return F.report_lines(rep)
@@ -1209,17 +1213,71 @@ def test_a_refusal_between_two_sessions_of_one_day_names_the_sessions_not_the_da
     assert lines(iso, iso, _records(), n=2) == [
         "C4 and C7 — can't say. There's no session record for either session today, so nothing "
         f"says the two sessions were {tail} File ▸ Session record… writes one."]
-    # Different days: the words this PR leaves alone.
+    # Different days, the open one not recorded today: each named by its day (cool/open-session-day).
     assert lines(past, "2026-09-20", _records()) == [
-        "C4 — can't say. There's no session record for 13 Sep and today, so nothing says the two "
+        "C4 — can't say. There's no session record for 13 Sep and 20 Sep, so nothing says the two "
         f"days were {tail}"]
     assert lines(past, iso, _records(("GX0062", dry)), n=2) == [
         "C4 and C7 — can't say. There's no session record for 13 Sep, so nothing says the two "
         f"days were {tail} File ▸ Session record… writes one."]
     # An unreadable date is never "one day" with another.
     assert lines("2026-00-13", "2026-00-13", _records())[0].startswith(
-        "C4 — can't say. There's no session record for last time and today,")
+        "C4 — can't say. There's no session record for last time and this session,")
     print("ok same day: the refusal names the sessions, the rule still refuses")
+
+
+def test_the_open_session_is_today_only_on_the_day_it_was_recorded():
+    """cool/open-session-day (DECISIONS §26's open list): beside earlier days the open session was
+    called "today" whatever day it was recorded — last month's recording read "no session record
+    for 13 Sep and today", "Mark today dry", "the corner there today turns the other way" and
+    "Replace with today's top 3". `focus.open_day` is the one rule: "today" only when the recording
+    IS of the clock's day (injected here, so no line depends on the day the test runs), else its
+    day as the Library names it, and "this session" for a recording with no date."""
+    on_day, later = datetime.date(2026, 9, 20), datetime.date(2026, 10, 18)
+    tail = "comparable; a coach will put up to 4 s a lap on conditions alone."
+
+    def refused(now_date, today):
+        now = {**_now(), "date": now_date}
+        return F.verdict([_item(date="2026-09-13")], now, [_sample(4.4)], _records(), today=today)
+
+    # Opened a month later: named by its day, in the line, the offer's hover and its button.
+    rep = refused("2026-09-20", later)
+    assert F.report_lines(rep) == [
+        f"C4 — can't say. There's no session record for 13 Sep and 20 Sep, so nothing says the two "
+        f"days were {tail}"], F.report_lines(rep)
+    assert [label for _fp, label in rep.unrecorded] == ["13 Sep", "20 Sep"], rep.unrecorded
+    assert "for 13 Sep and 20 Sep saying" in F.mark_dry_prompt(rep)[2], F.mark_dry_prompt(rep)
+    # On the day it was recorded, the same session is "today" — the words as they always were.
+    rep = refused("2026-09-20", on_day)
+    assert F.report_lines(rep)[0].startswith(
+        "C4 — can't say. There's no session record for 13 Sep and today, so"), F.report_lines(rep)
+    # No date on the recording: never "today", and never "last time" (that names a baseline).
+    rep = refused(None, later)
+    assert rep.now_day == F.THIS_SESSION
+    assert "for 13 Sep and this session, so" in F.report_lines(rep)[0], F.report_lines(rep)
+    alone = F.verdict([_item(date="2026-09-13")], {**_now(), "date": None}, [_sample(4.4)],
+                      _records(("GX0060", _record())), today=later)
+    assert F.mark_dry_prompt(alone)[:2] == ("Dry this session?", "Mark this session dry")
+    dated = F.verdict([_item(date="2026-09-13")], {**_now(), "date": "2026-09-20"},
+                      [_sample(4.4)], _records(("GX0060", _record())), today=later)
+    assert F.mark_dry_prompt(dated)[:2] == ("Dry on 20 Sep?", "Mark 20 Sep dry")
+
+    # The layout and lap-count refusals, the headline, and the Replace offer say it the same way.
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    now = {**_now(), "date": "2026-09-20", "corners": [(0.14, 0.205, -1), (0.40, 0.46, 1)]}
+    other = F.verdict([_layout_item(4, +1, 0.15, 0.20)], now, [_sample(4.2)], alike, today=later)
+    assert F.outcome_sentence(other.outcomes[0]) == (
+        "C4 — can't say: the corner there on 20 Sep turns the other way — a different layout?")
+    assert F.report_headline(other) == ("Focus list · 1 corner · no verdict — the layout looks "
+                                        "different on 20 Sep"), F.report_headline(other)
+    few = F.verdict([_item(date="2026-09-13")], {**_now(), "date": "2026-09-20"},
+                    [_sample(4.4, n=2)], alike, today=later)
+    assert F.outcome_sentence(few.outcomes[0]).endswith(
+        "can't say: 2 clean laps through it on 20 Sep."), F.outcome_sentence(few.outcomes[0])
+    assert F.replace_label([1, 5, 7], few.now_day) == "Replace with 20 Sep's top 3 (C1, C5, C7)"
+    assert F.replace_label([1], F.open_day("2026-09-20", on_day)) == "Replace with today's top 1 (C1)"
+    assert F.replace_label([1], F.open_day(None, on_day)) == "Replace with this session's top 1 (C1)"
+    print("ok open day: 'today' only on the day the recording was made")
 
 
 def test_three_sessions_of_one_day_are_counted_and_the_offer_names_each_day_once():
@@ -1228,7 +1286,8 @@ def test_three_sessions_of_one_day_are_counted_and_the_offer_names_each_day_once
     sessions) and "the earlier session on 13 Sep" (two); the offer's hover listed "13 Sep, 13 Sep
     and today" and "Mark today dry" sat on a 13 Sep session. Each phrase now counts the sessions
     it speaks for, and the hover names exactly the sessions the button writes (`unrecorded`)."""
-    today = datetime.date.today().isoformat()
+    clock = datetime.date(2026, 10, 4)          # injected: no line depends on the day it runs
+    today = clock.isoformat()
     past = "2026-09-13"
     dry = session_record.blank_record() | {"conditions": "dry"}
     tail = "comparable; a coach will put up to 4 s a lap on conditions alone."
@@ -1237,7 +1296,7 @@ def test_three_sessions_of_one_day_are_counted_and_the_offer_names_each_day_once
         now = {**_now(), "date": now_date}
         items = [_item(cid=4, fp="GX0060", date=then_date),
                  _item(cid=7, fp="GX0058", date=then_date)]
-        rep = F.verdict(items, now, [_sample(4.4)] * 2, records)
+        rep = F.verdict(items, now, [_sample(4.4)] * 2, records, today=clock)
         assert {o.blocker for o in rep.outcomes} == {F.BLOCK_NO_RECORD}, rep.outcomes
         return rep
 
@@ -1279,12 +1338,12 @@ def test_three_sessions_of_one_day_are_counted_and_the_offer_names_each_day_once
     _, prompt, _ = offer(report(today, today, _records(("GX0060", dry), ("GX0058", dry))))
     assert prompt[:2] == ("Dry today?", "Mark today dry"), prompt
 
-    # Mixed: two baselines of 13 Sep, the session in front of the driver a later day ("today",
-    # as every line about an earlier day calls it).
+    # Mixed: two baselines of 13 Sep, the session in front of the driver a later day, opened
+    # later still: named by its day, never "today" (cool/open-session-day).
     _, prompt, writes = offer(report(past, "2026-09-20", _records()))
     assert writes == ["GX0060", "GX0058", "GX0062"]
     assert prompt[:2] == ("All 3 dry?", "Mark all 3 dry")
-    assert "for the 2 sessions on 13 Sep and today's saying" in prompt[2], prompt[2]
+    assert "for the 2 sessions on 13 Sep and the session on 20 Sep saying" in prompt[2], prompt[2]
     print("ok three sessions of one day: counted, and each day named once")
 
 
@@ -1313,23 +1372,25 @@ def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
 def test_a_refusal_for_want_of_a_record_names_exactly_the_sessions_it_waits_on():
     """`Report.unrecorded` is what "Mark both dry" may write: the sessions a no_record refusal waits
     on — the earlier day(s) first, today last, each once — and never one that has a record, nor
-    any when the refusal is about something a record cannot fix."""
+    any when the refusal is about something a record cannot fix. Opened on the day it was
+    recorded (`_now()`'s 24 May, injected), so the open session is "today"."""
+    on_day = datetime.date(2026, 5, 24)
     items, samples = [_item(cid=4), _item(cid=7)], [_sample(4.5)] * 2
-    none = F.verdict(items, _now(), samples, session_record.empty_store())
+    none = F.verdict(items, _now(), samples, session_record.empty_store(), today=on_day)
     assert none.unrecorded == (("GX0060", "23 May"), ("GX0062", "today")), none.unrecorded
     assert F.mark_dry_prompt(none)[:2] == ("Both dry?", "Mark both dry")
     assert "for 23 May and today saying the conditions were Dry" in F.mark_dry_prompt(none)[2]
-    then_only = F.verdict(items, _now(), samples, _records(("GX0060", _record())))
+    then_only = F.verdict(items, _now(), samples, _records(("GX0060", _record())), today=on_day)
     assert then_only.unrecorded == (("GX0062", "today"),)
     assert F.mark_dry_prompt(then_only)[:2] == ("Dry today?", "Mark today dry")
-    now_only = F.verdict(items, _now(), samples, _records(("GX0062", _record())))
+    now_only = F.verdict(items, _now(), samples, _records(("GX0062", _record())), today=on_day)
     assert F.mark_dry_prompt(now_only)[:2] == ("Dry on 23 May?", "Mark 23 May dry")
     mixed = F.verdict([_item(cid=4), _item(cid=7, fp="GX0058", date="2026-04-11")], _now(),
-                      samples, session_record.empty_store())
+                      samples, session_record.empty_store(), today=on_day)
     assert [label for _fp, label in mixed.unrecorded] == ["23 May", "11 Apr", "today"]
     assert F.mark_dry_prompt(mixed)[:2] == ("All 3 dry?", "Mark all 3 dry")
     both = F.verdict(items, _now(), samples, _records(("GX0060", _record()),
-                                                      ("GX0062", _record())))
+                                                      ("GX0062", _record())), today=on_day)
     assert both.unrecorded == () and F.mark_dry_prompt(both) is None
     unverified = F.verdict(items, _now(verified=False), samples, session_record.empty_store())
     assert unverified.unrecorded == () and F.mark_dry_prompt(unverified) is None, \
@@ -1511,7 +1572,7 @@ def test_writing_both_records_the_refusal_asks_for_lifts_it_without_a_reload():
         try:
             library.upsert_and_save(_then_entry(entry["track"], folder))
             before = _focus_text(view)
-            assert f"{label} — can't say. There's no session record for 23 Aug and today" \
+            assert f"{label} — can't say. There's no session record for 23 Aug and 30 Aug" \
                 in before, before
 
             with _the_record_form_answers():
@@ -1554,7 +1615,7 @@ def test_every_other_write_to_the_record_store_moves_the_verdict_too():
             assert "no session record" not in _focus_text(view), _focus_text(view)
 
             ctl._clear_library()
-            assert "no session record for 23 Aug and today" in _focus_text(view), \
+            assert "no session record for 23 Aug and 30 Aug" in _focus_text(view), \
                 f"Clear wiped both records and the page still reads: {_focus_text(view)!r}"
             ctl._restore_library()
             assert "no session record" not in _focus_text(view), \
@@ -1565,7 +1626,7 @@ def test_every_other_write_to_the_record_store_moves_the_verdict_too():
             with _the_record_form_answers(delete=True):
                 ctl.edit_current_record()
             assert session_record.get(session_record.load(), entry["fingerprint"]) is None
-            assert "no session record for 23 Aug and today" in _focus_text(view), \
+            assert "no session record for 23 Aug and 30 Aug" in _focus_text(view), \
                 f"today's record was deleted and the page still reads: {_focus_text(view)!r}"
         finally:
             _dispose(win, view)
@@ -1654,7 +1715,7 @@ def test_two_clicks_from_the_coaching_page_lift_the_record_refusal_without_the_f
             with _no_record_form() as forms:
                 hands.open_tab("Coaching")
                 before = _focus_text(view)
-                assert "no session record for 23 Aug and today" in before, before
+                assert "no session record for 23 Aug and 30 Aug" in before, before
                 mark = hands.button("Mark ")
                 assert mark is not None, _NO_INLINE_ACTION.format(
                     [b.text() for b in hands.buttons()])
@@ -1735,8 +1796,9 @@ def test_two_sandown_sessions_reach_a_verdict_from_the_debrief():
                 hands = _Hands(view)
                 with _no_record_form() as forms:
                     refusal = _focus_text(view)
-                    assert f"no session record for {F._when(then_entry['date'])} and today" \
-                        in refusal, refusal
+                    now_day = F.open_day(win.library_ctl._current_library_entry().get("date"))
+                    assert (f"no session record for {F._when(then_entry['date'])} and {now_day}"
+                            in refusal), refusal
                     mark = hands.button("Mark ")
                     assert mark is not None, _NO_INLINE_ACTION.format(
                         [b.text() for b in hands.buttons()])

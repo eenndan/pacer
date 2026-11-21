@@ -337,8 +337,9 @@ class FocusBlock(QWidget):
         self._remeasured = False        # any corner re-measured here, verdict or refusal
         self._selected: int | None = None
         self._mark_fps: list[str] = []  # the unrecorded sessions the Mark button would write
-        self._replace: list[int] = []    # today's top corners the Replace button would store
+        self._replace: list[int] = []    # this session's top corners the Replace button would store
         self._refusal = ""               # why this session can be no baseline (QA REG-2), or ""
+        self.now_day = focus.THIS_SESSION  # the open session's name in these lines (`focus.open_day`)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(theme.SPACE_M, theme.SPACE_S, theme.SPACE_M, theme.SPACE_S)
         lay.setSpacing(theme.SPACE_XS)
@@ -413,6 +414,7 @@ class FocusBlock(QWidget):
         loop itself."""
         outcomes = list(report.outcomes) if report is not None else []
         self._cids = [o.item.cid for o in outcomes]
+        self.now_day = report.now_day if report is not None else focus.THIS_SESSION
         # What a re-measure said, for the one line (`line_text`): how many verdicts, and whether
         # any corner was re-measured at all (a refusal is news too; a list set today is not).
         self._n_verdicts = report.n_verdicts if report is not None else 0
@@ -443,7 +445,7 @@ class FocusBlock(QWidget):
             focus.replace_offer(report, shortlist or []) or [])
         if self._replace:
             who = ", ".join(f"C{c}" for c in self._replace)
-            self.replace_button.setText(focus.replace_label(self._replace))
+            self.replace_button.setText(focus.replace_label(self._replace, self.now_day))
             self.replace_button.setToolTip(
                 f"Replaces your focus list with {who}, with baselines measured on this session: "
                 "the next session here is checked against them.")
@@ -637,11 +639,12 @@ class FocusBlock(QWidget):
 DEBRIEF_ESC = "Esc returns to your usual layout."
 
 
-def debrief_note(promoted: list[int], saved: bool = True) -> str:
+def debrief_note(promoted: list[int], saved: bool = True, day: str = focus.THIS_SESSION) -> str:
     """The debrief's second line: what Pacer just did to the focus list, said as the default it is
     and how to undo it (board review PS-B1: "an explicit, reversible default — say so on screen"),
     then the way out. `saved` False is the synthetic demo's list, which is never written, so it is
-    not promised "for next time" (QA EVAL-2)."""
+    not promised "for next time" (QA EVAL-2). `day` names the session (`focus.open_day`): its top
+    corners are "today's" only on the day it was recorded."""
     if not promoted:
         return DEBRIEF_ESC
     labels = [f"C{c}" for c in promoted]
@@ -649,7 +652,7 @@ def debrief_note(promoted: list[int], saved: bool = True) -> str:
     undo = "remove it if you won't work on it" if len(labels) == 1 else \
         "remove any you won't work on"
     where = "on your focus list for next time" if saved else "on the focus list"
-    return (f"Pacer put {who}, from today's top corners, {where} — "
+    return (f"Pacer put {who}, from {day}'s top corners, {where} — "
             f"a default, not a decision: {undo}. {DEBRIEF_ESC}")
 
 
@@ -1995,7 +1998,8 @@ class OpportunitiesPanel(QWidget):
         if self._debrief:
             pb_line, promoted, compare, saved = self._debrief_lead
             kept = [c for c in promoted if c in self.focus_block.cids()]
-            self.debrief_block.set_lines(pb_line, debrief_note(kept, saved), compare)
+            self.debrief_block.set_lines(pb_line, debrief_note(kept, saved, self.focus_block.now_day),
+                                         compare)
 
     def shortlist_cids(self) -> list[int]:
         """The corners the headline sums, in rank order — what the debrief pre-promotes, so the
