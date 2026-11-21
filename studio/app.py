@@ -4529,12 +4529,22 @@ class StudioWindow(QMainWindow):
     def _on_reference_load_failed(self, token: int, paths: list[str], exc: Exception):
         """Reference load failed (UI thread, queued signal): drop a STALE result, else surface the
         reason without a freeze and keep the local best lap (the feature is additive). Mirrors
-        load_reference's own could-not-load message, just off-thread."""
+        load_reference's own could-not-load message, just off-thread.
+
+        The sentence is the main open's (`_load_failure_message`) — the same file fails for the same
+        reason whichever door it came through — followed by what stays the baseline, as every
+        guard refusal ends. It used to print the exception's class and text: "could not load the
+        reference recording (TelemetryUnreadable: Failed to open file: /…/GX019201.MP4)". Those
+        go to the log."""
         if token != self._ref_load_token:
             return  # superseded by a newer reference load; drop this result
         self._pb_compare_token = None  # the compare that asked for it ends with it
-        reason = f"could not load the reference recording ({type(exc).__name__}: {exc})"
-        _log.warning("reference not loaded — %s", reason, exc_info=exc)
+        _log.warning("reference not loaded — %s: %s", type(exc).__name__, exc, exc_info=exc)
+        reason = self._load_failure_message(paths, exc)
+        session = getattr(self, "session", None)
+        if session is not None:
+            kept = session.reference_kept()
+            reason = f"{reason} {kept[:1].upper()}{kept[1:]}."
         self.statusBar().clearMessage()
         QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
 
