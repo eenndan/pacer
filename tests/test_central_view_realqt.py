@@ -135,7 +135,7 @@ def _real_central_view():
 
     s._render_cache = render_cache.LapRenderCache(
         lap_xyt=s._lap_trace_xyt, valid_lap_ids=s.valid_lap_ids,
-        lap_has_dropout=s.lap_has_dropout, lap_time=s.lap_time, trace_times=s.tt)
+        lap_out_of_bests=s.lap_out_of_bests, lap_time=s.lap_time, trace_times=s.tt)
 
     windows = {0: (float(t0[0]), float(t0[-1])), 1: (float(t1[0]), float(t1[-1]))}
     s.lap_window = lambda lid: windows.get(lid)

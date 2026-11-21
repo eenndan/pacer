@@ -53,7 +53,8 @@ class Bests:
     computed over Session-bound primitives.
 
     All inputs are Session-bound callables (Session owns the pacer side + its memoized lap sets):
-    `valid_lap_ids` / `lap_has_dropout` are the memoized lap-set accessors; `lap_time` is the
+    `valid_lap_ids` / `lap_out_of_bests` are the memoized lap-set accessors (`lap_out_of_bests`:
+    a GPS dropout or a lap that cut the track, `Session.lap_out_of_bests`); `lap_time` is the
     per-lap time (reads Session's pacer `laps.lap_time`); `lap_sector_splits` the per-lap split
     columns; `sector_line_count` the number of sector lines; `lap_columns` the per-lap array
     fetch; `ideal_total` the corner-partition ideal lap time that `theoretical_best` IS
@@ -64,7 +65,7 @@ class Bests:
 
     def __init__(self, *,
                  valid_lap_ids: Callable[[], list[int]],
-                 lap_has_dropout: Callable[[int], bool],
+                 lap_out_of_bests: Callable[[int], bool],
                  lap_time: Callable[[int], float],
                  lap_sector_splits: Callable[[int], list[float]],
                  sector_line_count: Callable[[], int],
@@ -74,7 +75,7 @@ class Bests:
                  best_cache_set: Callable[[object], None],
                  unset: object):
         self._valid_lap_ids = valid_lap_ids
-        self._lap_has_dropout = lap_has_dropout
+        self._lap_out_of_bests = lap_out_of_bests
         self._lap_time = lap_time
         self._lap_sector_splits = lap_sector_splits
         self._sector_line_count = sector_line_count
@@ -86,13 +87,16 @@ class Bests:
 
     def best_candidate_ids(self) -> list[int]:
         """Laps eligible to be the HEADLINE best / Δ-baseline / session-best split: valid laps
-        with NO interior GPS dropout. A dropout lap's distance is speed-integral-reconstructed
-        and its timing is less reliable (it is already excluded from consistency σ and corner
-        detection), so it must not be allowed to become the 'best lap', the delta baseline, or a
-        purple session-best cell. Falls back to all valid laps when EVERY valid lap has a dropout
-        (a flagged best beats no best). The lap table still SHOWS dropout laps, flagged ⚠."""
+        with NO interior GPS dropout that stayed on the line the other laps drive
+        (`lap_out_of_bests`). A dropout lap's distance is speed-integral-reconstructed and its
+        timing is less reliable, and a lap that left the line (a cut across the infield,
+        `corners.CORRIDOR_MAX_M`) did not drive the same circuit; both are already out of
+        consistency σ and corner detection, and
+        neither may become the 'best lap', the delta baseline, or a purple session-best cell.
+        Falls back to all valid laps when EVERY valid lap is flagged (a flagged best beats no
+        best). The lap table still SHOWS these laps, flagged ⚠."""
         valid = self._valid_lap_ids()
-        clean = [i for i in valid if not self._lap_has_dropout(i)]
+        clean = [i for i in valid if not self._lap_out_of_bests(i)]
         return clean if clean else valid
 
     def best_lap_id(self) -> int | None:
@@ -188,12 +192,12 @@ class Bests:
         # Complete laps are themselves (S/F-aligned) rolling windows: rolling ≤ best. Seed the
         # floor from the dropout-free candidate set (same rule as best_lap_id) so a dropout lap's
         # unreliable time can't undercut the rolling best; the pair windows below already skip
-        # dropout laps (line: lap_has_dropout guard).
+        # flagged laps (line: lap_out_of_bests guard).
         best = min(self._lap_time(i) for i in self.best_candidate_ids())
         valid_set = set(valid)
         for a in valid:
             b = a + 1
-            if b not in valid_set or self._lap_has_dropout(a) or self._lap_has_dropout(b):
+            if b not in valid_set or self._lap_out_of_bests(a) or self._lap_out_of_bests(b):
                 continue
             times_a, xs_a, ys_a, _spd_a, cum_a = self._lap_columns(a)
             times_b, xs_b, ys_b, _spd_b, cum_b = self._lap_columns(b)

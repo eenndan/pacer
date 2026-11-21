@@ -1887,6 +1887,111 @@ def test_best_excludes_dropout_lap_then_falls_back():
     print("test_best_excludes_dropout_lap_then_falls_back OK")
 
 
+def _corridor_lap(c, *, seed, inside_m=0.0, chord_about=None, drift=(0.0, 0.0)):
+    """One lap of the synthetic GoPro's demo circuit `c` as a (times, xs, ys, speed, cum) trace at
+    2.5 m fixes: GPS noise (0.3 m), a constant receiver offset `drift`, a line `inside_m` metres
+    inside the usual one through every corner (15 m ramps), or a straight chord across the corner
+    whose apex is `chord_about` m along the lap, from 60 m before it to 60 m after (a cut)."""
+    from studio.dev import synth_gopro as sg
+    rng = np.random.default_rng(seed)
+    s = np.arange(0.0, c.length, 2.5)
+    x, y, h, _ = c.at(s)
+    sign = np.sign(c.kappa) * (np.abs(c.kappa) > 1e-4)
+    w = int(15.0 / sg.DS)
+    lat = np.interp(s, c.s, np.convolve(sign, np.ones(w) / w, mode="same")) * inside_m
+    x, y = x - np.sin(h) * lat + drift[0], y + np.cos(h) * lat + drift[1]
+    if chord_about is not None:
+        a, b = np.searchsorted(s, chord_about - 60.0), np.searchsorted(s, chord_about + 60.0)
+        f = np.linspace(0.0, 1.0, max(2, int(np.hypot(x[b] - x[a], y[b] - y[a]) / 2.5)),
+                        endpoint=False)
+        x = np.r_[x[:a], x[a] + f * (x[b] - x[a]), x[b:]]
+        y = np.r_[y[:a], y[a] + f * (y[b] - y[a]), y[b:]]
+    x = x + rng.normal(0.0, 0.3, len(x))
+    y = y + rng.normal(0.0, 0.3, len(y))
+    cum = np.r_[0.0, np.cumsum(np.hypot(np.diff(x), np.diff(y)))]
+    t = cum / 20.0
+    return t, x, y, np.full(len(t), 20.0), cum
+
+
+def _corridor_session(specs, times):
+    """A bare session whose valid laps are `_corridor_lap(**spec)` traces with lap times `times`."""
+    from studio.dev import synth_gopro as sg
+    from studio.session import _UNSET
+    c = sg.build_circuit()
+    cols = {i: _corridor_lap(c, seed=40 + i, **spec) for i, spec in enumerate(specs)}
+    s = bare_session({i: (col[0] + 100.0 * i, col[4]) for i, col in cols.items()},
+                     valid=list(cols))
+    s._cols_cache = {i: (col[0] + 100.0 * i, *col[1:]) for i, col in cols.items()}
+    s.laps = SimpleNamespace(lap_time=lambda lid: times[lid],
+                             sectors=SimpleNamespace(sector_lines=[]))
+    s._best_cache = _UNSET
+    return s, c
+
+
+def test_a_lap_that_left_the_line_is_listed_but_never_the_best():
+    """THE DEFECT (discovery, wave 21): a lap straight across the infield, ~1 s quicker, was
+    crowned best lap — and with it the PB, the Δ reference, the purple split and the map's
+    reference loop. It is still a valid, listed lap, kept out of the bests with the sentence the
+    lap table's ⚠ hover says. A lap 4 m inside the usual line through EVERY corner is a line, not a
+    cut — shorter, quicker, and a legitimate best — and a receiver offset of 3 m is not an
+    excursion either: neither is flagged. (Lap length could not tell the tight lap from the cut:
+    refused-2026-09.md §41.)"""
+    from studio import corners, render_cache
+    from studio.dev import synth_gopro as sg
+    c4 = next(k for k in sg.build_circuit().corners if k.cid == 4).apex_s
+    specs = [{}, {}, {"drift": (2.1, -2.1)}, {"inside_m": 4.0}, {}, {}, {"chord_about": c4}, {}]
+    times = {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.9, 4: 45.3, 5: 45.25, 6: 44.2, 7: 45.35}
+    s, _c = _corridor_session(specs, times)
+    # Lap length could not have told them apart: the tight lap is the SHORTER of the two.
+    assert s._lap_columns(3)[4][-1] < s._lap_columns(6)[4][-1]
+    off = s.off_line_metres()
+    assert list(off) == [6] and off[6] > 2 * corners.CORRIDOR_MAX_M, off
+    assert 6 in s.valid_lap_ids(), "the cut lap stays a counted lap"
+    assert s.best_lap_id() == 3, "the cut lap, or not the tight-line lap, was crowned best"
+    assert s.lap_out_of_bests(6) and not s.lap_out_of_bests(3) and not s.lap_out_of_bests(2)
+    assert 6 not in s.consistency_lap_ids()
+    assert s.off_line_notes() == {6: f"Lap 7 left the line your other laps drive by {off[6]:.0f} m, "
+                                     "so it is kept out of the bests."}
+    cache = render_cache.LapRenderCache(
+        lap_xyt=lambda i: s._lap_columns(i)[1:3] + (s._lap_columns(i)[0],),
+        valid_lap_ids=s.valid_lap_ids, lap_out_of_bests=s.lap_out_of_bests,
+        lap_time=lambda i: times[i], trace_times=np.arange(10) * 0.1)
+    loop = cache.reference_fit_loop()
+    assert np.array_equal(loop[:, 0], s._lap_columns(3)[1]), "the map's reference loop is the cut lap"
+    print("test_a_lap_that_left_the_line_is_listed_but_never_the_best OK")
+
+
+def test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap():
+    """Three laps (or three dropout-free laps) are no consensus to leave: nothing is flagged. A GPS
+    dropout lap is neither measured nor counted toward the consensus — its gap is a straight line
+    drawn across the hole, and it is out of the bests already."""
+    from studio.dev import synth_gopro as sg
+    c4 = next(k for k in sg.build_circuit().corners if k.cid == 4).apex_s
+    s, _c = _corridor_session([{}, {}, {"chord_about": c4}], {0: 45.3, 1: 45.2, 2: 44.2})
+    assert s.off_line_metres() == {} and s.best_lap_id() == 2
+    four = [{}, {}, {}, {"chord_about": c4}]
+    s, _c = _corridor_session(four, {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.2})
+    assert list(s.off_line_metres()) == [3]
+    s, _c = _corridor_session(four, {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.2})
+    s.lap_has_dropout = lambda lid: lid == 0
+    assert s.off_line_metres() == {}, "three dropout-free laps flagged a lap"
+    print("test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap OK")
+
+
+def test_sustained_max_holds_a_stretch_not_a_fix():
+    """One stray station is not an excursion; a stretch is, across the lap's seam too; NaN (no
+    answer) breaks a stretch rather than extending it."""
+    from studio.corners import sustained_max
+    r = np.zeros(20)
+    r[5] = 30.0
+    assert sustained_max(r, 3) == 0.0
+    r[[18, 19, 0]] = 12.0
+    assert sustained_max(r, 3) == 12.0
+    r2 = np.array([0.0, 15.0, np.nan, 15.0, 15.0, 0.0])
+    assert sustained_max(r2, 3) == 0.0 and sustained_max(r2, 2) == 15.0
+    print("test_sustained_max_holds_a_stretch_not_a_fix OK")
+
+
 def _straight_into_braking(n=201, peak=150):
     """A straight along +x, 2.5 m a fix: the speed builds slowly to `peak` (engine-limited), then
     falls fast (the braking zone) — the shape every real lap's fastest place has."""

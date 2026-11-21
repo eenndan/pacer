@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Forty features were built far enough to **measure**, and the measurement said not to ship
+Forty-one features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -3069,6 +3069,64 @@ lap count, `--plant D` for a planted habit), then `--summarize` over their logs.
 - a real or synthetic set where the named apex reasons' false share passes one in five;
 - a generator with line or lift habits that leave the apex speed alone and still cost time;
 - or a step that removes more false reasons than true ones and comes from a measured figure.
+
+---
+
+## 41. A lap-distance rule for cut laps — refused (cool/short-lap-out-of-bests, #697)
+
+**The idea.** A lap straight across one corner's infield passed the ±10 % distance band, was about
+1 s quicker, and was crowned best lap, PB, Δ reference and ideal-lap segment owner. #697 kept a lap
+out of the bests when it was shorter than the session's median valid-lap distance by more than
+max(3 robust σ, 2.7 % of the median). The 2.7 % was set midway between the widest legitimate line
+measured (2.07 %) and the cut (3.29 %).
+
+**Why lap length cannot tell a cut from a line.** A line δ metres tighter through a corner is
+shorter by about δ × that corner's turning angle. Over a lap that comes to δ × the track's total
+turning: a fixed number of METRES, not a share of the lap. So the same tighter line is a much
+bigger share of a short, twisty lap than of a long one. #697's 2.07 % also came from a 40 m
+smoothing ramp, which never reaches the full offset in a tight corner. With a 15 m ramp the demo
+circuit's 3 m-inside lap is 2.67 % short, against the cut's 3.29 %.
+
+The review measured the geometric length change of a whole lap driven δ inside the usual line
+through every corner. It used `studio/dev/synth_gopro.build_circuit` layouts, with each verdict
+taken from #697's rule on one such lap among nine consistent ones (σ 0.65 m):
+
+| track (length, total turning) | 1.5 m inside, 15 m ramp | 2 m inside | 3 m inside | #697's bar |
+|---|---|---|---|---|
+| demo circuit (971 m, 600°) | −14.0 m, −1.44 % (kept) | −18.2 m, −1.88 % (kept) | −25.9 m, −2.67 % (kept) | 26.2 m |
+| demo, straights halved (596 m, 600°) | −14.0 m, −2.35 % (kept) | −18.2 m, −3.06 % **flagged** | −25.9 m, −4.34 % **flagged** | 16.1 m |
+| demo, straights quartered (410 m, 600°) | −13.8 m, −3.36 % **flagged** | −17.8 m, −4.35 % **flagged** | −25.1 m, −6.11 % **flagged** | 11.1 m |
+| twisty club layout (601 m, 780°) | −17.6 m, −2.93 % **flagged** | −22.9 m, −3.80 % **flagged** | −32.4 m, −5.39 % **flagged** | 16.2 m |
+
+One kart width tighter in every corner is a line, not a cut. On the 601 m twisty layout it is
+2.9 % short and flagged. On the 410 m layout 1.5 m is enough.
+
+**When the tight laps come last, the best lap loses its ★.** The fast laps of a session are often
+its last, on a drying track or rubbered-in tyres. The review drew 400 sessions per case with the
+last laps tight and the rest consistent (σ 0.65 m), and counted how often #697's rule flagged a
+tight lap:
+
+| case | 5 laps, last 1 | 6, last 2 | 12, last 1 | 12, last 3 | 12, last 5 | 12, last 6 | 20, last 5 |
+|---|---|---|---|---|---|---|---|
+| twisty 601 m, 1.5 m inside | 0.94 | 0.98 | 0.98 | 1.00 | 0.99 | 0.00 | 1.00 |
+| twisty 601 m, 2 m inside | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0.00 | 1.00 |
+| 410 m, 1.5 m inside | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0.00 | 1.00 |
+| demo 971 m, 3 m inside | 0.25 | 0.27 | 0.26 | 0.46 | 0.32 | 0.00 | 0.60 |
+
+The genuine best lap is a tight lap. While the tight laps are a minority, it loses its ★ in
+94–100 % of the trials on the short tracks. Once they are half the session, they move the median
+and nothing is flagged. Neither outcome depends on whether anyone cut.
+
+**What counted as new evidence, and shipped instead (cool/cut-lap-out-of-bests).** The new evidence
+is a rule that measures WHERE the lap went, not how long it was. A line moves a few metres across
+the track; a cut leaves it. `corners.CORRIDOR_MAX_M` measures each lap's lateral distance from the
+session's consensus line (receiver drift removed). A lap whose distance stays above 10 m for 10 m
+of track is kept out of the bests. Its block in `studio/corners.py` carries the measurements: up to
+4.8 m for legitimate laps (7.0 m under a 3 m receiver jump between laps), and 13.5–34.2 m for
+infield cuts on 410 m, 601 m and 971 m layouts.
+
+**What would be new evidence for a length rule:** a statistic of lap length that is not, on a
+twisty layout, as large for one kart width of line as it is for a cut.
 
 ---
 

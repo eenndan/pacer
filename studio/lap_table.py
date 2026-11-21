@@ -426,7 +426,8 @@ def _lap_col_tips(unit: str | None) -> list[str]:
     the same contract the Corners table has had since its headers were abbreviated."""
     u = units.speed_label(unit)
     return [
-        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout · {story.BEHIND_MARK} C5 on a slow "
+        f"Lap number (▶ playing · ★ session best · ⚠ GPS dropout or a lap that left the line, "
+        f"kept out of the bests · {story.BEHIND_MARK} C5 on a slow "
         f"lap: the corner marked {story.BEHIND_MARK} against your typical pass (CORNERS BY LAP); "
         "hover it for the note)",
         "Lap time, measured between start/finish crossings",
@@ -1324,6 +1325,9 @@ class LapTable(QWidget):
         # rewrites, which go through _lap_cell_text).
         self._best_split: list = []
         self._dropout_ids: set = set()
+        # lap id -> why a lap that left the line is out of the bests (Session.off_line_notes): it
+        # wears the same ⚠ as a dropout lap (and is in `_dropout_ids`), with this as its hover.
+        self._off_line_tips: dict = {}
         self._best_lap_id = None
         # lap id -> story.SlowLapNote, read ONCE per refresh / trust flip (_read_slow_notes), never
         # per hover, sort or paint: the session's memo still rebuilds its key on every call.
@@ -2027,6 +2031,13 @@ class LapTable(QWidget):
         splits_by_lap = {row["idx"]: self.session.lap_sector_splits(row["idx"]) for row in rows}
         best_split = self.session.session_best_splits()
         dropout_ids = self.session.dropout_lap_ids()
+        # A lap that left the line the other laps drive (a cut) is out of the bests for the same
+        # reason a dropout lap is — it cannot be compared — so it joins the ⚠ set every rule below
+        # keys on (no ★, no purple, not the Δ bar scale, no slow-lap note) and only its hover
+        # differs. A double without the read has none.
+        off_line = getattr(self.session, "off_line_notes", None)
+        self._off_line_tips = off_line() if callable(off_line) else {}
+        dropout_ids = set(dropout_ids) | set(self._off_line_tips)
 
         # Sorting must be OFF while we populate (else rows reorder mid-fill and setItem(r,…)
         # lands on the wrong row); re-enabled after, preserving the user's chosen sort.
@@ -2102,7 +2113,7 @@ class LapTable(QWidget):
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(self._sort_col, self._sort_order)
         self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
-        # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
+        # ⚠ lap ids (dropout or off the line), keyed by lap id so the flag follows the lap across sorts
         self._dropout_ids = dropout_ids
         # laps whose splits are timed as measured (a refused receiver shift): their S cells say so
         self._as_measured_ids = getattr(self.session, "sector_as_measured_ids", frozenset)()
@@ -2297,7 +2308,7 @@ class LapTable(QWidget):
                 # italic, keeping the estimated cue); the dropout tooltip wins (it flags a per-lap
                 # issue), else the provisional note, else the estimated-timing note, else clear.
                 theme.apply_provisional_style(item, muted_cell)
-                tip = (DROPOUT_TOOLTIP if is_dropout
+                tip = (self._off_line_tips.get(lap_id, DROPOUT_TOOLTIP) if is_dropout
                        else PROVISIONAL_TOOLTIP if provisional_cell
                        else estimated_note if estimated_cell else "")
                 # IA-07: the ★ this row's Lap cell wears is a glyph with no legend anywhere unless
