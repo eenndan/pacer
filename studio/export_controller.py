@@ -997,6 +997,33 @@ class ExportController:
         good = [s for s in spans if math.isfinite(s) and s > 0]
         mean = (sum(good) / len(good)) if good else float("nan")
         return mean, len(ids), f"{len(ids)} laps, one file each"
+    def _scope_line(self, scope: str, lap: int) -> str:
+        """The overlay dialog's line above its form: the lap(s) the Export row WILL render, from
+        the same `scope_lap_ids` the hint's "Renders …" reads. "Selected lap 13 · 0:44.160",
+        "Best lap 4 · 0:44.950", "All laps · 14 laps, one file each", "Full session · 9:12".
+
+        It said "Selected lap …" whatever the row, so on "Best lap" (the path "my best lap as a
+        video") it showed another lap's time above "Renders lap 4." (discovery 11)."""
+        session = getattr(self.win, "session", None)
+        if scope == export_video.SCOPE_SESSION:
+            secs = self._export_session_seconds()
+            return "Full session" + (f"  ·  {fmt_hms(secs)}" if math.isfinite(secs) else "")
+        ids = [lap]
+        if session is not None and scope != export_video.SCOPE_THIS_LAP:
+            try:
+                ids = export_video.scope_lap_ids(session, scope, lap)
+            except Exception:  # noqa: BLE001 — a caption never blocks the export it describes
+                ids = [lap]
+        name = {export_video.SCOPE_BEST_LAP: "Best lap",
+                export_video.SCOPE_ALL_LAPS: "All laps"}.get(scope, "Selected lap")
+        if not ids:
+            return f"{name}  ·  none in this recording"
+        if scope == export_video.SCOPE_ALL_LAPS:
+            return f"{name}  ·  {plural(len(ids), 'lap')}, one file each"
+        # lap_time is a cheap pacer-free accessor (no ffprobe).
+        dur = session.lap_time(ids[0]) if session is not None else float("nan")
+        return f"{name} {lap_label(ids[0])}  ·  {fmt_time(dur)}"
+
     def _export_dialog(self, title: str) -> tuple[QDialog, QVBoxLayout]:
         """The shell both export pickers are built in: a titled modal at ONE measure, a panel
         header, and a body column laid out on the panel gutter. Returns the dialog and the column
@@ -1113,10 +1140,8 @@ class ExportController:
         desc.setProperty("role", "Note")
         col.addWidget(desc)
 
-        # lap_time is a cheap pacer-free accessor (no ffprobe).
-        dur = self.win.session.lap_time(lap) if hasattr(self.win, "session") else float("nan")
-        lap_text = f"Selected lap {lap_label(lap)}  ·  {fmt_time(dur)}"
-        lap_line = QLabel(lap_text)
+        # What the Export row WILL render (`_scope_line`), set by `_update_hint` below.
+        lap_line = QLabel(self._scope_line(export_video.SCOPE_THIS_LAP, lap))
         lap_line.setProperty("role", "Note")
         col.addWidget(lap_line)
         # With the pass row chosen the line names the pass, never the lap's time (a pass clip
@@ -1303,7 +1328,7 @@ class ExportController:
                 box.blockSignals(False)
             desc.setText(self._PASS_STYLE_DESC[_style()].format(noun=_pass_noun(pass_[0]))
                          if pass_scope else self._EXPORT_STYLE_DESC[_style()])
-            lap_line.setText(pass_text if pass_scope else lap_text)
+            lap_line.setText(pass_text if pass_scope else self._scope_line(scope, lap))
             provisional = not bool(getattr(getattr(self.win, "session", None),
                                            "timing_verified", True))
             cards_box.setToolTip(
