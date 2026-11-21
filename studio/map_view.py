@@ -2921,6 +2921,8 @@ class MapView(QWidget):
         place, which is the very thing MAP-07 is about. So: re-space only while the placed lines
         are still exactly what we suggested; the moment one is dragged, fall back to appending and
         leave the user's placements alone."""
+        if self._refuse_line_edit():
+            return
         start, sectors = self._current()
         n = len(sectors)
         if _segs_equal(sectors, self.session.suggest_sectors(n)):
@@ -2936,6 +2938,18 @@ class MapView(QWidget):
         self._pin_timing_chrome()         # the new line is there to be dragged: show its handles
         self._post_notice(note)
 
+    def _refuse_line_edit(self) -> bool:
+        """True (and the reason posted) when this recording has no GPS trace to put a line on.
+
+        CentralView disables the buttons on such a recording; this is the belt for any other way
+        in. Without it, Add sector on a recording with GPS switched off answered "Sector line 1
+        added — the lap is now split into 2 even sectors." over an empty map, and Reset sectors
+        "1 sector line cleared…": two successes for edits that could time nothing."""
+        if not data_quality.no_start_line(self.session):
+            return False
+        self._post_notice(data_quality.NO_LAPS_NO_GPS_BODY)
+        return True
+
     def _reset_sectors(self):
         """Clear every sector line — and SAY so, naming the way back.
 
@@ -2944,6 +2958,8 @@ class MapView(QWidget):
         edit goes through the same undo stack as a line drag), so the fix is the missing feedback,
         not a confirmation dialog — the app's only two confirms wipe a whole library index, a
         different scale from clearing annotations on the session in front of you."""
+        if self._refuse_line_edit():
+            return
         start, sectors = self._current()
         if not sectors:  # nothing to clear: say so rather than re-segmenting for no reason
             self._post_notice("No sector lines to clear.")
