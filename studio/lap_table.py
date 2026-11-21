@@ -3313,7 +3313,7 @@ QUICKEST_PLAY_TIP = "Play this pass, from just before the {what} to just after i
 # A sector row whose quickest lap's splits were timed as measured (stats.SPLIT_AS_MEASURED_NOTE).
 QUICKEST_AS_MEASURED_TIP = ("Its quickest pass, lap {lap}, was timed as measured: this lap ran too "
                             "far off the session's line to take its receiver drift off.")
-QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap took this {what} within "
+QUICKEST_STAR_TIP = ("★ Quickest by more than {step_name}: no other lap took this {what} within "
                      "{step:.2f} s of it.")
 QUICKEST_COL_TIPS = [
     "Detected corner in track order, with an arrow for its direction.",
@@ -3332,7 +3332,14 @@ QUICKEST_COL_TIPS = [
 QUICKEST_SECTOR_COL_TIPS = {
     0: " Then your own sectors, S1, S2…, between the sector lines you drew.",
     1: " For a sector: its quickest split, the same figure as the Stats page's SPLITS best.",
+    QUICKEST_LEVEL_COL: " For a sector: within the step for sector splits, the legend's sectors "
+                        "figure.",
+    QUICKEST_STRIP_COL: " For a sector the band is the step for sector splits.",
 }
+# What a row's level step is called: a corner's is the timing step (the legend's first figure), a
+# sector's is wider (SECTOR_LEVEL_NOTE_TIP) and is never called the timing step beside it.
+CORNER_STEP_NAME = "the timing step"
+SECTOR_STEP_NAME = "the step for sector splits"
 LEVEL_NOTE_TIP = ("Two passes closer than this are level: the timing cannot tell them apart. "
                   f"{stats_service.STEP_COVERS_PASS}")
 # A split is timed at two sector lines and carries more GPS noise than a lap time (docs/ACCURACY.md):
@@ -3354,6 +3361,11 @@ def level_note(level_s: float, sector_s: float | None = None) -> str:
 def stretch_noun(qp) -> str:
     """"sector" for a sector row (stats.sector_key), else "corner"."""
     return "corner" if stats_service.sector_col(qp.cid) is None else "sector"
+
+
+def step_name(qp) -> str:
+    """What row `qp`'s level step is called in its hovers (CORNER_STEP_NAME / SECTOR_STEP_NAME)."""
+    return SECTOR_STEP_NAME if stretch_noun(qp) == "sector" else CORNER_STEP_NAME
 
 
 def quickest_level_text(qp) -> str:
@@ -3380,7 +3392,7 @@ def quickest_level_tip(qp, level_s: float) -> str:
         return (f"No other lap is within {level_s:.2f} s here: the next quickest is "
                 f"{qp.next_gap_s:.3f} s slower.")
     laps = ", ".join(lap_label(lap) for lap in qp.level_laps)
-    return (f"Level with lap {lap_label(qp.lap_id)} (within {level_s:.2f} s, the timing step), "
+    return (f"Level with lap {lap_label(qp.lap_id)} (within {level_s:.2f} s, {step_name(qp)}), "
             f"quickest first: {'lap' if len(qp.level_laps) == 1 else 'laps'} {laps}. Which of "
             "them comes out on top is down to timing noise. Click the row again to play the next.")
 
@@ -4178,7 +4190,8 @@ class QuickestPassTable(QWidget):
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                    item.setToolTip(QUICKEST_STAR_TIP.format(step=level_s, what=stretch_noun(qp)))
+                    item.setToolTip(QUICKEST_STAR_TIP.format(
+                        step=level_s, what=stretch_noun(qp), step_name=step_name(qp)))
                 if col in (1, 2) and qp.cid < 0 and qp.lap_id in as_measured:
                     # its quickest pass counts like any other (the SPLITS grid's best is the same
                     # lap) and says it carries the receiver drift the others had taken off

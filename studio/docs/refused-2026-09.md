@@ -2875,7 +2875,12 @@ that lap left out: a day without an off is the one where selection decides it.
 | Coaching's first row = the card's opportunity (38 of 38 cards) | 38 days | 0.061 s | +0.009 (± 0.004) | 15 % | 0 of 38 |
 | Biggest-loss moment (the off) | 40 days | 2.828 s | −0.037 (± 0.005) | −1 % | 0 of 40 |
 | Biggest-loss moment, the off left out | 40 days | 0.139 s | +0.008 (± 0.004) | 6 % | 0 of 40 |
-| Sector hover, against the sector best | 2,080 cells | 0.23 s (median 0.11) | +0.032 (± 0.001) | 14 % | 423 of 2,080 past 0.07 s; 0 past the sector step, 0.30 s |
+| Sector hover, against the sector best | 2,080 cells | 0.22 s (median 0.105) | +0.019 (± 0.001) | 9 % | 163 of 2,080 past 0.07 s; 8 past the sector step, 0.15 s |
+
+The sector row was re-run after the splits were de-drifted (#676), on the same days, at the step
+that applies now (`stats.SECTOR_LEVEL_S`, 0.15 s); the other rows came out the same to the digit.
+Measured on the splits as timed before the de-drift, the same cells read 0.23 s shown, +0.032
+(± 0.001), 14 %, 423 past 0.07 s and 0 past the 0.30 s sector step of the time.
 
 The ideal lap's gap, on the same days: +0.173 s, 37 % of the 0.467 s shown, past 0.07 s on 40 of
 40 days.
@@ -2921,7 +2926,7 @@ luck, not time to find, and no single recording can measure how much."
 **What stops the other four.**
 
 1. **The bias is under the step on every surface but the hover, and the hover's own step is
-   0.30 s.** On the corner surfaces the selection is +0.008 to +0.019 s. No Coaching row, first row
+   0.15 s** (0.30 s when this was first measured). On the corner surfaces the selection is +0.008 to +0.019 s. No Coaching row, first row
    or moment is overstated past the 0.07 s timing step. The headline is, on 2 of 38 days, by a sum
    of three corners each under it. That is the size the app already calls "level" (`is_level`),
    and an allowance would move a printed hundredth on some rows and nothing a driver acts on.
@@ -2933,13 +2938,14 @@ luck, not time to find, and no single recording can measure how much."
      true as timed. Subtracting an allowance would print a number no two cells on screen give.
    - The ideal lap is the exception, because it says "on the table" and is a sum over 15 minima:
      there the bias is a third of the figure, which is why its sample line now says so in words.
-3. **The hover's 423 cells past 0.07 s are mostly the split's own noise, not selection.**
-   - The error's sd is 0.050 s against a bias of 0.032 s. With the bias removed and the same
-     spread, about one cell in twelve would still pass 0.07 s (a normal approximation, not
-     measured).
-   - Splits are read at `stats.SECTOR_LEVEL_S`: 0.30 s when this was measured, which no cell's
-     error reached; 0.25 s since cool/sector-step-one-reference, which 2 of the 2,080 cells'
-     errors pass (the same days, re-summarized).
+3. **The hover's 163 cells past 0.07 s are mostly the split's own noise, not selection.**
+   - On the de-drifted splits the error's sd is 0.035 s against a bias of 0.019 s (before the
+     de-drift: 0.050 against 0.032). With the bias removed and the same spread, about one cell
+     in 46 would still pass 0.07 s (a normal approximation, not measured; one in twelve before).
+   - Splits are read at `stats.SECTOR_LEVEL_S`, 0.15 s since the de-drift (#676): 8 of the
+     2,080 cells' errors pass it. It was 0.30 s when this section was first measured, which no
+     cell's error reached, then 0.25 s (cool/sector-step-one-reference), which 2 passed; both
+     of those counts are on the splits as timed before the de-drift.
    - That step was re-measured with §26 (its re-measure paragraph), not as a luck question.
 4. **The ranking's own errors are not selection bias, and an allowance does not touch them.**
    - Coaching's named lead (with its ties) misses the truly biggest loss by more than 0.07 s on 6
@@ -2958,8 +2964,8 @@ ideal lap keeps its figures; its sample sentence gains the figure-free clause ab
 **What would be new evidence:**
 - a corner surface whose selection bias passes the timing step on more than one day in twenty at
   the reference noise (a longer session raises the quickest's luck slowly, as blom(n) does);
-- a re-measured sector step near 0.10 s (§26's clause), under which the hover's +0.032 s would be a
-  third of the step;
+- a re-measured sector step near 0.06 s, under which the hover's +0.019 s (on de-drifted splits)
+  would be a third of the step;
 - or a surface that starts calling these figures "on the table" or "available", as the ideal lap
   does;
 - for the ideal lap: a way to read a recording's own noise level and its piece count's effect, so

@@ -555,6 +555,12 @@ def test_two_and_four_lines_list_their_sectors_below_the_corners():
             assert len("A sector split" + sector_part) <= 350 and "wrong" not in sector_part, tip
             tip = q.table.item(8, 3).toolTip()
             assert "within 0.15 s" in tip and "timing noise" in tip, tip
+            # the legend gives the timing step as 0.07 s: a sector's 0.15 s is never called that
+            assert "(within 0.15 s, the step for sector splits)" in tip and \
+                "timing step" not in tip, tip
+            assert "(within 0.07 s, the timing step)" in q.table.item(0, 3).toolTip()
+            heads = [q.table.horizontalHeaderItem(c).toolTip() for c in (3, QUICKEST_STRIP_COL)]
+            assert all("the step for sector splits" in h for h in heads), heads
             # the group's rule above S1, and ▶ says "sector"
             assert q.table.item(7, 0).data(GROUP_ROW_ROLE) and not q.table.item(6, 0).data(
                 GROUP_ROW_ROLE)
@@ -1101,7 +1107,9 @@ def test_provisional_timing_withholds_a_sectors_star():
         s.quickest_sectors = lambda: QuickestPasses([lone, *real.passes[1:]], real.level_s, ())
         q.refresh()
         assert q.table.item(7, 1).text() == "13.00 ★"
-        assert "no other lap took this sector within 0.15 s" in q.table.item(7, 1).toolTip()
+        star = q.table.item(7, 1).toolTip()
+        assert star.startswith("★ Quickest by more than the step for sector splits: no other lap "
+                               "took this sector within 0.15 s"), star
         cls = type(s)
         saved = cls.timing_verified
         cls.timing_verified = property(lambda _self: False)
