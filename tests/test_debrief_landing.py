@@ -633,6 +633,72 @@ def test_a_personal_best_is_never_compared_with_the_other_way_round():
     print(f"ok other way round: a first this way round at {slow}, then a PB at {fmt_time(fast)}")
 
 
+def test_the_pb_card_ends_with_the_session_it_celebrated():
+    """cool/pb-card-ends-with-its-session, on the real window, jailed: the PB card lived on its own
+    6 s clock and was replaced only by the next card, so a recording opened inside those 6 s kept
+    "Level with your personal best — …" over a DIFFERENT session (a no-laps one too, on a synthetic
+    season). Now a load starting takes it down — before the next session's verdict, which is then
+    its own (here: the first open's debrief, this way round) — and so does a transient status-line
+    confirmation about the outgoing session; the session going (the welcome) takes the card too."""
+    import shiboken6
+    from PySide6.QtWidgets import QMessageBox
+
+    from studio.app import STATUS_MS, StudioWindow
+    from studio.overlays import PBToast
+
+    def cards(win):
+        return [t for t in win.findChildren(PBToast) if shiboken6.isValid(t) and t.isVisible()]
+
+    boxes = {k: getattr(QMessageBox, k) for k in ("critical", "warning", "information", "question")}
+    for k in boxes:
+        setattr(QMessageBox, k, staticmethod(lambda *a, **_kw: (_ for _ in ()).throw(
+            AssertionError(f"a modal opened: {a[1:3]}"))))
+    with tempfile.TemporaryDirectory(prefix="debrief_rec_") as folder, _fresh_app_support():
+        fwd, rev, _faster = _way_recordings(folder)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            _open(win, fwd)
+            track = win.session.track_name
+            # The card A raises (what a re-open level with the PB shows), and a confirmation
+            # about A on the status line.
+            win.library_ctl.show_pb_moment({"kind": "beat", "track": track, "best": 44.9,
+                                            "prior": 45.2, "improvement": 0.3})
+            _settle(0.3)
+            assert len(cards(win)) == 1, "the card for the first session never appeared"
+            win.statusBar().showMessage("lap card copied — paste it into a chat", STATUS_MS)
+            win._open_recordings([rev])               # B, at once: well inside the card's 6 s
+            assert not cards(win), "the first session's PB card is still up as the next loads"
+            assert win._pb_toast is None
+            assert win.statusBar().currentMessage() == "", win.statusBar().currentMessage()
+            done = {"v": False}
+            win.loadFinished.connect(lambda: done.__setitem__("v", True))
+            deadline = time.time() + 120
+            while not done["v"] and time.time() < deadline:
+                _APP.processEvents()
+                time.sleep(0.01)
+            assert done["v"], "the second recording did not load"
+            _settle(0.4)
+            assert not cards(win), [c.title_label.text() for c in cards(win)]
+            line = win.library_ctl.debrief_pb_line()
+            assert line.startswith(f"First session logged at {track} this way round"), line
+            assert win.view.is_debrief()
+            # The session going takes its card with it.
+            win.library_ctl.show_pb_moment({"kind": "first", "track": track, "best": 45.1})
+            _settle(0.3)
+            assert len(cards(win)) == 1
+            win._show_welcome()
+            assert not cards(win) and win._pb_toast is None
+        finally:
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+            for k, fn in boxes.items():
+                setattr(QMessageBox, k, fn)
+    print("ok PB card: gone when the next load starts, the next session's own verdict follows")
+
+
 def test_a_mixed_library_never_names_a_way_its_figures_do_not_have():
     """cool/pb-per-direction's review, on the real window, jailed: two forward rows written WITHOUT
     a direction (as the build before writes them: seeds 1 and 2), a forward row that knows it
