@@ -36,7 +36,6 @@ typical (CornerMatrix says why)."""
 
 from __future__ import annotations
 
-import datetime
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,7 +46,7 @@ import numpy as np
 from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print, lap_label
 from .consistency import sigma
 from .lap_race import ESTIMATED_CLOCK_TIE_S
-from .library import PB_PRECISION_S, REFERENCE_RECORDING, within_timing_precision
+from .library import PB_PRECISION_S, REFERENCE_RECORDING, clock_hhmm, within_timing_precision
 
 if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
     from .gmeter import GMeter
@@ -1434,21 +1433,6 @@ def path_distance_m(xs, ys, times=None, speed_ms=None) -> float:
     """`path_distance(...).metres` — the plain number, for callers that don't need the gate's
     rejection accounting."""
     return path_distance(xs, ys, times, speed_ms).metres
-
-
-def clock_hhmm(epoch_ms) -> str | None:
-    """LOCAL wall-clock "HH:MM" for an epoch-ms timestamp, or None for the no-wall-clock
-    sentinel (<= 0 — the same one session_date() checks). Local for the same reason as
-    session_date: the time of day the driver actually experienced.
-
-    THE SENTINEL IS NOT THE GPS5 ERA. This used to say "GPS5 reports 0"; measured over the ten
-    bundled clips, all nine GPS5-era ones stamp every fix from the payload's GPSU and render a
-    real time here (hero6 reads 19:28). Only a recording with no wall clock on its fixes at all
-    (`karma.mp4`, no GPS stream) reaches the sentinel."""
-    ms = int(epoch_ms)
-    if ms <= 0:
-        return None
-    return datetime.datetime.fromtimestamp(ms / 1000.0).strftime("%H:%M")
 
 
 def pace_stats(lap_times) -> PaceStats | None:

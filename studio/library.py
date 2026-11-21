@@ -613,6 +613,9 @@ def _start_ms(e: dict) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
 
 
+row_start_ms = _start_ms   # the public name the Library window's Date sort key reads
+
+
 def _other_outing(stored: dict, entry: dict) -> bool:
     """True only when `stored` and `entry`, under one fingerprint, are KNOWN to be two recordings."""
     a, b = _start_ms(stored), _start_ms(entry)
@@ -1371,6 +1374,47 @@ MISSING_FOOTAGE = "Footage not found"
 RECENT_LIMIT = 5
 
 
+def clock_hhmm(epoch_ms) -> str | None:
+    """LOCAL wall-clock "HH:MM" for an epoch-ms timestamp, or None for the no-wall-clock
+    sentinel (<= 0 — the same one session_date() checks). Local for the same reason as
+    session_date: the time of day the driver actually experienced. (It lives here, not in stats,
+    so the Library rows and the welcome screen print a start time without importing numpy.)
+
+    THE SENTINEL IS NOT THE GPS5 ERA. This used to say "GPS5 reports 0"; measured over the ten
+    bundled clips, all nine GPS5-era ones stamp every fix from the payload's GPSU and render a
+    real time here (hero6 reads 19:28). Only a recording with no wall clock on its fixes at all
+    (`karma.mp4`, no GPS stream) reaches the sentinel."""
+    ms = int(epoch_ms)
+    if ms <= 0:
+        return None
+    return datetime.datetime.fromtimestamp(ms / 1000.0).strftime("%H:%M")
+
+
+# A RACE DAY IS SEVERAL ROWS ON ONE DATE (practice, qualifying, heats, final), and the date alone
+# neither tells them apart nor orders them: four rows read "2026-11-15 · <track>" and stayed in
+# the order they were OPENED. Every row written since `start_ms` existed carries its first fix's
+# clock, so a row says its local start time after its date, and the lists sort on date THEN start.
+def when_text(entry: dict) -> str | None:
+    """A row's date as the Library and the welcome screen print it: ``"2026-11-15 16:00"`` — the
+    stored date, then the first fix's LOCAL start time (the clock `date` itself was read on). A
+    row with no start (a legacy row, no wall clock) prints its date alone; an undated row None."""
+    date = entry.get("date")
+    if not date:
+        return None
+    start = _start_ms(entry)
+    clock = clock_hhmm(start) if start is not None else None
+    return f"{date} {clock}" if clock else str(date)
+
+
+def recency_key(entry: dict) -> tuple:
+    """The sort key that puts a row where a newest-first list (``reverse=True``) wants it: by
+    date, then by start within the date; a row without a start sorts after the timed rows of its
+    day, and an undated row after every dated one. Ties keep their order (Python's sort is
+    stable), which is the index order."""
+    start = _start_ms(entry)
+    return (entry.get("date") or "", start is not None, start or 0)
+
+
 def entry_name(entry: dict) -> str:
     """The recording's FILENAME — its first chapter's basename, i.e. what the user sees in Finder.
     Falls back to the stored first-chapter stem when the entry recorded no paths."""
@@ -1427,20 +1471,21 @@ def track_text(entry: dict, both: set[str], *, missing: bool = False,
 
 
 def recent_entries(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
-    """The welcome screen's recent sessions: newest recording date first, undated rows last, at most
-    `limit` — ordered as the Library window orders them (its Date column, descending, ties kept in
-    index order), so the two screens agree. A no-laps row is left out — the Library quarantines
+    """The welcome screen's recent sessions: newest recording first — by date, then by start time
+    within a date (``recency_key``) — undated rows last, at most `limit`; ordered as the Library
+    window orders them (its Date column, descending, ties kept in index order), so the two screens
+    agree. A no-laps row is left out — the Library quarantines
     it and Open Recent skips it, so there is nothing for one click to open. A row whose footage is
     missing is KEPT: it is still the recording, and the welcome greys it as the Library does."""
     rows = [e for e in index.get("entries", []) if e.get("lap_count")]
-    rows.sort(key=lambda e: e.get("date") or "", reverse=True)   # stable: ties keep index order
+    rows.sort(key=recency_key, reverse=True)   # stable: ties keep index order
     return rows[:limit]
 
 
 def recent_rows(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
     """What the welcome screen lists for ``recent_entries``, in the Library's own words: the
-    reopen `paths`, the Track label with its `way` and `tag` (``track_text``), the stored `date`,
-    `best` (seconds, formatted by the view as the Library formats it) and valid-lap count `laps`,
+    reopen `paths`, the Track label with its `way` and `tag` (``track_text``), the `date` with
+    its start time (``when_text``, as the Library's Date cell prints it), `best` (seconds, formatted by the view as the Library formats it) and valid-lap count `laps`,
     the `trust` tag, the file's `name`, and `missing` — the Library's missing-footage sentence, or
     None while the footage is there. One ``os.path.exists`` per listed path, never per index row."""
     both = tracks_both_ways(index)
@@ -1453,7 +1498,7 @@ def recent_rows(index: dict, limit: int = RECENT_LIMIT) -> list[dict]:
             # window's Track cell keeps its "(file missing)".
             label, tag = label[:len(label) - len(tag)], ""
         out.append({"paths": list(e.get("paths") or []), "track": label, "way": way, "tag": tag,
-                    "date": e.get("date"), "best": e.get("best"), "laps": e["lap_count"],
+                    "date": when_text(e), "best": e.get("best"), "laps": e["lap_count"],
                     "trust": None if gone else trust_label(e), "name": entry_name(e),
                     "missing": missing_footage_text(e) if gone else None})
     return out

@@ -32,10 +32,13 @@ Covered:
 
 Run: python tests/test_library.py   (no pacer, no telemetry file)
 """
+import contextlib
+import datetime
 import json
 import os
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -91,6 +94,29 @@ from studio.library_dialog import (  # noqa: E402
 
 
 # ------------------------------------------------------------------ helpers
+@contextlib.contextmanager
+def _local_tz(name: str):
+    """Run the block with the process's LOCAL timezone set to `name` (and put it back): a row's
+    start time prints in local time, as its date was read, so a test pins the zone rather than
+    depend on the machine's (the golden's TZ-dependence lesson, tests/test_golden_synthetic.py)."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old
+        time.tzset()
+
+
+def _utc_at(y, mo, d, h, mi) -> int:
+    """Epoch ms of a UTC wall-clock instant — a row's `start_ms`."""
+    return int(datetime.datetime(y, mo, d, h, mi, tzinfo=datetime.UTC).timestamp() * 1000)
+
+
 def _entry(stem, *, track="Daytona MK", date="2024-05-01", laps=12,
            best=68.4, theo=67.9, paths=None,
            verified=True, degraded=False, dropout=False, ideal_version=IDEAL_VERSION):
@@ -652,8 +678,8 @@ def test_trust_label_reasons_and_priority():
 
 def test_recent_rows_are_the_newest_recordings_in_the_librarys_words():
     """The welcome screen's list (cool/welcome-screen): newest RECORDING date first (the index has
-    no "last opened"), a same-day tie kept in index order and undated rows last — the Library
-    window's own Date sort — at most RECENT_LIMIT, no no-laps row (nothing to open), a
+    no "last opened"), then the newest START within a date, an untimed row after its day's timed
+    ones and undated rows last — the Library window's own Date sort — at most RECENT_LIMIT, no no-laps row (nothing to open), a
     missing-footage row KEPT with the Library's missing sentence (said once: its Track label drops
     the dialog's "(file missing)"), and every other label the Library window's (`track_text`): the
     trust tag on an untrustworthy row, the way on a track driven both ways, the placeholder."""
@@ -664,21 +690,27 @@ def test_recent_rows_are_the_newest_recordings_in_the_librarys_words():
         rows = [_entry("GX010001", date="2026-01-01", paths=[os.path.join(d, "GX010001.MP4")]),
                 _entry("GX010002", date=None, paths=[here]),
                 _entry("GX010003", date="2026-05-01", paths=[here], verified=False),
-                {**_entry("GX010004", date="2026-05-01", paths=[here]), "start_ms": 2},
-                {**_entry("GX010005", date="2026-05-01", paths=[here]), "start_ms": 9},
+                {**_entry("GX010004", date="2026-05-01", paths=[here]),
+                 "start_ms": _utc_at(2026, 5, 1, 9, 5)},
+                {**_entry("GX010005", date="2026-05-01", paths=[here]),
+                 "start_ms": _utc_at(2026, 5, 1, 14, 30)},
                 _entry("GX010006", date="2026-12-01", laps=0, paths=[here]),
                 {**_entry("GX010007", date="2026-04-01", paths=[here], track=None)},
                 {**_entry("GX010008", date="2026-03-01", paths=[here]), "rotation": 1},
                 {**_entry("GX010009", date="2026-02-01", paths=[here]), "rotation": -1}]
         index = {"version": library.VERSION, "entries": rows}
-        got = library.recent_rows(index, limit=99)
+        with _local_tz("UTC"):
+            got = library.recent_rows(index, limit=99)
         assert len(got) == 8, [r["name"] for r in got]                      # the no-laps row is not offered
-        assert [r["date"] for r in got] == ["2026-05-01"] * 3 + [
-            "2026-04-01", "2026-03-01", "2026-02-01", "2026-01-01", None], got
+        assert [r["date"] for r in got] == ["2026-05-01 14:30", "2026-05-01 09:05", "2026-05-01",
+                                            "2026-04-01", "2026-03-01", "2026-02-01", "2026-01-01",
+                                            None], got
         stems = [e["stem"] for e in library.recent_entries(index, 99)]
-        assert stems[:3] == ["GX010003", "GX010004", "GX010005"], stems   # index order, start_ms or not
-        assert got[0]["track"] == "Daytona MK  · provisional" and got[0]["trust"] == "provisional"
-        assert got[1]["track"] == "Daytona MK" and got[2]["track"] == "Daytona MK"
+        # The later start first; the untimed row after its day's timed ones (it was FIRST in the
+        # index, and the date alone left a race day in the order it was opened).
+        assert stems[:3] == ["GX010005", "GX010004", "GX010003"], stems
+        assert got[2]["track"] == "Daytona MK  · provisional" and got[2]["trust"] == "provisional"
+        assert got[0]["track"] == "Daytona MK" and got[1]["track"] == "Daytona MK"
         assert got[3]["track"] == library.UNKNOWN_TRACK
         assert got[4]["track"] == "Daytona MK, anticlockwise" and got[4]["way"] == ", anticlockwise"
         assert got[5]["track"] == "Daytona MK, clockwise"
@@ -1927,6 +1959,56 @@ def test_dialog_quarantines_junk_row_and_does_not_select_it():
         assert sel is not None and sel.data(TRACK_ROLE) == "MK"
         assert dlg.open_btn.isEnabled()                     # the selected row is openable
         dlg.deleteLater()
+
+
+def test_a_race_day_reads_and_sorts_by_its_start_times():
+    """cool/race-day-rows: four recordings of one day read "2026-11-15" four times and kept the
+    order they were OPENED (the Date sort was on the date alone). Each row now says its LOCAL start
+    time after its date — read on the clock its date was read on, so the zone is pinned here and a
+    second zone moves the time — and the Date column sorts on date then start, an untimed row of
+    the day after its timed ones (descending) and before them ascending; typing the date still
+    finds the whole day, and typing a time the one row. Open Recent uses the same key and words."""
+    from studio.library_controller import LibraryController
+
+    day = "2026-11-15"
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        rows = [{**_entry("GX010101", date=day, paths=[real.name]),
+                 "start_ms": _utc_at(2026, 11, 15, 16, 0)},
+                {**_entry("GX010098", date=day, paths=[real.name]),
+                 "start_ms": _utc_at(2026, 11, 15, 10, 30)},
+                _entry("GX010097", date=day, paths=[real.name]),
+                {**_entry("GX010100", date=day, paths=[real.name]),
+                 "start_ms": _utc_at(2026, 11, 15, 14, 0)},
+                {**_entry("GX010096", date="2026-11-14", paths=[real.name]),
+                 "start_ms": _utc_at(2026, 11, 14, 18, 0)}]
+        idx = {"version": library.VERSION, "entries": rows}
+        with _local_tz("UTC"):
+            dlg = LibraryDialog(idx, _OpenSpy())
+            col = [dlg.table.item(r, _COL_DATE).text() for r in range(dlg.table.rowCount())]
+            assert col == ["2026-11-15 16:00", "2026-11-15 14:00", "2026-11-15 10:30",
+                           "2026-11-15", "2026-11-14 18:00"], col
+            dlg.table.sortItems(_COL_DATE, Qt.AscendingOrder)
+            col = [dlg.table.item(r, _COL_DATE).text() for r in range(dlg.table.rowCount())]
+            assert col == ["2026-11-14 18:00", "2026-11-15", "2026-11-15 10:30",
+                           "2026-11-15 14:00", "2026-11-15 16:00"], col
+            dlg.search.setText(day)
+            seen = [dlg.table.item(r, _COL_DATE).text() for r in range(dlg.table.rowCount())
+                    if not dlg.table.isRowHidden(r)]
+            assert len(seen) == 4 and all(t.startswith(day) for t in seen), seen
+            dlg.search.setText("14:00")
+            seen = [dlg.table.item(r, _COL_DATE).text() for r in range(dlg.table.rowCount())
+                    if not dlg.table.isRowHidden(r)]
+            assert seen == ["2026-11-15 14:00"], seen
+            dlg.deleteLater()
+            # Open Recent: the same order and the same words.
+            ctl = LibraryController.__new__(LibraryController)
+            assert [ctl._recent_label(e).rsplit("(", 1)[1] for e in
+                    sorted(rows, key=library.recency_key, reverse=True)][:2] == [
+                "2026-11-15 16:00)", "2026-11-15 14:00)"]
+        with _local_tz("America/New_York"):      # 16:00 UTC is 11:00 there (EST)
+            assert library.when_text(rows[0]) == "2026-11-15 11:00"
+        assert library.when_text(rows[2]) == day                      # no start: the date alone
+        assert library.when_text({"date": None, "start_ms": 5}) is None
 
 
 def test_dialog_autoselects_most_recent_usable_row():

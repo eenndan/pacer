@@ -338,12 +338,20 @@ class WelcomeView(QWidget):
         texts = [self._row_texts(r) for r in self.recent]
         date_w = max(fm.horizontalAdvance(t["date"]) for t in texts)
         laps_w = max(fm.horizontalAdvance(t["laps"]) for t in texts)
+        # THE START TIME WIDENS THE CARD, NOT AT THE TRACK'S EXPENSE. A row's date carries its
+        # start time ("2026-11-15 16:00", `library.when_text`: a race day is several rows on one
+        # date); the card is fixed-width, so the time's ~37 px would have come out of the track
+        # name's room and elided names that fit before. The card grows by exactly what the time
+        # adds to the date column instead, so the track keeps the room it had.
+        dates_only = max(fm.horizontalAdvance(t["date"].split(" ")[0]) for t in texts)
+        card_w = theme.WELCOME_CARD_W + (date_w - dates_only)
+        self.drop_zone.setMinimumWidth(card_w)
         # The time and the lap count share one TAIL, which a missing row's "Footage not found:
         # <file>" fills instead. CAPPED at TAIL_SHARE of the row: a file name is the user's and can
         # be any length, and sized to it the column once took every other row's track name (a
         # 41-character name left ", cloc" and "· pr"). Past the cap the FILE NAME is elided in the
         # middle — its GX number and extension stay — and the whole sentence is on the hover.
-        content = (theme.WELCOME_CARD_W - 2 * (theme.SPACE_3XL + theme.SPACE_XXS)
+        content = (card_w - 2 * (theme.SPACE_3XL + theme.SPACE_XXS)
                    - 2 * (theme.SPACE_M + theme.BORDER_PX))
         tail = max([fm.horizontalAdvance(t["best"]) + theme.SPACE_L + laps_w for t in texts]
                    + [min(fm.horizontalAdvance(t["missing"]), int(content * self.TAIL_SHARE))
