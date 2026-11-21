@@ -16,7 +16,7 @@ Four halves:
     time would have got wrong — the store is keyed by the chapter-invariant library fingerprint, so
     the two opens share one key while their global clocks differ by whole chapters.
   * THE HONESTY RULE: that every derived mark agrees EXACTLY with the surface that already reports
-    the same fact. A lap carries a dropout mark iff ``Session.lap_has_dropout`` is True for it; the
+    the same fact. Every span behind a ``Session.lap_has_dropout`` lap is marked, once; the
     excluded marks are ``Session.excluded_lap_ids`` and nothing else; and no degraded mark is drawn
     over a second the quality strip grades GOOD.
   * THE SURFACES (offscreen Qt): the scrub bar's band placing its ink where the slider's own travel

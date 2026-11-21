@@ -176,6 +176,11 @@ def test_the_share_is_judged_over_the_timed_laps():
     # A little rejected driving that would not have downgraded the drive is nothing to state.
     small = TimingQuality(_census=_census(lambda t: t < 5.0)).over_laps((30.0, 90.0))
     assert small.outside_laps() == "", small.outside_laps()
+    # The lap vote making the verdict low (most laps missing a fix at the line) does not make the
+    # 20 s any less true, and its words are about the line: the notice still states them (wave 22).
+    voted = q.with_lap_dropouts(11, 14)
+    assert voted.low_gps_quality and voted.line_dropouts == (11, 14), voted
+    assert voted.outside_laps() == q.outside_laps(), voted.outside_laps()
     print("test_the_share_is_judged_over_the_timed_laps OK")
 
 
