@@ -32,6 +32,7 @@ Pinned here:
 
 Run: python tests/test_pb_compare.py   (~25 s; the pixi env's ffmpeg writes the video trak)
 """
+import json
 import os
 import sys
 import tempfile
@@ -378,6 +379,139 @@ def test_the_journey_on_the_real_window():
             _APP.processEvents()
     print("ok journey: the debrief's button and the card each opened the compare on the two best "
           "laps (A = this best, B = the previous PB's lap), the export enabled; a moved file said so")
+
+
+def _library_driver(win, act):
+    """Run `act(dialog)` once File ▸ Library… is up inside its real exec(), polled from the loop."""
+    from PySide6.QtCore import QTimer
+
+    from studio.library_dialog import LibraryDialog
+    seen = {}
+
+    def tick():
+        dlg = _APP.activeModalWidget()
+        if not isinstance(dlg, LibraryDialog):
+            QTimer.singleShot(20, tick)
+            return
+        seen["dialog"] = dlg
+        act(dlg)
+    QTimer.singleShot(20, tick)
+    return seen
+
+
+def _pick(dlg, stem):
+    for r in range(dlg.table.rowCount()):
+        dlg.table.selectRow(r)
+        if (dlg._selected_entry() or {}).get("stem") == stem:
+            return
+    raise AssertionError(f"no Library row {stem}")
+
+
+def test_the_library_loads_a_row_as_the_reference():
+    """cool/library-reference, end to end on the real window: File ▸ Library… ▸ a row ▸ "Use as
+    reference" closes the Library and loads that recording through the window's one reference
+    loader; every surface names it by its day and best lap; a row the loader refuses (a direction
+    the row does not know, measured on load) gets the loader's notice and leaves no reference."""
+    from PySide6.QtWidgets import QMessageBox
+    from test_debrief_landing import _fresh_app_support, _open
+
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    from studio.session import REFERENCE_ID
+
+    shown = []
+    real_info = QMessageBox.information
+    QMessageBox.information = staticmethod(lambda *a, **_k: shown.append(a[1:3]))
+    with tempfile.TemporaryDirectory(prefix="lib_ref_") as folder, _fresh_app_support() as jail:
+        slow, fast = _recordings(folder)
+        rec = sg.generate(os.path.join(folder, "gen9003"), 11, md.DEMO_LAPS, chapters=1,
+                          origin=md.DEMO_ORIGIN, reverse=True)
+        os.makedirs(os.path.join(folder, "9003"))
+        rev = os.path.join(folder, "9003", "GX019003.MP4")
+        os.replace(rec.paths[0], rev)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            for path in (slow, rev, fast):
+                _open(win, path)
+            states = {}
+
+            def matrix_then_use(dlg):
+                for stem in ("GX019001", "GX019002", "GX019003"):
+                    _pick(dlg, stem)
+                    states[stem] = (dlg.reference_btn.isEnabled(), dlg.reference_btn.toolTip())
+                _pick(dlg, "GX019001")
+                dlg.reference_btn.click()
+
+            seen = _library_driver(win, matrix_then_use)
+            win.library_ctl.open_library()
+            assert not seen["dialog"].isVisible(), "the Library stayed open"
+            assert states["GX019001"][0], states
+            assert states["GX019002"] == (False, "Not available: this is the recording you "
+                                                 "already have open"), states
+            assert not states["GX019003"][0] and "driven the other way round" in \
+                states["GX019003"][1], states
+            assert _wait(lambda: win.session.has_reference()), shown
+            assert not shown, shown
+            s = win.session
+            ref = s.reference_session()
+            assert os.path.realpath(ref.video_path) == os.path.realpath(slow)
+            name = ref.reference_name()
+            assert name and name.endswith(f"· best lap {library_fmt(ref.lap_time(ref.best_lap_id()))}")
+            assert name.startswith(ref.session_date()), name
+            assert s.reference_label() == name
+            # Every surface that names the reference: the chip, the Δ chart's legend and axis
+            # hover, the Corners table's Δ hover, pane B's caption.
+            assert win._ref_chip.text() == f"▶ reference: {name}"
+            plots = win.view.plots
+            assert plots._curve_label(REFERENCE_ID, True) == f"ref {name}"
+            assert f"({name})" in plots._delta_axis_tip()
+            corners = win.view.corners_page.lap_view
+            assert corners._reference_label() == name
+            from studio.lap_table import CORNER_DELTA_COL
+            assert name in corners.table.horizontalHeaderItem(CORNER_DELTA_COL).toolTip()
+            caption = win.view.compare._cross_caption_b(ref, ref.best_lap_id())
+            assert caption.startswith(f"{name} · lap "), caption
+
+            # A row the Library cannot know is refused: the reversed recording's row written
+            # before rows stored their way round. The Library offers it; the loader measures the
+            # way round on load and refuses it with the notice every pick gets.
+            win._clear_reference()
+            path = os.path.join(jail, "library.json")
+            with open(path) as f:
+                index = json.load(f)
+            for e in index["entries"]:
+                if e.get("stem") == "GX019003":
+                    e.pop("rotation", None)
+            with open(path, "w") as f:
+                json.dump(index, f)
+
+            def use_rev(dlg):
+                _pick(dlg, "GX019003")
+                assert dlg.reference_btn.isEnabled(), dlg.reference_btn.toolTip()
+                dlg.reference_btn.click()
+
+            _library_driver(win, use_rev)
+            win.library_ctl.open_library()
+            assert _wait(lambda: bool(shown)), "no notice"
+            title, text = shown[0]
+            assert title.endswith("reference not loaded"), title
+            assert "driven the other way round" in text, text
+            assert not win.session.has_reference()
+        finally:
+            QMessageBox.information = real_info
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+    print("ok library reference: a row loaded as the reference, named by its day on every "
+          "surface; a refused row left none")
+
+
+def library_fmt(t):
+    from studio._signal import fmt_time
+    return fmt_time(t)
 
 
 if __name__ == "__main__":

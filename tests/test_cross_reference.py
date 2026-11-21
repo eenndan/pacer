@@ -1259,6 +1259,65 @@ def test_a_reference_cut_five_metres_later_is_matched_on_track():
           f"{worst_rise * 1e3:.2f} ms, worst table cell {worst_table * 1e3:.2f} ms")
 
 
+# ----------------------------------------------------- the Library's reasons and the reference's name
+def test_the_librarys_reasons_are_the_loaders_own_words():
+    """cool/library-reference: the Library greys "Use as reference for the open session" with a
+    one-line reason, and a picked file gets the loader's refusal. The row's reason is a phrase OUT
+    of the loader's sentence for each case both can see, so the two never disagree."""
+    from studio import library
+
+    primary, ref = _comparable_pair()
+    give_paths(primary, "/recordings/GX010065.MP4")
+    give_paths(ref, "/recordings/GX010065.MP4")
+    assert library.REFERENCE_SAME.replace("this is ", "") in primary.set_reference_session(ref)
+
+    primary, ref = _comparable_pair()
+    ref.track_name = "Track B"
+    assert library.REFERENCE_OTHER_TRACK in primary.set_reference_session(ref)
+
+    primary, ref = _comparable_pair()
+    primary._known_lap_rotation, ref._known_lap_rotation = (lambda: -1), (lambda: 1)
+    assert library.REFERENCE_OTHER_WAY in primary.set_reference_session(ref)
+
+    primary = make_session({1: odometer(100, 0.5, 0.0, 800.0)}, best=1, valid=[1])
+    empty = make_session({}, best=None, valid=[])
+    assert library.REFERENCE_NO_LAPS in primary.set_reference_session(empty)
+    assert not primary.has_reference()
+
+
+def test_a_reference_is_named_by_its_day_and_its_best_lap():
+    """The chip, the chart legends, the Δ hovers and pane B's caption all read
+    `reference_label()`: the reference's OWN date, first-fix clock and best lap — the Library row's
+    words — and the file's label only when the recording has no date."""
+    import datetime
+
+    from studio._signal import fmt_time
+    from studio.plots_view import PlotsView
+
+    primary, ref = _comparable_pair()
+    first = int(datetime.datetime(2026, 9, 13, 17, 0, 12).timestamp() * 1000)
+    set_point_stream(ref, first_ms=first, last_ms=first + 600_000, n=6001)
+    lap = float(ref._lap_arrays(4)[2][-1])        # the adopted lap's own elapsed time
+    ref.lap_time = lambda lid: lap
+    assert primary.set_reference_session(ref, source_label="recording 7103 · 2 chapters") is None
+    want = f"2026-09-13 17:00 · best lap {fmt_time(lap)}"
+    assert primary.reference_label() == want, primary.reference_label()
+    assert ref.reference_name() == want
+    # The legend does not print the best lap twice.
+    assert fmt_time(primary.reference_lap_time()) == fmt_time(lap)
+    assert PlotsView._curve_label(SimpleNamespace(session=primary), REFERENCE_ID, True) == (
+        f"ref {want}")
+
+    # Undated (no wall clock): the file's own label, as before.
+    primary, ref = _comparable_pair()
+    assert ref.reference_name() is None
+    assert primary.set_reference_session(ref, source_label="recording 7103 · 2 chapters") is None
+    assert primary.reference_label() == "recording 7103 · 2 chapters"
+    t = primary.reference_lap_time()
+    assert PlotsView._curve_label(SimpleNamespace(session=primary), REFERENCE_ID, True) == (
+        f"ref recording 7103 · 2 chapters {fmt_time(t)} · best")
+
+
 if __name__ == "__main__":
     for fn in list(globals().values()):
         if callable(fn) and getattr(fn, "__name__", "").startswith("test_"):

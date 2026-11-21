@@ -1938,6 +1938,10 @@ class PlotsView(QWidget):
         if lid == REFERENCE_ID:
             t = self.session.reference_lap_time() or 0.0
             tag = self.session.reference_label() or "reference"
+            # A reference named by its day already says its best lap (Session.reference_name):
+            # "ref 2026-11-15 16:00 · best lap 0:46.808", not that time twice.
+            if tag.endswith(f"best lap {fmt_time(t)}"):
+                return f"ref {tag}"
             return f"ref {tag} {fmt_time(t)} · best"
         if not getattr(self, "_name_best", True) and lid == self.session.best_lap_id():
             # A document on provisional timing (set_document_still): the time, not the number.
