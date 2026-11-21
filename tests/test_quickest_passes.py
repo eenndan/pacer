@@ -2471,6 +2471,22 @@ def test_a_coaching_compare_counts_from_the_corner_and_jump_says_how_its_pass_st
             f"; its C1 pass ({v1.pass_s:.2f}) is quicker than your typical pass (lap 4, ")
         assert win._jump_pass_clause(3, 1, "C1") == (
             f"; its C1 pass ({s.pass_vs_typical(3, 1).pass_s:.2f}) is your typical pass there")
+        # Level only through the quickest pass's luck (the demo's C3): the typical pass's lap and
+        # time sit beside "your typical pass", not after the luck clause (0.21.0 QA: "(lap 1, 2.40)"
+        # trailed it), and the whole Jump line fits the 1440 px status bar it is read on.
+        v3 = s.pass_vs_typical(12, 3)
+        assert v3.level and v3.luck_s > 0 and not stats.is_level(v3.gap_s, v3.level_s)
+        bound = stats.with_luck(v3.level_s, v3.luck_s)
+        assert win._jump_pass_clause(12, 3, "C3") == (
+            f"; its C3 pass ({v3.pass_s:.2f}) is level with your typical pass (lap "
+            f"{v3.typical_lap_id + 1}, {v3.typical_pass_s:.2f}) within {bound:.3f} s, the step "
+            f"plus luck for the quickest of {v3.n} passes")
+        win._jump_to_opportunity(3, 0.0)
+        _settle()
+        msg = win.statusBar().currentMessage()
+        assert msg.endswith(win._jump_pass_clause(12, 3, "C3")), msg
+        from PySide6.QtGui import QFontMetrics
+        assert QFontMetrics(win.statusBar().font()).horizontalAdvance(msg) < 1200, msg
     finally:
         _close(win)
 

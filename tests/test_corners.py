@@ -808,6 +808,10 @@ def test_corner_delta_ref_is_neutral_under_the_reference_lap_corner_step():
     assert table.table.horizontalHeaderItem(2).text() == "Δref"
     assert f"A gap under {step:.2f} s is not coloured" in tip and "another recording" in tip, tip
     assert stats.STEP_COVERS_REFERENCE in tip, tip
+    # One bound, said once (0.21.0 QA): the step's own "reads up to that far apart" gave the hover
+    # two "up to" figures for one difference.
+    assert tip.count("up to") == stats.STEP_COVERS_REFERENCE.count("up to"), tip
+    assert "that far apart" not in tip, tip
     # Against another recording's lap and against this recording's (no reference, or a reference
     # that is its own): one step, one colouring.
     for session in (other, _StubSession(cs_n, by_lap, bests),
