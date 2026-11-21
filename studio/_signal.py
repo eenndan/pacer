@@ -31,6 +31,28 @@ if TYPE_CHECKING:
 # --- GPS denoising (originally derived from the upstream interpolation/noise notebooks) ---
 SMOOTH_WINDOW = 13  # boxcar width in samples; 1 disables smoothing
 SMOOTH_GAP_S = 1.0  # s — a jump larger than ~10x the 10 Hz period starts a new smoothing run
+# THE BOXCAR COUNTS FIXES, NOT SECONDS, and a lap is timed where the smoothed trace crosses the line.
+# Take one fix out near the line (the gate rejects a 2D fix, the cleaner a teleport: a 0.2 s step,
+# far under SMOOTH_GAP_S and the 0.35 s dropout ⚠) and every window that spans the hole reaches one
+# fix further on one side: its time centre moves up to 6/13 of a period (~46 ms) off its own fix's.
+# Within reach of a run's EDGE (a gap over SMOOTH_GAP_S) the window is all one side, up to 0.3 s off.
+# The crossing moves with them. MEASURED through the real loader on the synthetic GoPro
+# (tests/test_synth_gopro.py, 14 laps): 5 % of fixes rejected at random moved 13 laps by up to 49 ms
+# off their clean-trace time, as often FAST as slow; a 1.5 s gap ending 0.5 s before a crossing moved
+# the next lap +125 ms. Neither raised the ⚠. So a lap whose start or finish crossing has a missing
+# fix within SMOOTH_REACH_FIXES carries the GPS-dropout ⚠ and leaves the bests
+# (`Session.lap_dropout_spans`); every other lap is timed exactly as on the clean trace. The price,
+# over a 10-lap synthetic matrix (5 seeds): 1 / 2 / 5 / 10 % of fixes rejected at random puts the ⚠
+# on 18 / 42 / 80 / 100 % of laps. Re-centring the window in time instead keeps those laps within
+# 6 ms of their clean time at native noise, and was measured too: it also moves every position
+# beside ANY missing fix in a trace — 25,665 leaves of the synthetic golden, which carries two
+# cleaner-removed teleports — so it is not what this does.
+# A step has a fix missing inside it when it is nearer two median fix periods than one: halfway, so
+# a step's clock jitter never reads as a hole and one missing fix always does.
+MISSING_FIX_PERIODS = 1.5
+# How far a crossing feels a missing fix: it is interpolated between two fixes, and each is the mean
+# of SMOOTH_WINDOW // 2 fixes either side of it — so a hole up to one more period away is inside.
+SMOOTH_REACH_FIXES = SMOOTH_WINDOW // 2 + 1
 
 # --- GPS quality gating (uses the GPS9 DOP / fix fields exposed by the C++ core) ---
 MIN_FIX = 3  # GPS9 fix: 0=none, 2=2D, 3=3D. Require a 3D lock when the field is present.

@@ -766,10 +766,10 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
     `Session.quality_timeline`: under ~10 s it should cross `media_clock.without_gps_lag()` first,
     never `media_time`.
 
-      * `dropouts` — ``(lap_id, t0, t1)`` per interior GPS gap, straight from the very
-        `gapfill.find_gaps` call behind `Session.lap_has_dropout`. Passed IN rather than re-derived
-        here so the mark set and the lap table's dropout flag cannot be two different answers: a
-        lap carries a dropout mark exactly when `lap_has_dropout` is True for it.
+      * `dropouts` — ``(lap_id, t0, t1)`` per GPS dropout span, straight from the very
+        `Session.lap_dropout_spans` call behind `Session.lap_has_dropout`. Passed IN rather than
+        re-derived here so the mark set and the lap table's dropout flag cannot be two different
+        answers: a lap carries a dropout mark exactly when `lap_has_dropout` is True for it.
       * `excluded` — ``(lap_id, t0, t1[, why])`` per lap in `Session.excluded_lap_ids`, over that
         lap's own window, with the reason in words when known. Same rule: the strip that says a lap
         was left out and the mark that says so are the same list, and give the same reason.

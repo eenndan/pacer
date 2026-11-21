@@ -365,6 +365,37 @@ def test_a_lap_carries_a_dropout_mark_exactly_when_the_app_says_it_has_one():
     print("test_a_lap_carries_a_dropout_mark_exactly_when_the_app_says_it_has_one OK")
 
 
+def test_a_missing_fix_beside_the_line_is_a_dropout_and_a_mark():
+    """The same honesty rule for the OTHER way a lap gets the dropout ⚠: one fix missing within the
+    smoother's reach of its start crossing (`_signal.SMOOTH_REACH_FIXES`). The step it leaves is
+    0.2 s — no interior gap, nothing `gapfill.find_gaps` sees — yet it moves where the smoothed trace
+    crosses the line. The lap is flagged, its mark covers that step, and the lap whose finish is
+    nowhere near it is not; the same fix one reach further away flags nothing."""
+    from test_session_services import _synthetic_session
+
+    from studio._signal import SMOOTH_REACH_FIXES
+
+    def holed_session(after_start_s):
+        s = _synthetic_session()
+        start = float(s._lap_point_times(1)[0])
+        grid = np.arange(99.0, start + 120.0, 0.1)            # a 10 Hz trace of kept fixes
+        s._track_times_cache = np.delete(grid, int(np.argmin(np.abs(grid - (start + after_start_s)))))
+        s._quality_timeline = data_quality.empty_timeline()
+        s._excluded_cache = []
+        return s
+
+    s = holed_session(0.3)
+    assert not gapfill.find_gaps(s._lap_point_times(1)), "the fixture grew an interior gap"
+    auto, _ = s.auto_marks()
+    marked = {m["lap"] for m in auto if m["type"] == marks.TYPE_DROPOUT}
+    assert marked == s.dropout_lap_ids() == {1}, (marked, s.dropout_lap_ids())
+    (t0, t1), = s.lap_dropout_spans(1)
+    assert 0.15 < t1 - t0 < 0.25, (t0, t1)                  # one missing fix: a 0.2 s step
+    far = holed_session(0.3 + SMOOTH_REACH_FIXES * 0.1)
+    assert far.dropout_lap_ids() == set(), far.dropout_lap_ids()
+    print("test_a_missing_fix_beside_the_line_is_a_dropout_and_a_mark OK")
+
+
 def test_the_excluded_marks_are_the_excluded_laps_and_nothing_else():
     from test_session_services import _synthetic_session
 
