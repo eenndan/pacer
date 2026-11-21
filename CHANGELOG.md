@@ -6,6 +6,51 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-21
+
+A minor release: 9 pull requests, #659, #661 and #663 to #670. Its theme: every "level" in the app
+is read at one reference, the cleanest recording measured, and says what that covers; and the
+quickest of many passes is allowed its share of luck.
+
+### Highlights
+
+- **The Library agrees with the debrief.** A best lap within 0.07 s of your PB reads "level with
+  your PB", not a new PB; the chart is titled "Best lap by session" and rings the PBs (#664, #666)
+- **Corner gaps inside the timing step stay neutral.** Corners ▸ Lap N no longer paints a Δbest or
+  Δref under 0.07 s green or red; the figure is still printed (#665)
+- **The first export click opens at once.** File ▸ Export overlay video… no longer freezes the
+  window for about half a second the first time; the hint says while it measures the encoder (#663)
+- **Opening a session skips work it never uses.** A session without long GPS gaps no longer spends
+  ~0.2 s fitting a reference line for its map; one with a gap draws as before (#659)
+- **One reference for every step, said where you read "level".** Each step is measured at the
+  cleanest recording's noise; the hover says how far a noisier recording can differ (#669, #667)
+- **Stars and typical-pass offers allow for luck.** The quickest of 14 passes reads about 0.02 s
+  quick by chance alone, so a ★ or an offer must clear the step plus that, and says so (#670)
+
+### Changed
+
+- Quickest passes: a ★ and "Compare with my typical pass" on a quickest row now also allow for luck:
+  the quickest of 14 passes reads about 0.02 s quick by chance alone, and the hover says so. (#670)
+- The hover on "level" (Corners Δ header, Quickest passes, a focus line) says how far that figure
+  can differ from GPS noise alone, inside 0.07 s on the cleanest recording, more on noisier ones.
+  (#669)
+
+### Fixed
+
+- Focus list: a corner level with its baseline day (under 0.07 s) prints both times with digits
+  enough that their printed gap never reaches the 0.07 s it is said to be under. (#667)
+- The Library's chart is titled "Best lap by session", which is what it draws (it said "PB
+  progression" over slower days too); the sessions that set a PB are ringed. (#666)
+- Corners ▸ Lap N: a Δbest or Δref within timing precision (under 0.07 s) is no longer painted green
+  or red; the figure stays, in the neutral colour, as the Laps table and the corner cards read it.
+  (#665)
+- The Library's summary line no longer counts a best lap within timing precision of your PB as a new
+  PB: it reads "level with your PB", as the debrief does for the same session. (#664)
+- The first Export overlay video… of a session opens at once instead of freezing the window about
+  half a second: the hint says it is measuring the encoder until it knows which one renders. (#663)
+- Opening a session without long GPS gaps no longer spends ~0.2 s fitting a reference line it never
+  uses (the demo has none); a session with a gap draws its map exactly as before. (#659)
+
 ## [0.20.1] — 2026-11-20
 
 A patch release: 1 pull request, #660. A recording opened while an export was starting ffmpeg could
@@ -2629,7 +2674,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/eenndan/pacer/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/eenndan/pacer/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/eenndan/pacer/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/eenndan/pacer/compare/v0.18.0...v0.19.0
