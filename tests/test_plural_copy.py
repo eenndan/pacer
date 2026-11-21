@@ -287,6 +287,8 @@ ALLOWED = {
         "inside `if offerable:` — one more than a non-empty list",
     ("app", "StudioWindow._session_notice", "subset[1]", "chapters — File"):
         "`_chapter_subset` answers only for a STRICT subset of a recording's chapters",
+    ("chapters", "missing_notice", "_files(missing)", "are not in"):
+        "inside `if lead and gaps:` — at least one leading and one gap chapter, two files or more",
     ("central_view", "", "laps", "clean laps across"):
         "_IDEAL_CHIP_SAMPLE is filled only for a STITCHED ideal: two donor laps or more",
     ("coaching", "brake_direction_line", "d.n_laps", "laps)"):

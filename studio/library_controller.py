@@ -268,8 +268,8 @@ class LibraryController:
         suppressing on mere presence would swallow exactly that).
 
         PART OF A RECORDING DECIDES NOTHING (QA NEW-1). A load that is a strict subset of its
-        recording's chapters on disk, or whose folder lacks a chapter before its last one
-        (`chapters.part_of_recording`), returns no moment, sets no standing
+        recording's chapters on disk, or whose folder lacks a chapter between two it holds
+        (`chapters.part_of_recording`; missing FIRST chapters alone are whole for this), returns no moment, sets no standing
         and is never a first open: its best lap and ranked corners are a sample of the outing. On
         the owner's SD_19_09, chapter 1 announced "0:46.862, 0.05 s faster" for a true 0:46.808,
         0.10 s faster, and a focus list without the session's biggest loss. For a recording the

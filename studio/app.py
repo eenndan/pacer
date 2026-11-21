@@ -1618,8 +1618,8 @@ class StudioWindow(QMainWindow):
             is the reason a chapter can have no laps or an unfamiliar best;
           * a MISSING CHAPTER — one that is not in the folder although a later one is
             (`chapters.missing_chapters`): a recording that starts at chapter 2 used to open as the
-            whole outing, and one with a gap timed a lap across it, both in silence. It decides no
-            verdict either (`chapters.part_of_recording`);
+            whole outing, and one with a gap timed a lap across it, both in silence. Only a gap
+            decides no verdict (`chapters.part_of_recording`): a truncated start is timed right;
           * an UNREADABLE TRACK DATABASE — tracks.json exists and this build cannot read a circuit
             out of it, so no track auto-detects and every recording opens as "unknown track" with
             no way to tell that from a genuinely new circuit (QA D2-16);
@@ -1669,17 +1669,20 @@ class StudioWindow(QMainWindow):
         subset = self._chapter_subset()
         chapter_notice = (f"{subset[0]} of {subset[1]} chapters — File ▸ Load full recording to "
                           "analyse the whole recording") if subset else None
+        # A chapter that is not in the folder at all: where the recording starts, or that it jumps
+        # across a gap. No menu item can fetch it, so this is only said, never offered. A GAP holds
+        # the verdict (a lap is timed across it), and only that chapter back in the folder ends the
+        # wait, so its clause says so and the subset clause promises nothing: Load full recording
+        # would still leave the gap. Missing FIRST chapters alone hold nothing back.
+        missing = chapters.missing_chapters(getattr(self, "_paths", None) or [])
+        missing_notice = chapters.missing_notice(missing)
+        gap_wait = chapters.gap_wait(missing)
+        if missing_notice and gap_wait and self.library_ctl.waiting_for_whole:
+            missing_notice += gap_wait
         # A partial FIRST open decides nothing (LibraryController.update_library), so this is the
         # one place that says the verdict is still to come — and what brings it.
-        if chapter_notice:
+        if chapter_notice and not gap_wait:
             chapter_notice += verdict.whole_wait
-        # A chapter that is not in the folder at all: where the recording starts, or that it jumps
-        # across a gap. No menu item can fetch it, so this is only said, never offered; and when no
-        # chain is on offer either, this clause carries what the verdict waits for.
-        missing_notice = chapters.missing_notice(
-            chapters.missing_chapters(getattr(self, "_paths", None) or []))
-        if missing_notice and not chapter_notice and self.library_ctl.waiting_for_whole:
-            missing_notice += "; your PB and focus list wait for the whole recording"
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
         # The two writes that used to fail into a print (§7.5). The library flag is set by whichever
