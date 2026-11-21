@@ -538,6 +538,8 @@ class Session:
           * the reference must be the SAME detected track as this session (`track_name`); a
             different track would make the normalized-distance overlay meaningless;
           * the reference must have a valid best lap with a real arc-length curve;
+          * its laps must not be KNOWN to run the other way round from this session's
+            (`_direction_refusal`) — the reversed layout shares the name and the length;
           * that lap must be the same LENGTH as a lap here (see `_lap_length_refusal`) — the
             same track segmented differently is not a comparable lap.
 
@@ -604,6 +606,12 @@ class Session:
         dist, speed_kmh, elapsed = ref._lap_arrays(ref_best)
         if len(dist) < 2 or float(dist[-1]) <= 0:
             return "reference best lap is degenerate; keeping the local best lap"
+        # Way-round guard: the same circuit driven the OTHER WAY ROUND passes both the track gate
+        # (same name, same place) and the lap-length band below (same tarmac, same length to the
+        # metre), and every Δ is then measured between different corners — see _direction_refusal.
+        reason = self._direction_refusal(ref)
+        if reason is not None:
+            return reason
         # Lap-comparability guard: the same TRACK is not the same LAP. The track gate above only
         # proves both recordings are the same circuit; two recordings segmented at DIFFERENT
         # start lines still cut that circuit into laps of different lengths, and the
@@ -810,6 +818,40 @@ class Session:
                     "these don't look like the same track (different location); "
                     "keeping the local best lap")
         return True, True, None  # same place, unknown name -> admit but flag UNVERIFIED
+
+    def _known_lap_rotation(self) -> int:
+        """`_lap_rotation`, or 0 (unknown) when this session's corners cannot be read at all — a
+        bare test double, a stream the corner model trips on. Never raises: the way-round guard is
+        a refusal, and a reading it cannot take must not turn into a crash on the reference path."""
+        try:
+            return int(self._lap_rotation())
+        except Exception:  # noqa: BLE001 — an unreadable direction is an unknown one
+            return 0
+
+    def _direction_refusal(self, ref: Session) -> str | None:
+        """Refuse a reference KNOWN to run the other way round from this session; None to admit.
+
+        A kart track's usual other layout is its own tarmac driven backwards: the same registry
+        name, the same footprint, the same lap length — so neither `_track_admits_reference` nor
+        `_lap_length_refusal` can see it, and on the synthetic season (the demo circuit, then the
+        same circuit reversed) the reversed recording was adopted silently and painted per-corner
+        Δref of +0.43 / +0.95 / −0.32 / −0.41 s between corners that are not the same corner.
+        Which way round the laps run is `_lap_rotation` — the definition the PB, the Library and
+        the focus list already keep directions apart by (`library.other_way`, `focus.layout_check`).
+
+        UNKNOWN ON EITHER SIDE ADMITS, exactly as before this guard: a rotation of 0 means the
+        corners do not add up to a direction (no best lap, too little turning, a figure of eight)
+        and is not evidence of the other way round. Measured over the synthetic generators (41
+        sessions: 1-14 laps, plain / reversed / mirrored / both, the disc9 season), the only 0 was
+        a pit-lane recording with no valid lap — refused anyway, as having none."""
+        mine = self._known_lap_rotation()
+        theirs = ref._known_lap_rotation()
+        if mine == 0 or theirs == 0 or mine == theirs:
+            return None
+        words = library.ROTATION_WORDS  # the Library rows' own spelling of a direction
+        return (f"that recording was driven the other way round ({words[theirs]}; this session "
+                f"runs {words[mine]}), so its corners don't line up with this session's; keeping "
+                "the local best lap")
 
     def _median_valid_lap_distance(self) -> float | None:
         """Median odometer distance (m) over this session's VALID laps — "how long a lap runs
