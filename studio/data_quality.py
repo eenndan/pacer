@@ -707,8 +707,8 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 # coaching. The two nearest codes are [x] (not available) and [z] (not applicable) and the lap is
 # NEITHER: it was measured, its time exists, the app shows it in the strip. It is simply not IN
 # the statistics. There is no standard symbol for "measured, shown, and deliberately not counted",
-# so ⊘ and its sentence stay, and the exports state the count in words (they never wrote an
-# excluded lap as a row in the first place). Naming this is the point of the table above: the
+# so ⊘ and its sentence stay, and the exports state the count and each lap's reason in words
+# (laps.csv in a trailer row, never a lap row; the report as a muted row). Naming this is the point of the table above: the
 # standard covers four of pacer's five quality conditions, and forcing the fifth would have made
 # the vocabulary less true, not more standard.
 #
@@ -969,6 +969,18 @@ def not_counted_line(session, lap_id) -> str:
     export dialogs' lap line), "" for any other: `WARN_REASON`'s words, then `NOT_COUNTED`."""
     kind = lap_warning_kinds(session).get(lap_id) if lap_id is not None else None
     return "" if kind is None else f"⚠ {WARN_REASON[kind]} — {NOT_COUNTED}"
+
+
+def laps_by_kind(session) -> dict[str, list[int]]:
+    """``{kind: [lap_id, …]}`` (sorted, every kind present, maybe empty) — the ⚠ set PARTITIONED by
+    each lap's ONE reported kind (`lap_warning_kinds`). Every count of ⚠ laps by reason reads this,
+    never `dropout_lap_ids`, so the parts add up to the ⚠ total: a lap timed across a missing
+    chapter whose join also reads as a GPS gap is in `dropout_lap_ids` as well, and was counted
+    twice ("2 with a GPS dropout · … · 1 across a missing chapter" over 3 ⚠ laps, DECISIONS §27)."""
+    out: dict[str, list[int]] = {kind: [] for kind in WARN_REASON}
+    for i, kind in sorted(lap_warning_kinds(session).items()):
+        out[kind].append(i)
+    return out
 
 
 def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:

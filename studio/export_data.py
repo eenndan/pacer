@@ -65,9 +65,9 @@ OFF_LINE_FLAG = "off-line"
 # ...and a lap timed across a missing chapter (`Session.chapter_gap_notes`): its time is short by
 # the chapter that is not in the folder. Wins over the other two, as its ⚠ sentence does.
 GAP_FLAG = "chapter-gap"
-#: Each `flag` value as the ⚠ kind it names (`data_quality.WARN_REASON` words it), in key order.
-FLAG_KIND = {DROPOUT_FLAG: data_quality.WARN_DROPOUT, OFF_LINE_FLAG: data_quality.WARN_OFF_LINE,
-             GAP_FLAG: data_quality.WARN_CHAPTER_GAP}
+#: `data_quality.lap_warning_kinds` kind → its `flag` cell (also the report key's order).
+_KIND_FLAG = {data_quality.WARN_DROPOUT: DROPOUT_FLAG, data_quality.WARN_OFF_LINE: OFF_LINE_FLAG,
+              data_quality.WARN_CHAPTER_GAP: GAP_FLAG}
 
 # laps.csv's per-lap distance column. It is the lap odometer, which reads short of the distance
 # driven (`stats.ODOMETER_NOTE`), so the file's trailer carries that note under this label, the
@@ -103,6 +103,30 @@ INTERPOLATED_NOTE = (
 # app's live surfaces call Δideal.
 SUMMARY_MARKER = "summary"
 SUMMARY_ROWS = (("Theoretical best", "theoretical_best"), ("Best rolling", "best_rolling_lap"))
+#: An EXCLUDED lap's trailer label ("summary: excluded lap 7") and the kind its note opens with:
+#: `excluded-` + the `_signal.EXCLUDED_*` reason ("excluded-stopped", "excluded-band",
+#: "excluded-open"), the lowercase-hyphen family of the `flag` column's words.
+EXCLUDED_LABEL = "excluded lap"
+EXCLUDED_KIND_PREFIX = "excluded-"
+
+
+def excluded_trailer(session) -> list[tuple[str, str, str]]:
+    """``(lap label, time_s, note)`` per EXCLUDED lap (⊘, `Session.excluded_lap_rows`), in lap
+    order — laps.csv's trailer rows for the laps its lap rows leave out. The lap rows stay one per
+    VALID lap (a reader summing `time_s` must not sum a stopped lap), so the excluded ones are
+    named here, the way the ideal lap's sample is: before this, `redflag_stop` exported laps 1-6
+    then 8-14 and nothing said lap 7 existed. The note is the kind, the odometer distance and the
+    ⊘ strip's own reason (`_signal.exclusion_detail`, ASCII): "excluded-stopped: 978 m, the kart
+    stopped during it". getattr-guarded: a double with no excluded laps writes nothing."""
+    rows = getattr(session, "excluded_lap_rows", list)() or []
+    reasons = getattr(session, "excluded_lap_reasons", dict)() or {}
+    out = []
+    for r in sorted(rows, key=lambda r: r["idx"]):
+        kind = f"{EXCLUDED_KIND_PREFIX}{reasons.get(r['idx'], 'unknown')}"
+        why = r.get("why")
+        note = f"{kind}: {_DISPLAY.dist(r['dist'])} m" + (f", {why}" if why else "")
+        out.append((lap_label(r["idx"]), _f3(r["time"]), note))
+    return out
 
 
 class SummaryRow(NamedTuple):
@@ -284,8 +308,8 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
     n_splits = n_sect + 1 if n_sect else 0  # N lines -> N+1 sub-sectors; 0 lines -> none
     corner_list = session.corners.corner_list()
     dropout_ids = session.dropout_lap_ids()
-    warned = data_quality.lap_warnings(session)   # the ⚠ set: dropouts (None), off-line laps
-    gap = data_quality.gap_lap_ids(session)       # ...and the laps timed across a missing chapter
+    # The ⚠ set, each lap under its ONE kind (the report and the strip count the same partition).
+    kinds = data_quality.lap_warning_kinds(session)
 
     sfx, speed = _speed_column(unit)
 
@@ -305,8 +329,7 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
         # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
         cells = [lap_label(lap_id), fmt.time(r["time"]), fmt.dist(r["dist"]),
                  fmt.speed(speed(r["entry"])),
-                 "" if lap_id not in warned else GAP_FLAG if lap_id in gap
-                 else OFF_LINE_FLAG if warned[lap_id] else DROPOUT_FLAG]
+                 _KIND_FLAG.get(kinds.get(lap_id, ""), "")]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
             cells.append(fmt.split(splits[i]) if i < len(splits) else fmt.missing)
@@ -357,12 +380,12 @@ def quality_key(headers, rows) -> list[tuple[str, str]]:
 
 
 def flag_key(headers, rows) -> list[tuple[str, str]]:
-    """`(flag, reason)` for every `flag` value `rows` carry, in `FLAG_KIND` order, worded from
+    """`(flag, reason)` for every `flag` value `rows` carry, in `_KIND_FLAG` order, worded from
     `data_quality.WARN_REASON` — the key the report puts under the column. Read off the ROWS like
     `quality_key`, so it lists only the kinds present, and nothing on a clean session."""
     col = list(headers).index("flag")
     present = {cells[col] for _lap_id, cells in rows if len(cells) > col}
-    return [(f, data_quality.WARN_REASON[kind]) for f, kind in FLAG_KIND.items() if f in present]
+    return [(f, data_quality.WARN_REASON[kind]) for kind, f in _KIND_FLAG.items() if f in present]
 
 
 def any_interpolated(headers, rows) -> bool:
@@ -468,12 +491,17 @@ def write_laps_csv(path: str, session) -> None:
     matched every corner emits nothing.
 
     AND THE `dist_m` NOTE (TRUTH2-ODO): the column is the lap odometer, which reads short of the
-    distance driven, so any file with a lap row carries `stats.ODOMETER_NOTE` under that label."""
+    distance driven, so any file with a lap row carries `stats.ODOMETER_NOTE` under that label.
+
+    AND ONE ROW PER EXCLUDED LAP (`excluded_trailer`), after the summary rows: the lap rows above
+    are the VALID laps only, and a lap the app lists under ⊘ is named here with its time, kind and
+    reason rather than nowhere. A session with no excluded lap writes none (the file is unchanged)."""
     headers, rows = laps_table(session)
     summary = laps_summary(session)
     key = quality_key(headers, rows)
     broke = data_quality.break_in_series(session)
     interpolated = any_interpolated(headers, rows)
+    excluded = excluded_trailer(session)
 
     def body(f):
         w = csv.writer(f)
@@ -483,6 +511,8 @@ def write_laps_csv(path: str, session) -> None:
         w.writerow([SUMMARY_MARKER, "time_s", "over_laps", "note"])
         for row in summary:
             w.writerow([f"{SUMMARY_MARKER}: {row.label}", row.value, row.over_laps, row.note])
+        for label, time_s, note in excluded:
+            w.writerow([f"{SUMMARY_MARKER}: {EXCLUDED_LABEL} {label}", time_s, "", note])
         if rows:
             w.writerow([f"{SUMMARY_MARKER}: {DIST_COLUMN}", "", "", stats_service.ODOMETER_NOTE])
         for code, meaning in key:
@@ -661,7 +691,9 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
     # under a tooltip that decodes the glyphs, and an exported line has no tooltip (§5.4 again).
     valid = list(session.valid_lap_ids()) if hasattr(session, "valid_lap_ids") else []
     excluded = getattr(session, "excluded_lap_ids", list)() or []
-    dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+    # Each ⚠ lap under its ONE kind (`laps_by_kind`), so the parts add up to the page's ⚠ count.
+    by_kind = data_quality.laps_by_kind(session)
+    dropouts = by_kind[data_quality.WARN_DROPOUT]
     lap_bits = [f"{len(valid)} valid"]
     if excluded:
         # The reason per lap, counted — "distance off the session median" was printed for every
@@ -670,8 +702,8 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         lap_bits.append(f"{len(excluded)} excluded ({why})" if why else f"{len(excluded)} excluded")
     if dropouts:
         lap_bits.append(f"{len(dropouts)} with a GPS dropout")
-    gap = data_quality.gap_lap_ids(session)
-    off_line = [i for i, why in data_quality.lap_warnings(session).items() if why and i not in gap]
+    gap = by_kind[data_quality.WARN_CHAPTER_GAP]
+    off_line = by_kind[data_quality.WARN_OFF_LINE]
     if off_line:
         lap_bits.append(f"{len(off_line)} off the line")
     if gap:
@@ -1325,10 +1357,28 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
     """The Laps table (`laps_table`'s rows at the app's precision, `display=True`, under
     `report_laps_header`'s words) and the notes that decode it."""
     esc = html.escape
-    out = ['<section class="wide">', f"<h2>Laps ({len(rows)})</h2>",
+    # The EXCLUDED laps (⊘) as muted rows in lap order — the Laps tab's strip, in words: lap,
+    # time, distance, then the reason across the columns it has no number for. Not ranked, never
+    # green; a session without one prints exactly the table it always did.
+    excluded = sorted(getattr(session, "excluded_lap_rows", list)() or [], key=lambda r: r["idx"])
+    count = (f"{len(rows)} valid · {len(excluded)} excluded" if excluded else f"{len(rows)}")
+    out = ['<section class="wide">', f"<h2>Laps ({count})</h2>",
            '<table class="laps">' + _laps_head(headers)]
-    for lap_id, cells in rows:  # the best lap reads green, like the app's table — and, like the
-        cls = ' class="best"' if lap_id == cue_lap else ""  # app's table, not while provisional
+    muted = {r["idx"]: (
+        f"<td>{esc(lap_label(r['idx']))}</td><td>{esc(_DISPLAY.time(r['time']))}</td>"
+        f"<td>{esc(_DISPLAY.dist(r['dist']))}</td>"
+        f'<td style="text-align: left" colspan="{max(len(headers) - 3, 1)}">'
+        f"{esc('excluded' + (': ' + r['why'] if r.get('why') else ''))}</td>")
+        for r in excluded}
+    merged = (sorted([*rows, *((i, None) for i in muted)], key=lambda x: x[0]) if muted
+              else rows)   # no excluded lap: the rows exactly as `laps_table` ordered them
+    for lap_id, cells in merged:
+        if cells is None:
+            out.append(f'<tr class="muted">{muted[lap_id]}</tr>')
+            continue
+        # the best lap reads green, like the app's table — and, like the app's table, not while
+        # provisional
+        cls = ' class="best"' if lap_id == cue_lap else ""
         out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
     out.append("</table>")
     # The distance column's note, as laps.csv's trailer carries it: the odometer reads short.

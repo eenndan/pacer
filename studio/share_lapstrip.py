@@ -102,6 +102,9 @@ KIND_LAP = "lap"            # a clean, timed lap: solid bar
 KIND_DROPOUT = "dropout"    # a timed lap with a GPS dropout (the table's ⚠): hatched bar
 KIND_OFF_LINE = "off_line"  # a timed lap that left the line the other laps drive (⚠): hatched
 KIND_GAP = "chapter_gap"  # a timed lap across a missing chapter (⚠): hatched, its own legend
+#: `data_quality.lap_warning_kinds` kind → its bar kind.
+_KIND_BAR = {data_quality.WARN_DROPOUT: KIND_DROPOUT, data_quality.WARN_OFF_LINE: KIND_OFF_LINE,
+             data_quality.WARN_CHAPTER_GAP: KIND_GAP}
 KIND_EXCLUDED = "excluded"  # left out of the times (the table's ⊘ strip): a marked slot, no height
 TONE_BEST = "best"
 
@@ -189,9 +192,9 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
     unit = units.normalize_unit(unit)
     card = share_card.card_data(session, unit=unit)
     rows = list(session.lap_rows())
-    warned = data_quality.lap_warnings(session)   # the ⚠ set: dropout (None) or off the line
-    gap_ids = data_quality.gap_lap_ids(session)   # ...or timed across a missing chapter
-    dropouts = set(warned)
+    # The ⚠ set, each lap under its ONE kind (`lap_warning_kinds`), as laps.csv flags it.
+    kinds = data_quality.lap_warning_kinds(session)
+    dropouts = set(kinds)
     excluded = list(session.excluded_lap_ids() or [])
     times = {int(r["idx"]): float(r["time"]) for r in rows}
 
@@ -211,8 +214,7 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
         if lid not in times:
             bars.append(StripBar(lid, lap_label(lid), KIND_EXCLUDED, None, "", 0.0, False))
             continue
-        kind = (KIND_LAP if lid not in warned else KIND_GAP if lid in gap_ids
-                else KIND_OFF_LINE if warned[lid] else KIND_DROPOUT)
+        kind = _KIND_BAR.get(kinds.get(lid, ""), KIND_LAP)
         gap = gaps.get(lid)
         if gap is None:
             bars.append(StripBar(lid, lap_label(lid), kind, None, TONE_BEHIND, 0.0, False))
