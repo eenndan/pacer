@@ -46,15 +46,17 @@ next gaps and its two-parameter fit (`quickest_bias.bias_by_n` / `fit` on these 
 the step's basis placement (`worst_split`) is what `stats.quickest_luck_s` ships for a sector, which
 the summary checks (`luck_basis.app_fit_is_this_fit`).
 
-MEASURED (defaults: 40 habit-free + 24 planted days per noise, at 1.9, 4.0 and 6.5; about 40
-minutes as two processes; `--set-index 4,5,6,7 --plant-days 0` out of sample): at the reference
-noise 1.9 the split σ is 0.035-0.041 s pooled mid-straight (golden 0.0408, sets 0.0385-0.0434; its
-interior sector 0.0498), 0.047 at the apexes, 0.050 at the exits and 0.066 at the hairpins, whose
-interior sector, 0.0881 s, is the worst of all 13 placements and `stats.PUBLISHED_NOISE_SIGMAS`'
-split column (B 0.1873, A 0.3062; hairpin the worst at each), which the summary checks
-(`worst_split`). The luck fit there: typical +0.0019 + 0.0385·blom(n), next +0.0327 + 0.0103·blom(n).
-Out of sample the worst sector reads 0.0835 s. De-drifted: 0.023-0.033 s pooled, 0.038 s at the
-worst sector. The full table and the decisions are in `stats.SECTOR_LEVEL_S`'s comment.
+MEASURED (defaults: 40 habit-free + 24 planted days per noise, at 1.9, 4.0 and 6.5; about an hour
+as two processes; `--set-index 4,5,6,7 --plant-days 0` out of sample). The app's splits are
+de-drifted since cool/sector-dedrift (`Session._sector_drift`); row field 3 is the same lap timed
+as before (`uncorrected_splits`, summary `pair_uncorrected`). At the reference noise 1.9 the split
+σ is 0.023-0.025 s pooled mid-straight (golden 0.0248, worst sector 0.0298) and 0.031-0.033 s at
+the slow lines; the worst sector of all 13 placements, three slow lines' 0.0377 s, is
+`stats.PUBLISHED_NOISE_SIGMAS`' split column (B 0.0796, A 0.1308; the same placement at each),
+which the summary checks (`worst_split`). The luck fit there: typical +0.0037 + 0.0136·blom(n),
+next +0.0130 + 0.0054·blom(n). Out of sample the worst sector reads 0.0355 s. As timed before:
+0.0408 s golden pooled and 0.0881 s at the hairpin's worst sector (B 0.1873, A 0.3062), #675's
+figures to the digit. The full table and the decisions are in `stats.SECTOR_LEVEL_S`'s comment.
 
 `--matrix` instead re-runs truth matrix row 2's own recordings (three seeds, noise 2, two chapters,
 the default origin, golden placement) and reports each seed's per-lap interior-split errors over
@@ -101,7 +103,7 @@ sidecar.save = lambda *a, **k: None   # nothing is ever written beside a recordi
 NOISES = (1.9, 4.0, 6.5)          # recordings C, B and A (stats.PUBLISHED_NOISE_SIGMAS)
 PLANT_SEED = 3011                 # quickest_bias's planted days, so the two probes plant alike
 TRUE_LEVEL_S = 0.03               # a true gap this small is no difference a driver could act on
-STEPS = (0.07, 0.10, 0.12, 0.14, 0.25, 0.30)
+STEPS = (0.07, 0.10, 0.11, 0.12, 0.14, 0.25, 0.30)
 
 
 def _configs(c) -> dict[str, list[float]]:
@@ -126,29 +128,29 @@ def _r(x) -> float:
     return round(float(x), 5)
 
 
-def dedrifted_splits(s: Session, lap: int) -> list[float]:
-    """What a SOURCE-level fix would give: `lap`'s splits with its trace first moved by the
-    session geometry's rigid receiver shift (`CornerModel.lap_shift`, which the corner cells
-    already remove) before it is crossed with the sector lines. Read through the app's own
-    `lap_sector_splits` with only the trace's xs/ys translated; nothing in the app changes."""
-    sx, sy = s.corners.lap_shift(lap)
-    orig = s._lap_columns
-
-    def shifted(lid):
-        t, xs, ys, v, cum = orig(lid)
-        return t, xs - sx, ys - sy, v, cum
-
-    s._lap_columns = shifted
+def splits_with(s: Session, lap: int, drift) -> list[float]:
+    """`lap`'s splits with `drift(lap_id) -> (dx, dy)` taken off each trace in place of the app's
+    own `Session._sector_drift`, read through the app's `lap_sector_splits`; the session is put
+    back after."""
+    s._sector_drift = drift
+    s._sector_collapse_cache = None
     try:
         return s.lap_sector_splits(lap)
     finally:
-        del s._lap_columns
+        del s._sector_drift
+        s._sector_collapse_cache = None
+
+
+def uncorrected_splits(s: Session, lap: int) -> list[float]:
+    """`lap`'s splits as they were timed before cool/sector-dedrift: its trace crossed with the
+    sector lines WITHOUT its receiver shift taken off (`Session._sector_drift` held at (0, 0))."""
+    return splits_with(s, lap, lambda _lap: (0.0, 0.0))
 
 
 def placements(s: Session, truth) -> dict:
     """Every placement on session `s`: its lines' metres and true speeds, and per counted lap of
-    the SPLITS grid (lap, app splits, true splits, the de-drifted splits `dedrifted_splits`), with
-    the grid's column medians."""
+    the SPLITS grid (lap, app splits, true splits, the splits as timed before the de-drift
+    `uncorrected_splits`), with the grid's column medians."""
     out = {}
     start, _ = s.timing_lines_latlon()
     for name, metres in _configs(truth.circuit).items():
@@ -162,7 +164,7 @@ def placements(s: Session, truth) -> dict:
                               strict=True):
             if lap in true and None not in cells and len(true[lap]) == len(cells):
                 rows.append([int(lap), [_r(v) for v in cells], [_r(v) for v in true[lap]],
-                             [_r(v) for v in dedrifted_splits(s, lap)]])
+                             [_r(v) for v in uncorrected_splits(s, lap)]])
         speeds = [float(np.median(truth.speed_at(truth.times_at(m)[1:-1]))) for m in metres]
         out[name] = {"metres": [round(m, 2) for m in metres],
                      "speed_ms": [round(v, 2) for v in speeds],
@@ -183,7 +185,7 @@ def day_record(work: str, noise: float, seed: int, day_no: int, plant: float | N
 # ------------------------------------------------------------------------------- the summary
 def _ss(days, name: str, app: int = 1) -> tuple[list[float], list[int]]:
     """Per sector column: (sum of squares of the error about each day's column mean, dof), the
-    app's splits read from row field `app` (1: as shipped, 3: de-drifted)."""
+    app's splits read from row field `app` (1: as shipped, 3: as timed before the de-drift)."""
     ss: list[float] = []
     dof: list[int] = []
     for d in days:
@@ -361,7 +363,7 @@ def summarize(days: list[dict]) -> dict:
             rec[name] = {"metres": some and some["metres"],
                          "speed_ms": some and some["speed_ms"],
                          "pair": pair_sigma(free, name), "typical": typical_rms(free, name),
-                         "pair_dedrifted": pair_sigma(free, name, app=3),
+                         "pair_uncorrected": pair_sigma(free, name, app=3),
                          "calls": {f"{st:g}": calls(mine, name, st) for st in STEPS}}
         # The σ one step must cover: the worst sector of the worst placement measured, which is
         # `stats.PUBLISHED_NOISE_SIGMAS`' split column at the noise matching each recording.

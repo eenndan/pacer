@@ -803,6 +803,24 @@ class CornerModel:
         best = self._best_lap_id()
         if geom is None or best is None:
             return 0.0, 0.0
+        return geom.relative_shift(self._fitted_shift(geom, lap_id), best)
+
+    def consensus_shift(self, lap_id: int) -> tuple[float, float]:
+        """The rigid translation that moves `lap_id` onto the session's CONSENSUS line
+        (`SessionGeometry.shift`, fitted on demand for a lap outside the consensus set, as
+        `lap_shift` does) — the frame the sector splits are crossed in (`Session._sector_drift`).
+        Unlike `lap_shift` it is not relative to the reference lap: a split is crossed with lines
+        drawn on the map, not matched against another lap's trace, and the consensus frame's mean
+        over the clean laps is about zero, so one lap's receiver error does not move a whole
+        column. (0, 0) when there is no geometry, or when the lap has no usable trace."""
+        geom = self.geometry()
+        if geom is None or self._best_lap_id() is None:
+            return 0.0, 0.0
+        t = self._fitted_shift(geom, lap_id)
+        return float(t[0]), float(t[1])
+
+    def _fitted_shift(self, geom, lap_id: int) -> np.ndarray:
+        """`lap_id`'s own fitted translation against the consensus, memoized per lap."""
         lap_id = int(lap_id)
         got = self._shift_cache.get(lap_id, _UNSET)
         if got is _UNSET:
@@ -812,7 +830,7 @@ class CornerModel:
                 got = (geom.fit(xs, ys, cum)[0] if len(cum) >= 2 and float(cum[-1]) > 0
                        else np.zeros(2))
             self._shift_cache[lap_id] = got
-        return geom.relative_shift(got, best)
+        return got
 
     def lap_alignment(self, lap_id: int, total_lap: float,
                       edges: tuple | None = None) -> corners.Alignment | None:

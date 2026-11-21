@@ -237,10 +237,17 @@ offered on a sector row: per sector, the printed typical split minus the quickes
 `sector_split_sigma` measures the split's σ on the 40-day grid at 13 line placements, and the
 false calls and power of every sector decision under candidate steps: the split column of
 `stats.PUBLISHED_NOISE_SIGMAS` that `stats.SECTOR_LEVEL_S` is the house rule on, the sector luck
-`stats.quickest_luck_s` ships (fitted at the same placement), and what de-drifting the splits at
-the source would buy.
+`stats.quickest_luck_s` ships (fitted at the same placement), and the same splits as they were
+timed before each lap's receiver shift was taken off (cool/sector-dedrift).
 
     pixi run python -m studio.dev.probes.sector_split_sigma
+
+`sector_dedrift` asks whether that de-drift is an artefact of the generator's drift model: the
+receiver's position error replaced by drift faster or slower than a lap, a rigid offset per lap,
+white noise only, none, and a rotation or scale of the trace; per variant the split σ before and
+after, each sector column's bias, and how rigid the error is over one lap (`half_lap_shifts`).
+
+    pixi run python -m studio.dev.probes.sector_dedrift
 
 `corner_typical_compare` is `sector_typical_compare`'s corner twin (first written by the #641
 review): on each corner row, whether the compare is offered and the TRUE typical − quickest gap

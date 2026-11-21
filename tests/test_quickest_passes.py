@@ -3068,9 +3068,10 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
             assert seq[0] == 0.0 and all(b >= a for a, b in zip(seq, seq[1:], strict=False)), seq
     assert (luck(1, 5, "typical"), luck(1, 14, "typical")) == (0.012, 0.020)
     assert (luck(1, 5, "next"), luck(1, 14, "next")) == (0.014, 0.019)
-    # a sector's, fitted at the split step's own placement (studio/dev/probes/sector_split_sigma)
-    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.047, 0.068)
-    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.045, 0.050)
+    # a sector's, fitted at the split step's own placement on the de-drifted splits
+    # (studio/dev/probes/sector_split_sigma, cool/sector-dedrift)
+    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.020, 0.027)
+    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.019, 0.022)
     assert luck(1, 1, "next") == 0.0 and luck(1, 0, "typical") == 0.0
     base = [3.30, 3.31, 3.32, 3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39, 3.40, 3.41, 3.42]
     for next_gap, alone in ((0.075, False), (0.088, False), (0.089, True), (0.30, True)):
@@ -3124,9 +3125,9 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     try:
         got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
         # a sector's luck is fitted at the split step's own placement, the worst measured: the
-        # apexes of C1 and C5 ("hairpin"), whose worst sector is the σ SECTOR_LEVEL_S is built on
+        # three slow lines ("three_slow"), whose worst sector is the σ SECTOR_LEVEL_S is built on
         got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS,
-                                                  "hairpin", probe.CHECK_N)
+                                                  "three_slow", probe.CHECK_N)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         sidecar.save = keep[0]
@@ -3137,7 +3138,8 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
         else:
             os.environ[app_support.DIR_ENV] = keep[2]
     # A sector's luck at the worst placement scatters more over six days (about ±0.02 s between
-    # groups of six on the 40-day grid; these six land within 0.006 s), so it is held to 0.010.
+    # groups of six on the 40-day grid before the de-drift; these six land within 0.004 s of the
+    # de-drifted fit), so it is held to 0.010.
     for kind, key, tol in (("corners", 1, 0.006), ("sectors", -1, 0.010)):
         for n in probe.CHECK_N:
             typ, nxt = got[kind][n]

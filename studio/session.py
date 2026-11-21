@@ -2131,6 +2131,27 @@ class Session:
             ends.append((a.x, a.y, b.x, b.y))
         return ends
 
+    def _sector_drift(self, lap_id: int) -> tuple[float, float]:
+        """The receiver shift taken off `lap_id`'s trace BEFORE it is crossed with the sector lines
+        (`_project_sector_lines`): its rigid translation onto the session's consensus line,
+        `CornerModel.consensus_shift` — the same per-lap fit the corner cells already remove.
+
+        WHY. A lap crosses the start line twice and its receiver's slowly drifting position error
+        cancels; a split crosses two DIFFERENT lines and keeps (that error · heading) / speed at
+        each, which dominated the split's σ (studio/dev/probes/sector_dedrift.py and
+        `stats.SECTOR_LEVEL_S`'s block). A translation does not change the trace's odometer, so the
+        lap's start and finish — and its time — are untouched, and its splits still sum to it.
+
+        THE FALLBACK: with no session geometry (fewer than `corners.DRIFT_MIN_LAPS` clean laps,
+        too few stations answering) this is (0, 0) for every lap of the session, and its splits
+        are crossed as measured — one method per session, never mixed in a column. Fewer clean laps
+        than `corners.DRIFT_MIN_LAPS` is also too few for a SPLITS grid (`stats.MATRIX_MIN_LAPS`),
+        so no level step is read there; a geometry that fails with enough laps (a degenerate
+        reference lap) keeps the uncorrected splits under the de-drifted step, a stated limit
+        (docs/ACCURACY.md). getattr-guarded for the bare-Session test path."""
+        cm = getattr(self, "corners", None)
+        return (0.0, 0.0) if cm is None else cm.consensus_shift(lap_id)
+
     def _project_sector_lines(self, lap_id: int, lines: list[tuple[float, float, float, float]]
                               ) -> tuple[list[float], float] | None:
         """Where ONE lap's trace crosses every sector line: `(distances, tol)` where
@@ -2160,7 +2181,8 @@ class Session:
         m = min(len(xs), len(cum))
         if m < 2:
             return None
-        xs, ys, cum = xs[:m], ys[:m], cum[:m]
+        sx, sy = self._sector_drift(lap_id)
+        xs, ys, cum = xs[:m] - sx, ys[:m] - sy, cum[:m]
         total = float(cum[-1])
         # Window half-width (in samples) for the wrong-pass guard: a fraction of the lap's
         # samples, reusing the same ±2% arc the rolling-best nearest-point search trusts (a real

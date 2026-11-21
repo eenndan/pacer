@@ -2039,14 +2039,14 @@ as the app measures them and as the generator's truth has them.
 
 | recordings | GPS noise | σ | gate | chips | new bests, app / truth | coloured wrong | over the gate, app / truth | largest true margin |
 |---|---|---|---|---|---|---|---|---|
-| `synth_gopro`, three seeds | 2 | 0.11 s | 0.30 s | 117 | 31 / 27 | 16 | 2 / 2 | 0.32 s |
-| the demo's telemetry | 2 | 0.11 s | 0.30 s | 39 | 6 / 6 | 2 | 1 / 2 | 0.52 s |
-| `synth_gopro`, three seeds | 4.5 | 0.24 s | 0.68 s | 117 | 27 / 27 | 24 | 0 / 0 | 0.32 s |
-| the demo's telemetry | 4.5 | 0.24 s | 0.68 s | 39 | 8 / 6 | 4 | 0 / 0 | 0.52 s |
+| `synth_gopro`, three seeds | 2 | 0.11 s | 0.30 s | 117 | 31 / 27 | 12 | 2 / 2 | 0.32 s |
+| the demo's telemetry | 2 | 0.11 s | 0.30 s | 39 | 9 / 6 | 3 | 1 / 2 | 0.52 s |
+| `synth_gopro`, three seeds | 4.5 | 0.24 s | 0.68 s | 117 | 29 / 27 | 20 | 0 / 0 | 0.32 s |
+| the demo's telemetry | 4.5 | 0.24 s | 0.68 s | 39 | 11 / 6 | 5 | 0 / 0 | 0.52 s |
 
 **Ungated, the colours are the noise's. Gated, they almost never come on.**
-- Without the gate, 31 and 27 of the 117 `synth_gopro` chips would turn colour, and 16 at noise 2
-  and 24 at 4.5 would be coloured where the truth has no new best, or grey where it has one.
+- Without the gate, 31 and 29 of the 117 `synth_gopro` chips would turn colour, and 12 at noise 2
+  and 20 at 4.5 would be coloured where the truth has no new best, or grey where it has one.
 - With the gate, 2 of the 117 colour at noise 2 and none at 4.5. The demo's real half second at
   C1, its largest true margin, clears the gate at noise 2 and not at 4.5.
 - The truth itself rarely holds a margin that large: the three seeds' largest is 0.32 s, at the
@@ -2069,13 +2069,25 @@ interior sector) and 0.066 s at the two slowest apexes (0.088 s at their worst s
 first half of the clause is met for a mid-straight line, but the σ depends on where the lines
 are: it is the receiver's slowly drifting position error, which a lap cancels and a split between
 two differently placed lines keeps. A chip, like every split surface, has one gate for every
-sector a driver can draw, and the split step is now 0.25 s (2√2 × 0.088 s), near the 0.30 s gate
-this section measured (the chips were not re-run at 0.25 s; the probe still gates on row 2's σ).
-At the measured track's slowest point, 13.5 m/s, a split's error is largest; a line at a slower
-hairpin than that is unmeasured. What would reopen it: splits
-de-drifted at the source (each lap's rigid receiver shift removed before the lines are crossed,
-as the corner cells already do), which on the same grid leaves 0.038 s at the worst sector of any
-placement, a gate of 0.11 s.
+sector a driver can draw, and the split step was then 0.25 s (2√2 × 0.088 s), near the 0.30 s
+gate this section measured (the chips were not re-run at 0.25 s; the probe still gates on row 2's
+σ). At the measured track's slowest point, 13.5 m/s, a split's error is largest; a line at a
+slower hairpin than that is unmeasured. What would reopen it: splits de-drifted at the source.
+
+**De-drifted at the source (cool/sector-dedrift): the clause's first half is met; the refusal
+stands until the chips are re-run.** Each lap's trace is now moved by its own receiver shift onto
+the session's consensus line before the sector lines are crossed. On the same grid one split's σ
+is 0.038 s at the worst sector of any placement (0.023–0.025 s pooled mid-straight), so the split
+step is now 0.11 s, and the σ is "well under a tenth of a second at recording C's noise" at every
+placement measured. That is the evidence this section asked for, and it makes the chip worth
+re-measuring, not built. The table above is the probe's own run on the de-drifted splits at its
+old gates (a test re-runs it): ungated, the `synth_gopro` chips coloured wrongly fell from 16 to 12
+of 117 at noise 2 and from 24 to 20 at 4.5, the demo's went from 2 to 3 and 4 to 5 of 39; gated,
+nothing moved. `clip_refusals.py` still gates on truth matrix row 2's σ and was not run at a 0.11 s
+gate, so how many chips would colour, and how many of them wrongly, is
+unmeasured. The de-drift's own limit carries over: it removes the drift that is one vector over a
+lap, and on a receiver whose error changes faster than the grid's (`sector_dedrift.py`: a 30 s
+time constant) the worst sector reads 0.056 s, a 0.16 s gate. Not built here.
 
 ---
 

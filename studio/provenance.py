@@ -83,7 +83,8 @@ METHODS: dict[str, str] = {
         "its opening boundary, both read off this lap's (odometer, elapsed) curve by linear "
         "interpolation. Each boundary's odometer is where the lap's GPS chord crosses that sector "
         "line, extended past its ends so a short line that a lap geometrically misses still "
-        "produces a split."
+        "produces a split, with the lap's trace first moved by its receiver drift (one shift per "
+        "lap onto the session's consensus line, as the corner times use)."
     ),
     "corner_best.min_over_laps": (
         "A corner best is the quickest time any clean lap spent inside that corner. One lap's "
