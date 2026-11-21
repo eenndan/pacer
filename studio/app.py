@@ -71,7 +71,7 @@ from . import (
 from . import (
     marks as marks_model,
 )
-from ._signal import PRINT_DECIMALS, fmt_hms, fmt_time, lap_label
+from ._signal import PRINT_DECIMALS, fmt_hms, fmt_time, lap_label, plural
 from .central_view import CentralView, undo_summary
 from .coaching_panel import DEBRIEF_COMPARE
 from .command_palette import CommandPalette
@@ -96,6 +96,7 @@ from .overlays import (
     WelcomeView,
 )
 from .race_controller import NO_RACE_REASON
+from .stats import is_level, with_luck
 from .video_view import PLAYBACK_RATES
 from .widgets import chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker
@@ -3671,7 +3672,12 @@ class StudioWindow(QMainWindow):
         d = PRINT_DECIMALS
         if v.is_typical:
             return f"; its {label} pass ({v.pass_s:.{d}f}) is your typical pass there"
-        if v.level:
+        if v.level and v.luck_s > 0 and not is_level(v.gap_s, v.level_s):
+            # level only through the quickest pass's luck (`stats.quickest_luck_s`): say so
+            how = (f"level with your typical pass within {with_luck(v.level_s, v.luck_s):.3f} s, "
+                   f"the step plus what the quickest of {plural(v.n, 'pass', 'passes')} reads quick "
+                   "by luck alone")
+        elif v.level:
             how = "level with your typical pass"
         else:
             how = "quicker than your typical pass" if v.gap_s > 0 else (

@@ -3381,10 +3381,12 @@ def quickest_no_star_tip(qp, level_s: float) -> str:
     something else (that lap's time prints as the quickest), so the difference is said here."""
     n = len(qp.level_laps)
     if n == 0:   # clear of the step, not of the step plus the quickest pass's luck (`qp.alone`)
+        # The bound and the luck to the millisecond, as the gap beside them prints.
         passes = plural(qp.n_counted, "pass", "passes")
-        return (f"The next quickest is {qp.next_gap_s:.3f} s slower, within "
-                f"{level_s + qp.luck_s:.2f} s: the quickest of {passes} is expected to be about "
-                f"{qp.luck_s:.2f} s quicker than the next by luck alone, so no ★.")
+        bound = stats_service.with_luck(level_s, qp.luck_s)
+        return (f"The next quickest is {qp.next_gap_s:.3f} s slower, within {bound:.3f} s: with "
+                f"{passes}, the quickest's gap to the next is expected to read about "
+                f"{qp.luck_s:.3f} s larger than it truly is, by luck alone, so no ★.")
     return (f"{plural(n, 'more lap')} {'is' if n == 1 else 'are'} level within {level_s:.2f} s, "
             "so no ★: here it marks a quickest pass no other lap matches.")
 

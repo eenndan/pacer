@@ -513,9 +513,9 @@ def test_a_tie_says_why_it_has_no_star():
                                           "marks a quickest pass no other lap matches."), \
             t.item(2, 1).toolTip()
         assert t.item(4, 1).toolTip() == (
-            "The next quickest is 0.071 s slower, within 0.09 s: the quickest of 14 passes is "
-            "expected to be about 0.02 s quicker than the next by luck alone, so no ★."), \
-            t.item(4, 1).toolTip()                                          # C5: luck, no ★
+            "The next quickest is 0.071 s slower, within 0.089 s: with 14 passes, the quickest's "
+            "gap to the next is expected to read about 0.019 s larger than it truly is, by luck "
+            "alone, so no ★."), t.item(4, 1).toolTip()                     # C5: luck, no ★
         hdr = t.horizontalHeaderItem(3)
         assert hdr.textAlignment() & Qt.AlignLeft, "Level with sits over its left-aligned words"
     finally:
@@ -3043,6 +3043,13 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
     quickest to clear the step plus the typical gap's. Any other pass gets no luck term: it was not
     chosen for being quick. Past both, as before. Pinned at the measured values, n = 5 and 14."""
     luck = stats.quickest_luck_s
+    # under the measured range (5 passes up) it holds its smallest measured value, and it never
+    # falls as n grows (60 passes: a long sprint)
+    for key in (1, -1):
+        for gap in ("typical", "next"):
+            assert luck(key, 2, gap) == luck(key, 4, gap) == luck(key, 5, gap) > 0, (key, gap)
+            seq = [luck(key, n, gap) for n in range(1, 61)]
+            assert seq[0] == 0.0 and all(b >= a for a, b in zip(seq, seq[1:], strict=False)), seq
     assert (luck(1, 5, "typical"), luck(1, 14, "typical")) == (0.012, 0.020)
     assert (luck(1, 5, "next"), luck(1, 14, "next")) == (0.014, 0.019)
     assert (luck(-1, 5, "typical"), luck(-1, 14, "next")) == (0.022, 0.026)
@@ -3135,14 +3142,75 @@ def test_the_demo_has_no_star_and_two_typical_offers_once_luck_is_allowed_for():
             enabled[r + 1] = (compare.isEnabled(), compare.toolTip())
         assert [c for c, (on, _tip) in enabled.items() if on] == [1, 5], enabled
         assert enabled[3][1] == (
-            "Lap 13's pass through C3 is within 0.09 s of your typical pass as timed: the quickest "
-            "of 14 passes is expected to be about 0.02 s quicker than typical by luck alone"), \
-            enabled[3][1]
+            "Lap 13's pass through C3 is within 0.090 s of your typical pass as timed: the "
+            "quickest of 14 passes is expected to read about 0.020 s quicker than typical by luck "
+            "alone"), enabled[3][1]
         assert enabled[2][1] == ("Lap 11's pass through C2 is within 0.07 s of your typical pass "
                                  "as timed"), enabled[2][1]
+        # …and the shipped demo's own offer runs, with no luck patch: C5's quickest (lap 10)
+        # beside its typical pass, held neutral
+        s = win.session
+        v = s.pass_vs_typical(9, 5)
+        assert not v.level and round(v.gap_s, 2) == 0.09 and v.luck_s == 0.020, v
+        assert view.compare_pass_with_typical(9, 5)
+        _settle()
+        assert view._comparing() and (view.compare.lap_a, view.compare.lap_b) == (9, v.typical_lap_id)
+        assert view.compare.pass_anchor() == "C5"
+        assert "0.09 s quicker through C5 as timed" in win.statusBar().currentMessage()
     finally:
         _close(win)
         prefs.set_corners_view("lap")
+
+
+def test_no_printed_gap_reaches_the_bound_it_is_said_to_be_within():
+    """The ★'s and the typical offer's luck sentences print the bound (step + luck) and the luck to
+    the millisecond, as the gap beside them: at two decimals n = 5 read "0.083 s slower, within
+    0.08 s" (bound 0.084), and n = 2 "about 0.00 s". Swept over n = 2…20 and gaps on a 1 ms grid
+    around the bound, corners and sectors: wherever "within" is said the printed gap is under the
+    printed bound, and wherever the ★ or the offer stands it is at or past it; the luck never
+    prints 0.000."""
+    import re
+
+    from studio.central_view import typical_luck_reason
+    from studio.lap_table import quickest_no_star_tip
+    for key, step in ((1, PB_PRECISION_S), (stats.sector_key(0), stats.SECTOR_LEVEL_S)):
+        for n in range(2, 21):
+            for gap_name in ("next", "typical"):
+                luck = stats.quickest_luck_s(key, n, gap_name)
+                bound = stats.with_luck(step, luck)
+                assert luck >= 0.012, (key, n, gap_name, luck)
+                for k in range(-8, 9):
+                    g = round(bound + 0.001 * k, 3)
+                    if gap_name == "next":
+                        if g < step:          # a level lap would be listed: another sentence
+                            continue
+                        qp = stats.QuickestPass(key, 10.0, 0, (), g, n, level_s=step)
+                        if qp.alone:
+                            assert g >= bound, (key, n, g, bound)
+                            continue
+                        tip = quickest_no_star_tip(qp, step)
+                        m = re.match(r"The next quickest is ([0-9.]+) s slower, within "
+                                     r"([0-9.]+) s: .* about ([0-9.]+) s larger", tip)
+                        assert m, tip
+                        gap_p, bound_p, luck_p = (float(x) for x in m.groups())
+                    else:
+                        g = round(g, 2)       # typical − quickest is a gap of two printed times
+                        level = stats.is_level(g, bound)
+                        if not level:
+                            assert g >= bound, (key, n, g, bound)
+                            continue
+                        if stats.is_level(g, step):   # under the step alone: its own sentence
+                            continue
+                        v = stats.PassVsTypical(key, 0, 10.0, 1, 10.0 + g, g, True, False, step,
+                                                luck, n)
+                        tip = typical_luck_reason("1", "C1", v)
+                        m = re.match(r".* within ([0-9.]+) s of your typical pass as timed: "
+                                     r".* about ([0-9.]+) s quicker", tip)
+                        assert m, tip
+                        # the gap is printed beside it at two decimals (the status line's)
+                        gap_p, (bound_p, luck_p) = float(f"{g:.2f}"), map(float, m.groups())
+                    assert gap_p < bound_p and luck_p > 0, (key, n, gap_name, g, tip)
+    print("ok no printed gap reaches its printed bound (n = 2…20, corners and sectors)")
 
 
 if __name__ == "__main__":

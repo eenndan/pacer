@@ -628,7 +628,7 @@ def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: f
     luck = quickest_luck_s(key, len(counted), "typical") if quickest else 0.0
     return PassVsTypical(cid=int(key), lap_id=lap, pass_s=counted[lap], typical_lap_id=other,
                          typical_pass_s=counted[other], gap_s=gap,
-                         level=is_level(gap, _with_luck(level_s, luck)), is_typical=nearest == lap,
+                         level=is_level(gap, with_luck(level_s, luck)), is_typical=nearest == lap,
                          level_s=level_s, luck_s=luck, n=len(counted))
 
 
@@ -679,14 +679,20 @@ def _blom(n: int) -> float:
 def quickest_luck_s(key: int, n: int, gap: str) -> float:
     """How much the quickest of `n` counted passes through stretch `key` (a corner's cid, or a
     `sector_key`) is expected to read quick by luck alone, to the millisecond: on the gap to its
-    typical pass (`gap` "typical") or to the next quickest pass ("next"). 0 under two passes."""
+    typical pass (`gap` "typical") or to the next quickest pass ("next"). 0 under two passes.
+
+    UNDER THE MEASURED RANGE IT HOLDS ITS SMALLEST MEASURED VALUE. The fit was measured from
+    MATRIX_MIN_LAPS (5) passes up; below that the form does not hold — at n = 2 the two gaps are
+    one statistic, yet the fit gives 0.004 and 0.009 s while a simulation gives 0.012-0.018 s for
+    both — so n is clamped up to MATRIX_MIN_LAPS: conservative (a wider bar), monotone in n, and
+    never 0 once there is a runner-up."""
     if n < 2:
         return 0.0
     a, b = _QUICKEST_LUCK_FIT[("sector" if sector_col(key) is not None else "corner", gap)]
-    return max(0.0, round(a + b * _blom(n), 3))
+    return max(0.0, round(a + b * _blom(max(n, MATRIX_MIN_LAPS)), 3))
 
 
-def _with_luck(level_s: float, luck_s: float) -> float:
+def with_luck(level_s: float, luck_s: float) -> float:
     """The step a gap read off the quickest pass must clear: `level_s` itself when there is no luck
     term (so `is_level` keeps its exact timing-step rule), else the sum to the millisecond."""
     return level_s if luck_s <= 0 else round(level_s + luck_s, 3)
@@ -2137,7 +2143,7 @@ class QuickestPass:
         clears the step PLUS what the quickest of this many passes reads quick by luck alone
         (`quickest_luck_s`): the ★ claims a pass no other lap matches, on the truth."""
         return (self.lap_id is not None and not self.level_laps and self.next_gap_s is not None
-                and not is_level(self.next_gap_s, _with_luck(self.level_s, self.luck_s)))
+                and not is_level(self.next_gap_s, with_luck(self.level_s, self.luck_s)))
 
     def play_order(self) -> tuple[int, ...]:
         """The laps the view plays on repeated activation: the quickest, then each level lap."""

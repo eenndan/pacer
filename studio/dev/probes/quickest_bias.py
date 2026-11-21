@@ -29,9 +29,10 @@ holds C4, is truly quicker than the rest by about the gain (`PLANTS`, printed as
 give the power of the offer and of the ★ before and after the luck term.
 
 The summary, per noise and per stretch kind: the bias of each gap by n with its standard error;
-at REFERENCE_NOISE (the one reference recording's, `library.REFERENCE_RECORDING`) the one-parameter
-fit `stats.quickest_luck_s` ships, bias(n) = k × the expected largest of n standard normals
-(Blom's approximation), its k by least squares weighted by draws, and the largest residual; then,
+at REFERENCE_NOISE (the one reference recording's, `library.REFERENCE_RECORDING`) the
+two-parameter fit `stats.quickest_luck_s` ships, bias(n) = a + b × the expected largest of n
+standard normals (Blom's approximation), a and b by least squares weighted by draws, and the
+largest residual (in seconds and in standard errors); then,
 over every stretch-day at the full count, the offers and stars before (level step) and after
 (level step + luck): how many, how many truly under the step / under 0.03 s / of the wrong sign,
 and on planted days how many name the planted lap.
@@ -235,8 +236,8 @@ def _decide(days: list[dict], kind: str, luck) -> dict:
             n = len(rows)
             # the app's own rule: not level under the step plus the luck term, to the millisecond
             offer = gap > 0 and not stats.is_level(
-                gap, stats._with_luck(step, luck(int(key), n, "typical")))
-            star = not stats.is_level(nxt, stats._with_luck(step, luck(int(key), n, "next")))
+                gap, stats.with_luck(step, luck(int(key), n, "typical")))
+            star = not stats.is_level(nxt, stats.with_luck(step, luck(int(key), n, "next")))
             if d["plant"] is None:
                 out["rows"] += 1
                 out["offered"] += offer
