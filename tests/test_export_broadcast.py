@@ -223,6 +223,30 @@ def _once_per_spec(test):
 
 
 @_once_per_spec
+def test_a_vertical_frame_keeps_the_classic_plates_out_of_the_apps_bands():
+    """Portrait (owner ruling, wave 22) holds the Classic style too: the strip and its stamp, the
+    g-meter, the minimap, the speed readout and the corner card stay out of the top 8 % and the
+    bottom 18 % of the height, which the apps that play a vertical video cover. (The Broadcast
+    elements are held by the matrix below.)"""
+    f = _fixture()
+    s, lap = f["s"], f["lap"]
+    spec = _spec(s, lap, style="classic")
+    frames = [(w, h) for w, h in _dialog_frames() if h > w]
+    assert (608, 1080) in frames and (1080, 1920) in frames, frames
+    for w, h in frames:
+        with _Stamped():
+            p = _painter(s, spec, w, h)
+        boxes = {"strip": p._strip_rect, "stamp": p._stamp_rect, "g-meter": p._g_rect,
+                 "minimap": p._map._box, "speed": p._readout_rect}
+        card = next((e for e in p.elements if e.name == "corner_cards"), None)
+        if card is not None:
+            boxes["corner card"] = card.rect
+        for name, r in boxes.items():
+            assert r.y() >= 0.08 * h - 1e-6 and r.bottom() <= 0.82 * h + 1e-6, (
+                f"{w}x{h}: the {name} {r} is in a band the apps cover")
+
+
+@_once_per_spec
 def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
     """The whole matrix: every dialog frame × honesty stamp off / three lines × a lap export with
     ghost + cards off / on, and a WHOLE-RECORDING export (its tower carries the reserved LAST
@@ -278,6 +302,14 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                     skipped += 1
                 m = layout.MARGIN * min(w, h)
                 safe = layout.Box(m, m, w - 2 * m, h - 2 * m)
+                edge = layout.Box(0, 0, w, h)      # the stamp's last resort: the frame across
+                if h > w:
+                    # PORTRAIT (owner ruling, wave 22): nothing in the top 8 % or the bottom 18 %
+                    # of the height, which the apps that play a vertical video cover; at the
+                    # margin alone the big speed sat 13 px off the bottom of 608x1080.
+                    top, bottom = max(m, 0.08 * h), max(m, 0.18 * h)
+                    safe = layout.Box(m, top, w - 2 * m, h - top - bottom)
+                    edge = layout.Box(0, top, w, h - top - bottom)
                 names = sorted(boxes)
                 for i, a in enumerate(names):
                     room = safe
@@ -291,7 +323,7 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                         assert not safe.contains(c), what
                         st = boxes[a]
                         assert st.x >= 0 and st.right - w <= max(0.0, c.right - w) + 1e-6, what
-                        room = layout.Box(0, 0, max(w, st.right), h)
+                        room = layout.Box(0, edge.y, max(w, st.right), edge.h)
                         wide += 1
                     assert room.contains(boxes[a]), f"{what}: {a} leaves the safe area"
                     for c in names[i + 1:]:
@@ -312,7 +344,7 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                 for u, pl in under.items():
                     host = boxes[u]
                     if u == "stamp":
-                        area = safe if safe.contains(host) else layout.Box(0, 0, w, h)
+                        area = safe if safe.contains(host) else edge
                         held = layout.Box(host.x, host.y, min(host.right, w) - host.x, host.h)
                         assert pl.contains(held), f"{what}: the stamp's plate does not hold it"
                         assert area.contains(pl), f"{what}: the stamp's plate leaves its room"
@@ -550,6 +582,87 @@ def test_a_reference_names_the_baseline_in_the_tower_and_on_the_bar():
         del s.has_reference
     assert broadcast.baseline_name(s) == "Δbest"
     print("ok a reference loaded: the tower and the bar read Δref")
+
+
+def test_a_lap_kept_out_of_the_bests_burns_neutral_and_says_not_counted():
+    """Discovery 11: a lap out of the bests (the ⚠ set: here one that left the line) exported as a
+    clip burned "LAP 10 · 0:44.227 · Δbest −0.73" in GREEN with a full green bar, its minimap drew
+    the lap's own broken line, and the dialog said only "Selected lap 10 · 0:44.227". Now, in
+    both styles: every frame names it "LAP n · ⚠ not counted", its Δ (and Broadcast's bar, and its
+    corner cards) are the neutral white, the inset draws the best lap's line (the kart dot still
+    follows this lap), and the dialog's lap line carries the reason. A whole-recording clip keeps
+    the refusal (no tag) but draws the lap's Δ neutral; a clean lap is untouched."""
+    f = _fixture()
+    s, lap, best = f["s"], f["lap"], f["best"]
+    tag = "⚠ not counted"                     # data_quality.FRAME_NOT_COUNTED, checked last
+    s.lap_warnings = lambda: {lap: f"Lap {lap + 1} left the line your other laps drive by 34 m."}
+    try:
+        for style in (broadcast.STYLE_CLASSIC, broadcast.STYLE_BROADCAST):
+            best_map = _painter(s, _spec(s, best, style=style, extras=()))._map._layer
+            spec = _spec(s, lap, style=style, extras=())
+            p = _painter(s, spec)
+            tails = 0
+            for t in ev.frame_times(spec.t0, spec.t1, 30000 / 1001)[::10]:
+                vals = ev.overlay_values_at(s, float(t), spec)
+                label, tail, colour, _frac = ev._frame_strip_runs(s, vals, spec, None)
+                assert label.startswith(f"LAP {lap + 1} · {tag}   "), label
+                if tail:
+                    tails += 1
+                    assert colour == EXPORT.neutral, (t, tail, colour)
+            assert tails > 50 and spec.not_counted == {lap}, (tails, spec.not_counted)
+            assert p._map._layer == best_map, "the inset drew the ⚠ lap's own line"
+            if style == broadcast.STYLE_BROADCAST:
+                st = _element(p, "broadcast").state(
+                    ev.overlay_values_at(s, spec.lap_t0 + 20.0, spec))
+                assert st[0] == f"LAP {lap + 1} · {tag}" and st[3] == EXPORT.neutral, st
+                assert st[5] is not None, "the bar went with the colour"
+            # The tagged name is the widest the top-left plate gets: it stays inside the portrait
+            # safe area (`layout.safe_area`, #710) at the narrowest shapes the dialog offers.
+            for w, h in ((608, 1080), (1080, 1920)):
+                pp = _painter(s, spec, w, h)
+                plate = (_element(pp, "broadcast").tower if style == broadcast.STYLE_BROADCAST
+                         else pp._strip_rect)
+                sa = layout.safe_area(w, h)
+                assert sa.x <= plate.x() and plate.right() <= sa.x + sa.w + 1e-6 and \
+                    sa.y <= plate.y() and plate.bottom() <= sa.y + sa.h + 1e-6, (style, w, h, plate)
+        cards = corner_cards.card_rows(s, lap, None, None)
+        assert cards and all(c.colour in (None, EXPORT.neutral) for c in cards), cards
+        # The whole recording: no tag (the refusal), the ⚠ lap's Δ still neutral.
+        cfg = broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
+                               broadcast.STYLE_BROADCAST)
+        whole = ev.build_session_spec(s, os.path.join(f["out"], "never.mp4"), config=cfg)
+        vals = ev.overlay_values_at(s, s.lap_window(lap)[0] + 20.0, whole)
+        label, tail, colour, _frac = ev._frame_strip_runs(s, vals, whole, None)
+        assert vals.lap_id == lap and tag not in label and tail and colour == EXPORT.neutral
+        # The dialog: the line names what each Export row WILL render (`_scope_line`), and the
+        # reason comes from THOSE laps: This lap on the ⚠ lap carries it in data_quality's words,
+        # Best lap never, All laps counts them, the full session says nothing.
+        seen = {}
+
+        def look(dlg, rows):
+            for i in range(rows["Export"].count()):
+                rows["Export"].setCurrentIndex(i)
+                seen[rows["Export"].currentText()] = next(
+                    lb.text() for lb in dlg.findChildren(QLabel)
+                    if lb.text().startswith(("Selected lap", "Best lap", "All laps", "Full")))
+            return QDialog.Rejected
+        _open_dialog(lap, look)
+        why = "⚠ left the line the other laps drive — not counted in your bests"
+        lines = list(seen.values())
+        assert lines[0].startswith(f"Selected lap {lap + 1}") and lines[0].endswith(why), lines
+        assert lines[1].startswith(f"Best lap {best + 1}") and "⚠" not in lines[1], lines
+        assert lines[2].endswith("one file each  ·  ⚠ 1 not counted in your bests"), lines
+        assert lines[3].startswith("Full session") and "⚠" not in lines[3], lines
+    finally:
+        del s.lap_warnings
+        s.__dict__.pop("_race_memo", None)   # the dialog's ghost read memoized the patched field
+    clean = _spec(s, lap, style="classic", extras=())
+    assert not clean.not_counted
+    vals = ev.overlay_values_at(s, clean.lap_t0 + 20.0, clean)
+    label, tail, colour, _frac = ev._frame_strip_runs(s, vals, clean, None)
+    assert tag not in label and colour == ev.burned_delta_colour(vals.delta_s, None)
+    assert data_quality.FRAME_NOT_COUNTED == tag
+    print("ok a ⚠ lap's clip: tagged, Δ/bar/cards neutral, the best lap's line, the dialog says why")
 
 
 def test_the_bar_scale_is_each_laps_own():
@@ -1165,7 +1278,8 @@ def test_a_real_broadcast_export_through_the_dialog_plays_with_sound_to_the_end(
 
 
 def _run_all():
-    for fn in (test_every_frame_the_dialog_offers_lays_out_clear_and_safe,
+    for fn in (test_a_vertical_frame_keeps_the_classic_plates_out_of_the_apps_bands,
+               test_every_frame_the_dialog_offers_lays_out_clear_and_safe,
                test_a_layout_that_would_overlap_fails_by_name,
                test_a_layout_that_cannot_fit_says_so_not_that_the_encoder_stopped,
                test_corner_cards_that_cannot_fit_sit_the_export_out_and_say_so,
@@ -1174,6 +1288,7 @@ def _run_all():
                test_the_honesty_stamp_is_kept_at_its_classic_size_at_every_shape,
                test_every_broadcast_text_reads_over_sky_grass_white_and_noise,
                test_a_reference_names_the_baseline_in_the_tower_and_on_the_bar,
+               test_a_lap_kept_out_of_the_bests_burns_neutral_and_says_not_counted,
                test_the_bar_scale_is_each_laps_own,
                test_a_whole_recording_tower_shows_each_finished_laps_table_time,
                test_the_last_line_names_its_baseline_and_stands_without_the_tower,

@@ -73,7 +73,7 @@ from ._signal import (
     nearest_on_polyline,
     polyline_line_crossing,
 )
-from .load import load_recording
+from .load import load_recording, timed_window
 
 _log = logging.getLogger(__name__)
 
@@ -1575,6 +1575,10 @@ class Session:
             sector_lines=[s.to_pacer() for s in sectors],
         )
         self.laps.update()
+        # The GPS verdict is judged over the timed laps, and the line just moved their ends.
+        quality = self.timing_quality
+        if quality._census is not None:
+            self._timing_quality = quality.over_laps(timed_window(self.laps))
         self._cols_cache.clear()
         self._dist_cache.clear()
         self._xyt_cache.clear()

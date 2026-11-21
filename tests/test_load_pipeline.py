@@ -236,6 +236,137 @@ def test_the_media_clock_bound_covers_every_gps5_era_clip():
     print(f"ok media-clock bound: {data_quality.MEDIA_CLOCK_LAP_ERROR!r} covers {table}")
 
 
+def _load_with_2d_fixes(paths, bad):
+    """`Session.load(paths)` through the real loader, with every raw fix whose naive (media) time
+    `bad(t)` holds turned into a 2D fix (fix 2, DOP 3, its true position): the quality gate rejects
+    it, exactly as it rejects a receiver still acquiring. Nothing else about the recording moves."""
+    import pacer
+
+    real = load.read_recording
+
+    def read_recording(p):
+        out = real(p)
+        samples = [s if not bad(t) else pacer.GPSSample(
+            lat=s.lat, lon=s.lon, altitude=s.altitude, full_speed=s.full_speed,
+            ground_speed=s.ground_speed, timestamp_ms=s.timestamp_ms, dop=3.0, fix=2)
+            for s, t in zip(out[0], out[2], strict=True)]
+        return (samples, *out[1:])
+
+    load.read_recording = read_recording
+    try:
+        return Session.load(paths)
+    finally:
+        load.read_recording = real
+
+
+def test_the_gps_verdict_is_judged_over_the_timed_laps():
+    """THE GPS VERDICT IS ABOUT THE LAPS, so fixes rejected where no lap is timed do not decide it.
+
+    It was the share of every MOVING fix, so a receiver that held only a 2D fix through the grid
+    and the out-lap downgraded the whole session: on the synthetic demo circuit with 164 s of 2D
+    fixes it read "GPS quality low (20% of fixes rejected)", decided no PB, focus list or debrief
+    and de-emphasised 11 lap times that each equalled the clean recording's to the millisecond.
+    The share is now taken from the first start/finish crossing to the last.
+
+    Both halves on one real recording through the real loader: 2D fixes until just before the
+    second crossing (the first lap is lost — it has no crossing to start from — and the session
+    notice says so), then 2D fixes for 30 s inside the timed laps, which must still downgrade."""
+    import tempfile
+
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    from studio.dev._jail import divert_app_support
+
+    divert_app_support("pacer-test-quality-laps-")
+    with tempfile.TemporaryDirectory(prefix="quality_laps_") as tmp:
+        rec = sg.generate(os.path.join(tmp, "rec"), md.DEMO_SEED, 5, chapters=1,
+                          origin=md.DEMO_ORIGIN)
+        clean = Session.load(rec.paths)
+        n = clean.lap_count()
+        clean_times = [clean.lap_time(i) for i in range(n - 1)]
+        # The naive clock runs ~0.5 s from the telemetry axis (the GPS lag): 3 s of margin, clear
+        # of that and of the edge guard band (the test below works inside it).
+        second = clean.laps.start_timestamp(1)
+        out = _load_with_2d_fixes(rec.paths, lambda t: t < second - 3.0)
+        q = out.timing_quality
+        assert q.dropped_fraction == 0.0 and not q.degraded, (q.dropped_fraction, q.summary())
+        assert q.in_laps, "five timed laps: the share is the laps' own"
+        assert q._moving_fraction >= data_quality.DROPPED_FIX_CONCERN_FRAC, (
+            f"no teeth: the whole drive's share {q._moving_fraction:.3f} would not have downgraded")
+        got = [out.lap_time(i) for i in range(out.lap_count() - 1)]
+        assert len(got) == len(clean_times) - 1, (got, clean_times)
+        assert max(abs(a - b) for a, b in zip(got, clean_times[1:], strict=True)) < 1e-6, (
+            got, clean_times)
+        assert "s of driving outside your laps, so a lap there may be missing" in q.outside_laps(), (
+            q.outside_laps())
+        # A start-line edit moves the laps' ends, and the verdict is judged again (same line here).
+        out.set_timing_lines(out.start_line, out.sector_lines, user_confirm=False)
+        assert out.timing_quality == q, out.timing_quality
+
+        # Inside the laps: 30 s of the third lap's span onwards, rejected — still GPS quality low,
+        # in plain words, at a share over the laps above the whole drive's.
+        third = clean.laps.start_timestamp(2)
+        inside = _load_with_2d_fixes(rec.paths, lambda t: third + 5.0 < t < third + 35.0)
+        qi = inside.timing_quality
+        assert qi.in_laps and qi.low_gps_quality, (qi.dropped_fraction, qi.summary())
+        assert qi.dropped_fraction > qi._moving_fraction, (qi.dropped_fraction, qi._moving_fraction)
+        assert f"({qi.dropped_pct()}% of fixes inside your laps rejected)" in qi.untrusted(), (
+            qi.untrusted())
+        assert qi.outside_laps() == "", qi.outside_laps()
+    print(f"ok verdict over the timed laps: outside {q._moving_fraction:.1%} of the drive -> "
+          f"{q.dropped_fraction:.0%}; inside -> {qi.dropped_fraction:.1%}")
+
+
+def test_rejected_fixes_at_the_edge_of_the_laps_keep_the_whole_drive_verdict():
+    """REVIEW OF #709: a stretch of rejected fixes that ENDS just before the first counted crossing,
+    or STARTS just after the last, reaches that crossing through the smoother (its 13-fix window
+    averages one-sidedly at a run's edge): on the demo circuit the first timed lap read +282 ms at
+    0.35-0.40 s of margin, +180 ms at 0.45-0.50 s, exact only from 0.65 s; the last, +216 ms at
+    0.40-0.45 s. Judged over the laps alone that session read clean. Inside the guard band
+    (`data_quality.EDGE_GUARD_FIXES` fixes beyond either edge) the whole drive decides instead, so
+    it stays "GPS quality low"; 3 s of margin is clear of the smoother and is cleared."""
+    import tempfile
+
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    from studio.dev._jail import divert_app_support
+
+    divert_app_support("pacer-test-quality-edge-")
+    with tempfile.TemporaryDirectory(prefix="quality_edge_") as tmp:
+        rec = sg.generate(os.path.join(tmp, "rec"), md.DEMO_SEED, 5, chapters=1,
+                          origin=md.DEMO_ORIGIN)
+        clean = Session.load(rec.paths)
+        n = clean.lap_count()
+        # The bad stretches are cut on the NAIVE clock the samples carry; the crossings are on the
+        # telemetry axis. Map each crossing back through the clean load's own kept fixes.
+        seen = {}
+        real = load._gps9_times
+
+        def times(samples, naive):
+            t = real(samples, naive)
+            seen["t"], seen["n"] = np.asarray(t, float), np.asarray(naive, float)
+            return t
+
+        load._gps9_times = times
+        try:
+            Session.load(rec.paths)
+        finally:
+            load._gps9_times = real
+        second, last = np.interp([clean.laps.start_timestamp(1), clean.laps.start_timestamp(n - 1)],
+                                 seen["t"], seen["n"])
+        for m in (0.4, 0.5):
+            before = _load_with_2d_fixes(rec.paths, lambda t, m=m: t < second - m).timing_quality
+            after = _load_with_2d_fixes(rec.paths, lambda t, m=m: t > last + m).timing_quality
+            for where, q in (("before the first", before), ("after the last", after)):
+                assert q.low_gps_quality and not q.in_laps, (
+                    f"rejected fixes {m} s {where} crossing reach it through the smoother, yet the "
+                    f"session read {q.dropped_pct()}% ({q.summary() or 'clean'})")
+        for t_bad in (lambda t: t < second - 3.0, lambda t: t > last + 3.0):
+            q = _load_with_2d_fixes(rec.paths, t_bad).timing_quality
+            assert q.in_laps and not q.degraded, (q.dropped_pct(), q.summary())
+    print(f"ok edge band: {data_quality.EDGE_GUARD_FIXES} fixes either side keep the whole drive")
+
+
 def _write_baseline():
     with open(BASELINE, "w") as f:
         json.dump(_load_fingerprint(), f, sort_keys=True, indent=1)
@@ -251,6 +382,8 @@ if __name__ == "__main__":
               test_load_pipeline_media_clock_invariants,
               test_load_pipeline_matches_baseline,
               test_a_gps5_era_clip_is_rejected_by_spacing_and_still_publishes_a_wall_clock,
-              test_the_media_clock_bound_covers_every_gps5_era_clip):
+              test_the_media_clock_bound_covers_every_gps5_era_clip,
+              test_the_gps_verdict_is_judged_over_the_timed_laps,
+              test_rejected_fixes_at_the_edge_of_the_laps_keep_the_whole_drive_verdict):
         t()
     print("\nALL LOAD-PIPELINE TESTS PASSED")
