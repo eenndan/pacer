@@ -6,6 +6,44 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-11-21
+
+A minor release: 5 pull requests, #672 and #674 to #677. Its theme: sector times get the receiver
+drift correction corner times already had, so two splits read level within 0.15 s instead of
+0.30 s, and the ideal lap says in words that GPS noise lowers it too.
+
+### Highlights
+
+- **Sector times are de-drifted before they are timed.** Each lap's GPS drift comes off its trace
+  before the sector lines are crossed: two splits read level within 0.15 s, not 0.30 s. Lap times
+  do not move, and a lap's splits still add up to it (#675, #676)
+- **A real sector gain is offered more often.** On synthetic race days "Compare with my typical
+  pass" names a planted 0.15 s gain on 6 of 8 days, not 2; a few more offers land on passes
+  truly within 0.03 s, and the docs say so (#676)
+- **A lap that ran wide keeps honest sector times.** The drift fit trims a lap's wide stretches; a
+  lap too far off its line is timed as measured, still counted, and its sector cells say so (#677)
+- **The ideal lap says GPS noise lowers it too.** Its note on the Stats page, in the report and in
+  laps.csv says part of its gap is timing luck, in words, with no figure (#674)
+- **Two hovers read cleaner.** The Δref header hover states its bound once, and Coaching's Jump
+  line names the typical pass's lap and time right beside it (#672)
+
+### Changed
+
+- A lap too far off the line for its GPS drift to be taken off says so on its sector times: in the
+  Stats page's SPLITS grid, the lap table and a Quickest passes sector row it leads. (#677)
+- Sector splits take each lap's GPS receiver drift off before they are timed, as corner times do,
+  and their step was re-measured: two splits are now level within 0.15 s, not 0.30 s. Lap times do
+  not move. (#675, #676)
+- The ideal lap's note (Stats, report, laps.csv) now says GPS noise lowers the ideal too: part of
+  its gap is timing luck, not time to find, by an amount no single recording can measure. (#674)
+
+### Fixed
+
+- The Δref header hover states its bound once: the 0.07 s colour step, and that from GPS alone a
+  lap's corner time and another recording's can differ by up to 0.06 s at the cleanest noise. (#672)
+- Coaching's Jump status line puts the typical pass's lap and time beside "your typical pass", not
+  after the luck clause, in a shorter sentence. (#672)
+
 ## [0.21.0] — 2026-11-21
 
 A minor release: 9 pull requests, #659, #661 and #663 to #670. Its theme: every "level" in the app
@@ -2674,7 +2712,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/eenndan/pacer/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/eenndan/pacer/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/eenndan/pacer/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/eenndan/pacer/compare/v0.19.0...v0.20.0
