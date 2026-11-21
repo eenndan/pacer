@@ -101,6 +101,7 @@ CARD_W, CARD_H = share_card.CARD_W, share_card.CARD_H
 KIND_LAP = "lap"            # a clean, timed lap: solid bar
 KIND_DROPOUT = "dropout"    # a timed lap with a GPS dropout (the table's ⚠): hatched bar
 KIND_OFF_LINE = "off_line"  # a timed lap that left the line the other laps drive (⚠): hatched
+KIND_GAP = "chapter_gap"  # a timed lap across a missing chapter (⚠): hatched, its own legend
 KIND_EXCLUDED = "excluded"  # left out of the times (the table's ⊘ strip): a marked slot, no height
 TONE_BEST = "best"
 
@@ -189,6 +190,7 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
     card = share_card.card_data(session, unit=unit)
     rows = list(session.lap_rows())
     warned = data_quality.lap_warnings(session)   # the ⚠ set: dropout (None) or off the line
+    gap_ids = data_quality.gap_lap_ids(session)   # ...or timed across a missing chapter
     dropouts = set(warned)
     excluded = list(session.excluded_lap_ids() or [])
     times = {int(r["idx"]): float(r["time"]) for r in rows}
@@ -209,7 +211,8 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
         if lid not in times:
             bars.append(StripBar(lid, lap_label(lid), KIND_EXCLUDED, None, "", 0.0, False))
             continue
-        kind = KIND_LAP if lid not in warned else KIND_OFF_LINE if warned[lid] else KIND_DROPOUT
+        kind = (KIND_LAP if lid not in warned else KIND_GAP if lid in gap_ids
+                else KIND_OFF_LINE if warned[lid] else KIND_DROPOUT)
         gap = gaps.get(lid)
         if gap is None:
             bars.append(StripBar(lid, lap_label(lid), kind, None, TONE_BEHIND, 0.0, False))
@@ -258,6 +261,7 @@ _SW, _SW_GAP, _ENTRY_GAP = 18.0, 10.0, 28.0
 # the one line that accounts for crossings the picture cannot show at all — is not in the table:
 # `legend_plan` drops it only once every entry here has gone.
 LEGEND_PRIORITY = {TONE_BEHIND: 0, TONE_LEVEL: 1, TONE_BEST: 2, KIND_DROPOUT: 3, KIND_OFF_LINE: 3,
+                   KIND_GAP: 3,
                    TONE_QUICKER: 4,
                    "clipped": 5, KIND_EXCLUDED: 6}
 
@@ -294,12 +298,15 @@ def legend_entries(data: LapStripData, *, short: bool = False) -> list[tuple[str
         out.append((KIND_DROPOUT, "GPS dropout: time less reliable"))
     if any(b.kind == KIND_OFF_LINE and b.tone != TONE_QUICKER for b in timed):
         out.append((KIND_OFF_LINE, "left the line the other laps drive: not counted"))
+    if any(b.kind == KIND_GAP and b.tone != TONE_QUICKER for b in timed):
+        out.append((KIND_GAP, "timed across a missing chapter: not counted"))
     quick = [b for b in timed if b.tone == TONE_QUICKER]
     if quick:
         who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in quick)
                if len(quick) <= 3 else plural(len(quick), "lap"))
         why = " or ".join(w for k, w in ((KIND_DROPOUT, "GPS dropout"),
-                                         (KIND_OFF_LINE, "left the line"))
+                                         (KIND_OFF_LINE, "left the line"),
+                                         (KIND_GAP, "across a missing chapter"))
                           if any(b.kind == k for b in quick))
         out.append((TONE_QUICKER, f"{who}: quicker, {why} (not counted)"))
     cut = [b for b in timed if b.clipped]
@@ -533,7 +540,7 @@ def _paint(data: LapStripData) -> QImage:
             continue
         top = min(y_of(b.height), base - MIN_DRAW_PX)
         rect = QRectF(cx - bar_w / 2, top, bar_w, base - top)
-        if b.kind in (KIND_DROPOUT, KIND_OFF_LINE):
+        if b.kind in (KIND_DROPOUT, KIND_OFF_LINE, KIND_GAP):
             _paint_hatched(p, rect, fill)
         else:
             p.setPen(Qt.NoPen)
@@ -666,7 +673,7 @@ def _paint_legend(p: QPainter, plan: LegendPlan, tone_fill: dict, best_hue: str)
         box = QRectF(it.x, it.y - _SW + 2, _SW, _SW)
         if it.style == KIND_EXCLUDED:
             _paint_excluded(p, box.center().x(), box.center().y(), _SW * 0.9)
-        elif it.style in (KIND_DROPOUT, KIND_OFF_LINE, TONE_QUICKER):
+        elif it.style in (KIND_DROPOUT, KIND_OFF_LINE, KIND_GAP, TONE_QUICKER):
             _paint_hatched(p, box, tone_fill[TONE_BEHIND])
         elif it.style == "clipped":
             p.setPen(Qt.NoPen)

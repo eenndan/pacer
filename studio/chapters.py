@@ -353,6 +353,46 @@ def missing_chapters(paths: list[str]) -> list[tuple[int, str]]:
             for n in range(1, max(present, default=0)) if n not in present]
 
 
+_GOPR_RE = re.compile(r"^GOPR(\d{4})\.MP4$", re.IGNORECASE)
+
+
+def _chapter_number(path: str) -> tuple[tuple[str, int], int] | None:
+    """((prefix, recording), chapter number as the camera counts it) for a GoPro chapter name, or
+    None. The legacy naming is renumbered the way `missing_chapters` numbers it: GOPRnnnn is
+    chapter 1 and GP01nnnn chapter 2."""
+    info = parse_gopro_name(path)
+    if info is not None:
+        legacy = info.prefix == "GP"
+        return (info.prefix, info.recording), info.chapter + 1 if legacy else info.chapter
+    m = _GOPR_RE.match(os.path.basename(path))
+    return (("GP", int(m.group(1))), 1) if m else None
+
+
+def gap_joins(paths: list[str]) -> list[tuple[int, list[tuple[int, str]]]]:
+    """Where the chained `paths` jump across chapters that are not among them: ``[(k, missing)]``
+    with `k` the index in `paths` of the chapter AFTER the jump and `missing` its ``(chapter
+    number, the path the camera's name would have)``. [] for consecutive chapters, a lone file, a
+    recording missing only its FIRST chapters (nothing is chained across that) and non-GoPro names.
+
+    The CLOCK's fact, where `missing_chapters` is the FOLDER's: the chapters are laid end to end
+    on one clock, so at such a join the trace jumps from the end of one chapter to the start of a
+    later one with no time between them, and a lap timed across it is short by the chapter that is
+    not there. Names only, no listing: what decides is which files were chained."""
+    out: list[tuple[int, list[tuple[int, str]]]] = []
+    nums = [_chapter_number(p) for p in paths or []]
+    for k in range(1, len(nums)):
+        a, b = nums[k - 1], nums[k]
+        if a is None or b is None or a[0] != b[0] or b[1] - a[1] <= 1:
+            continue
+        (prefix, rec), folder = a[0], os.path.dirname(os.path.abspath(paths[k]))
+        ext = os.path.splitext(paths[k])[1]
+        names = [f"{prefix}{(n - 1 if prefix == 'GP' else n):02d}{rec:04d}{ext}"
+                 for n in range(a[1] + 1, b[1])]
+        out.append((k, [(n, os.path.join(folder, name))
+                        for n, name in zip(range(a[1] + 1, b[1]), names, strict=True)]))
+    return out
+
+
 def _split_missing(missing: list[tuple[int, str]]):
     """(the leading run — chapters 1, 2, … k, where the recording starts — , the gaps after it)."""
     lead = 0
@@ -382,6 +422,11 @@ def _files(missing: list[tuple[int, str]]) -> str:
     if len(missing) > _MAX_NAMED_SKIPS:
         shown += f", +{len(missing) - _MAX_NAMED_SKIPS} more"
     return shown
+
+
+def missing_names(missing: list[tuple[int, str]]) -> str:
+    """'chapter 2, GX020068.MP4' — the chapters of one `gap_joins` entry, as a lap's ⚠ names them."""
+    return f"{_numbers(missing)}, {_files(missing)}"
 
 
 def missing_notice(missing: list[tuple[int, str]]) -> str | None:
