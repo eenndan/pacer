@@ -2241,7 +2241,7 @@ def empty_state_copy(opps: Opportunities, session=None) -> tuple[str, str]:
         valid, dropouts = _lap_account(session)
         if valid == 0:
             return data_quality.NO_LAPS_HEADLINE, data_quality.no_laps_body_for(session)
-        needs = (f"Coaching needs {MIN_LAPS} clean (valid, no GPS dropout, on the line) laps; "
+        needs = (f"Coaching needs {MIN_LAPS} clean laps (valid; {data_quality.CLEAN_LAP_TERMS}); "
                  f"this session has {opps.n_laps}")
         # (dropouts > 0 only with a lap account: `valid` is then a count.)
         lost = (f"{dropouts} of its {plural(valid, 'lap')} had a GPS dropout"
@@ -2324,7 +2324,7 @@ def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:
         total = (f"The total is {what} cleared the evidence gate; corners that did not are "
                  f"listed {where} with the reason.")
     return ("The biggest realistic time gains vs your own best lap, across the WHOLE session "
-            f"(the median over your clean laps: no GPS dropout, on the line){selection} {total}")
+            f"(the median over your clean laps: {data_quality.CLEAN_LAP_TERMS}){selection} {total}")
 
 
 def totals_pointer(top_total: float, n: int, ideal_gap: str, *, corners_note: bool) -> str:

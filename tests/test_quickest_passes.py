@@ -1071,8 +1071,15 @@ def test_a_corners_by_lap_cell_plays_its_pass_and_a_cell_it_cannot_play_says_why
         _patched_matrix(win, drop_lap=2)
         assert not view.play_lap_pass(2, 1) and len(plays) == n
         assert "not counted in the corner times" in win.statusBar().currentMessage()
-        # ...and a lap that left the line (the ⚠ set's other half) is among the reasons it names
-        assert "⚠ left the line" in win.statusBar().currentMessage()
+        assert "(not a row of the grid)" in win.statusBar().currentMessage()
+        # ...and a ⚠ lap is refused under ITS own reason (data_quality.lap_warning_kinds), read
+        # off the ⚠ set alone (patching the session's notes would re-cut the grid under the test)
+        gap = "Lap 3 was timed across a missing chapter (…)"
+        s.lap_warnings, s.chapter_gap_notes = (lambda: {2: gap}), (lambda: {2: gap})
+        try:
+            assert view._uncounted_why(2, "x") == "⚠ timed across a missing chapter"
+        finally:
+            del s.lap_warnings, s.chapter_gap_notes
     finally:
         _close(win)
 
@@ -3278,10 +3285,11 @@ def test_the_not_counted_hover_names_each_laps_own_reason():
     s = _demo_session()
     real = s.quickest_passes()
     patched = dict(
-        quickest_passes=lambda: replace(real, not_counted=(1, 3, 6, 9)),
+        quickest_passes=lambda: replace(real, not_counted=(1, 3, 4, 6, 9)),
         quickest_sectors=lambda: None, excluded_lap_ids=lambda: [3],
         lap_warnings=lambda: {9: "Lap 10 left the line your other laps drive by 34 m, so it is "
-                                 "kept out of the bests.", 6: None})
+                                 "kept out of the bests.", 6: None, 4: "Lap 5 was timed …"},
+        chapter_gap_notes=lambda: {4: "Lap 5 was timed …"})
     for k, v in patched.items():
         setattr(s, k, v)
     try:
@@ -3292,8 +3300,9 @@ def test_the_not_counted_hover_names_each_laps_own_reason():
         for k in patched:
             delattr(s, k)
     assert tip == ("Not counted at one corner or more: lap 2 (a corner edge not matched on track); "
-                   "lap 4 (⊘ excluded); lap 7 (⚠ GPS dropout); lap 10 (⚠ left the line the other "
-                   "laps drive) — as in the Stats page's CORNERS BY LAP."), tip
+                   "lap 4 (⊘ excluded); lap 5 (⚠ timed across a missing chapter); lap 7 (⚠ GPS "
+                   "dropout); lap 10 (⚠ left the line the other laps drive) — as in the Stats "
+                   "page's CORNERS BY LAP."), tip
     print("ok the not-counted hover names each lap's own reason")
 
 

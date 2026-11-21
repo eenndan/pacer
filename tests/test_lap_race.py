@@ -350,6 +350,14 @@ def test_a_lap_that_left_the_line_is_left_out_by_name():
     assert 0 not in rt.ids and rt.excluded == {0: lap_race.EXCLUDED_OFF_LINE}, rt.excluded
     assert set(rt.ids) == {1, 2, 3, 4}
     assert s.race_tracks([0, s.best_lap_id()]) is None
+    # A lap timed across a missing chapter (#700) is out under ITS kind, never "off the line".
+    s.chapter_gap_notes = lambda: {2: "Lap 3 was timed across a missing chapter (…)"}
+    s._race_memo = None
+    s._best_cache = _UNSET
+    rt = s.race_tracks()
+    assert rt.excluded == {0: lap_race.EXCLUDED_OFF_LINE, 2: lap_race.EXCLUDED_CHAPTER_GAP}, \
+        rt.excluded
+    assert set(rt.ids) == {1, 3, 4}
     print("test_a_lap_that_left_the_line_is_left_out_by_name OK")
 
 

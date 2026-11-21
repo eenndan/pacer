@@ -2398,8 +2398,9 @@ def test_stats_view_flags_a_lap_that_left_the_line():
     # hover says what a clean lap is: kept in the bests, not merely dropout-free.
     assert v.t_laps.value.text() == "2 · 2 ⚠", v.t_laps.value.text()
     assert "left the line" in v.t_laps.toolTip(), v.t_laps.toolTip()
-    assert "no GPS dropout and not off the line" in v._pace_section.toolTip(), \
-        v._pace_section.toolTip()
+    assert "timed across a missing chapter" in v.t_laps.toolTip(), v.t_laps.toolTip()
+    assert ("no GPS dropout, not off the line, not timed across a missing chapter"
+            in v._pace_section.toolTip()), v._pace_section.toolTip()
     # A lap timed across a missing chapter wears a ⚠ sentence too, but the card names it on its
     # own row: it did not leave the line.
     gap = "Lap 1 was timed across a missing chapter (chapter 2, GX020001.MP4), so …"
@@ -4467,7 +4468,16 @@ def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
             f"{DROPOUT_MARK} off-the-line laps (see the Laps tab).") in cut.corner_grid_note.text(), \
         cut.corner_grid_note.text()
     cut.hide()
-    del sess.lap_warnings
+    # ...and a lap timed across a missing chapter is named as what it is, never "off the line".
+    gap = "Lap 7 was timed across a missing chapter (chapter 2, GX020001.MP4), so …"
+    sess.lap_warnings = lambda: {1: None, 6: gap}
+    sess.chapter_gap_notes = lambda: {6: gap}
+    held = StatsView(sess)
+    assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded, 1 {DROPOUT_MARK} GPS-dropout and 1 "
+            f"{DROPOUT_MARK} missing-chapter laps (see the Laps tab).") in \
+        held.corner_grid_note.text(), held.corner_grid_note.text()
+    held.hide()
+    del sess.lap_warnings, sess.chapter_gap_notes
     # No per-corner ★ in it: "quickest" is the CORNERS table's question (stats.CornerMatrix).
     assert not any(BEST_SECTOR_MARK in t.item(r, c).text()
                    for r in range(t.rowCount()) for c in range(t.columnCount()))

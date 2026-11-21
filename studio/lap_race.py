@@ -66,7 +66,8 @@ the UI to count: not a clean lap (`EXCLUDED_NOT_CLEAN`: the band left it out, or
 it), an interior GPS dropout (`EXCLUDED_DROPOUT`; the dot would cross the infield and the interval
 would read an interpolated odometer), a lap that left the line the other laps drive
 (`EXCLUDED_OFF_LINE`: a cut is not the same circuit, so it is out of the bests and out of the race
-alike), or no on-track match (`EXCLUDED_UNMATCHED`: no corner warp could be built, so its place
+alike), a lap timed across a missing chapter (`EXCLUDED_CHAPTER_GAP`: its time is short by the
+chapter), or no on-track match (`EXCLUDED_UNMATCHED`: no corner warp could be built, so its place
 would be an equal-fraction guess). Fewer than `MIN_FIELD` laps left → no race (None).
 """
 from __future__ import annotations
@@ -75,6 +76,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import data_quality
 from .library import PB_PRECISION_S
 
 #: What the place match may add to a running interval's noise — see the module doc.
@@ -95,8 +97,10 @@ COLOURED_LAPS = 5
 LADDER_TOP = 8
 
 EXCLUDED_NOT_CLEAN = "not a clean lap"
-EXCLUDED_DROPOUT = "dropout"
-EXCLUDED_OFF_LINE = "off line"
+# The three ⚠ reasons are the ⚠ kinds themselves (data_quality.lap_warning_kinds).
+EXCLUDED_DROPOUT = data_quality.WARN_DROPOUT
+EXCLUDED_OFF_LINE = data_quality.WARN_OFF_LINE
+EXCLUDED_CHAPTER_GAP = data_quality.WARN_CHAPTER_GAP
 EXCLUDED_UNMATCHED = "unmatched"
 
 UNRANKED_PROVISIONAL = ("The start/finish line is not confirmed, so lap times are provisional: "

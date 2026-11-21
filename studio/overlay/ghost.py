@@ -13,8 +13,9 @@ WHEN THERE IS NO GHOST (`unavailable_reason`, the one rule the dialog and the re
     a ring at your own best would sit at a gap the strip does not print;
   * the start/finish line is provisional — every lap time, the best lap included, is referenced to
     an arbitrary point (the Laps table blanks its Δbest there for the same reason);
-  * the Lap Race leaves either lap out (not a clean lap, a GPS dropout, off the line, no on-track
-    match) — the ring would be an interpolated or equal-fraction guess, or a lap on another line;
+  * the Lap Race leaves either lap out (not a clean lap, a ⚠ lap — a GPS dropout, off the line,
+    timed across a missing chapter — or no on-track match) — the ring would be an interpolated or
+    equal-fraction guess, a lap on another line, or a lap on a broken clock;
   * the full-session scope — it follows every lap, so there is no one lap to race.
 Never the ideal lap: it is a composite of segments, not a drive with a position at a time.
 The ring is shown only between the lines: in the run-up there is no lap clock yet, and in the
@@ -34,7 +35,7 @@ THE TWO HALVES RUN ON TWO THREADS. `unavailable_reason` (the dialog, GUI thread)
 Race's default field — the memo the app already holds — because only that keeps each left-out
 lap's reason. The render (`GhostElement.prepare`, the export's worker thread) never builds that
 field: it asks the session-wide rules and then the two-lap field it needs anyway to paint. A lap
-is left out of a field for reasons of its own (not clean, unmatched, a dropout, off the line), so
+is left out of a field for reasons of its own (not clean, unmatched, any ⚠ kind), so
 either lap being left out drops the two-lap field below `lap_race.MIN_FIELD` — the same verdict, no reason.
 
 THE LOOK is the app's own "other lap" language (map_view's compare ghost): the compare cyan as a
@@ -57,7 +58,7 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QPainter, QPainterPath, QPen
 
-from studio import lap_race, theme
+from studio import data_quality, lap_race, theme
 from studio.export_palette import EXPORT
 from studio.overlay import DOT_R, LAYER_MAP, ElementContext
 
@@ -126,8 +127,8 @@ def unavailable_reason(session, lap_id: int | None, follow_laps: bool = False) -
             why = tracks.excluded.get(lap, "")
             if why == lap_race.EXCLUDED_DROPOUT:
                 return f"{_lap_name(lap)} has a GPS dropout, so its place on track is a guess."
-            if why == lap_race.EXCLUDED_OFF_LINE:
-                return f"{_lap_name(lap)} left the line your other laps drive, so it is not raced."
+            if why in data_quality.WARN_REASON:      # the other ⚠ kinds, in their own words
+                return f"{_lap_name(lap)} is not raced: {data_quality.WARN_REASON[why]}."
             if why == lap_race.EXCLUDED_UNMATCHED:
                 return f"{_lap_name(lap)} could not be matched on track to your best lap."
             return f"{_lap_name(lap)} is not a clean lap."

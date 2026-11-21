@@ -902,6 +902,38 @@ def gap_lap_ids(session) -> set[int]:
     return set(ask()) if callable(ask) else set()
 
 
+# THE ⚠ REASON KINDS, and every way a surface words them — one table, so the race card, the export
+# ghost, Quickest passes, the Stats page and the status line cannot word a lap's reason three
+# ways (or call a lap timed across a missing chapter "off the line").
+WARN_DROPOUT = "dropout"
+WARN_OFF_LINE = "off line"
+WARN_CHAPTER_GAP = "chapter gap"
+#: kind → the reason after a ⚠: "lap 10 (⚠ left the line the other laps drive)".
+WARN_REASON = {WARN_DROPOUT: "GPS dropout",
+               WARN_OFF_LINE: "left the line the other laps drive",
+               WARN_CHAPTER_GAP: "timed across a missing chapter"}
+#: kind → (one lap, several laps) in a count: "1 GPS dropout (L6)", "2 off the line (L3, L9)".
+WARN_COUNTED = {WARN_DROPOUT: ("GPS dropout", "GPS dropouts"),
+                WARN_OFF_LINE: ("off the line", "off the line"),
+                WARN_CHAPTER_GAP: ("timed across a missing chapter",
+                                   "timed across a missing chapter")}
+#: kind → the compound adjective before "lap": "1 ⚠ off-the-line lap".
+WARN_ADJECTIVE = {WARN_DROPOUT: "GPS-dropout", WARN_OFF_LINE: "off-the-line",
+                  WARN_CHAPTER_GAP: "missing-chapter"}
+#: What a CLEAN lap is — the complement of the ⚠ set (`Session.lap_out_of_bests`), for the copy
+#: that defines the laps a number runs over.
+CLEAN_LAP_TERMS = "no GPS dropout, not off the line, not timed across a missing chapter"
+
+
+def lap_warning_kinds(session) -> dict[int, str]:
+    """``{lap_id: kind}`` over the ⚠ set (`lap_warnings`): `WARN_CHAPTER_GAP` for a lap timed
+    across a missing chapter (its sentence wins in `Session.lap_warnings`), `WARN_DROPOUT` for a
+    GPS dropout, `WARN_OFF_LINE` for a lap that left the line."""
+    gaps = gap_lap_ids(session)
+    return {i: (WARN_CHAPTER_GAP if i in gaps else WARN_DROPOUT if why is None else WARN_OFF_LINE)
+            for i, why in lap_warnings(session).items()}
+
+
 def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:
     """Every quality code that applies to ONE lap row — the session-wide ones plus this lap's own.
 

@@ -3441,19 +3441,18 @@ def step_name(qp) -> str:
 
 def not_counted_tip(session, left, sectors: bool) -> str:
     """The "N laps not counted" hover: each lap in `left` under its OWN reason — ⊘ excluded
-    (`excluded_lap_ids`), ⚠ GPS dropout or ⚠ left the line (the one ⚠ set,
-    `data_quality.lap_warnings`), else a corner edge not matched on track (or, with `sectors`, a
-    sector split missing). A list of every possible reason sent a reader hunting for a cut lap
+    (`excluded_lap_ids`), its ⚠ kind's words (`data_quality.lap_warning_kinds`: a GPS dropout,
+    left the line, timed across a missing chapter), else a corner edge not matched on track (or,
+    with `sectors`, a sector split missing). A list of every possible reason sent a reader hunting for a cut lap
     under "GPS dropout" (release QA, wave 21)."""
     excluded = set(getattr(session, "excluded_lap_ids", list)() or ())
-    warned = data_quality.lap_warnings(session)
+    kinds = data_quality.lap_warning_kinds(session)
     rest = ("a corner edge not matched on track or a sector split missing" if sectors else
             "a corner edge not matched on track")
     groups: dict[str, list[int]] = {}
     for i in left:
         why = (f"{EXCLUDED_MARK} excluded" if i in excluded else
-               rest if i not in warned else
-               "⚠ GPS dropout" if warned[i] is None else "⚠ left the line the other laps drive")
+               f"{DROPOUT_MARK} {data_quality.WARN_REASON[kinds[i]]}" if i in kinds else rest)
         groups.setdefault(why, []).append(i)
     parts = "; ".join(f"{'lap' if len(ids) == 1 else 'laps'} {', '.join(map(lap_label, ids))} "
                       f"({why})" for why, ids in groups.items())

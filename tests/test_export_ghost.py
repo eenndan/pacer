@@ -371,6 +371,10 @@ def test_no_ghost_where_the_rules_forbid_one():
         why = ghost.unavailable_reason(s, lap)
         assert why is not None and "left the line" in why, why
     s._race_memo = None
+    with _Patched(s, chapter_gap_notes=lambda: {lap: "Lap … was timed across a missing chapter"}):
+        why = ghost.unavailable_reason(s, lap)
+        assert why is not None and "timed across a missing chapter" in why, why
+    s._race_memo = None
     cases["the full-session scope"] = _ghost_pixels(s, None, follow=True, elements=("ghost",))
     for what, (count, painter) in cases.items():
         assert count == 0, f"{what}: {count} ghost pixels"
