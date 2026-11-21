@@ -57,7 +57,7 @@ from ._signal import (
 )
 
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
-# dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
+# dropout in the lap or at its line — its time/distance are less reliable). Clean laps carry "".
 DROPOUT_FLAG = "gps-dropout"
 # ...and a lap that left the line the other laps drive (a cut: `Session.off_line_metres`), the
 # other half of the ⚠ set — kept out of the bests, so it is no clean row either.

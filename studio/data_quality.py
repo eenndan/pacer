@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 
-from ._signal import MAX_DOP, SMOOTH_WINDOW, fmt_hms
+from ._signal import MAX_DOP, SMOOTH_REACH_FIXES, fmt_hms, plural
 
 # Timing-clock provenance — which per-sample time axis the load path actually built.
 GPS9_TRUECLOCK = "gps9_trueclock"        # GPS9 per-sample fix spacing (the validated headline path)
@@ -84,9 +84,19 @@ DROPPED_FIX_CONCERN_FRAC = 0.08
 # measured on the demo circuit (review of #709), the first timed lap read +282 ms at 0.35-0.40 s
 # of margin, +180 ms at 0.45-0.50 s and +80 ms at 0.55-0.60 s, and was exact from 0.65 s; the
 # last read +216 ms at 0.40-0.45 s and +12 ms at 0.60 s. The smoother reaches SMOOTH_WINDOW // 2
-# + 1 fixes (0.7 s at 10 Hz, past every measured error); the band is twice that, 1.4 s at 10 Hz,
-# and moves with the window.
-EDGE_GUARD_FIXES = 2 * (SMOOTH_WINDOW // 2 + 1)
+# + 1 fixes (`_signal.SMOOTH_REACH_FIXES`: 0.7 s at 10 Hz, past every measured error); the band is
+# twice that, 1.4 s at 10 Hz, and moves with the window.
+EDGE_GUARD_FIXES = 2 * SMOOTH_REACH_FIXES
+
+# MOST LAPS ⚠ IS A LOW-QUALITY RECORDING, whatever the rejected-fix share says. A fix missing
+# within the smoother's reach of a crossing moves that lap and puts the GPS-dropout ⚠ on it
+# (`Session.lap_dropout_spans`), and scattered rejections do that to most laps long before the
+# share reaches DROPPED_FIX_CONCERN_FRAC: on the synthetic GoPro, 5 % of fixes rejected at random
+# left 13 of 14 laps ⚠, and the "best" was then the one slow lap that happened to be clean, judged
+# for a PB against the library. So when STRICTLY MORE than this share of the valid laps wear the
+# dropout ⚠ (chapter-gap laps do not vote), the verdict is `low_gps_quality` and the degraded path
+# takes over: no PB, no focus list or debrief, the Library row flagged, the banner up.
+LINE_DROPOUT_MAJORITY = 0.5
 
 
 @dataclass(frozen=True)
@@ -226,6 +236,34 @@ class TimingQuality:
     _in_laps: bool = False
     _moving_fraction: float = 0.0
     _outside_s: float = 0.0
+    _lap_dropouts: tuple[int, int] = (0, 0)   # (valid laps wearing the dropout ⚠, valid laps)
+
+    def with_lap_dropouts(self, flagged: int, laps: int) -> TimingQuality:
+        """This verdict told how many of the `laps` valid laps wear the GPS-dropout ⚠ (`flagged`);
+        a majority of them makes it low (LINE_DROPOUT_MAJORITY)."""
+        return replace(self, _lap_dropouts=(int(flagged), int(laps)))
+
+    @property
+    def line_dropouts(self) -> tuple[int, int] | None:
+        """(⚠ laps, valid laps) when STRICTLY more than LINE_DROPOUT_MAJORITY of the valid laps
+        wear the GPS-dropout ⚠, else None."""
+        flagged, laps = self._lap_dropouts
+        return (flagged, laps) if laps and flagged > LINE_DROPOUT_MAJORITY * laps else None
+
+    @property
+    def _share_low(self) -> bool:
+        return self.dropped_fraction >= DROPPED_FIX_CONCERN_FRAC
+
+    def _line_words(self) -> str:
+        """"GPS fixes are missing at the line on 13 of 14 laps" — the measure of the lap vote."""
+        flagged, laps = self.line_dropouts or self._lap_dropouts
+        return f"GPS fixes are missing at the line on {flagged} of {plural(laps, 'lap')}"
+
+    def line_sentence(self) -> str:
+        """The plain-words reason a lap vote made this recording low, or "" when it did not."""
+        if self.line_dropouts is None:
+            return ""
+        return f"{self._line_words()}, so lap times can't be trusted enough to judge a PB."
 
     def over_laps(self, window: tuple[float, float] | None) -> TimingQuality:
         """This verdict re-judged over `window`, the (first, last) start/finish crossing on the
@@ -291,8 +329,9 @@ class TimingQuality:
 
     @property
     def low_gps_quality(self) -> bool:
-        """True when the quality gate rejected a concerning fraction of fixes."""
-        return self.dropped_fraction >= DROPPED_FIX_CONCERN_FRAC
+        """True when the quality gate rejected a concerning fraction of fixes, or when most valid
+        laps wear the GPS-dropout ⚠ (`line_dropouts`). THE one place low quality is decided."""
+        return self._share_low or self.line_dropouts is not None
 
     @property
     def degraded(self) -> bool:
@@ -312,8 +351,10 @@ class TimingQuality:
         parts = []
         if self.media_clock:
             parts.append("timing estimated from the video clock")
-        if self.low_gps_quality:
+        if self._share_low:
             parts.append(f"GPS quality low ({self._share()})")
+        elif self.low_gps_quality:
+            parts.append(self._line_words().replace("GPS fixes are missing", "GPS fixes missing"))
         return " and ".join(parts)
 
     def concerns(self) -> list[str]:
@@ -327,9 +368,11 @@ class TimingQuality:
             out.append(
                 "Timing estimated from the video clock (older GoPro without GPS9) — "
                 f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off.")
-        if self.low_gps_quality:
+        if self._share_low:
             out.append(
                 f"GPS quality low — {self._share(were=True)}; times may be less accurate.")
+        elif self.low_gps_quality:
+            out.append(self.line_sentence())
         return out
 
     # --- SHARED degraded-timing copy (one source, so the map banner, the lap-table Time tooltip,
@@ -346,6 +389,8 @@ class TimingQuality:
         media, low = self.media_clock, self.low_gps_quality
         if self.no_gps:
             return "No usable GPS in this recording — no lap can be timed."
+        if media and low and not self._share_low:
+            return f"Timing estimated (video clock), and {self.line_sentence()}"
         if media and low:
             return (f"Timing estimated (video clock) and GPS quality low — "
                     f"{self._share()}; times may be less accurate.")
@@ -353,6 +398,8 @@ class TimingQuality:
             # 63 characters: the banner is setWordWrap(False), and this may not outgrow the 66 it
             # had ("Timing estimated from …" + the bound would be 73).
             return f"Timing from the video clock — a lap may read {MEDIA_CLOCK_LAP_ERROR} off."
+        if low and not self._share_low:
+            return self.line_sentence()
         if low:
             return f"GPS quality low — {self._share()}; times may be less accurate."
         return ""
@@ -375,10 +422,14 @@ class TimingQuality:
                     "which places each GPS fix only to about ±0.05 s, a few further, so a lap can "
                     f"read {MEDIA_CLOCK_LAP_ERROR} off. Not yet checked against official timing on "
                     "such a camera — treat the absolute times as approximate.")
-            if low:
+            if low and not self._share_low:
+                base += f" {self.line_sentence()}"
+            elif low:
                 base += (f" GPS quality is also low: {self._share(were=True)}, "
                          "so the positions are less accurate too.")
             return base + " See the note over the map."
+        if low and not self._share_low:
+            return f"{self.line_sentence()} See the note over the map."
         if low:
             return (f"GPS quality low for this recording — {self._share(were=True)}, "
                     "so the positions (and the times derived from them) may be less "
@@ -399,6 +450,10 @@ class TimingQuality:
         media, low = self.media_clock, self.low_gps_quality
         if self.no_gps:
             return ""
+        if low and not self._share_low:
+            line = self._line_words().replace("GPS fixes are missing", "GPS fixes missing")
+            return (f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off, and " if media else "") + (
+                f"{line}, so lap times can't be trusted enough to judge a PB")
         if media and low:
             return (f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off, and GPS quality is low, so the "
                     "positions are less accurate too")
@@ -760,8 +815,8 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 #                       it — which is precisely what the standard means by provisional. laps.csv
 #                       carried no per-row marker for this at all before; the app's own word for
 #                       it is already "Provisional timing".
-#   [u] low reliability ADOPTED (exports). A GPS dropout inside the lap (the ⚠ rule), or a
-#                       recording whose quality gate rejected a concerning share of fixes. It is
+#   [u] low reliability ADOPTED (exports). A GPS dropout in the lap or at its line (the ⚠ rule),
+#                       or a recording whose quality gate rejected a concerning share of fixes. It is
 #                       deliberately NOT extended to a lap whose `QualityTimeline` class is merely
 #                       below GOOD, and that refusal is measured rather than cautious: on the D24
 #                       0060 pair 17 of the 38 clean laps contain a second outside the GNSS good
@@ -865,6 +920,7 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 STAMP_PROVISIONAL = "PROVISIONAL — lap timing from a start/finish line that was never confirmed"
 STAMP_ESTIMATED = "ESTIMATED — lap timing from the video clock, not GPS"
 STAMP_LOW_GPS = "GPS LOW — {pct}% of fixes rejected; speed and position less accurate"
+STAMP_LINE_GPS = "GPS LOW — fixes missing at the line on {n} of {laps}; lap times uncertain"
 
 
 def burned_timing_stamp(session) -> list[str]:
@@ -885,7 +941,10 @@ def burned_timing_stamp(session) -> list[str]:
         if getattr(quality, "media_clock", False):
             out.append(STAMP_ESTIMATED)
         if getattr(quality, "low_gps_quality", False):
-            out.append(STAMP_LOW_GPS.format(pct=quality.dropped_pct()))
+            line = getattr(quality, "line_dropouts", None)
+            out.append(STAMP_LOW_GPS.format(pct=quality.dropped_pct())
+                       if line is None or getattr(quality, "_share_low", True)
+                       else STAMP_LINE_GPS.format(n=line[0], laps=plural(line[1], "lap")))
     return out
 
 
@@ -917,8 +976,9 @@ MARK_MEANING = {
                      "official timing on such a camera"),
     MARK_BREAK_IN_SERIES: ("break in series: the recording is not continuous, so times either "
                            "side of the break are not on the same footing"),
-    MARK_LOW_RELIABILITY: ("low reliability: a GPS dropout inside this lap, or a recording whose "
-                           "quality gate rejected a concerning share of fixes"),
+    MARK_LOW_RELIABILITY: ("low reliability: a GPS dropout in this lap or at its line, or a "
+                           "recording whose quality gate rejected a concerning share of fixes "
+                           "or most of whose laps have such a dropout"),
 }
 
 

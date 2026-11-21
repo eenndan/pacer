@@ -161,6 +161,21 @@ the dropouts don't sit where the error would have to be for fusion to help. (Wha
 *does* corrupt is the lap *distance* on the map, which Pacer already reconstructs with a gap-aware
 speed integral.)
 
+**A missing fix *near* the line is another matter, even a single one.** The load-time position
+smoother averages 13 fixes, not 1.3 s, so a fix missing inside its window — one the quality gate
+rejected leaves a 0.2 s hole, far under the 0.35 s an interior dropout needs — shifts the averaged
+position's instant by up to ~46 ms, and the crossing moves with it; a hole of over a second ending
+just before the line leaves the next fixes averaged from one side only. On the synthetic recording
+in `tests/test_synth_gopro.py`, rejecting 5 % of its fixes at random moved 13 of its 14 laps by up
+to 49 ms, faster as often as slower, and a 1.5 s hole ending 0.5 s before a crossing moved the next
+lap by 125 ms, and a recording whose fixes start or stop 0.4 s from a crossing moved that lap by
+over a quarter of a second. So a lap with a missing fix within the smoother's reach of its start
+or finish crossing (7 fixes; the recording's first and last fix count as the edge of a gap) wears
+the GPS-dropout ⚠ and is kept out of the bests, and every other lap is timed to the bit as before.
+A receiver that drops scattered fixes leaves most laps ⚠, and the few clean ones are no fair best:
+when more than half the valid laps wear the ⚠, the session is judged low GPS quality, says why, and
+claims no PB.
+
 **3. Sub-tick "refine the millisecond at the line" tricks buy nothing at 10 Hz.** Phone lap-timers
 that run on 1 Hz GPS use IMU acceleration to interpolate the exact instant the car crossed the line,
 because at 1 Hz the chord between fixes is a full second wide. At Pacer's 10 Hz it is a tenth of that,

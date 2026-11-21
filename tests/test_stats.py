@@ -2393,7 +2393,7 @@ def test_stats_view_flags_a_lap_that_left_the_line():
     assert rows.get("Off the line") == (
         "lap 1 left the line the other laps drive — flagged ⚠ and left out of bests, σ and pace",
         True), rows
-    assert rows["GPS dropout"][0].startswith("inside 1 of 2 laps"), rows
+    assert rows["GPS dropout"][0].startswith("at 1 of 2 laps"), rows
     # The LAPS tile counts the same ⚠ set (it read "2 · 1 ⚠": the dropout alone), and the PACE
     # hover says what a clean lap is: kept in the bests, not merely dropout-free.
     assert v.t_laps.value.text() == "2 · 2 ⚠", v.t_laps.value.text()
@@ -2419,7 +2419,7 @@ def test_stats_view_flags_a_lap_that_left_the_line():
     sess.dropout_lap_ids = lambda: {0, 1}
     v = StatsView(sess)
     rows = {t: (val, c) for t, val, c in v.trust.card.rows()}
-    assert rows["GPS dropout"][0].startswith("inside 1 of 2 laps"), rows
+    assert rows["GPS dropout"][0].startswith("at 1 of 2 laps"), rows
     assert v.t_laps.value.text() == "2 · 2 ⚠", v.t_laps.value.text()
     print("test_stats_view_flags_a_lap_that_left_the_line OK")
 

@@ -166,6 +166,9 @@ def test_demo_opens_verified_in_the_real_window():
         print(f"  {len(valid)} valid laps on {s.track_name!r}, verified={s.timing_verified}, "
               f"clock {s.timing_quality.clock}")
         assert s.timing_verified, f"the demo opened with PROVISIONAL timing (track {s.track_name!r})"
+        # No missing fix at its lines: no lap ⚠, and so no lap vote making the demo read low.
+        assert not s.dropout_lap_ids() and not s.timing_quality.degraded, (
+            s.dropout_lap_ids(), s.timing_quality.concerns())
         assert s.track_name == md.DEMO_TRACK_NAME, f"the demo circuit was not detected: {s.track_name}"
         assert len(valid) >= MIN_LAPS, f"{len(valid)} valid laps, the board asked for >= {MIN_LAPS}"
         assert len(valid) == truth.laps, (len(valid), truth.laps)

@@ -146,6 +146,136 @@ def test_the_auto_fitted_line_is_off_the_braking_point():
         f"docs/ACCURACY.md quote {PUBLISHED_AUTO_LINE_MS} ms — re-measure and update them together")
 
 
+# A MISSING FIX NEAR THE LINE (`studio/_signal.py` MISSING_FIX_PERIODS). The load-time boxcar counts
+# fixes, not seconds, so a fix the gate rejects within its reach of a crossing moves that crossing —
+# and the 0.2 s it leaves is far under the 0.35 s an interior dropout needs to raise the ⚠. Each case
+# loads this recording with some fixes reported 2D (rejected by the gate, exactly as a receiver that
+# loses its 3D lock is) and times it at the CLEAN load's line, so the only difference is the fixes.
+REJECT_SHARE = 0.05    # of all fixes, at random: inside the dropped-fix share that raises no concern
+REJECT_SEED = 3
+MOVED_S = 0.020        # a lap this far off its clean-trace time was moved by the missing fixes
+EDGE_GAP_S = (2.0, 0.5)   # a 1.5 s hole (it splits the smoothing run) ending 0.5 s before a crossing
+
+
+def _load_rejecting(rec, bad):
+    """`rec` loaded with every fix whose media time satisfies `bad(t)` reported as a 2D fix, so the
+    quality gate drops it. Patches the loader's read for the one call."""
+    import pacer
+    from studio import load
+    real = load.read_recording
+
+    def read(paths):
+        out = real(paths)
+        samples = [s if not bad(t) else pacer.GPSSample(
+            lat=s.lat, lon=s.lon, altitude=s.altitude, full_speed=s.full_speed,
+            ground_speed=s.ground_speed, timestamp_ms=s.timestamp_ms, dop=s.dop, fix=2)
+            for s, t in zip(out[0], out[2], strict=True)]
+        return (samples, *out[1:])
+    load.read_recording = read
+    try:
+        return Session.load(rec.paths)
+    finally:
+        load.read_recording = real
+
+
+def _moved_by_rejection(bad) -> tuple[dict, set]:
+    """({lap id: lap time minus the clean trace's, at the same line}, the ⚠ dropout laps)."""
+    rec, _ = _load()
+    clean, holed = _load_rejecting(rec, lambda t: False), _load_rejecting(rec, bad)
+    line = clean.timing_lines_latlon()[0]
+    for s in (clean, holed):
+        assert s.apply_timing_lines_latlon(line, [], confirmed=True), "the clean line was refused"
+    starts = np.array([clean.laps.start_timestamp(i) for i in range(clean.lap_count())])
+    moved = {}
+    for i in holed.valid_lap_ids():
+        j = int(np.argmin(np.abs(starts - holed.laps.start_timestamp(i))))
+        assert abs(starts[j] - holed.laps.start_timestamp(i)) < 1.0, f"lap {i} has no clean twin"
+        moved[i] = holed.lap_time(i) - clean.lap_time(j)
+    return moved, holed.dropout_lap_ids()
+
+
+def test_scattered_missing_fixes_never_move_a_lap_that_stays_in_the_bests():
+    """5 % of fixes rejected at random, each alone: on main this recording read an unflagged lap
+    tens of ms off its clean time, some of them FAST — a false best the size of the timing step.
+    Now every lap a missing fix moved carries the dropout ⚠, and every lap without one is timed to
+    the bit as on the clean trace."""
+    keep = np.random.default_rng(REJECT_SEED).random(1_000_000) >= REJECT_SHARE
+    moved, dropout = _moved_by_rejection(lambda t: not keep[int(round(t * 10))])
+    off = {i: round(d * 1e3, 1) for i, d in moved.items() if abs(d) > 1e-9}
+    print(f"  {len(moved)} laps, {len(dropout)} ⚠; moved (ms): {off}")
+    assert max(abs(d) for d in moved.values()) > MOVED_S, "no lap moved: the case has no teeth"
+    unflagged = {i: ms for i, ms in off.items() if i not in dropout}
+    assert not unflagged, f"laps moved by missing fixes yet still in the bests (ms): {unflagged}"
+
+
+def test_a_gap_ending_just_before_the_line_flags_the_lap_after_it():
+    """A 1.5 s hole ending 0.5 s before a crossing splits the smoothing run, so the fixes after it
+    are averaged one-sidedly, toward the run's interior: the crossing moves. The lap holding the gap
+    always had the ⚠; the lap STARTING at that crossing has no gap inside it and read clean."""
+    rec, s = _load()
+    k = s.valid_lap_ids()[3]
+    c = s.laps.start_timestamp(k)
+    moved, dropout = _moved_by_rejection(lambda t: c - EDGE_GAP_S[0] < t < c - EDGE_GAP_S[1])
+    print(f"  lap {k} starts at the moved crossing: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
+    assert abs(moved[k]) > MOVED_S, f"the crossing did not move ({moved[k] * 1e3:+.1f} ms): no teeth"
+    assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by a gap at its start, unflagged"
+
+
+TRACE_END_MARGIN_S = 0.4   # the kept trace starts (or ends) this close to a lap's crossing
+
+
+def test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap():
+    """The trace's own first fix is a run edge like any gap's: a recording whose kept fixes start
+    0.4 s before the first crossing averages them one-sidedly, and that lap moved +276 ms on the
+    demo circuit (review of #712), unflagged. Its lap now wears the dropout ⚠."""
+    rec, s = _load()
+    k = s.valid_lap_ids()[0]
+    c = s.laps.start_timestamp(k)
+    moved, dropout = _moved_by_rejection(lambda t: t < c - TRACE_END_MARGIN_S)
+    print(f"  first lap {k}: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
+    assert abs(moved[k]) > MOVED_S, f"the first crossing did not move ({moved[k] * 1e3:+.1f} ms)"
+    assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by the trace's start, unflagged"
+
+
+def test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap():
+    """…and its last fix: kept fixes that stop 0.4 s after the last crossing move the last lap."""
+    rec, s = _load()
+    k = s.valid_lap_ids()[-1]
+    c = s.laps.start_timestamp(k) + s.lap_time(k)
+    moved, dropout = _moved_by_rejection(lambda t: t > c + TRACE_END_MARGIN_S)
+    print(f"  last lap {k}: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
+    assert abs(moved[k]) > MOVED_S, f"the last crossing did not move ({moved[k] * 1e3:+.1f} ms)"
+    assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by the trace's end, unflagged"
+
+
+def test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb():
+    """The cost side (`data_quality.LINE_DROPOUT_MAJORITY`): 5 % of fixes rejected at random leave
+    the rejected-fix share far under its concern line, but most laps ⚠ — and their one clean lap
+    is no best to judge a PB by. The session reads low in plain words, keeps its PB out
+    (`untrusted`) and writes its Library row degraded. One ⚠ lap of 14 does not, and the clean
+    recording is untouched."""
+    rec, clean = _load()
+    assert clean.timing_quality.line_dropouts is None and not clean.timing_quality.degraded
+    keep = np.random.default_rng(REJECT_SEED).random(1_000_000) >= REJECT_SHARE
+    holed = _load_rejecting(rec, lambda t: not keep[int(round(t * 10))])
+    q = holed.timing_quality
+    flagged, laps = len(holed.dropout_lap_ids()), len(holed.valid_lap_ids())
+    print(f"  {flagged} of {laps} laps ⚠, {q.dropped_pct()}% rejected: {q.concerns()}")
+    assert q.dropped_fraction < data_quality.DROPPED_FIX_CONCERN_FRAC, "the share alone reads low"
+    assert q.line_dropouts == (flagged, laps) and q.low_gps_quality and q.degraded
+    assert q.concerns() == [f"GPS fixes are missing at the line on {flagged} of {laps} laps, so "
+                            "lap times can't be trusted enough to judge a PB."], q.concerns()
+    assert q.untrusted(), "a PB could still be judged on this recording"
+    assert holed.library_entry(rec.paths)["degraded"] is True
+    # One ⚠ lap (the trace starting just before the first line) is not a majority.
+    k = clean.valid_lap_ids()[0]
+    c = clean.laps.start_timestamp(k)
+    one = _load_rejecting(rec, lambda t: t < c - TRACE_END_MARGIN_S)
+    assert len(one.dropout_lap_ids()) == 1 and not one.timing_quality.degraded, (
+        one.dropout_lap_ids(), one.timing_quality.concerns())
+    assert one.library_entry(rec.paths)["degraded"] is False
+
+
 def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():
     """The lap table's `entry` column (and laps.csv's, which reads the same row) is km/h at the
     moment the lap began: within ENTRY_KMH of 3.6 × the TRUE speed where the kart crossed the app's
@@ -317,6 +447,11 @@ def _run_all():
     for fn in (test_the_real_loader_times_every_lap_on_the_gps9_clock,
                test_noise_free_laps_are_exact_to_the_millisecond,
                test_the_auto_fitted_line_is_off_the_braking_point,
+               test_scattered_missing_fixes_never_move_a_lap_that_stays_in_the_bests,
+               test_a_gap_ending_just_before_the_line_flags_the_lap_after_it,
+               test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap,
+               test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap,
+               test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb,
                test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing,
                test_the_corners_are_the_circuits,
                test_the_stats_tiles_and_the_coaching_page_are_populated,

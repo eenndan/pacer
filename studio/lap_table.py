@@ -143,7 +143,8 @@ UNMATCHED_EDGE_TIP = ("Not counted: on this lap, {label}'s {edge} could not be m
                       "the Stats page's STRAIGHTS speeds.")
 # The two columns read at ONE edge, and which edge (column index -> (edge offset, word)).
 _CORNER_EDGE_COLS = {5: (0, "entry"), 6: (1, "exit")}
-DROPOUT_TOOLTIP = "GPS dropout in this lap — its time, distance and map are less reliable."
+DROPOUT_TOOLTIP = ("GPS dropout in this lap or at its line — its time, distance and map are less "
+                   "reliable.")
 # EXCLUDED laps: substantial laps the validity rule left OUT of the times / bests (a piece of a lap
 # that doesn't end where it started, a mis-segmented short/long lap, an out-lap, an in-lap, or a lap
 # the kart STOPPED on — the median band cannot see the first or the last, so _signal tests them

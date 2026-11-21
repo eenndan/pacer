@@ -61,6 +61,8 @@ from ._signal import (
     EXCLUDED_OPEN,
     LAP_DIST_BAND_HI,
     LAP_DIST_BAND_LO,
+    MISSING_FIX_PERIODS,
+    SMOOTH_REACH_FIXES,
     SMOOTH_WINDOW,
     _band_lap_ids,
     _excluded_laps,
@@ -1542,8 +1544,24 @@ class Session:
         ``timing_quality.degraded`` is what the data-quality banner + the lap-table de-emphasis
         read; a normal GPS9, clean-fix recording reports not-degraded so the UI is unchanged.
         getattr-guarded (defaults to high quality) for the bare-Session (no-__init__) test path —
-        see ``_ref``."""
-        return getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
+        see ``_ref``.
+
+        THE LAPS VOTE TOO: the loader's verdict is handed the share of valid laps wearing the GPS
+        dropout ⚠ (`data_quality.TimingQuality.with_lap_dropouts`), because scattered missing fixes
+        can leave most laps ⚠ while the rejected-fix share stays under its concern line. Laps
+        timed across a missing chapter wear a ⚠ for another reason and do not vote. Memoized on
+        the loader's verdict object and cleared on re-segment; a bare Session has no laps to ask."""
+        base = getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
+        memo = getattr(self, "_judged_quality", None)
+        if memo is not None and memo[0] is base:
+            return memo[1]
+        judged = base
+        if hasattr(getattr(self, "laps", None), "track_columns"):
+            gap = self.chapter_gap_notes()
+            flagged = sum(1 for i in self.dropout_lap_ids() if i not in gap)
+            judged = base.with_lap_dropouts(flagged, len(self.valid_lap_ids()))
+        self._judged_quality = (base, judged)
+        return judged
 
     # ----------------------------------------------------------- timing lines
     @property
@@ -1574,9 +1592,10 @@ class Session:
         )
         self.laps.update()
         # The GPS verdict is judged over the timed laps, and the line just moved their ends.
-        quality = self.timing_quality
+        quality = getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
         if quality._census is not None:
             self._timing_quality = quality.over_laps(timed_window(self.laps))
+        self._judged_quality = None   # …and the laps' own vote (`timing_quality`) is re-cast
         self._cols_cache.clear()
         self._dist_cache.clear()
         self._xyt_cache.clear()
@@ -2121,15 +2140,62 @@ class Session:
         GPS dropout (not jitter)."""
         return self._lap_columns(lap_id)[0]
 
+    def _missing_fix_steps(self) -> tuple[np.ndarray, np.ndarray, float]:
+        """``(t0, t1, period)``: the start and end TELEMETRY time of every step of the kept trace
+        long enough to have a fix missing inside it (`_signal.MISSING_FIX_PERIODS` median
+        periods), and that median period, over the very fixes the loader smoothed (`_track_times`).
+        The trace's own two ENDS are steps too — (-inf, first fix) and (last fix, +inf) — because
+        the smoother averages one-sidedly there exactly as at a gap: a recording that starts 0.4 s
+        before its first crossing moved that lap +276 ms on the demo circuit. Memoized: moving a
+        timing line re-cuts laps, never moves a fix. A bare Session with no pacer trace behind it
+        (a seeded test double) has none."""
+        memo = getattr(self, "_missing_fix_memo", None)
+        if memo is None:
+            t = getattr(self, "_track_times_cache", None)
+            if t is None and hasattr(getattr(self, "laps", None), "track_columns"):
+                t = self._track_times()
+            t = np.asarray(() if t is None else t, float)
+            dt = np.diff(t)
+            period = float(np.median(dt)) if len(dt) else 0.0
+            if period > 0:
+                hole = dt >= MISSING_FIX_PERIODS * period
+                memo = (np.concatenate([[-np.inf], t[:-1][hole], t[-1:]]),
+                        np.concatenate([t[:1], t[1:][hole], [np.inf]]), period)
+            else:
+                memo = (np.empty(0), np.empty(0), 0.0)
+            self._missing_fix_memo = memo
+        return memo
+
+    def lap_dropout_spans(self, lap_id: int) -> list[tuple[float, float]]:
+        """The ``(t0, t1)`` TELEMETRY spans that make a lap a GPS-dropout lap, in time order: every
+        INTERIOR gap of its kept points longer than gapfill.GAP_TIME_S (0.35 s, the gap-aware draw
+        logic's threshold), and every missing fix within the smoother's reach of its start or
+        finish crossing (`_signal.SMOOTH_REACH_FIXES` periods, however short the gap — see
+        `_signal.MISSING_FIX_PERIODS` for why a single missing fix there moves the lap time) —
+        the trace's first and last fix included, each as the edge of a gap. A span at a trace end
+        runs to the smoother's reach: the part of the window with no fix in it. The ONE
+        detector behind `lap_has_dropout` and the dropout marks (`auto_marks`)."""
+        times = self._lap_point_times(lap_id)
+        spans = {(float(times[g["i"]]), float(times[g["j"]])) for g in gapfill.find_gaps(times)}
+        t0, t1, period = self._missing_fix_steps()
+        if len(t0) and len(times) >= 2:
+            reach = SMOOTH_REACH_FIXES * period
+            for crossing in (float(times[0]), float(times[-1])):
+                near = (t1 > crossing - reach) & (t0 < crossing + reach)
+                lo = np.where(np.isinf(t0[near]), crossing - reach, t0[near])
+                hi = np.where(np.isinf(t1[near]), crossing + reach, t1[near])
+                spans.update(zip(lo.tolist(), hi.tolist(), strict=True))
+        return sorted(spans)
+
     def lap_has_dropout(self, lap_id: int) -> bool:
-        """True if a lap's kept-point times contain an INTERIOR gap — a delta between two
-        consecutive samples larger than the gap threshold (gapfill.GAP_TIME_S = 0.35 s, the
-        same threshold the gap-aware draw logic uses). Such a lap had a GPS dropout, so its
-        time / distance / map are less reliable. Read-only; alters no analysis value."""
-        return bool(gapfill.find_gaps(self._lap_point_times(lap_id)))
+        """True if a lap had a GPS dropout that its time can feel (`lap_dropout_spans`): a gap
+        inside it, or a missing fix close enough to its start or finish line to move where the
+        smoothed trace crosses it. Its time / distance / map are less reliable, so it is ⚠ and out
+        of the bests. Read-only; alters no analysis value."""
+        return bool(self.lap_dropout_spans(lap_id))
 
     def dropout_lap_ids(self) -> set[int]:
-        """The set of VALID lap ids whose trace has an interior GPS dropout (see
+        """The set of VALID lap ids that had a GPS dropout their time can feel (see
         `lap_has_dropout`). The lap table flags these as low-confidence so the user knows the
         timing / distance / map for that lap is less reliable. Pure read-only helper —
         the views stay pacer-free, so they consume this flag via the app."""
@@ -4654,21 +4720,18 @@ class Session:
         `library_entry` builds a dict the pacer-free `library` module then owns.
 
         THE HONESTY RULE IS STRUCTURAL HERE. Every input is the SAME call the surface that already
-        reports it makes — `gapfill.find_gaps` over `_lap_point_times` is verbatim what
-        `lap_has_dropout` runs, `excluded_lap_ids` is the list the lap panel's ⊘ strip renders, and
-        `quality_timeline` is the array the scrub bar's quality strip paints. So a lap carries a
-        dropout mark exactly when the lap table flags it, and the marks band and the quality strip
-        cannot disagree about a second of this recording: there is no second detector to drift.
+        reports it makes — `lap_dropout_spans` is verbatim what `lap_has_dropout` runs,
+        `excluded_lap_ids` is the list the lap panel's ⊘ strip renders, and `quality_timeline` is
+        the array the scrub bar's quality strip paints. So a lap carries a dropout mark exactly
+        when the lap table flags it, and the marks band and the quality strip cannot disagree about
+        a second of this recording: there is no second detector to drift.
 
         Measured on the owner's recordings (both full chains, all five single chapters and the
         bundled sample): ZERO dropout marks and ZERO excluded-lap marks anywhere, and one degraded
         mark in total — the 49 s block at the head of recording 0062 where the receiver is
         acquiring its lock. See `marks.MIN_DEGRADED_S` for the run-length census behind that."""
-        dropouts = []
-        for lap_id in self.valid_lap_ids():
-            times = self._lap_point_times(lap_id)
-            for gap in gapfill.find_gaps(times):
-                dropouts.append((lap_id, float(times[gap["i"]]), float(times[gap["j"]])))
+        dropouts = [(lap_id, t0, t1) for lap_id in self.valid_lap_ids()
+                    for t0, t1 in self.lap_dropout_spans(lap_id)]
         excluded = []
         reasons = self.excluded_lap_reasons()
         for lap_id in self.excluded_lap_ids():
