@@ -1360,8 +1360,10 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
 # studio/dev/) off the code — plain and annotated assignments — and hold each to ONE of three forms
 # derived from that one reference, or to a stated reason it is not a GPS-noise step pinned to its
 # home file; a new step that names its own σ or recording, or a second definition of a step name,
-# fails here (`_step_problems`, whose planted defeats are below).
-_STEP_NAME = re.compile(r"^_?[A-Z0-9_]*(LEVEL|STEP|PRECISION|TIE|SIGMA|FLOOR)(_S)?$")
+# fails here (`_step_problems`, whose planted defeats are below). A step in km/h (`_KMH`, the
+# apex-speed step of cool/apex-delta-at-noise) is held to the same forms: its σ is a km/h column of
+# the same per-recording table, read at the same one reference.
+_STEP_NAME = re.compile(r"^_?[A-Z0-9_]*(LEVEL|STEP|PRECISION|TIE|SIGMA|FLOOR)(_S|_KMH)?$")
 # Constants under a step-like name that are no GPS-noise "level" step: home file, and why.
 _NOT_A_GPS_STEP = {
     "ESTIMATED_CLOCK_TIE_S": ("lap_race.py", "the media clock's published bound, not GPS noise"),
@@ -1471,7 +1473,7 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
                 and len(value.args) == 1 and not value.keywords:
             arg = value.args[0]
             good = _is_reference_sigma(arg) or (
-                _name_of(arg) is not None and _name_of(arg).endswith("_SIGMA_S")
+                _name_of(arg) is not None and _name_of(arg).endswith(("_SIGMA_S", "_SIGMA_KMH"))
                 and ok(_name_of(arg), (*seen, name)))
         elif isinstance(value, ast.Call) and _name_of(value.func) == "max" \
                 and len(value.args) == 2 and not value.keywords:
@@ -1517,7 +1519,9 @@ def test_every_level_step_derives_from_the_one_reference():
     defs = _studio_step_defs()
     names = {n for _r, n, _v in defs if _STEP_NAME.match(n)}
     assert {"PB_PRECISION_S", "CROSS_SESSION_LEVEL_S", "REFERENCE_CORNER_LEVEL_S",
-            "SECTOR_LEVEL_S", "CORNER_DAY_SIGMA_S", "REFERENCE_CORNER_SIGMA_S"} <= names, names
+            "SECTOR_LEVEL_S", "CORNER_DAY_SIGMA_S", "REFERENCE_CORNER_SIGMA_S",
+            "APEX_SPEED_SIGMA_KMH", "APEX_SPEED_LEVEL_KMH", "REFERENCE_APEX_SIGMA_KMH",
+            "REFERENCE_APEX_LEVEL_KMH"} <= names, names
     problems = _step_problems(defs)
     assert not problems, "\n  ".join(["a step not derived from the one reference:", *problems])
     # every anchor and exemption still exists where it says (a stale entry hides nothing)
@@ -1584,6 +1588,15 @@ _GUARD_PLANTS = (
     ("studio/lap_table.py", "SPLIT_SAMPLING_HEADROOM_S = 0.10"),
     ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 1)"),
     ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + 0.10, 2)"),
+    # a km/h step (cool/apex-delta-at-noise): typed, from a σ of its own, from the chart's per-sample
+    # noise, a second definition, or a σ not read off the reference row
+    ("studio/lap_table.py", "APEX_X_LEVEL_KMH = 1.75"),
+    ("studio/lap_table.py", "APEX_X_LEVEL_KMH = house_step(0.31)"),
+    ("studio/lap_table.py", "APEX_X_SIGMA_KMH = 0.62\nAPEX_X_LEVEL_KMH = house_step(APEX_X_SIGMA_KMH)"),
+    ("studio/lap_table.py", "APEX_X_LEVEL_KMH = house_step(chart_stats.SPEED_NOISE_KMH)"),
+    ("studio/lap_table.py", "APEX_SPEED_LEVEL_KMH = 0.9"),
+    ("studio/stats.py", "APEX_X_SIGMA_KMH = PUBLISHED_NOISE_SIGMAS['A'].apex_kmh\n"
+                        "APEX_X_LEVEL_KMH = house_step(APEX_X_SIGMA_KMH)"),
 )
 
 
@@ -1633,7 +1646,7 @@ def test_the_accuracy_step_table_is_the_published_noise_table():
     # every lap and corner cell of the reference row is within the timing step; the split is the
     # one statistic with its own, wider step (cool/sector-step-one-reference), its own cell
     assert max(stats.house_step(s) for k, s in vars(ref).items()
-               if s < 1 and k != "split") <= library.PB_PRECISION_S
+               if s < 1 and k != "split" and not k.endswith("_kmh")) <= library.PB_PRECISION_S
     # the split step is the house rule on its cell rounded up by the one named sampling headroom
     # (cool/sector-dedrift)
     assert stats.SECTOR_LEVEL_S == round(stats.house_step(ref.split)

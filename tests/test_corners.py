@@ -9,6 +9,7 @@ EXACTLY. The Session wiring runs on a bare Session (tests/_synthetic seeding idi
 pacer Laps, no telemetry file); the CornerTable + map corner-marker overlay run offscreen
 on stubs. Run:  QT_QPA_PLATFORM=offscreen python tests/test_corners.py
 """
+import math
 import os
 import sys
 from types import SimpleNamespace
@@ -822,6 +823,161 @@ def test_corner_delta_ref_is_neutral_under_the_reference_lap_corner_step():
         assert got[0.08] == QColor(theme.behind_colour()), got
         assert got[-0.10] == QColor(theme.ahead_colour()), got
     print(f"ok Δref: neutral under {step:.2f} s against another recording, as Δbest")
+
+
+def test_apex_delta_inside_the_apex_speed_step_is_not_coloured():
+    """cool/apex-delta-at-noise. Δapex was coloured by `theme.delta_colour(−Δ)`, whose 0.005 dead
+    band is a TIME tolerance applied to km/h: +0.04 km/h printed "+0.0" in green. It is now coloured
+    only at or past `stats.apex_speed_step` (the house rule on the measured σ of one apex speed),
+    decided on the PRINTED figure in the display unit: inside it the figure stays, neutral; a
+    printed figure at the step is coloured (+ faster = green); "0.0" is never coloured — in km/h
+    and mph, against a lap of this recording and against another recording's. The header says the
+    step once."""
+    _qapp()
+    import dataclasses
+
+    from PySide6.QtGui import QColor
+
+    from studio import stats, theme, units
+    from studio.lap_table import BASE_COLOR, CornerTable, apex_delta_colour
+    step = stats.apex_speed_step(False)
+    assert step == stats.APEX_SPEED_LEVEL_KMH
+    assert stats.apex_speed_step(True) == max(stats.REFERENCE_APEX_LEVEL_KMH, step)
+    cs, cum_a, sp_a, el_a, cum_b, sp_b, el_b = _two_laps()
+    ref = C.lap_corner_stats(cs, float(cum_a[-1]), cum_a, sp_a * 3.6, el_a)
+    st = C.lap_corner_stats(cs, float(cum_a[-1]), cum_b, sp_b * 3.6, el_b, ref=ref)
+    at = math.ceil(step * 10 - 1e-9) / 10            # the first printed figure at or past the step
+    inside = round(at - 0.1, 1)                      # the last printed figure under it
+    cases = [0.04, -0.04, inside, -inside, at, -at, 3.0]
+    for unit in ("kmh", "mph"):
+        for cross in (False, True):
+            u_step = units.convert_speed(stats.apex_speed_step(cross), unit)
+            for d in (*cases, 0.0, 0.049, -0.049, step, -step):
+                printed = float(fmt_signed(units.convert_speed(d, unit), 1).replace("−", "-"))
+                col = apex_delta_colour(d, unit, cross)
+                assert (col is None) == (abs(printed) < u_step - 1e-9), (unit, cross, d, col)
+                if printed == 0.0:
+                    assert col is None, (unit, d)
+                if col is not None:
+                    assert col == (theme.ahead_colour() if d > 0 else theme.behind_colour())
+    # through the real table: the figure is printed, its colour as above (km/h)
+    cs_n = [cs[i % len(cs)] for i in range(len(cases))]
+    st_n = [dataclasses.replace(st[i % len(st)], delta=0.5, apex_speed_delta=d)
+            for i, d in enumerate(cases)]
+    stub = _StubSession(cs_n, {0: [dataclasses.replace(s, delta=0.0, apex_speed_delta=0.0)
+                                   for s in st_n], 1: st_n}, [s.time - 1.0 for s in st_n])
+    table = CornerTable(stub)
+    table.set_lap(1)
+    got = {}
+    for r, d in enumerate(cases):
+        item = table.table.item(r, 4)
+        assert item.text() == fmt_signed(d, 1), (item.text(), d)       # the figure is still shown
+        got[d] = item.foreground().color()
+    for d in (0.04, -0.04, inside, -inside):
+        assert got[d] == BASE_COLOR, (d, got[d].name())
+    assert got[at] == QColor(theme.ahead_colour()) == got[3.0], got   # faster apex: green
+    assert got[-at] == QColor(theme.behind_colour()), got
+    tip = table.table.horizontalHeaderItem(4).toolTip()
+    assert f"A gap under {step:.2f} km/h is not coloured" in tip, tip
+    assert tip.count("under") == 1 and tip.count("up to") == 1, tip   # the step, said once
+    from studio.lap_table import _corner_col_tips
+    ref_tip = _corner_col_tips("mph", "Other day")[4]
+    assert f"under {units.convert_speed(stats.apex_speed_step(True), 'mph'):.2f} mph" in ref_tip
+    assert "another recording's lap" in ref_tip, ref_tip
+    print(f"ok Δapex: neutral under {step:.2f} km/h, coloured at {at:.1f}, '0.0' never coloured")
+
+
+def test_the_apex_speed_step_is_the_house_rule_on_the_measured_sigma():
+    """`stats.APEX_SPEED_LEVEL_KMH` / `REFERENCE_APEX_LEVEL_KMH` are derived, not picked: the house
+    rule on the σ of one apex speed `studio/dev/probes/apex_speed_sigma.py` measures over 40
+    synthetic days at the ONE reference recording's noise (`stats.REFERENCE_SIGMAS`); docs/ACCURACY.md
+    publishes them; the probe checks its pooled σ against the table at every noise it holds; and
+    the chart's gain gate stays its own per-sample statistic, wider than this step."""
+    import re
+
+    from studio import chart_stats, library, stats
+    ref = stats.PUBLISHED_NOISE_SIGMAS[library.REFERENCE_RECORDING]
+    assert stats.APEX_SPEED_SIGMA_KMH == ref.apex_kmh
+    assert stats.REFERENCE_APEX_SIGMA_KMH == ref.reference_apex_kmh
+    assert stats.APEX_SPEED_LEVEL_KMH == round(stats.DIFF_2SIGMA_K * ref.apex_kmh, 2)
+    assert stats.REFERENCE_APEX_LEVEL_KMH == round(stats.DIFF_2SIGMA_K * ref.reference_apex_kmh, 2)
+    # noisier recordings need more, never less
+    for col in ("apex_kmh", "reference_apex_kmh"):
+        row = [getattr(stats.PUBLISHED_NOISE_SIGMAS[r], col) for r in ("C", "B", "A")]
+        assert row == sorted(row) and row[0] > 0, (col, row)
+    gate = stats.DIFF_2SIGMA_K * chart_stats.SPEED_NOISE_KMH
+    assert stats.apex_speed_step(True) < gate, (stats.apex_speed_step(True), gate)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs", "ACCURACY.md"), encoding="utf-8") as f:
+        accuracy = " ".join(f.read().split())
+    m = re.search(r"\*\*One lap's apex speed\*\* .*? On (\d+) synthetic race days .*? at GPS noise "
+                  r"([0-9.]+), recording ([ABC])'s, one lap's apex speed carries σ ([0-9.]+) km/h "
+                  r"\(([0-9.]+)–([0-9.]+) km/h over four seed sets\), so the rule gives ([0-9.]+) "
+                  r"km/h \(2√2σ\); against another recording's lap σ ([0-9.]+) km/h, ([0-9.]+) km/h\. "
+                  r"At recording B's noise the rule gives ([0-9.]+) km/h, at A's ([0-9.]+) km/h",
+                  accuracy)
+    assert m, "docs/ACCURACY.md no longer publishes the apex-speed step"
+    days, noise, rec, sigma, lo, hi, rule, rsigma, rrule, at_b, at_a = m.groups()
+    assert int(days) >= 40 and rec == library.REFERENCE_RECORDING and float(noise) == ref.noise
+    assert float(sigma) == stats.APEX_SPEED_SIGMA_KMH and float(lo) <= float(sigma) <= float(hi)
+    assert float(rule) == stats.APEX_SPEED_LEVEL_KMH, m.groups()
+    assert float(rsigma) == stats.REFERENCE_APEX_SIGMA_KMH, m.groups()
+    assert float(rrule) == stats.REFERENCE_APEX_LEVEL_KMH, m.groups()
+    assert float(at_b) == stats.house_step(stats.PUBLISHED_NOISE_SIGMAS["B"].apex_kmh)
+    assert float(at_a) == stats.house_step(stats.PUBLISHED_NOISE_SIGMAS["A"].apex_kmh)
+    with open(os.path.join(root, "studio", "dev", "probes", "apex_speed_sigma.py"),
+              encoding="utf-8") as f:
+        probe = f.read()
+    assert 'rec["within_sigma_one"] == stats.APEX_SPEED_SIGMA_KMH' in probe
+    assert "== stats.APEX_SPEED_LEVEL_KMH" in probe
+    assert 'rec["within_sigma_one"] == row.apex_kmh' in probe
+    assert 'rec.get("reference_sigma_one") == row.reference_apex_kmh' in probe
+    print(f"ok apex-speed step: 2√2 × {stats.APEX_SPEED_SIGMA_KMH} km/h = "
+          f"{stats.APEX_SPEED_LEVEL_KMH} km/h (against another recording "
+          f"{stats.REFERENCE_APEX_LEVEL_KMH} km/h)")
+
+
+def test_the_probe_re_measures_the_apex_speed_sigma_on_a_small_seed_set():
+    """`apex_speed_sigma.measure_sigma` on its three-day check set at the reference noise: both σs
+    land within 25 % of the constants (ten-day sets scatter by a few % around the pooled value). A
+    constant typed by hand, or a probe whose σ drifted, fails here rather than in a doc."""
+    import shutil
+    import tempfile
+
+    from studio import (
+        app_support,
+        demo,
+        focus,
+        library,
+        logsetup,
+        marks,
+        prefs,
+        session_record,
+        sidecar,
+        stats,
+        track_db,
+    )
+    seams = (demo, focus, library, logsetup, marks, prefs, session_record, track_db)
+    keep = (sidecar.save, [m._app_support_dir for m in seams],
+            os.environ.get(app_support.DIR_ENV))
+    from studio.dev.probes import apex_speed_sigma as probe
+    from studio.dev.probes import focus_cross_session as sibling
+    work = tempfile.mkdtemp(prefix="apex_speed_sigma_check_")
+    try:
+        got = probe.measure_sigma(work, sibling.REFERENCE_NOISE, probe.CHECK_SEEDS)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        sidecar.save = keep[0]
+        for m, seam in zip(seams, keep[1], strict=True):
+            m._app_support_dir = seam
+        if keep[2] is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = keep[2]
+    assert abs(got["within"] / stats.APEX_SPEED_SIGMA_KMH - 1) <= 0.25, got
+    assert abs(got["reference"] / stats.REFERENCE_APEX_SIGMA_KMH - 1) <= 0.25, got
+    print(f"ok apex σ check: {got['within']:.3f} / {got['reference']:.3f} km/h (constants "
+          f"{stats.APEX_SPEED_SIGMA_KMH} / {stats.REFERENCE_APEX_SIGMA_KMH})")
 
 
 def test_the_reference_lap_corner_step_is_the_house_rule_on_the_measured_sigma():

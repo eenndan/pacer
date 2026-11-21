@@ -2366,12 +2366,17 @@ class NoiseSigmas:
     reference_corner: float  # one lap's corner time, against one lap of another recording
     split: float             # one sector split against another of the same recording: the worst
                              # sector of the worst line placement measured (sector_split_sigma)
+    # km/h, not seconds (cool/apex-delta-at-noise; studio/dev/probes/apex_speed_sigma.py): one lap's
+    # apex (minimum) speed through a corner, against another lap of the same recording ...
+    apex_kmh: float
+    # ... and against one lap of another recording (Δapex with a reference recording loaded)
+    reference_apex_kmh: float
 
 
 PUBLISHED_NOISE_SIGMAS = {
-    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205, 0.0474),
-    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435, 0.0990),
-    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730, 0.1621),
+    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205, 0.0474, 0.362, 0.366),
+    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435, 0.0990, 0.711, 0.722),
+    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730, 0.1621, 1.112, 1.132),
 }
 REFERENCE_SIGMAS = PUBLISHED_NOISE_SIGMAS[REFERENCE_RECORDING]
 # The split column's SECOND parameter (cool/sector-dedrift): the receiver drift's time constant the
@@ -2471,6 +2476,49 @@ def corner_delta_step(cross_recording: bool) -> float:
     if not cross_recording:
         return PB_PRECISION_S
     return max(REFERENCE_CORNER_LEVEL_S, PB_PRECISION_S)
+
+
+# THE APEX-SPEED STEP (cool/apex-delta-at-noise). The Corners table's Δapex — one lap's apex
+# (minimum) speed through a corner minus the baseline lap's, km/h — was coloured by
+# `theme.delta_colour`, whose 0.005 "even" band is a TIME tolerance in seconds: a +0.04 km/h gap
+# printed "+0.0" in green. Its step is measured, like every timing step, at the one reference.
+# MEASURED (studio/dev/probes/apex_speed_sigma.py: the demo circuit, 40 habit-free days per noise in
+# four seed sets of ten, every clean lap × every corner against the truth's minimum speed over the
+# table's own frame window; err = app Δ − true Δ, σ = RMS(err) / √2, the σ of ONE apex speed). The
+# generator's kart holds a flat speed through each arc, the case most favourable to a minimum of
+# noisy fixes (many share the bottom), so the grid gives every apex a V, 3 km/h deep at ±10 m, where
+# one or two fixes carry it; the flat arc's σ is the last column:
+#
+#   GPS noise  like  vs a lap of this recording   vs another recording's   2√2σ          flat arc
+#   1.9        C     0.362 km/h (0.348-0.380)      0.366 km/h               1.02 / 1.04   0.316
+#   4.0        B     0.711 km/h (0.659-0.754)      0.722 km/h               2.01 / 2.04   0.666
+#   6.5        A     1.112 km/h (1.035-1.165)      1.132 km/h               3.15 / 3.20   1.055
+#
+# AT THE ONE REFERENCE: 1.02 km/h against a lap of this recording, 1.04 km/h against another
+# recording's (the warp adds next to nothing, as for corner times). On the 40 days at C's noise the
+# old rule coloured 3601 of 3640 Δbest cells (75 printing "0.0"); the step colours 1632, of which 69
+# are truly within 0.5 km/h.
+#
+# NOT THE CHART'S GATE. `plots_view.GAIN_GATE_KMH` (1.75 km/h) is 2√2 × `chart_stats.SPEED_NOISE_KMH`,
+# the 10 Hz speed channel's per-SAMPLE residual against a 0.5 s average (0.62 km/h, measured on
+# recording A, the noisiest). The gain shading compares two traces sample by sample, so that is its
+# statistic, and it is left as it is; an apex speed is one figure per pass, the minimum over a
+# corner's fixes, and carries its own σ. The synthetic speed channel at C's noise reads 0.67 km/h on
+# the chart's own statistic (two days, 28 laps), so this grid is not quieter than the recording that
+# gate was measured on.
+APEX_SPEED_SIGMA_KMH = REFERENCE_SIGMAS.apex_kmh
+APEX_SPEED_LEVEL_KMH = house_step(APEX_SPEED_SIGMA_KMH)
+REFERENCE_APEX_SIGMA_KMH = REFERENCE_SIGMAS.reference_apex_kmh
+REFERENCE_APEX_LEVEL_KMH = house_step(REFERENCE_APEX_SIGMA_KMH)
+
+
+def apex_speed_step(cross_recording: bool) -> float:
+    """The step (km/h) under which a Δapex reads level: against a lap of this recording, the
+    apex-speed step; against another recording's, the reference apex step or the apex-speed step,
+    whichever is wider."""
+    if not cross_recording:
+        return APEX_SPEED_LEVEL_KMH
+    return max(REFERENCE_APEX_LEVEL_KMH, APEX_SPEED_LEVEL_KMH)
 
 
 def sector_key(col: int) -> int:
