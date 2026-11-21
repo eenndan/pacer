@@ -616,6 +616,10 @@ def set_on(items: list[FocusItem]) -> str:
 
 
 # ------------------------------------------------------------------------------------- the verdict
+# The open session's name when its recording carries no date (`open_day`): never "today".
+THIS_SESSION = "this session"
+
+
 @dataclass(frozen=True)
 class Outcome:
     """One focused corner, re-measured. ``delta`` is None unless a verdict was actually allowed."""
@@ -632,6 +636,7 @@ class Outcome:
                                     #   refused: a fleet kart changes every session
     same_day: bool = False          # a BLOCK_NO_RECORD refusal between two sessions of ONE date:
                                     #   its words are "the two sessions", not "the two days"
+    now_day: str = THIS_SESSION     # the open session's name in the line (`open_day`)
 
     @property
     def has_verdict(self) -> bool:
@@ -645,9 +650,9 @@ class Report:
     track: str | None
     outcomes: list[Outcome] = field(default_factory=list)
     # The sessions a BLOCK_NO_RECORD refusal is waiting on, as (fingerprint, "19 Jul" | "today"):
-    # the earlier days first in list order, today last, each once. A label is its session's DAY
-    # (`_day_label`); the session in front of the driver is "today" beside earlier days, as every
-    # line here calls it, and its own date beside sessions of that date. Exactly what the focus
+    # the earlier days first in list order, the open session last, each once. A label is its
+    # session's DAY (`_day_label`); the session in front of the driver is `open_day`'s name, as
+    # every line here calls it. Exactly what the focus
     # block's one-click "Mark both dry" offers to write — and nothing it may not
     # (`mark_dry_prompt`).
     unrecorded: tuple[tuple[str, str], ...] = ()
@@ -657,6 +662,8 @@ class Report:
     # The session in front of the driver (its fingerprint), so a line about several corners can
     # tell it apart from their baselines in `unrecorded`.
     now_fingerprint: str = ""
+    # …and its name in every line about it (`open_day`): "today" only on the day it was recorded.
+    now_day: str = THIS_SESSION
 
     @property
     def active(self) -> bool:
@@ -756,7 +763,7 @@ def layout_check(item: FocusItem, corners, rotation: int = 0) -> str:
 
 
 def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
-             rec_now: dict | None) -> tuple[str, str]:
+             rec_now: dict | None, today: datetime.date | None = None) -> tuple[str, str]:
     """(BLOCK_*, detail) for one item against the current session, or (BLOCK_NONE, "").
 
     The tests run in a FIXED priority so the reported objection is deterministic and the most
@@ -786,7 +793,7 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
     # record that does not exist cannot also disagree.
     if session_record.is_empty(rec_then) or session_record.is_empty(rec_now):
         then_blank, now_blank = session_record.is_empty(rec_then), session_record.is_empty(rec_now)
-        on = _same_day(item, now_ctx)
+        on = _same_day(item, now_ctx, today)
         if on:
             # Two sessions of ONE date (a race day): "13 Sep and today" named one day twice, so it
             # names the sessions instead. The rule is unchanged — a record is still required.
@@ -795,36 +802,68 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
                                      else "this session")
         missing = []
         if then_blank:
-            missing.append(_when(item.date))
+            missing.append((_when(item.date), item.date))
         if now_blank:
-            missing.append("today")
-        return BLOCK_NO_RECORD, " and ".join(missing)
+            missing.append((open_day(now_ctx.get("date"), today), now_ctx.get("date")))
+        return BLOCK_NO_RECORD, " and ".join(_year_apart(missing))
     differences = session_record.comparable(rec_then, rec_now)
     if differences:
         return BLOCK_CONDITIONS, ", ".join(differences)
     return BLOCK_NONE, ""
 
 
-def _same_day(item: FocusItem, now_ctx: dict) -> str:
+def _same_day(item: FocusItem, now_ctx: dict, today: datetime.date | None = None) -> str:
     """"today" or "on 13 Sep" when the baseline and the session in front of the driver were
-    recorded on ONE calendar date, else "". "today" only when that date is the machine's own
-    calendar day (the local clock `Session.session_date` reads a date on)."""
+    recorded on ONE calendar date, else "" (`_day_label`'s rule for which)."""
     then, now = _day(item.date), _day(now_ctx.get("date"))
     if then is None or then != now:
         return ""
-    return "today" if then == datetime.date.today() else f"on {_when(item.date)}"
+    return _on_day(_day_label(item.date, today))
 
 
-def _day_label(date: str | None) -> str:
-    """A session's day in the mark offer's words: "today" when it is the calendar's today, else
-    `_when`'s "13 Sep"."""
+def _day_label(date: str | None, today: datetime.date | None = None,
+               undated: str = "last time") -> str:
+    """A session's day in this module's words: "today" when it IS `today` (the machine's local
+    calendar day when None — the clock `Session.session_date` reads a date on), else `_when`'s
+    "13 Sep", and `undated` for a recording with no readable date."""
     day = _day(date)
-    return "today" if day is not None and day == datetime.date.today() else _when(date)
+    if day is None:
+        return undated
+    return "today" if day == (today or datetime.date.today()) else _when(date)
+
+
+def open_day(date: str | None, today: datetime.date | None = None) -> str:
+    """THE NAME OF THE SESSION IN FRONT OF THE DRIVER beside other sessions — the one rule every
+    line here uses: "today" only when it was RECORDED on `today`, else its day as "13 Sep", and
+    "this session" when its recording carries no date. Opening last month's recording is not
+    today's driving: "no session record for 13 Sep and today" on a 20 Oct recording, "the layout
+    looks different today" and "Replace with today's top 3" all named a day it was not."""
+    return _day_label(date, today, THIS_SESSION)
+
+
+def _year_apart(named: list[tuple[str, str | None]]) -> list[str]:
+    """The labels of (label, date) pairs, each with its year where another of a DIFFERENT date
+    shares its label: "20 Sep" names both 20 Sep 2025 and 20 Sep 2026, and "20 Sep and 20 Sep" /
+    "both sessions on 20 Sep" said one day of two a year apart. Sessions are one day only when
+    their dates are equal, never their labels; every label is unchanged where none collide."""
+    out = []
+    for label, date in named:
+        day = _day(date)
+        clash = day is not None and any(other == label and _day(d) != day for other, d in named)
+        out.append(f"{label} {day.year}" if clash and day is not None else label)
+    return out
 
 
 def _on_day(label: str) -> str:
-    """"today" / "on 13 Sep" for a `_day_label`."""
-    return label if label == "today" else f"on {label}"
+    """"today" / "on 13 Sep" / "in this session" for a `_day_label`."""
+    if label == "today":
+        return label
+    return "in this session" if label == THIS_SESSION else f"on {label}"
+
+
+def _days(label: str) -> str:
+    """The possessive of a `_day_label`: "today's" / "13 Sep's" / "this session's"."""
+    return f"{label}'s"
 
 
 def sessions_named(labels: list[str]) -> str:
@@ -848,7 +887,8 @@ def sessions_named(labels: list[str]) -> str:
     parts = []
     for label, n in days.items():
         if n == 1:
-            parts.append("today's" if label == "today" else f"the session on {label}")
+            parts.append(_days(label) if label == "today" else label if label == THIS_SESSION
+                         else f"the session on {label}")
         else:
             parts.append(f"the {n} sessions {_on_day(label)}")
     return ", ".join(parts[:-1]) + f" and {parts[-1]}"
@@ -859,7 +899,7 @@ def _same_day_detail(report: Report, outcomes: list[Outcome]) -> str:
     counted over every session they involve: with two focus baselines from earlier that day, the
     per-corner "either session on 13 Sep" spoke of three sessions, and "the earlier session" of
     two (w19 QA)."""
-    on = _on_day(_day_label(outcomes[0].item.date))
+    on = _on_day(report.now_day)              # one date, so the baselines' day is this session's
     waiting = {fp for fp, _label in report.unrecorded}
     baselines = {o.item.fingerprint for o in outcomes}
     n_all, n_blank = len(baselines), len(waiting & baselines)
@@ -893,7 +933,7 @@ def _no_record_sentence(detail: str, same_day: bool, sessions: int = 2) -> str:
 
 
 def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | None],
-            records: dict | None = None) -> Report:
+            records: dict | None = None, today: datetime.date | None = None) -> Report:
     """Re-measure verdict for every focus item. PURE — every input is a plain value.
 
     ``now_ctx``: this session's facts — ``list_track`` (the focus list's track), ``track``,
@@ -904,33 +944,41 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
     comparison is looked up by its own fingerprint, and an absent record is itself an answer.
 
     An item promoted from THIS recording reports ``OUTCOME_SET_HERE`` — there is nothing to compare
-    a session with itself against, and saying "no change" would be dressing that up as a result."""
+    a session with itself against, and saying "no change" would be dressing that up as a result.
+
+    ``today``: the calendar day the lines call "today" (`open_day`) — None is the machine's own;
+    a test passes one so that no line depends on the day it runs."""
     store = records or {}
     now_fp = str(now_ctx.get("fingerprint") or "")
+    day = open_day(now_ctx.get("date"), today)
     rec_now = session_record.get(store, now_fp)
     outcomes: list[Outcome] = []
     unrecorded: dict[str, str] = {}
+    dates: dict[str, str | None] = {now_fp: now_ctx.get("date")}    # each unrecorded one's date
     for i, item in enumerate(items):
         now = samples[i] if i < len(samples) else None
         if item.fingerprint and item.fingerprint == now_fp:
-            outcomes.append(Outcome(item=item, kind=OUTCOME_SET_HERE, now=now, delta=None))
+            outcomes.append(Outcome(item=item, kind=OUTCOME_SET_HERE, now=now, delta=None,
+                                    now_day=day))
             continue
         rec_then = session_record.get(store, item.fingerprint)
-        block, detail = _blocker(item, now_ctx, rec_then, rec_now)
+        block, detail = _blocker(item, now_ctx, rec_then, rec_now, today)
         if block:
             if block == BLOCK_NO_RECORD and item.fingerprint and session_record.is_empty(rec_then):
-                unrecorded.setdefault(item.fingerprint, _day_label(item.date))
+                unrecorded.setdefault(item.fingerprint, _day_label(item.date, today))
+                dates.setdefault(item.fingerprint, item.date)
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
                                     blocker=block, detail=detail,
                                     same_day=block == BLOCK_NO_RECORD
-                                    and bool(_same_day(item, now_ctx))))
+                                    and bool(_same_day(item, now_ctx, today)), now_day=day))
             continue
         if now is None or now.n_laps < MIN_CORNER_LAPS:
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
                                     blocker=BLOCK_FEW_LAPS,
                                     # 0, 1 or 2 by this branch's own test, so the singular is
                                     # one of the three values it can print.
-                                    detail=plural(now.n_laps if now else 0, "clean lap")))
+                                    detail=plural(now.n_laps if now else 0, "clean lap"),
+                                    now_day=day))
             continue
         delta = now.median - item.median_s
         # The SAME actionability test the coaching gate applies to a within-session claim, on the
@@ -958,19 +1006,20 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         else:
             kind = OUTCOME_IMPROVED if delta < 0 else OUTCOME_SLOWER
         outcomes.append(Outcome(item=item, kind=kind, now=now, delta=float(delta),
-                                karts=session_record.kart_pair(rec_then, rec_now)))
+                                karts=session_record.kart_pair(rec_then, rec_now), now_day=day))
     waiting = [o for o in outcomes if o.blocker == BLOCK_NO_RECORD]
     if waiting and now_fp and session_record.is_empty(rec_now):
-        # "today" is this module's word for the session in front of the driver beside an EARLIER
-        # DAY ("13 Sep and today"). Beside sessions of its OWN date only, it is that date — unless
-        # the date is the calendar's today: "Mark today dry" on a 13 Sep session named a day it
-        # was not (w19 QA), and the refusal line above it already says "this session".
-        same_day = all(o.same_day for o in waiting)
-        unrecorded.setdefault(now_fp, _day_label(now_ctx.get("date")) if same_day
-                              else "today")
+        # Named as every line names it (`open_day`): "Mark today dry" on a 13 Sep session named a
+        # day it was not (w19 QA), beside sessions of its own date and beside earlier days alike.
+        unrecorded.setdefault(now_fp, day)
+    # One label for two dates (a year apart) is never one day in `sessions_named`.
+    unrecorded = dict(zip(unrecorded, _year_apart([(label, dates.get(fp))
+                                                   for fp, label in unrecorded.items()]),
+                          strict=True))
     return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes,
                   unrecorded=tuple(unrecorded.items()),
-                  baseline_refusal=baseline_refusal(now_ctx, items), now_fingerprint=now_fp)
+                  baseline_refusal=baseline_refusal(now_ctx, items), now_fingerprint=now_fp,
+                  now_day=day)
 
 
 # ------------------------------------------------------------------------------------- the words
@@ -1006,6 +1055,18 @@ _BLOCK_SENTENCE = {
     BLOCK_FEW_LAPS: "too few clean laps through it today",
 }
 
+
+def _said_on(words: str, day: str) -> str:
+    """`words` with their "today" — this module's copy writes the open session so — said as the
+    open session named `day` is (`open_day`): "today's laps" → "13 Sep's laps", "there today"
+    → "there on 13 Sep". Unchanged when it was recorded today."""
+    return words.replace("today's", _days(day)).replace("today", _on_day(day))
+
+
+def _block_sentence(blocker: str, day: str) -> str:
+    """`_BLOCK_SENTENCE`'s words for `blocker`, the open session named `day` (`open_day`)."""
+    return _said_on(_BLOCK_SENTENCE.get(blocker, "not comparable"), day)
+
 # BLOCK_LAYOUT's words, per corner and for a list refused as a whole (`report_lines`).
 # A window with no corner over it today is not by itself another layout: a corner near the
 # detector's MIN_TURN_DEG (studio/corners.py) comes and goes with the line and the receiver. On
@@ -1014,6 +1075,7 @@ _BLOCK_SENTENCE = {
 # no corner there today — a different layout?" beside the rest of the list measured level. So it
 # says only what was measured — nothing was picked out — and leaves the cause open: a gentle
 # corner, a GPS dropout over the window and another layout all read the same here.
+# Their "today" is the open session, said by its day where it was not recorded today (`_said_on`).
 _LAYOUT_WHY_ONE = {LAYOUT_OTHER_WAY: "the corner there today turns the other way",
                    LAYOUT_NO_CORNER: "no corner was picked out there today",
                    LAYOUT_REVERSED: "today's laps run the other way round"}
@@ -1022,16 +1084,17 @@ _LAYOUT_WHY_ALL = {LAYOUT_OTHER_WAY: "the corners there today turn the other way
                    LAYOUT_REVERSED: "today's laps run the other way round"}
 
 
-def _layout_why_mixed(details: set) -> str:
+def _layout_why_mixed(details: set, day: str) -> str:
     """One sentence for a list refused for SEVERAL layout reasons, each said once: the laps run the
     other way round (items that stored a rotation), and the corners under the rest turn the other
     way or were not picked out. Never "the layout looks different" before "a different layout?",
     and never that a corner "isn't there" when nothing was picked out."""
     corner = [w for d, w in ((LAYOUT_OTHER_WAY, "turn the other way"),
                              (LAYOUT_NO_CORNER, "weren't picked out")) if d in details]
-    parts = [_LAYOUT_WHY_ALL[LAYOUT_REVERSED]] if LAYOUT_REVERSED in details else []
+    parts = ([_said_on(_LAYOUT_WHY_ALL[LAYOUT_REVERSED], day)] if LAYOUT_REVERSED in details
+             else [])
     if corner:
-        parts.append("the corners there today " + " or ".join(corner))
+        parts.append(_said_on("the corners there today ", day) + " or ".join(corner))
     return ", or ".join(parts)
 
 
@@ -1064,11 +1127,12 @@ def outcome_sentence(o: Outcome) -> str:
         if o.blocker == BLOCK_CONDITIONS:
             return f"{label} — can't say: {o.detail}."
         if o.blocker == BLOCK_FEW_LAPS:
-            return f"{label} — can't say: {o.detail} through it today."
+            return _said_on(f"{label} — can't say: {o.detail} through it today.", o.now_day)
         if o.blocker == BLOCK_LAYOUT:
-            return f"{label} — can't say: {_LAYOUT_WHY_ONE[o.detail]} — a different layout?"
+            return (f"{label} — can't say: {_said_on(_LAYOUT_WHY_ONE[o.detail], o.now_day)} — "
+                    "a different layout?")
         tail = f" ({o.detail})" if o.detail and o.blocker == BLOCK_GEOMETRY else ""
-        return f"{label} — can't say: {_BLOCK_SENTENCE.get(o.blocker, 'not comparable')}{tail}."
+        return f"{label} — can't say: {_block_sentence(o.blocker, o.now_day)}{tail}."
     assert o.now is not None and o.delta is not None  # has_verdict implies both
     spread = max(o.item.iqr_s, o.now.iqr)
     # Level by the step alone (`verdict`, `level_step`): its line says so, and prints its two
@@ -1115,7 +1179,8 @@ def mark_dry_prompt(report: Report | None) -> tuple[str, str, str] | None:
         return None
     if len(names) == 1:
         name = names[0]
-        question = "Dry today?" if name == "today" else f"Dry on {name}?"
+        question = ("Dry today?" if name == "today" else "Dry this session?"
+                    if name == THIS_SESSION else f"Dry on {name}?")
         button = f"Mark {name} dry"
     elif len(names) == 2:
         question, button = "Both dry?", "Mark both dry"
@@ -1168,11 +1233,11 @@ def report_lines(report: Report) -> list[str]:
             return [f"{who} — can't say: {first.detail}."]
         if first.blocker == BLOCK_LAYOUT:
             details = {o.detail for o in outcomes}
-            why = (_LAYOUT_WHY_ALL[first.detail] if len(details) == 1
-                   else _layout_why_mixed(details))
+            why = (_said_on(_LAYOUT_WHY_ALL[first.detail], report.now_day)
+                   if len(details) == 1 else _layout_why_mixed(details, report.now_day))
             return [f"{who} — can't say: {why} — a different layout of the track?"]
         return [f"{who} — can't say: "
-                f"{_BLOCK_SENTENCE.get(first.blocker, 'not comparable')}."]
+                f"{_block_sentence(first.blocker, report.now_day)}."]
     if len(outcomes) > 1 and kinds == {OUTCOME_SET_HERE}:
         # The lap count each baseline was ACTUALLY measured on: one count when they share it, else
         # one per corner — C2 over "16 of 19 laps" is not C5 over 19 (QA LOOK-10).
@@ -1237,9 +1302,10 @@ def replace_offer(report: Report | None, shortlist: list[int]) -> list[int] | No
     return cids[:MAX_ITEMS]
 
 
-def replace_label(cids: list[int]) -> str:
-    """The offer's button: "Replace with today's top 3 (C1, C5, C7)"."""
-    return f"Replace with today's top {len(cids)} ({', '.join(f'C{c}' for c in cids)})"
+def replace_label(cids: list[int], day: str) -> str:
+    """The offer's button: "Replace with today's top 3 (C1, C5, C7)", the open session named
+    `day` (`Report.now_day`): "Replace with 13 Sep's top 3" on a recording of 13 Sep."""
+    return f"Replace with {_days(day)} top {len(cids)} ({', '.join(f'C{c}' for c in cids)})"
 
 
 def report_headline(report: Report) -> str:
@@ -1262,8 +1328,9 @@ def report_headline(report: Report) -> str:
         # Only "the layout looks different" when something measured says so: a list whose
         # corners were all just not picked out today says that, and no more.
         undetected = all(o.detail == LAYOUT_NO_CORNER for o in report.outcomes)
-        why = ((_LAYOUT_WHY_ONE if n == 1 else _LAYOUT_WHY_ALL)[LAYOUT_NO_CORNER] if undetected
-               else _BLOCK_SENTENCE[BLOCK_LAYOUT])
+        why = (_said_on((_LAYOUT_WHY_ONE if n == 1 else _LAYOUT_WHY_ALL)[LAYOUT_NO_CORNER],
+                        report.now_day) if undetected
+               else _block_sentence(BLOCK_LAYOUT, report.now_day))
         return f"Focus list · {n} {noun} · no verdict — {why}"
     if verdicts == 0:
         return f"Focus list · {n} {noun} · no verdict yet — {_refusal_summary(report)}"
@@ -1284,5 +1351,5 @@ def _refusal_summary(report: Report) -> str:
     if top == BLOCK_CONDITIONS:
         return "the two sessions weren't alike"
     if top == BLOCK_FEW_LAPS:
-        return "too few clean laps through them today"
-    return _BLOCK_SENTENCE.get(top, "not comparable")
+        return _said_on("too few clean laps through them today", report.now_day)
+    return _block_sentence(top, report.now_day)

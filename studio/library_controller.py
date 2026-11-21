@@ -1420,7 +1420,7 @@ class LibraryController:
                 return
             items = self.win.session.focus_items([int(c) for c in cids], entry)
             if not items:
-                self._focus_failed("today's corners could not be measured on its clean laps")
+                self._focus_failed("this session's corners could not be measured on its clean laps")
                 return
             self._save_focus(track, items)
         except OSError as exc:

@@ -35,6 +35,7 @@ flagged — the scanner is shown to see the class before its silence on the tree
 Run: python tests/test_plural_copy.py
 """
 import ast
+import datetime
 import importlib
 import os
 import re
@@ -477,7 +478,7 @@ def test_the_fixed_copy_reads_right_at_one():
     for n, want in ((1, "can't say: 1 clean lap through it today."),
                     (2, "can't say: 2 clean laps through it today.")):
         o = focus.verdict([item], now, [focus.CornerSample(median=4.4, iqr=0.1, n_laps=n)],
-                          store).outcomes[0]
+                          store, today=datetime.date(2026, 5, 24)).outcomes[0]   # its own day
         assert o.blocker == focus.BLOCK_FEW_LAPS, o
         assert focus.outcome_sentence(o).endswith(want), focus.outcome_sentence(o)
 
