@@ -137,10 +137,10 @@
       }
     },
     "quickest.png": {
-      "captured": "2026-11-20",
-      "commit": "1fbd5670",
+      "captured": "2026-11-21",
+      "commit": "83e99abe",
       "derived": null,
-      "sha256": "27260f79eb73df0b08f41d8d126a35137c8e05341c6a58847fc754c8296504bd",
+      "sha256": "b94a7e80e2611e6b3bbc9682f63185bb5d17603b8d0f7949c6e8bd22d25bedd2",
       "shot": "quickest",
       "source": "synthetic demo",
       "version": "0.20.1",
