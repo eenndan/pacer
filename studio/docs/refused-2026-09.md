@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirty-eight features were built far enough to **measure**, and the measurement said not to ship
+Thirty-nine features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2798,6 +2798,93 @@ chosen corners, behind the same step.
 recording's per-lap σ, so that a step near 0.02 s keeps every-corner false reads under 1 in 20
 while finding a 0.10 s gain alone on most pairs. Or a rule over seven corners that holds the whole
 read's false-call share to 5 %, measured on these days.
+
+---
+
+## 39. A luck allowance on Coaching's time lost, the biggest-loss moment, the share card's opportunity and the sector-best hover — refused (cool/luck-other-surfaces)
+
+**The idea.** v0.21.0 (#670) gave the quickest of n passes its luck where a gap is read off it
+(`stats.quickest_luck_s`). DECISIONS §24 listed the other surfaces that read a figure off a selected
+extreme and carried no allowance. Give each the same treatment: subtract the measured selection
+bias, or make the figure clear the step plus it.
+
+- **Coaching's time lost.** The median of (pass − the best lap's pass), and the headline's sum
+  over the top three ranked corners. The best lap is picked on its lap time, so its passes are
+  partly lucky ones, and the top three are picked on their noisy losses.
+- **The biggest-loss moment.** "Biggest single-corner loss: Lap N · Cn +x.xx s over your typical
+  pass", the largest of every lap × corner gap to the corner's median.
+- **The share card's opportunity line.** "BIGGEST OPPORTUNITY Cn +x.xx s" is Coaching's first
+  ranked row.
+- **The Stats sector hover.** "… +x.xx s against the sector best (… s, lap N)" is a split minus
+  the column's quickest.
+
+The ideal lap's gap, the fifth surface on §24's list, was measured the same way and its allowance
+shipped (cool/luck-ideal-gap, #673). The other four are below.
+
+**How it was measured.** `studio/dev/probes/selection_surfaces.py`. Each figure is read through the
+app's own accessor (`coaching_opportunities`, `session_moments`, `share_card.card_data`,
+`split_matrix`) and rebuilt on the truth for the same laps. The grid is
+`focus_cross_session`'s: the demo circuit at the one reference recording's GPS noise (C's,
+`library.REFERENCE_RECORDING`), 40 habit-free days of 14 laps in four seed sets. Corner passes
+are timed on truth over the best lap's corner window, and splits on the truth's own crossings of
+three mid-straight lines. The error is app − truth, and its mean is the bias. Every synthetic day
+carries the generator's one slow lap, a real multi-second off, so the moment is also read with
+that lap left out: a day without an off is the one where selection decides it.
+
+| Surface (what it prints) | shown | mean shown | bias (± se) | share of shown | overstated by more than 0.07 s |
+|---|---|---|---|---|---|
+| Coaching row, time lost | 195 rows | 0.046 s | +0.0075 (± 0.0014) | 16 % | 0 of 195 |
+| Coaching headline, top 3 summed | 38 days | 0.102 s | +0.019 (± 0.005) | 18 % | 2 of 38 |
+| Coaching's first row = the card's opportunity (38 of 38 cards) | 38 days | 0.061 s | +0.009 (± 0.004) | 15 % | 0 of 38 |
+| Biggest-loss moment (the off) | 40 days | 2.828 s | −0.037 (± 0.005) | −1 % | 0 of 40 |
+| Biggest-loss moment, the off left out | 40 days | 0.139 s | +0.008 (± 0.004) | 6 % | 0 of 40 |
+| Sector hover, against the sector best | 2,080 cells | 0.23 s (median 0.11) | +0.032 (± 0.001) | 14 % | 423 of 2,080 past 0.07 s; 0 past the sector step, 0.30 s |
+
+The ideal lap's gap, on the same days: +0.173 s, 37 % of the 0.467 s shown, past 0.07 s on 40 of
+40 days.
+
+**What stops it.**
+
+1. **The bias is under the step on every surface but the hover, and the hover's own step is
+   0.30 s.** On the corner surfaces the selection is +0.008 to +0.019 s. No Coaching row, first row
+   or moment is overstated past the 0.07 s timing step. The headline is, on 2 of 38 days, by a sum
+   of three corners each under it. That is the size the app already calls "level" (`is_level`),
+   and an allowance would move a printed hundredth on some rows and nothing a driver acts on.
+2. **Each of these figures is arithmetic the reader can redo, and that is its claim.**
+   - A Coaching row is the median of what the Corners table prints against the best lap's cell.
+   - The moment is the printed cell minus the printed typical.
+   - The hover is "the printed cell minus the printed anchor beside it" (`stats_panel`'s comment).
+   - Each says "vs your best lap", "over your typical pass" or "against the sector best", which is
+     true as timed. Subtracting an allowance would print a number no two cells on screen give.
+   - The ideal lap is the exception, because it says "on the table" and is a sum over 15 minima:
+     there the bias is a third of the figure.
+3. **The hover's 423 cells past 0.07 s are mostly the split's own noise, not selection.**
+   - The error's sd is 0.050 s against a bias of 0.032 s. With the bias removed and the same
+     spread, about one cell in twelve would still pass 0.07 s (a normal approximation, not
+     measured).
+   - Splits are read at `stats.SECTOR_LEVEL_S`, 0.30 s, which no cell's error reaches.
+   - Whether 0.30 s is the right sector step is refused §26's open re-measure, not a luck question.
+4. **The ranking's own errors are not selection bias, and an allowance does not touch them.**
+   - Coaching's named lead (with its ties) misses the truly biggest loss by more than 0.07 s on 6
+     of 38 days.
+   - 50 of the 94 ranked rows are truly under 0.03 s, and 5 have the wrong sign.
+   - These are the lap-to-lap scatter `coaching.corner_evidence` already gates on, and §13's open
+     question to the owner (should Coaching rank corners that lose under 0.07 s?). Subtracting a
+     constant 0.008 s from every row leaves the order as it was.
+
+**What moves because of this refusal: nothing in the app.** The four surfaces keep their figures and
+their words.
+
+**Re-run it:** `pixi run python -m studio.dev.probes.selection_surfaces` (or one process per
+`--set-index`, then `--summarize` over their logs).
+
+**What would be new evidence:**
+- a corner surface whose selection bias passes the timing step on more than one day in twenty at
+  the reference noise (a longer session raises the quickest's luck slowly, as blom(n) does);
+- a re-measured sector step near 0.10 s (§26's clause), under which the hover's +0.032 s would be a
+  third of the step;
+- or a surface that starts calling these figures "on the table" or "available", as the ideal lap
+  does.
 
 ---
 
