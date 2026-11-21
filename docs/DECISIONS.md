@@ -1703,3 +1703,117 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   and the release gate, not by an independent reviewer.
 - **Open for the owner** (carried from sections 18 to 22, untouched by this wave's changes): every
   item of section 22's last list stands as written there.
+
+## 25. Recorded at the 0.22.0 release, 2026-11-21
+
+- **v0.22.0 is a minor release**: 5 pull requests, #672 and #674 to #677, Wave 18 of the campaign
+  section 8 records, its theme "sector times get the receiver-drift correction corner times
+  already had, and the ideal lap says in words that GPS noise lowers it too".
+  - #672: the Δref header hover states its bound once (section 24's open item); Coaching's Jump
+    line names its typical pass's lap and time beside "your typical pass".
+  - #674: the ideal lap's sample sentence (the Stats line, the report, laps.csv) ends in a
+    figure-free clause, `corner_model.IDEAL_NOISE_CLAUSE`; refused-2026-09 §39.
+  - #675: the split σ re-measured at the one reference on the 40-day grid, at the worst of 13 line
+    placements: the sector step 0.30 → 0.25 s, and the quickest sector's luck moved with it.
+  - #676: each lap's trace is moved by its own robust receiver shift onto the session's consensus
+    line before the sector lines are crossed; the step 0.25 → 0.15 s; the golden gate's sector
+    leaves re-cut. A lap's start and finish do not move, so no lap time moved.
+  - #677: a lap whose shift is refused is timed as measured, still counted, and its SPLITS cells,
+    lap-table cells and a Quickest row it leads say so; a sector-line edit that leaves the start
+    line where it was keeps the session's geometry instead of refitting it.
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19.
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **#673 was closed, not merged.** It printed the ideal lap's selection bias as a figure ("about
+    0.17 s", scaled by piece and lap count). No one figure holds across recordings, piece counts
+    and lap counts (0.17 s at C's noise, 0.57 s at B's, a fifth of it on a coarser cut), and a
+    synthetic bias may not be printed on a surface (falsification-2026-09 §1, its last paragraph).
+    The words shipped instead (#674).
+  - **Refusal §39**: no luck allowance on Coaching's time lost, the biggest-loss moment, the share
+    card's opportunity or the Stats sector hover; their selection bias is +0.008 to +0.019 s, under
+    the timing step, and each is arithmetic on figures printed beside it.
+  - **The sector step was re-derived, then de-drifted**: 0.30 s (truth matrix row 2) → 0.25 s
+    (#675, the 40-day grid's worst placement, splits as timed) → 0.15 s (#676, de-drifted).
+  - **The split column rests on an ASSUMPTION**: a receiver drift that decorrelates over about 30 s
+    (`stats.SPLIT_DRIFT_TAU_S`). No recording has measured it; at 10 s the worst sector reads
+    0.079 s, a 0.22 s rule, and the 0.15 s step under-covers.
+  - **0.02 s of sampling headroom** (`stats.SPLIT_SAMPLING_HEADROOM_S`) on the house rule's 0.13 s,
+    said as such; it covers every ten-day set measured but the noisiest (0.16 s).
+  - **A refused lap stays counted and says so** (#677), rather than leaving the SPLITS grid and
+    Quickest passes on different lap sets.
+- **Resolved from section 24**: the split σ's re-measurement (#675, then de-drifted by #676, which
+  meets refusal §26's first new-evidence clause; the chips stay refused until re-run); the
+  surfaces not luck-corrected (refused, §39; the ideal lap's gap carries words instead); the Δref
+  hover's two bounds (#672).
+- **Process.** The QA pass drove the merged tree in the real window, offscreen and jailed, at
+  1440×900 with the theme applied, on the demo and on four synthetic sessions (5 laps; 12 laps in
+  three chapters; 14 laps with a planted 4 s GPS gap in two laps; the demo with a planted 20 m ×
+  400 m excursion on one lap). On each it added 1 to 4 sector lines with the map's Add sector,
+  dragged sector lines ten times through the handles' own release, the start line three times (by
+  0.1 mm, then ±3 m), cleared and re-added lines, pressed Edit ▸ Undo six times, loaded and cleared
+  a reference recording, and opened another session (driven the other way round) and came back.
+  After each of the 30 steps every lap time, split, SPLITS matrix, Quickest sector row, drift
+  status and split provenance equalled a fresh load of the same session with the same lines
+  (16,948 checks, no difference); splits summed to their lap to 1 µs; no lap time moved on a
+  sector-only edit; the lap table, the SPLITS grid and Quickest passes printed the session's
+  values. The planted lap's cells, its Quickest row and its provenance said "timed as measured",
+  and no other lap's did. A two-lap session's splits were timed as measured and its provenance
+  says why. Quickest passes on six placements (2, 3 and 4 lines, mid-straight and evenly spaced):
+  the legend reads "sectors 0.15 s", no ★, "Compare with my typical pass" on S1 alone, every
+  greyed reason's printed gap under the bound it names (bounds to the millisecond with the luck);
+  a sector compare's Δ is neutral below a printed 0.15 s. Twenty opens of the export dialog on a
+  sector pass through its real `exec()` and twenty sector compares left the top-level and widget
+  counts level.
+- **The media.** `hero.png`, `og.png`, `map.png`, `accuracy.png`, `debrief.png`, `moments.png`,
+  `quickest.png`, `report.png` (its own run) and `lapstrip.png` (its own run) were re-captured on
+  the synthetic demo at 0.22.0 and are byte-identical to the files already committed. The waiver
+  of `data-trust.png` is renewed: a demo render from v0.21.0's studio/ and from 0.22.0 is
+  byte-identical. The waiver of `ideal-lap.png` is renewed with a new reason: the still predates
+  #674's noise clause, a demo render now differs by it, and the Sandown 3h recording it is of is
+  not on this machine. Those of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed:
+  0.22.0 changed no export code.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. The de-drift's 30 s assumption cannot be checked without a recording
+  whose receiver drift has been measured. A sector line at a hairpin slower than the synthetic
+  track's slowest point (13.5 m/s) is unmeasured. Hover timing, real macOS fullscreen and a second
+  monitor cannot be checked offscreen. The full gate, the soak and the smoke run on the release
+  branch, not in the QA pass.
+- **Found in this release's QA, not fixed** (each minor; only the third comes from this wave):
+  Quickest passes' sector "Level with" hover and ★ tip call the 0.15 s split step "the timing
+  step", which the legend beside them gives as 0.07 s; the SPLITS grid's hover gives its ▼ floor
+  as "0.3 s" without saying it is a display floor, not the 0.15 s level step; refusal §39's points
+  1 and 3 and its new-evidence list still read the sector step as 0.30 / 0.25 s, measured on splits
+  as timed before #676; each Inspect of a number (the provenance panel) leaves one closed dialog of
+  about 50 widgets alive until the window closes; `tests/test_coaching.py` leaves a full-window
+  Coaching page shown, so under one pytest process (not CTest's alphabetical script run) the debrief
+  hero's cursor test hovers that page instead of the hero.
+- **Open for the owner** (new, most important first).
+  - **Which recording every step is referenced to**: still C, the cleanest recording measured, as
+    section 24 set out; B would read lap 0.15 s, corner 0.12 s and sector split 0.28 s level.
+  - **The sector step's drift assumption and its headroom.** 0.15 s rests on a 30 s drift and
+    0.02 s of headroom. On the 30 s grid it names a planted 0.15 s gain on 6 of 8 days against 2 of
+    8 at 0.25 s on splits as timed, about twice the sensitivity, for a pass menu that offers 5 and 7
+    compares truly within 0.03 s where 0.25 s offered 1 and 3 (`stats.SECTOR_LEVEL_S`'s block,
+    which docs/ACCURACY.md's split column rests on). Keeping 0.15 s takes that trade. A step of
+    0.18 s would sit between the two, closer to the earlier false-offer record with fewer true
+    offers; it was not run on the grid, so how many of each is unmeasured. A faster drift (10 s)
+    would need about 0.22 s.
+  - **Whether a figure may ever be printed on the ideal lap.** Today words only (§39); a figure
+    needs a way to read a recording's own noise and its piece count's effect.
+  - **"Compare with my typical pass" on a NON-quickest pass carries no luck allowance.** On the
+    demo with 2, 3 and 4 lines on six placements, 52 of 336 lap × sector menus offer it.
+  - **A sector line at a hairpin slower than the synthetic track's slowest point** (13.5 m/s) is
+    unmeasured; the split's error is largest at a slow line.
+- **Open for the owner** (carried from section 24, re-checked against 0.22.0's changes): the luck
+  allowance is fitted at C's noise only; the Library counts no PB for a run of sessions that each
+  beat the last by less than 0.07 s; the selection effect stays on Coaching's ranking; the
+  free-space estimate sizes a pass comparison by pane A's clip, up to 6.5 % low on the demo;
+  section 13's question (should Coaching rank corners that lose under 0.07 s, and name a habit
+  there?); Quickest passes is still not the Corners tab's default view; the readout and the
+  overlays on real macOS fullscreen Spaces and a second monitor are unverified offscreen; the strip
+  hides at 1280×800 docked for sessions of about 60 laps or more; at 1440×900 docked the Stats
+  page's even gaps put three tile labels below the fold; sound after a chapter seam on the
+  synthetic chapters runs 16.7 ms early; at a 30.000 fps output over a 59.94 source about 3 frames
+  in 300 show the next source frame; hardware-decode exports were verified by the author's sweep
+  and the release gate, not by an independent reviewer.
+- **Open for the owner** (carried from sections 18 to 22, untouched by this wave's changes): every
+  item of section 22's last list stands as written there.
