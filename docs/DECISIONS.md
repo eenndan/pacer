@@ -1907,3 +1907,100 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   stands as written there.
 - **Open for the owner** (carried from sections 18 to 22, untouched by this wave's changes): every
   item of section 22's last list stands as written there.
+
+## 27. Recorded at the 0.24.0 release, 2026-11-21
+
+- **v0.24.0 is a minor release**: 9 pull requests, #689 to #696 and #698, Wave 21 of the campaign
+  section 8 records, its theme "recordings that went wrong: each says what happened, and none
+  decides a best lap it should not".
+  - #689 (docs and a probe): refusal §40, no apex-speed step of its own for Coaching's reason;
+    every step that could be measured withheld more true reasons than it removed false ones.
+  - #690: a session whose record says wet is a hollow point on "Best lap by session" and hovers
+    "Wet"; the title adds "○ wet" while one is plotted.
+  - #691: a missing first chapter is named in the session notice; a missing middle chapter is
+    named and the recording decides no PB, focus list or Library row until it is in the folder.
+  - #692: Corners ▸ Lap N's Δapex is coloured only when every gap its figure rounds from is past
+    the gate; in mph colour starts at 1.2.
+  - #693: the open session is "today" only on the day it was recorded, another day by its date,
+    an undated one "this session".
+  - #694: a recording with no GPS says so in its lap, chart and map panels, and the map's line
+    tools are off.
+  - #695: a lap left out with a long stop in it says "the kart stopped during it", not "off the
+    session median"; which laps are left out is unchanged.
+  - #696: a refused reference says why in the main open's plain words, and one with no GPS says
+    so.
+  - #698: a lap that left the line the other laps drive is kept out of the bests, listed with its
+    time and a ⚠ that says why; refusal §41 records the lap-distance rule of #697 (closed, not
+    merged).
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19.
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **A missing first chapter gets a notice only, and keeps its verdict, PB and Library row.** Its
+    laps are real, only truncated, and a camera's loop recording deletes early chapters. **A
+    missing middle chapter waits** until it is in the folder: a lap timed across the gap is wrong
+    (on a synthetic three-chapter recording it was 31.798 s and became the best lap).
+  - **Cut laps: a spatial rule, not a distance rule.** The lap-distance rule was refused (§41): a
+    tighter line shortens a lap about as much as a cut on a twisty layout. Shipped instead: a lap
+    10 m off the session's consensus line, held for 10 m of track, is off the line; only ever a
+    minority, under two-fifths of the laps (with 40–60 % on another line nothing is flagged).
+    Synthetic margins: legitimate laps at most 6.99 m (a 3 m receiver jump), infield cuts from
+    13.5 m; it misses a cut that saves under ~9 m, as it misses an honest off.
+  - **The Δapex figure is coloured only when every gap that rounds to it is past the gate**, so a
+    coloured cell never stands for a gap the speed chart leaves unshaded; in mph the first coloured
+    figure is 1.2, and a printed +1.1 mph stays neutral even for gaps of 1.75–1.85 km/h.
+  - **"Today" only on the recording's own day.** Another day is named by its date, with the year
+    added when two different days share a label.
+  - **Wet is a hollow point, and only the `wet` tag counts.** Damp and mixed are the driver's
+    in-between words, and the chart does not guess how wet they were.
+- **Resolved from section 26**: the wet day's unmarked hump (#690); the missing first chapter
+  that opened as whole (#691); the mph gate's printed 1.1 (#692); Coaching's apex-speed step,
+  refused with numbers (#689, §40); "today" for a session recorded on another day (#693).
+- **Process.** The release QA drove the merged tree in the real window, offscreen and jailed, at
+  1440×900 with the theme applied, on synthetic recordings only: the pinned demo, and imperfect
+  recordings of the demo circuit (an infield cut, the same cut recorded as three chapters with the
+  first or the middle one removed, a cut and a stop in one lap, no GPS). It read
+  the Laps, Corners, Quickest passes, Stats and Coaching pages, the Lap Race, the reference loader,
+  the Library and the exports (laps.csv, the report, the lap card and the lap strip). The demo's
+  laps, best lap (lap 13, 0:44.950) and ideal lap read the same from v0.23.0's studio/ and from
+  0.24.0; no demo lap is off the line.
+- **The media.** `map.png`, `accuracy.png`, `moments.png`, `quickest.png` and `report.png` (its
+  own run) were re-captured on the pinned synthetic demo at 0.24.0 and are byte-identical to the
+  files already committed. `debrief.png` changed in one line, the note's "from today's top
+  corners", now "from 1 Jun's top corners" (#693: the demo is dated 1 June). `lapstrip.png` moved
+  its "median" and "best" labels by a fraction of a pixel (442 pixels, #698's change to the strip's
+  drawing). `hero.png` changed in the Δ chart's axis gutter (0.37 % of pixels), and v0.23.0's
+  studio/ renders the same new pixels on this machine today, so it is not this release's code;
+  `og.png` follows it. The waivers of `data-trust.png` and `ideal-lap.png` are renewed: a demo
+  render of each from 0.24.0 is byte-identical to 0.23.0's. Those of `overlay.jpg`,
+  `best-lap.jpg` and `best-lap.mp4` are renewed: 0.24.0 changed no export code.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name, and whether any real lap is flagged off the line on Sandown 3h was not
+  re-measured here (#698 measured none on its reference recording). The full gate, the soak and
+  the smoke run on the release branch, not in the QA pass.
+- **Found in this release's QA, between its pull requests, not fixed here:**
+  - the Lap Race still races a lap that left the line as a clean lap, so a cut lap leads the race
+    and finishes first (#698 left `Session.race_tracks` out of the ⚠ set);
+  - with a middle chapter missing, the lap timed across the gap is flagged "left the line your
+    other laps drive by 59 m", a true geometry but the wrong cause (#691 × #698), and it races;
+  - Quickest passes' "not counted" hover names "⊘ excluded, ⚠ GPS dropout, or a corner edge not
+    matched" for a lap that is out because it left the line;
+  - the Stats page's LAPS tile ("14", no "1 ⚠"), its CORNERS BY LAP note and the lap-time
+    distribution's hover ("valid, no GPS dropout") still count only the dropout half of the ⚠ set;
+  - on a recording with no GPS, Coaching ▸ Load reference recording… stays enabled and a refused
+    pick says "these don't look like the same track (different location); keeping the local best
+    lap", where the open recording has no location and no best lap (#694 × #696).
+- **Open for the owner** (new, most important first).
+  - **No "include this lap" override for a ⚠ lap.** A lap flagged off the line is out of the bests
+    with no way to put it back, even when the driver knows it was an honest lap.
+  - **A no-majority session flags nothing.** With 40–60 % of the laps on another line, the rule
+    stands down, so a cut lap can still be the best lap.
+  - **laps.csv drops an excluded lap** (stopped, or outside the band) with no row and no note.
+  - **A 2D-fix stretch outside every timed lap downgrades the whole session's verdict** (discovery
+    10, finding 2); unmeasured on real footage.
+  - **Renamed chapter files are treated as separate recordings.**
+  - **Legacy GOPR/GP chapter numbering** is named in the notice, but sibling discovery still never
+    chains `GOPRnnnn` with its `GPccnnnn` chapters.
+  - **The DATA TRUST "clock drifted … ppm" figure on a very short recording is fit noise.**
+- **Open for the owner** (carried from section 26, re-checked against 0.24.0's changes): whether
+  the focus list should be kept per direction, as the PB is; a best-of-the-day mark in the
+  Library needs a new meaning for ★ or a new mark; and section 26's carried lists stand as
+  written there.
