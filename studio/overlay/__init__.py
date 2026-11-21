@@ -28,8 +28,8 @@ an element here instead, so the 4,800-line exporter does not grow with every ide
     plate in place). The honesty stamp is not a plate and cannot be replaced: what it qualifies is
     the recording, and a style may move the caveat but never drop it;
   * the context carries every Classic plate's rectangle (`plates`, read-only, in frame pixels: the
-    rect each was painted into) and the frame's `safe` area (the frame inset by the Classic margin),
-    so an element can place itself clear of them — or exactly over the one it replaces;
+    rect each was painted into) and the frame's `safe` area (`layout.safe_area`: the Classic margin, and
+    in portrait the bands the apps cover), so an element can place itself clear of them — or exactly over the one it replaces;
   * `occupies` (optional, set by `prepare`: a {plate name: rect} dict) says where a PREPARED element
     now stands in for a plate: every element prepared AFTER it reads those rects in `plates` (a
     style's tower is the "strip" a corner card keeps clear of), and an `occupies[STAMP]` moves the
@@ -94,7 +94,7 @@ class ElementContext:
     map_rect: QRectF
     map_point: Callable[[float, float], QPointF] | None
     plates: Mapping[str, QRectF]   # PLATES + STAMP -> rect, read-only copies
-    safe: QRectF                   # the frame inset by the Classic margin
+    safe: QRectF                   # `layout.safe_area`: the margin (+ the portrait bands)
 
 
 class OverlayElement(Protocol):
