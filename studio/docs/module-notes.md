@@ -325,8 +325,9 @@ not at a lap), so a lap can span a chapter boundary.
   decided the first-open debrief, PB and focus list on part of the session (QA NEW-1). The
   command line goes through the same door without the sibling expansion (`--full`/`--chaptered`
   adds it), and `chapters.load_order` — also `Session.load`'s backstop — chains any list in
-  chapter order, once each (QA NEW-2). Part of a recording (`chapters.chapter_subset`) decides no
-  verdict; **File ▸ Load full recording** reloads the whole.
+  chapter order, once each (QA NEW-2). Part of a recording (`chapters.part_of_recording`: a strict
+  subset of the chapters on disk, or a folder missing a chapter before the last) decides no verdict;
+  **File ▸ Load full recording** reloads the whole, and a missing chapter is named in the notice.
 
 - **A sibling that isn't video (`chapters.split_non_mp4`).** Discovery groups on NAMES, so a file
   wearing a chapter's name and holding something else is handed to the loader with the real ones,

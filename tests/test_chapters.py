@@ -242,6 +242,43 @@ def test_map_unknown_duration_does_not_clamp_seek():
     assert abs(local - 457.8) < 1e-9
 
 
+# ------------------------------------------- chapters missing from the folder
+def test_missing_chapters_names_the_gaps_before_the_last_chapter_on_disk():
+    """A recording whose chapter 1 (or a middle chapter) is not in the folder used to open as
+    whole, in silence: chapter_subset only compares against what IS on disk. The missing names are
+    the GoPro names the camera would have written, in the opened file's folder; a missing LAST
+    chapter cannot be told from the names, so none is invented."""
+    with tempfile.TemporaryDirectory() as d:
+        for n in ["GX020068.MP4", "GX030068.MP4", "GX050068.MP4", "GX010069.MP4", "GH010068.MP4"]:
+            _touch(d, n)
+        missing = chapters.missing_chapters([os.path.join(d, "GX030068.MP4")])
+        assert [os.path.basename(p) for p in missing] == ["GX010068.MP4", "GX040068.MP4"], missing
+        assert all(os.path.dirname(p) == d for p in missing), missing
+        # Whole, a lone chapter 1, a non-GoPro clip, an unreadable folder: nothing is missing.
+        assert chapters.missing_chapters([os.path.join(d, "GX010069.MP4")]) == []
+        assert chapters.missing_chapters([os.path.join(d, "hero6.mp4")]) == []
+        assert chapters.missing_chapters([os.path.join(d, "nowhere", "GX020001.MP4")]) == []
+        assert chapters.missing_chapters([]) == []
+
+
+def test_missing_notice_says_where_the_recording_starts_or_jumps():
+    first = chapters.missing_notice(["/d/GX010068.MP4"])
+    assert first == ("This recording starts at chapter 2: chapter 1 (GX010068.MP4) is not in the "
+                     "folder, so the first minutes are missing"), first
+    two = chapters.missing_notice(["/d/GX010068.MP4", "/d/GX020068.MP4"])
+    assert two == ("This recording starts at chapter 3: chapters 1 and 2 (GX010068.MP4, "
+                   "GX020068.MP4) are not in the folder, so the first minutes are missing"), two
+    middle = chapters.missing_notice(["/d/GX020068.MP4"])
+    assert middle == ("chapter 2 (GX020068.MP4) is not in the folder, so the recording jumps "
+                      "across it and a lap timed across the gap is wrong"), middle
+    both = chapters.missing_notice(["/d/GX010068.MP4", "/d/GX030068.MP4", "/d/GX050068.MP4"])
+    assert both == ("This recording starts at chapter 2: chapter 1 (GX010068.MP4) is not in the "
+                    "folder, so the first minutes are missing; chapters 3 and 5 (GX030068.MP4, "
+                    "GX050068.MP4) are not in the folder either, so the recording jumps across "
+                    "them and a lap timed across a gap is wrong"), both
+    assert chapters.missing_notice([]) is None
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

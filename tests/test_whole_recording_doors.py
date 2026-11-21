@@ -380,8 +380,45 @@ def test_part_of_a_new_recording_decides_nothing_until_the_whole_recording_loads
           "through chapter 2 alone said nothing")
 
 
+# ------------------------------- 5. a recording whose first chapter is not in the folder at all
+def test_a_recording_missing_its_first_chapter_says_so_and_decides_nothing():
+    """Chapter 2 dropped from a folder that does not hold chapter 1. On main it opened as whole, in
+    silence: `chapter_subset` compares against the chapters ON DISK, so nothing was a subset; the
+    first open decided its PB and focus list on the second half of the outing and wrote its row,
+    and the same gap in the middle of a 3-chapter recording timed a lap across it (a 31.8 s lap of
+    a ~45 s circuit, crowned best). The fix says where the recording starts, once, in the session
+    notice, and a recording with a gap is part of one: no verdict, no row, as for a lone chapter."""
+    ch1, ch2 = _recording()
+    whole = Session.load([ch1, ch2])
+    prior = round(whole.lap_time(whole.best_lap_id()) + 0.5, 3)
+    folder = os.path.join(_REC["folder"], "no_first")
+    os.makedirs(folder, exist_ok=True)
+    only2 = os.path.join(folder, os.path.basename(ch2))
+    if not os.path.exists(only2):
+        shutil.copyfile(ch2, only2)
+    with _no_modals(), _fresh_app_support(prior, whole.track_name):
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            _until_loaded(win, lambda: win._open_recordings([only2]))
+            assert _chapter_names(win.session) == ["GX029001.MP4"]
+            notice = win.statusBar().currentMessage()
+            assert notice == ("This recording starts at chapter 2: chapter 1 (GX019001.MP4) is "
+                              "not in the folder, so the first minutes are missing; your PB and "
+                              "focus list wait for the whole recording"), notice
+            assert _verdict(win) == {"debrief": False, "pb_line": None, "card": False,
+                                     "focus": [], "row": None}, _verdict(win)
+            assert win.library_ctl.waiting_for_whole
+            # Nothing on disk to chain: the menu item that loads the rest stays off.
+            assert win._chapter_subset() is None and not win._full_action.isEnabled()
+        finally:
+            _close(win)
+    print(f"ok missing first chapter: {notice!r}")
+
+
 if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    tests =[v for k, v in sorted(globals().items()) if k.startswith("test_")]
     try:
         for t in tests:
             t()

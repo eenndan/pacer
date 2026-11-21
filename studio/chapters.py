@@ -308,6 +308,83 @@ def chapter_subset(paths: list[str]) -> tuple[int, int] | None:
     return None
 
 
+def missing_chapters(paths: list[str]) -> list[str]:
+    """The chapters of `paths`' recording that are NOT in its folder although a later chapter is:
+    the paths the camera's own names would have, ascending. [] for a whole recording, a lone
+    chapter 1, a non-GoPro clip or a folder that cannot be listed.
+
+    `chapter_subset`'s blind spot, and the reason this exists: it compares the open chapters with
+    the ones ON DISK, so a folder that never held chapter 1 opened as the whole recording, in
+    silence — its first lap, lap count and first-open verdict about the second half of an outing.
+    A missing middle chapter is worse: the chapters are laid end to end on one clock, and a lap
+    timed across the gap is short by the chapter that is not there (a 31.8 s "best" of a ~45 s
+    synthetic circuit). A missing LAST chapter leaves no gap in the names, so none is invented.
+
+    Names only: whether a chapter on disk is readable is `split_non_mp4`'s question, and its
+    notice names one that is not."""
+    info = parse_gopro_name(paths[0]) if paths else None
+    if info is None:
+        return []
+    folder = os.path.dirname(os.path.abspath(paths[0]))
+    try:
+        os.listdir(folder)
+    except OSError:
+        return []         # never invent a missing chapter (`chapter_subset`'s rule)
+    present = {}
+    for p in discover_siblings(paths[0]):
+        sib = parse_gopro_name(p)
+        if sib is not None:
+            present[sib.chapter] = p
+    ext = os.path.splitext(paths[0])[1]
+    return [os.path.join(folder, f"{info.prefix}{cc:02d}{info.recording:04d}{ext}")
+            for cc in range(1, max(present, default=0)) if cc not in present]
+
+
+def part_of_recording(paths: list[str]) -> bool:
+    """Whether `paths` are provably PART of a recording: a strict subset of its chapters on disk
+    (`chapter_subset`) or a recording with a chapter missing from its folder (`missing_chapters`).
+    What makes the library controller decide no first-open verdict on a load."""
+    return chapter_subset(paths) is not None or bool(missing_chapters(paths))
+
+
+def _chapter_list(missing: list[str]) -> str:
+    """'chapter 1 (GX010068.MP4)' / 'chapters 1 and 2 (…, …)' / 'chapters 1, 2 and 3 (…)'."""
+    nums = [str(info.chapter) for info in map(parse_gopro_name, missing) if info is not None]
+    shown = ", ".join(os.path.basename(p) for p in missing[:_MAX_NAMED_SKIPS])
+    if len(missing) > _MAX_NAMED_SKIPS:
+        shown += f", +{len(missing) - _MAX_NAMED_SKIPS} more"
+    if len(nums) == 1:
+        return f"chapter {nums[0]} ({shown})"
+    return f"chapters {', '.join(nums[:-1])} and {nums[-1]} ({shown})"
+
+
+def missing_notice(missing: list[str]) -> str | None:
+    """The session notice's sentence for `missing_chapters`, or None when none is missing: where
+    the recording starts when its first chapters are not there, and that it jumps across a missing
+    middle one."""
+    if not missing:
+        return None
+    # The leading run (chapters 1, 2, … k) is where the recording starts; the rest are gaps.
+    lead: list[str] = []
+    for p in missing:
+        info = parse_gopro_name(p)
+        if info is None or info.chapter != len(lead) + 1:
+            break
+        lead.append(p)
+    gaps = missing[len(lead):]
+    parts = []
+    if lead:
+        verb = "is" if len(lead) == 1 else "are"
+        parts.append(f"This recording starts at chapter {len(lead) + 1}: {_chapter_list(lead)} "
+                     f"{verb} not in the folder, so the first minutes are missing")
+    if gaps:
+        verb, it, gap = ("is", "it", "the gap") if len(gaps) == 1 else ("are", "them", "a gap")
+        either = " either" if lead else ""
+        parts.append(f"{_chapter_list(gaps)} {verb} not in the folder{either}, so the recording "
+                     f"jumps across {it} and a lap timed across {gap} is wrong")
+    return "; ".join(parts)
+
+
 def group_into_recordings(paths: list[str]) -> list[list[str]]:
     """Group a flat list of dropped/opened paths into distinct RECORDINGS, so unrelated files are
     never folded onto one clock.

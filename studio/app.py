@@ -1616,6 +1616,10 @@ class StudioWindow(QMainWindow):
             library row stored from part of one; on a FIRST open it also says the PB and focus
             list are waiting. Stated alongside rather than instead of the clauses above, because it
             is the reason a chapter can have no laps or an unfamiliar best;
+          * a MISSING CHAPTER — one that is not in the folder although a later one is
+            (`chapters.missing_chapters`): a recording that starts at chapter 2 used to open as the
+            whole outing, and one with a gap timed a lap across it, both in silence. It decides no
+            verdict either (`chapters.part_of_recording`);
           * an UNREADABLE TRACK DATABASE — tracks.json exists and this build cannot read a circuit
             out of it, so no track auto-detects and every recording opens as "unknown track" with
             no way to tell that from a genuinely new circuit (QA D2-16);
@@ -1669,6 +1673,13 @@ class StudioWindow(QMainWindow):
         # one place that says the verdict is still to come — and what brings it.
         if chapter_notice:
             chapter_notice += verdict.whole_wait
+        # A chapter that is not in the folder at all: where the recording starts, or that it jumps
+        # across a gap. No menu item can fetch it, so this is only said, never offered; and when no
+        # chain is on offer either, this clause carries what the verdict waits for.
+        missing_notice = chapters.missing_notice(
+            chapters.missing_chapters(getattr(self, "_paths", None) or []))
+        if missing_notice and not chapter_notice and self.library_ctl.waiting_for_whole:
+            missing_notice += "; your PB and focus list wait for the whole recording"
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
         # The two writes that used to fail into a print (§7.5). The library flag is set by whichever
@@ -1680,8 +1691,8 @@ class StudioWindow(QMainWindow):
                                            False) else None)
         drop_notice = getattr(self, "_drop_notice", None)
         return " · ".join(p for p in (notice, sidecar_notice, skipped_notice, ref_skipped_notice,
-                                      desync_notice, chapter_notice, tracks_notice, library_notice,
-                                      sidecar_write_notice, drop_notice) if p) or None
+                                      desync_notice, missing_notice, chapter_notice, tracks_notice,
+                                      library_notice, sidecar_write_notice, drop_notice) if p) or None
 
     def _retract_status(self, text: str) -> None:
         """Take `text` off the status bar if it is still what the bar shows: the view's sentence
