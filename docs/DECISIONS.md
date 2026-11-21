@@ -2035,3 +2035,116 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   the focus list should be kept per direction, as the PB is; a best-of-the-day mark in the
   Library needs a new meaning for ★ or a new mark; and section 26's carried lists stand as
   written there.
+
+## 28. Recorded at the 0.25.0 release, 2026-11-21
+
+- **v0.25.0 is a minor release**: 9 pull requests, #704 to #712, Wave 22 of the campaign section 8
+  records, its theme "what leaves the app, and what a missing GPS fix does".
+  - #704: each ⚠ lap is counted once, under the kind it wears, in DATA TRUST and the report's
+    summary; the Lap Race names a GPS-dropout lap it leaves out "GPS dropout", not "no on-track
+    match".
+  - #705: laps.csv names each excluded lap in its trailer (`summary: excluded lap N`, its time,
+    and `excluded-stopped`, `excluded-band` or `excluded-open` with its distance and reason); the
+    report shows it as a muted row in lap order.
+  - #706: the lap strip says a slow lap's bar is "clipped at" its scale line, not "cut at" it.
+  - #707: an export whose folder is gone by render time says so, not "the encoder stopped".
+  - #708: the export dialog's top line names the lap the Export row will render.
+  - #709: the GPS-quality verdict judges the rejected-fix share over the timed laps, first to last
+    crossing, with a guard band of 14 fixes beyond either edge; the status bar names rejected
+    driving outside the laps when it alone would have read low.
+  - #710: a 9:16 export keeps every overlay out of the top 8 % and bottom 18 % of the frame.
+  - #711: a ⚠ lap's one-lap clip and compare pane say "⚠ not counted" with a neutral Δ, its
+    minimap draws the best lap's line, the export dialogs name the reason, and the report's ⚠
+    column is headed "Not counted" with a key.
+  - #712: a lap with a GPS fix missing within the smoother's reach of its start/finish crossing,
+    or with the trace starting or ending there, wears the GPS-dropout ⚠; when more than half the
+    valid laps wear it the session reads GPS quality low.
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19.
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **Excluded laps go in laps.csv's trailer, not as rows.** The file promises one row per valid
+    lap, and a reader who sums or averages `time_s` would take in an 81.7 s stopped lap.
+  - **The GPS-quality verdict is judged inside the timed laps**, with a guard band of twice the
+    smoother's reach beyond either edge (14 fixes, 1.4 s at 10 Hz). It is kept wide on purpose:
+    rejected fixes ending 0.35–0.60 s before the first crossing moved that lap by up to 282 ms,
+    and the band re-downgrades two synthetic sessions whose laps are exact (a 2D fix, or no lock,
+    until 1.24 s before the first crossing).
+  - **Timing is not changed for missing fixes; the laps are flagged instead.** A lap with a hole
+    within the smoother's reach of a crossing wears the dropout ⚠. The time-centred smoother was
+    measured (its largest change to an unflagged lap 4–12 ms) and deferred: it moves 25,665
+    non-lap-time leaves of the synthetic golden and needs a reviewed re-cut.
+  - **When more than half the valid laps wear the dropout ⚠, the session is low**: no PB, focus
+    list or debrief, and a degraded Library row. Laps timed across a missing chapter do not vote.
+  - **One-lap clips and compares carry "⚠ not counted" with a neutral Δ.** Full-session clips keep
+    no per-lap tag (the refusal stands: a tag would appear and vanish mid-clip), but draw a ⚠
+    lap's Δ neutral while it is on screen.
+  - **The portrait safe area is 8 % at the top and 18 % at the bottom** of a 9:16 frame;
+    landscape and square are untouched. Refusal §25 was re-measured on the row the overlay now
+    uses, and still stands.
+- **Resolved from section 27**: the lap counted twice in DATA TRUST and the report's summary, and
+  the Lap Race's "no on-track match" for a GPS-dropout lap (#704); laps.csv dropping an excluded
+  lap with no note (#705); a 2D-fix stretch outside every timed lap downgrading the whole session
+  (#709, with the guard band's cost above).
+- **Process.** The release QA drove the merged tree in the real window, offscreen and jailed, at
+  1440×900 with the theme applied, on synthetic recordings only: the pinned demo, and the demo
+  circuit with gate-rejected fixes scattered at 3 % and 5 %, single fixes missing just before 2 to
+  11 of the start/finish crossings, rejected driving outside the laps with and without such
+  holes, a 30 s block inside a lap, a red-flag stop and an infield cut, each with holes added at
+  read time. It read the banner, the GPS LOW chip and its hover, the status bar, DATA TRUST, the
+  Stats tiles, the Laps tab's hovers, the marks, the Lap Race card, the Library row, laps.csv,
+  the report (rendered), the lap strip and the export dialogs, and looked at exported frames: a
+  ⚠ lap's Classic and Broadcast clips in landscape and 9:16, the best lap's clip in a low
+  session, and a compare. On the demo its laps, best lap (lap 13, 0:44.950) and ideal lap
+  (44.631 s) read as in 0.24.0, no lap is ⚠ and the verdict is clean; its laps.csv, lap card and
+  best-lap and lap-12 clips (decoded at 20 s and at the last frame) are byte-identical from
+  v0.24.0's studio/ and from 0.25.0.
+- **The media.** `hero.png`, `og.png`, `map.png`, `accuracy.png`, `moments.png`, `quickest.png`,
+  `debrief.png`, `lapstrip.png` and `report.png` (its own run) were re-captured on the pinned
+  synthetic demo at 0.25.0 and are byte-identical to the files already committed. One capture of
+  `lapstrip.png` came out different in its "median" and "best" labels (442 pixels, the same two
+  labels as at 0.24.0) and a second reproduced the committed file: that render is not
+  deterministic in those labels, and the committed pixels are the ones kept. The waivers of
+  `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are
+  renewed: a demo render of the data-trust shot changed in its Timing row's words only (#709:
+  "0% of fixes inside your laps rejected"), the ideal-lap shot is byte-identical, and the export
+  changes (#710, #711) reach neither a landscape best-lap clip nor a frame of a lap with no ⚠.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name, and whether any lap of Sandown 3h wears the new dropout ⚠ was not re-measured
+  here (#712's real-footage golden dump was unchanged). The full gate, the soak and the smoke run
+  on the release branch, not in the QA pass.
+- **Found in this release's QA between its pull requests** (#712 × #698): the off-line test
+  measures only laps with no dropout, and #712 widened the dropout to near-line holes. A cut lap
+  whose session has most laps holed is no longer measured against enough laps, and is crowned
+  best: on the infield-cut recording with single fixes missing at six crossings (11 of 14 laps
+  ⚠, the session low), lap 10, 929 m and 34 m off the line, is "★ Session best" at 0:44.227 in
+  the Laps tab, the lap strip, the lap card and the report, where 0.24.0 kept it out on the same
+  input. A cut lap that also has a near-line hole is named "GPS dropout" instead of "left the
+  line".
+- **Found in the QA, not fixed** (each minor): the status bar's "rejected for N s of driving
+  outside your laps, so a lap there may be missing" is dropped when the lap vote makes the session
+  low; one hole at a crossing gives two identical dropout marks, the second lap's lying before its
+  start; the ghost's reason says a near-line dropout lap's "place on track is a guess"; the
+  report's "Not counted" cell wraps "gps-dropout" at its hyphen; DATA TRUST's Timing row can read
+  "0% of fixes inside your laps rejected — GPS fixes missing at the line on 8 of 14 laps"; the lap
+  card and the lap strip stamp "estimated timing (est)" on a true-clock session that is low by the
+  vote, as they already did for a low share.
+- **Open for the owner** (new, most important first).
+  - **Sector splits and the ideal lap can move by about ±46 ms when a fix is missing near a
+    sector line**, with nothing flagged: the new rule looks only at the start/finish crossings.
+  - **The bests fallback still crowns a ⚠ lap when every lap is flagged** (in the session only;
+    the PB is refused).
+  - **The time-centred smoother's re-cut**, which would fix the values instead of flagging them.
+  - **laps.csv has no key row for `flag`.**
+  - **A ⚠ lap's corner-pass clip is untagged.**
+  - **An off-line lap has no Quality code** in the report or laps.csv.
+  - **The burned stamp says "% of fixes rejected"** for the share inside the laps.
+  - **The export box's header says "couldn't finish" when the render never started.**
+  - **A hole is judged against the trace's median period**, so a recording whose rate changes
+    mid-way would misread its steps.
+- **Open for the owner** (carried from section 27, re-checked against 0.25.0's changes): no
+  "include this lap" override for a ⚠ lap; a no-majority session flags nothing; renamed chapter
+  files are treated as separate recordings; legacy GOPR/GP chapters are named but not chained; the
+  DATA TRUST clock-drift figure on a very short recording is fit noise; the map's gap-fill can
+  borrow from an out-of-bests lap; Coaching's lap account counts only dropouts; an explicitly
+  chosen out-of-bests best lap is exempt from the race rule; with a lap boundary within one fix
+  of a chapter join, only the lap after it is flagged; and section 27's carried lists stand as
+  written there.
