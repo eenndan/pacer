@@ -1460,6 +1460,10 @@ class Session:
         decided from the persisted flag in `apply_timing_lines_latlon`)."""
         if user_confirm:
             self._timing_user_confirmed = True
+        # the same start line segments the same laps: only the sector lines moved. No start line
+        # known yet (a Laps without sectors, or a stub of one) → not the same: refit as before.
+        old = getattr(getattr(self.laps, "sectors", None), "start_line", None)
+        same_laps = old is not None and start == Seg.from_pacer(old)
         self.laps.sectors = pacer.Sectors(
             start_line=start.to_pacer(),
             sector_lines=[s.to_pacer() for s in sectors],
@@ -1486,7 +1490,7 @@ class Session:
         # them via invalidate() (the corner basis + per-lap stats + session bests; the per-lap
         # brake/coast/grip — the driving thresholds depend only on the unchanged g series so
         # they survive), replacing the ~7 hand-cleared cache slots this block used to enumerate.
-        self.corners.invalidate()
+        self.corners.invalidate(keep_geometry=same_laps)
         self.driving.invalidate()
         self.stats.invalidate()
 
@@ -2153,6 +2157,15 @@ class Session:
         bare-Session test path."""
         cm = getattr(self, "corners", None)
         return (0.0, 0.0) if cm is None else cm.sector_shift(lap_id)[0]
+
+    def sector_as_measured_ids(self) -> frozenset[int]:
+        """The valid laps whose splits are timed as measured inside a de-drifted session (their
+        robust shift was refused, `sector_drift_status` "untrusted"); empty with no sector line.
+        What the SPLITS grid, the lap table's sector cells and Quickest passes mark."""
+        if not self.laps.sectors.sector_lines:
+            return frozenset()
+        return frozenset(int(i) for i in self.valid_lap_ids()
+                         if self.sector_drift_status(i) == "untrusted")
 
     def sector_drift_status(self, lap_id: int) -> str:
         """Why `lap_id`'s splits were or were not de-drifted (`CornerModel.sector_shift`'s word)."""

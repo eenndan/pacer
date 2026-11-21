@@ -2104,6 +2104,8 @@ class LapTable(QWidget):
         self._best_split = best_split  # cached so re-highlight after a sort needn't recompute
         # dropout lap ids, keyed by lap id so the ⚠ flag follows the lap across sorts
         self._dropout_ids = dropout_ids
+        # laps whose splits are timed as measured (a refused receiver shift): their S cells say so
+        self._as_measured_ids = getattr(self.session, "sector_as_measured_ids", frozenset)()
         self._read_slow_notes()
         self._refresh_slow_finder()
         self._apply_highlights()
@@ -2344,6 +2346,9 @@ class LapTable(QWidget):
                     item.setToolTip(_with_star(BEST_SPLIT_TIP, item.toolTip()))
                 else:
                     font.setBold(False)
+                if lap_id in getattr(self, "_as_measured_ids", ()):
+                    item.setToolTip(" ".join(x for x in (
+                        item.toolTip(), stats_service.SPLIT_AS_MEASURED_NOTE) if x))
                 item.setFont(font)
         self.table.blockSignals(False)
         self._route_delegate(ink_rows)
@@ -3305,6 +3310,9 @@ QUICKEST_BTN_TIP = ("Your quickest pass through each corner (and each sector you
 LAP_VIEW_TIP = "This lap's time, speeds and grip through each corner."
 QUICKEST_NEEDS_LAPS = "Needs more laps"
 QUICKEST_PLAY_TIP = "Play this pass, from just before the {what} to just after it (Return)"
+# A sector row whose quickest lap's splits were timed as measured (stats.SPLIT_AS_MEASURED_NOTE).
+QUICKEST_AS_MEASURED_TIP = ("Its quickest pass, lap {lap}, was timed as measured: this lap ran too "
+                            "far off the session's line to take its receiver drift off.")
 QUICKEST_STAR_TIP = ("★ Quickest by more than the timing step: no other lap took this {what} within "
                      "{step:.2f} s of it.")
 QUICKEST_COL_TIPS = [
@@ -4138,6 +4146,7 @@ class QuickestPassTable(QWidget):
                 "page's CORNERS BY LAP and SPLITS.")
             self.not_counted.setVisible(True)
         verified = getattr(self.session, "timing_verified", True)
+        as_measured = getattr(self.session, "sector_as_measured_ids", frozenset)()
         direction = {c.cid: c.direction for c in corner_list}
         self.table.setRowCount(len(passes))
         for r, qp in enumerate(passes):
@@ -4170,6 +4179,11 @@ class QuickestPassTable(QWidget):
                     font.setBold(True)
                     item.setFont(font)
                     item.setToolTip(QUICKEST_STAR_TIP.format(step=level_s, what=stretch_noun(qp)))
+                if col in (1, 2) and qp.cid < 0 and qp.lap_id in as_measured:
+                    # its quickest pass counts like any other (the SPLITS grid's best is the same
+                    # lap) and says it carries the receiver drift the others had taken off
+                    item.setToolTip(" ".join(x for x in (item.toolTip(), QUICKEST_AS_MEASURED_TIP.format(
+                        lap=lap_label(qp.lap_id))) if x))
                 self.table.setItem(r, col, item)
             self.table.setItem(r, QUICKEST_STRIP_COL, self._strip_item(label, qp, star))
             btn = icon_button("ph.play-fill",

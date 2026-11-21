@@ -2014,6 +2014,14 @@ def stint_rows(lap_ids, lap_times, starts, ends, vmins=None,
     return out
 
 
+# A split of a lap whose receiver shift could not be fitted robustly (cool/sector-dedrift-followup):
+# its cells in the SPLITS grid and the lap table, and a Quickest passes sector row it is the quickest
+# of, carry this clause. The lap still counts like any other: excluding it would make the row
+# disagree with the grid's best, and on clean synthetic days no lap was refused (0 of 280).
+SPLIT_AS_MEASURED_NOTE = ("Timed as measured: this lap ran too far off the session's line to take "
+                          "its receiver drift off.")
+
+
 def split_matrix(lap_ids, splits_by_lap, columns: int | None = None) -> SplitMatrix | None:
     """The laps × sectors grid (see SplitMatrix). `splits_by_lap[k]` is lap `lap_ids[k]`'s split
     list; rows whose length disagrees with the session's column count are kept but blanked, so a
@@ -2284,7 +2292,8 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 #
 # THE STEP: the house rule on the largest worst-sector σ of the pinned samples (in sample,
 # 0.0474 s) gives 0.13 s (0.11 s at τ 90 s); the step is 0.15 s, that ROUNDED UP for sampling
-# headroom (`SPLIT_SAMPLING_HEADROOM_S`): the ten-day sets read 0.13-0.16 s on their own.
+# headroom (`SPLIT_SAMPLING_HEADROOM_S`); it covers every ten-day set measured but the noisiest
+# (0.16 s).
 # THE LIMITS: the synthetic circuit's slowest point is 13.5 m/s (C5's apex), and a line at a slower
 # hairpin is not covered; faster drift than the assumption (above); on noise with no drift (white
 # only) the fitted shift adds error, 0.0202 → 0.0207 s, and a rotation or scale of the trace, which
@@ -2377,8 +2386,9 @@ SPLIT_DRIFT_TAU_S = 30.0
 SPLIT_SIGMA_S = REFERENCE_SIGMAS.split
 # SAMPLING HEADROOM (the step's block above). The house rule on the split column gives 0.13 s, and
 # every pooled sample says so (40 days in sample 0.0474 s, the 40 out of sample 0.0440, all 80
-# 0.0456); single ten-day sets read 0.044-0.056 s, 0.13-0.16 s. The step is that house rule ROUNDED
-# UP by this much, to 0.15 s: headroom for sampling, said as such, and nothing else may use it
+# 0.0456); single ten-day sets read 0.044-0.056 s. The step is that house rule ROUNDED
+# UP by this much, to 0.15 s: headroom for sampling, said as such — it covers every ten-day set
+# but the noisiest (0.16 s) — and nothing else may use it
 # (tests/test_measured_figures.py holds `SECTOR_LEVEL_S` to exactly this one expression).
 SPLIT_SAMPLING_HEADROOM_S = 0.02
 SECTOR_HOUSE_STEP_S = house_step(SPLIT_SIGMA_S)

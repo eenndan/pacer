@@ -176,6 +176,57 @@ def test_a_lap_s_rigid_receiver_shift_does_not_move_its_splits_and_its_time_neve
           f"(as timed before: {moved_before * 1000:.1f} ms)")
 
 
+def test_a_sector_drag_keeps_the_session_geometry_and_a_start_line_move_rebuilds_it():
+    """cool/sector-dedrift-followup: `set_timing_lines` keeps the session geometry and the sector
+    timing's robust shifts when only SECTOR lines change (the same start line segments the same
+    laps), and rebuilds them when the START line moves. Either way every lap's splits equal a fresh
+    load's with the same lines — the cache must never be visible."""
+    import shutil
+
+    from studio import chapters
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    from studio.dev.probes.focus_cross_session import _generate
+    from studio.session import Session
+    work = tempfile.mkdtemp(prefix="split_cache_test_")
+    try:
+        path = _generate(work, stats.REFERENCE_SIGMAS.noise, 401, 1, None)
+        s = Session.load(chapters.discover_siblings(path))
+        truth = sg.simulate(401, 14, origin=make_demo.DEMO_ORIGIN)
+        mid = [sum(st) / 2.0 for st in truth.circuit.straights]
+        apex = {k.cid: k.apex_s for k in truth.circuit.corners}
+        start, _ = s.timing_lines_latlon()
+
+        def fresh(start_ll, lines):
+            f = Session.load(chapters.discover_siblings(path))
+            assert f.apply_timing_lines_latlon(start_ll, lines, confirmed=True)
+            return {i: f.lap_sector_splits(i) for i in f.consistency_lap_ids()}
+
+        def splits():
+            return {i: s.lap_sector_splits(i) for i in s.consistency_lap_ids()}
+
+        a_lines = [truth.line_at(apex[1]), truth.line_at(apex[5])]
+        assert s.apply_timing_lines_latlon(start, a_lines, confirmed=True)
+        assert splits() == fresh(start, a_lines)
+        geom = s.corners.geometry()
+        shift = s._sector_drift(s.consistency_lap_ids()[0])
+        # only the sector lines move: the same geometry object, the same robust shifts, and splits
+        # equal to a fresh load's with the new lines
+        b_lines = [truth.line_at(mid[2]), truth.line_at(mid[5])]
+        assert s.apply_timing_lines_latlon(start, b_lines, confirmed=True)
+        assert s.corners.geometry() is geom
+        assert s._sector_drift(s.consistency_lap_ids()[0]) == shift
+        assert splits() == fresh(start, b_lines)
+        # the START line moves (to another straight): the laps are new, the geometry is rebuilt,
+        # and the splits again equal a fresh load's
+        moved = truth.line_at(mid[1])
+        assert s.apply_timing_lines_latlon(moved, b_lines, confirmed=True)
+        assert s.corners.geometry() is not geom
+        assert splits() == fresh(moved, b_lines)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def test_a_lap_that_runs_wide_for_a_stretch_does_not_tilt_its_sector_shift():
     """The independent review of cool/sector-dedrift: PLANT an 8 m lateral excursion over 150 m of
     one counted lap (lap metres 250-400, a raised-cosine bump to the left of its trace), well
@@ -582,6 +633,70 @@ def test_the_walk_stays_among_the_sectors_and_says_where_it_ends():
         assert view.step_corner_pass(+1)
         assert view.pass_subject()[:2] == (lap, stats.sector_key(1))
     finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_a_lap_timed_as_measured_says_so_in_every_split_cell_and_the_row_it_leads():
+    """cool/sector-dedrift-followup, on the real window over the demo with 2 lines: PLANT the 20 m ×
+    400 m excursion (the planted-shift tests' construction) on S1's quickest lap, so its robust
+    shift is refused and its splits are timed as measured inside a de-drifted session. The lap still
+    counts (the SPLITS grid's best and Quickest passes stay one source), and every split cell of it
+    — the Stats page's SPLITS grid, the lap table's S columns — and a sector row it is the quickest
+    of carry `stats.SPLIT_AS_MEASURED_NOTE`; no other lap's cells do."""
+    import numpy as np
+
+    from studio.lap_table import QUICKEST_AS_MEASURED_TIP, lap_label
+    prefs.set_corners_view("quickest")
+    win = _window(2)
+    try:
+        view, s = win.view, win.session
+        lap = s.split_matrix().best_lap[0]
+        orig = s._lap_columns
+
+        def planted(lid):
+            t, xs, ys, v, cum = orig(lid)
+            if lid != lap:
+                return t, xs, ys, v, cum
+            u = np.clip((cum - 250.0) / 400.0, 0.0, 1.0)
+            w = 20.0 * np.sqrt(np.sin(np.pi * u))
+            hx, hy = np.gradient(xs), np.gradient(ys)
+            n = np.hypot(hx, hy)
+            n[n == 0] = 1.0
+            return t, xs - w * hy / n, ys + w * hx / n, v, cum
+
+        s._lap_columns = s.corners._lap_columns = planted
+        s.corners.invalidate_stats()
+        s._sector_collapse_cache = None
+        assert s.sector_as_measured_ids() == {lap}, s.sector_as_measured_ids()
+        m = s.split_matrix()
+        assert lap in m.lap_ids          # still counted
+        view.rebuild_derived_views()
+        _settle()
+        note = stats.SPLIT_AS_MEASURED_NOTE
+        grid = view.stats_view.splits_table
+        for r, lid in enumerate(m.lap_ids):
+            for c in range(m.columns):
+                tip = grid.item(r, c + 1).toolTip()
+                assert (note in tip) == (lid == lap), (lid, c, tip)
+        lt = view.table
+        first_s = lt.table.columnCount() - lt._n_split_cols() - 1     # the S columns, then spacer
+        for r in range(lt.table.rowCount()):
+            for c in range(first_s, first_s + lt._n_split_cols()):
+                item = lt.table.item(r, c)
+                if item is not None and item.text():
+                    assert (note in item.toolTip()) == (lt._lap_id(r) == lap), (r, c)
+        q = view.corners_page.quickest
+        led = [p for p in q.sectors.passes if p.lap_id == lap]
+        for p in q.sectors.passes:
+            tip = q.table.item(q.row_of(p.cid), 1).toolTip()
+            want = QUICKEST_AS_MEASURED_TIP.format(lap=lap_label(lap))
+            assert (want in tip) == (p.lap_id == lap), (p.cid, tip)
+        print(f"lap {lap + 1} timed as measured; it leads {len(led)} sector row(s)")
+    finally:
+        del s._lap_columns
+        s.corners._lap_columns = orig
+        s.corners.invalidate_stats()
         _close(win)
         prefs.set_corners_view("lap")
 

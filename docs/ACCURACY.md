@@ -192,7 +192,8 @@ assumption one split against another of the same recording carries σ 0.026–0.
 mid-straight and 0.040–0.042 s at the slowest lines, and one split's σ is 0.047 s at recording
 C's GPS noise, at the worst sector of any placement (0.044 s out of sample, 0.046 s over all 80
 days); the house rule gives 0.13 s (2√2σ), the last column below. The app's step is 0.15 s,
-rounded up from that for sampling headroom: single ten-day sets read 0.13–0.16 s. At the grid's
+rounded up from that for sampling headroom; it covers every ten-day set measured but the noisiest
+(0.16 s). At the grid's
 own 90 s drift, the favourable case, the σ is 0.038 s and the rule 0.11 s. The step does not mean
 a split compare is never wrong: on the synthetic grid the right-click menu still offers a few of
 its thousands of compares on a pass truly within 0.03 s, or of the wrong sign. Its other limits:
@@ -200,8 +201,10 @@ the measured track's slowest point is 13.5 m/s, and a line at a slower hairpin i
 lap that runs about 3 m off its line for 40 % of the lap still moves its splits by up to 0.03 s
 (within the split's own noise; planted excursions of 3–20 m over 50–400 m, one across a sector
 line, moved them by at most 0.031 s); on position noise with no drift at all the fitted shift adds at
-most 2 ms; and a session too short to fit the shift (fewer than three
-clean laps) keeps its splits as measured. No official timing has checked a split. (The truth matrix names its noise levels by its own three-seed calibration, which reads
+most 2 ms; a session too short to fit the shift (fewer than three clean laps) keeps its splits as
+measured; and a lap too far off its line for the shift to be fitted is timed as measured inside a
+de-drifted session, still counted in the SPLITS grid and Quickest passes, with its cells and a
+quickest row it leads saying so. No official timing has checked a split. (The truth matrix names its noise levels by its own three-seed calibration, which reads
 C's per-lap σ as noise 2.1 and B's as 4.4; the 40-day grid below reproduces C's at noise 1.9 and
 B's at 4.0. Same recordings, two calibrations.)
 

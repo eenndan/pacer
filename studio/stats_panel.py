@@ -2824,6 +2824,8 @@ class StatsView(QWidget):
             self.splits_note.setText("")
             return
         n_cols = matrix.columns
+        # laps timed as measured inside a de-drifted session: their cells say so (the session's word)
+        as_measured = getattr(session, "sector_as_measured_ids", frozenset)()
         self.splits_table.set_columns(
             SPLIT_LEAD_COLUMNS + [f"S{c + 1}" for c in range(n_cols)] + SPLIT_TAIL_COLUMNS)
         best_colour = QColor(theme.best_sector_colour())
@@ -2876,6 +2878,9 @@ class StatsView(QWidget):
                             f"S{c + 1} ({med:.{d}f} s); "
                             f"{stats_service.fmt_pass_vs_typical(to_best)} against the sector best "
                             f"({col_best:.{d}f} s, lap {matrix.best_lap[c] + 1}).")
+                if lap_id in as_measured:
+                    item.setToolTip(" ".join(x for x in (
+                        item.toolTip(), stats_service.SPLIT_AS_MEASURED_NOTE) if x))
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 item.setFont(mono)
                 t.setItem(r, c + 1, item)

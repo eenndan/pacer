@@ -3125,16 +3125,20 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     seams = (demo, focus, library, logsetup, marks, prefs, session_record, track_db)
     keep = (sidecar.save, [m._app_support_dir for m in seams],
             os.environ.get(app_support.DIR_ENV))
+    from studio.dev import synth_gopro as sg
     from studio.dev.probes import quickest_bias as probe
     from studio.dev.probes import sector_split_sigma as split_probe
     work = tempfile.mkdtemp(prefix="quickest_bias_check_")
     try:
-        got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
-        # a sector's luck is fitted to the upper envelope over the 13 placements (studio/stats.py's
-        # luck block), which three slow lines (244, 578, 730 m) set at every n, at the split
-        # column's drift time constant (`stats.SPLIT_DRIFT_TAU_S`, measure_luck's default)
-        got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE, SECTOR_LUCK_SEEDS,
-                                                  "three_slow", probe.CHECK_N)
+        # the placeholder picture is encoded once per length, not 36 times (cool/sector-dedrift-
+        # followup: 58 s → 26 s); the telemetry, all that is measured, is untouched
+        with sg.reuse_placeholder_video():
+            got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
+            # a sector's luck is fitted to the upper envelope over the 13 placements (stats.py's
+            # luck block), which three slow lines (244, 578, 730 m) set at every n, at the split
+            # column's drift time constant (`stats.SPLIT_DRIFT_TAU_S`, measure_luck's default)
+            got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE,
+                                                      SECTOR_LUCK_SEEDS, "three_slow", probe.CHECK_N)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         sidecar.save = keep[0]
