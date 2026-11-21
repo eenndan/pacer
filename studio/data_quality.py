@@ -839,12 +839,21 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 #   [b] break in series   REFUSED. A break is a fact about a SERIES — times either side of a gap
 #                 not being on the same footing — and one clip is one window of one recording, not
 #                 a series a viewer can compare across. The exports that ARE series keep it.
-#   the per-lap GPS-dropout ⚠  REFUSED, and this is the closer call: it is genuinely a fact about
-#                 the exported lap. But it changes per lap, and the SESSION scope renders many laps
-#                 in one clip — so it would have to raise and drop a mark mid-clip, which reads as
-#                 a rendering fault rather than a disclosure. The stamp is session-scoped, exactly
-#                 like `session_marks` and like the pill budget that is resolved once per export.
-#                 ⚠ stays where a reader can see which lap it belongs to.
+#   the per-lap ⚠ (`lap_warnings`: a GPS dropout, off the line, timed across a missing chapter)
+#                 ON A FULL-SESSION CLIP: REFUSED. It is a fact about one lap, and the SESSION
+#                 scope renders many laps in one clip — so it would have to raise and drop a mark
+#                 mid-clip, which reads as a rendering fault rather than a disclosure. The stamp
+#                 is session-scoped, exactly like `session_marks` and like the pill budget that is
+#                 resolved once per export. That clip only draws a ⚠ lap's Δ NEUTRAL while the lap
+#                 is on screen (`not_counted_ids`): a green "−0.73" would say it beat a best it
+#                 is kept out of.
+#   the per-lap ⚠ ON A ONE-LAP CLIP (a lap, the best lap, each file of All laps) AND ON EACH
+#                 PANE OF A LAP-VS-LAP COMPARE: CARRIED, as `FRAME_NOT_COUNTED` beside the lap's
+#                 name, with the Δ figure and bar neutral. Here the reason above does not hold:
+#                 the clip's whole subject is that one lap, so the tag is on every frame or none,
+#                 never raised mid-clip — and without it the most public artefact burned a cut
+#                 lap as "Δbest −0.73" in green, faster than a best it can never be (discovery
+#                 11). A corner-pass clip burns no lap clock and no lap Δ, so it carries neither.
 #
 # THE WORDS ARE THE APP'S OWN. "ESTIMATED" and "GPS LOW" are literally the lap panel's data-quality
 # chip (central_view._refresh_quality_badge — whose third word, "NO GPS", has no stamp here because
@@ -1029,6 +1038,29 @@ def lap_warning_kinds(session) -> dict[int, str]:
     gaps = gap_lap_ids(session)
     return {i: (WARN_CHAPTER_GAP if i in gaps else WARN_DROPOUT if why is None else WARN_OFF_LINE)
             for i, why in lap_warnings(session).items()}
+
+
+#: What the ⚠ set IS on every artefact that names it (the export dialogs, the report's key): kept
+#: out of the bests.
+NOT_COUNTED = "not counted in your bests"
+#: The tag a ONE-LAP clip (and a compare pane) burns beside a ⚠ lap's name (the block above).
+FRAME_NOT_COUNTED = "⚠ not counted"
+
+
+def not_counted_ids(session) -> frozenset[int]:
+    """The ⚠ set (`lap_warnings`) as ids — the laps an export must never colour as a gain or a
+    loss against the best, resolved once per export. Empty for a double with no accessor."""
+    try:
+        return frozenset(int(i) for i in lap_warnings(session))
+    except Exception:  # noqa: BLE001 — a stand-in session must never fail an export
+        return frozenset()
+
+
+def not_counted_line(session, lap_id) -> str:
+    """"⚠ left the line the other laps drive — not counted in your bests" for a ⚠ lap (the
+    export dialogs' lap line), "" for any other: `WARN_REASON`'s words, then `NOT_COUNTED`."""
+    kind = lap_warning_kinds(session).get(lap_id) if lap_id is not None else None
+    return "" if kind is None else f"⚠ {WARN_REASON[kind]} — {NOT_COUNTED}"
 
 
 def laps_by_kind(session) -> dict[str, list[int]]:

@@ -584,6 +584,87 @@ def test_a_reference_names_the_baseline_in_the_tower_and_on_the_bar():
     print("ok a reference loaded: the tower and the bar read Δref")
 
 
+def test_a_lap_kept_out_of_the_bests_burns_neutral_and_says_not_counted():
+    """Discovery 11: a lap out of the bests (the ⚠ set: here one that left the line) exported as a
+    clip burned "LAP 10 · 0:44.227 · Δbest −0.73" in GREEN with a full green bar, its minimap drew
+    the lap's own broken line, and the dialog said only "Selected lap 10 · 0:44.227". Now, in
+    both styles: every frame names it "LAP n · ⚠ not counted", its Δ (and Broadcast's bar, and its
+    corner cards) are the neutral white, the inset draws the best lap's line (the kart dot still
+    follows this lap), and the dialog's lap line carries the reason. A whole-recording clip keeps
+    the refusal (no tag) but draws the lap's Δ neutral; a clean lap is untouched."""
+    f = _fixture()
+    s, lap, best = f["s"], f["lap"], f["best"]
+    tag = "⚠ not counted"                     # data_quality.FRAME_NOT_COUNTED, checked last
+    s.lap_warnings = lambda: {lap: f"Lap {lap + 1} left the line your other laps drive by 34 m."}
+    try:
+        for style in (broadcast.STYLE_CLASSIC, broadcast.STYLE_BROADCAST):
+            best_map = _painter(s, _spec(s, best, style=style, extras=()))._map._layer
+            spec = _spec(s, lap, style=style, extras=())
+            p = _painter(s, spec)
+            tails = 0
+            for t in ev.frame_times(spec.t0, spec.t1, 30000 / 1001)[::10]:
+                vals = ev.overlay_values_at(s, float(t), spec)
+                label, tail, colour, _frac = ev._frame_strip_runs(s, vals, spec, None)
+                assert label.startswith(f"LAP {lap + 1} · {tag}   "), label
+                if tail:
+                    tails += 1
+                    assert colour == EXPORT.neutral, (t, tail, colour)
+            assert tails > 50 and spec.not_counted == {lap}, (tails, spec.not_counted)
+            assert p._map._layer == best_map, "the inset drew the ⚠ lap's own line"
+            if style == broadcast.STYLE_BROADCAST:
+                st = _element(p, "broadcast").state(
+                    ev.overlay_values_at(s, spec.lap_t0 + 20.0, spec))
+                assert st[0] == f"LAP {lap + 1} · {tag}" and st[3] == EXPORT.neutral, st
+                assert st[5] is not None, "the bar went with the colour"
+            # The tagged name is the widest the top-left plate gets: it stays inside the portrait
+            # safe area (`layout.safe_area`, #710) at the narrowest shapes the dialog offers.
+            for w, h in ((608, 1080), (1080, 1920)):
+                pp = _painter(s, spec, w, h)
+                plate = (_element(pp, "broadcast").tower if style == broadcast.STYLE_BROADCAST
+                         else pp._strip_rect)
+                sa = layout.safe_area(w, h)
+                assert sa.x <= plate.x() and plate.right() <= sa.x + sa.w + 1e-6 and \
+                    sa.y <= plate.y() and plate.bottom() <= sa.y + sa.h + 1e-6, (style, w, h, plate)
+        cards = corner_cards.card_rows(s, lap, None, None)
+        assert cards and all(c.colour in (None, EXPORT.neutral) for c in cards), cards
+        # The whole recording: no tag (the refusal), the ⚠ lap's Δ still neutral.
+        cfg = broadcast.styled(ev.OverlayConfig(encoder="libx264", hwaccel_decode=False),
+                               broadcast.STYLE_BROADCAST)
+        whole = ev.build_session_spec(s, os.path.join(f["out"], "never.mp4"), config=cfg)
+        vals = ev.overlay_values_at(s, s.lap_window(lap)[0] + 20.0, whole)
+        label, tail, colour, _frac = ev._frame_strip_runs(s, vals, whole, None)
+        assert vals.lap_id == lap and tag not in label and tail and colour == EXPORT.neutral
+        # The dialog: the line names what each Export row WILL render (`_scope_line`), and the
+        # reason comes from THOSE laps: This lap on the ⚠ lap carries it in data_quality's words,
+        # Best lap never, All laps counts them, the full session says nothing.
+        seen = {}
+
+        def look(dlg, rows):
+            for i in range(rows["Export"].count()):
+                rows["Export"].setCurrentIndex(i)
+                seen[rows["Export"].currentText()] = next(
+                    lb.text() for lb in dlg.findChildren(QLabel)
+                    if lb.text().startswith(("Selected lap", "Best lap", "All laps", "Full")))
+            return QDialog.Rejected
+        _open_dialog(lap, look)
+        why = "⚠ left the line the other laps drive — not counted in your bests"
+        lines = list(seen.values())
+        assert lines[0].startswith(f"Selected lap {lap + 1}") and lines[0].endswith(why), lines
+        assert lines[1].startswith(f"Best lap {best + 1}") and "⚠" not in lines[1], lines
+        assert lines[2].endswith("one file each  ·  ⚠ 1 not counted in your bests"), lines
+        assert lines[3].startswith("Full session") and "⚠" not in lines[3], lines
+    finally:
+        del s.lap_warnings
+        s.__dict__.pop("_race_memo", None)   # the dialog's ghost read memoized the patched field
+    clean = _spec(s, lap, style="classic", extras=())
+    assert not clean.not_counted
+    vals = ev.overlay_values_at(s, clean.lap_t0 + 20.0, clean)
+    label, tail, colour, _frac = ev._frame_strip_runs(s, vals, clean, None)
+    assert tag not in label and colour == ev.burned_delta_colour(vals.delta_s, None)
+    assert data_quality.FRAME_NOT_COUNTED == tag
+    print("ok a ⚠ lap's clip: tagged, Δ/bar/cards neutral, the best lap's line, the dialog says why")
+
+
 def test_the_bar_scale_is_each_laps_own():
     """A whole-recording export over a slow lap and a quick one: each lap's bar carries its OWN
     scale at its ends, so the slow lap does not flatten the quick one."""
@@ -1207,6 +1288,7 @@ def _run_all():
                test_the_honesty_stamp_is_kept_at_its_classic_size_at_every_shape,
                test_every_broadcast_text_reads_over_sky_grass_white_and_noise,
                test_a_reference_names_the_baseline_in_the_tower_and_on_the_bar,
+               test_a_lap_kept_out_of_the_bests_burns_neutral_and_says_not_counted,
                test_the_bar_scale_is_each_laps_own,
                test_a_whole_recording_tower_shows_each_finished_laps_table_time,
                test_the_last_line_names_its_baseline_and_stands_without_the_tower,

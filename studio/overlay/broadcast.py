@@ -70,7 +70,7 @@ from dataclasses import replace
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QFontMetricsF, QImage, QPainter, QPainterPath, QPen
 
-from studio import library, theme, units
+from studio import data_quality, library, theme, units
 from studio._signal import fmt_signed, fmt_time, lap_label
 from studio.export_palette import EXPORT
 from studio.overlay import LAYER_MAP, LAYER_TOP, STAMP, ElementContext, layout
@@ -145,6 +145,7 @@ def last_lap_rows(session, palette) -> dict[int, tuple[str, str, str]]:
     best = session.best_lap_id() if rows and verified else None
     gaps = lap_table.delta_best_gaps(rows, best)
     star, star_colour = ev.strip_tail(None, True, palette)
+    uncounted = data_quality.not_counted_ids(session)   # a ⚠ lap's gap is no gain or loss
     out = {}
     for lap, t in rows.items():
         if lap not in gaps:
@@ -157,7 +158,8 @@ def last_lap_rows(session, palette) -> dict[int, tuple[str, str, str]]:
             # Decided on the PRINTED value, at this line's own 3 decimals, as every other burned
             # Δ is: a raw 0.0698 prints "+0.070" and must not read level beside a coloured 0.0700.
             colour = (EXPORT.neutral
-                      if library.within_timing_precision(float(delta.replace("−", "-")))
+                      if lap in uncounted
+                      or library.within_timing_precision(float(delta.replace("−", "-")))
                       else ev.export_delta_colour(g, palette))
         out[lap] = (fmt_time(t), delta, colour)
     return out
