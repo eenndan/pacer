@@ -115,6 +115,12 @@ NO_LAPS_NEXT_ACTION = ("If this is the right track, drag the start/finish line o
 # said this and ONLY this, which is how the contradiction arose. Its intent survives here, stated
 # after the drag action rather than instead of it.
 NO_LAPS_ALT_ACTION = "If it is the wrong recording, open another with ⌘O."
+# A recording with NO GPS stream at all (GPS switched off on the camera) is the one zero-lap case
+# where the body above is false twice over: nothing failed to lock, and there is no trace on the
+# map to drag a line along (discovery, `gen.py --variant nogps`: three panels asked for that drag
+# over an empty map). The cause is known, so it is stated instead — with what still works. Also
+# the hover of the map's line tools, which a recording with no trace disables.
+NO_LAPS_NO_GPS_BODY = "This recording has no GPS, so no lap can be timed; the video still plays."
 
 
 def no_laps_body(crossings: int | None = None) -> str:
@@ -139,7 +145,12 @@ def no_laps_body_for(session: Any) -> str:
     a session states. A caller with no session (or a double with no lap account) gets the plain
     body, and so does a session whose GPS quality is low or unknown: when the quality gate dropped
     a concerning share of fixes, the count is of the SURVIVING trace and "the GPS may not have
-    locked" is still the likelier cause (review of #636: 7 crossings driven, 1 counted)."""
+    locked" is still the likelier cause (review of #636: 7 crossings driven, 1 counted).
+
+    A recording with no GPS trace at all (`no_start_line`) gets `NO_LAPS_NO_GPS_BODY` instead:
+    neither guessed cause nor either way out applies to it."""
+    if no_start_line(session):
+        return NO_LAPS_NO_GPS_BODY
     count = getattr(session, "lap_count", None)
     if not callable(count) or getattr(session, "laps", True) is None:
         return no_laps_body()

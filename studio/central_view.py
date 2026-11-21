@@ -1146,6 +1146,15 @@ class CentralView(QWidget):
                         "recording. The start/finish line is not affected.")):
             b.setToolTip(tip)
         # (snap_btn and rainbow_combo already carry MapView's own tooltips — left alone.)
+        # No GPS trace = nothing on the map to place a line on: the line tools go off, their hover
+        # saying why (they used to answer with a success over an empty map). Fixed per session —
+        # a new recording builds a new view.
+        if data_quality.no_start_line(self.session):
+            for b, name in ((self.map.snap_btn, "Snap to track"),
+                            (self.map.add_sector_btn, "Add sector"),
+                            (self.map.reset_sectors_btn, "Reset sectors")):
+                b.setEnabled(False)
+                b.setToolTip(f"{name}: {data_quality.NO_LAPS_NO_GPS_BODY}")
         self._map_max_btn = self._maximize_button()
         self._map_header = PanelHeader("MAP", trailing=self._map_max_btn)
         self._map_toolbar = PanelToolbar(self.map.rainbow_combo, self.map.snap_btn,
