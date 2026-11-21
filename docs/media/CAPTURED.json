@@ -85,9 +85,9 @@
     },
     "lapstrip.png": {
       "captured": "2026-11-21",
-      "commit": "53c41ab5",
+      "commit": "03b0845f",
       "derived": null,
-      "sha256": "411b5a1921fe589cf5949166a0a2080737b1ae320ce8f98c08cab9b49f2a3ce5",
+      "sha256": "f31324a30c0129278cc34f7e697f34dcd58726e443975e750c8d661179e7a370",
       "shot": "lapstrip",
       "source": "synthetic demo",
       "version": "0.24.0",

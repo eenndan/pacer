@@ -593,16 +593,25 @@ def test_a_lap_kept_out_of_the_bests_burns_neutral_and_says_not_counted():
         vals = ev.overlay_values_at(s, s.lap_window(lap)[0] + 20.0, whole)
         label, tail, colour, _frac = ev._frame_strip_runs(s, vals, whole, None)
         assert vals.lap_id == lap and tag not in label and tail and colour == EXPORT.neutral
-        # The dialog: the reason on the lap line, in data_quality's words.
+        # The dialog: the line names what each Export row WILL render (`_scope_line`), and the
+        # reason comes from THOSE laps: This lap on the ⚠ lap carries it in data_quality's words,
+        # Best lap never, All laps counts them, the full session says nothing.
         seen = {}
 
         def look(dlg, rows):
-            seen["lines"] = [lb.text() for lb in dlg.findChildren(QLabel)]
+            for i in range(rows["Export"].count()):
+                rows["Export"].setCurrentIndex(i)
+                seen[rows["Export"].currentText()] = next(
+                    lb.text() for lb in dlg.findChildren(QLabel)
+                    if lb.text().startswith(("Selected lap", "Best lap", "All laps", "Full")))
             return QDialog.Rejected
         _open_dialog(lap, look)
-        line = next(t for t in seen["lines"] if t.startswith("Selected lap"))
-        assert line.endswith("⚠ left the line the other laps drive — not counted in your bests"), \
-            line
+        why = "⚠ left the line the other laps drive — not counted in your bests"
+        lines = list(seen.values())
+        assert lines[0].startswith(f"Selected lap {lap + 1}") and lines[0].endswith(why), lines
+        assert lines[1].startswith(f"Best lap {best + 1}") and "⚠" not in lines[1], lines
+        assert lines[2].endswith("one file each  ·  ⚠ 1 not counted in your bests"), lines
+        assert lines[3].startswith("Full session") and "⚠" not in lines[3], lines
     finally:
         del s.lap_warnings
         s.__dict__.pop("_race_memo", None)   # the dialog's ghost read memoized the patched field

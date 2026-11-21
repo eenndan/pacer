@@ -427,7 +427,12 @@ class ExportController:
         if "permission denied" in low or "operation not permitted" in low:
             return ("Pacer isn't allowed to write there. Choose a different folder — your Movies "
                     "or Desktop folder will work.")
-        if "no such file or directory" in low and "ffmpeg" not in low:
+        # ffmpeg says "No such file or directory" of a missing INPUT too, so its words alone are
+        # not this case; every renderer failure begins "ffmpeg encode failed", though, so a
+        # destination folder gone by render time is told apart by asking for the folder NOW.
+        folder = os.path.dirname(os.path.abspath(out_path)) if out_path else ""
+        if "no such file or directory" in low and (
+                "ffmpeg" not in low or (folder and not os.path.isdir(folder))):
             return ("The folder you chose isn't there any more — it may have been moved, renamed "
                     "or unmounted. Choose another one and export again.")
         if export_video.is_truncated_footage(message or ""):
@@ -731,6 +736,11 @@ class ExportController:
         return value if isinstance(value, int) and 0 <= value < count else default
 
     @staticmethod
+    def _not_counted_ids(session) -> frozenset:
+        """`data_quality.not_counted_ids` for a dialog line; empty without a session."""
+        return data_quality.not_counted_ids(session) if session is not None else frozenset()
+
+    @staticmethod
     def _not_counted_line(session, lap) -> str:
         """`data_quality.not_counted_line` for an export dialog, "" when it cannot be read: a
         caption never blocks the export it describes."""
@@ -1011,6 +1021,40 @@ class ExportController:
         good = [s for s in spans if math.isfinite(s) and s > 0]
         mean = (sum(good) / len(good)) if good else float("nan")
         return mean, len(ids), f"{len(ids)} laps, one file each"
+    def _scope_line(self, scope: str, lap: int) -> str:
+        """The overlay dialog's line above its form: the lap(s) the Export row WILL render, from
+        the same `scope_lap_ids` the hint's "Renders …" reads. "Selected lap 13 · 0:44.160",
+        "Best lap 4 · 0:44.950", "All laps · 14 laps, one file each", "Full session · 9:12".
+
+        It said "Selected lap …" whatever the row, so on "Best lap" (the path "my best lap as a
+        video") it showed another lap's time above "Renders lap 4." (discovery 11)."""
+        session = getattr(self.win, "session", None)
+        if scope == export_video.SCOPE_SESSION:
+            secs = self._export_session_seconds()
+            return "Full session" + (f"  ·  {fmt_hms(secs)}" if math.isfinite(secs) else "")
+        ids = [lap]
+        if session is not None and scope != export_video.SCOPE_THIS_LAP:
+            try:
+                ids = export_video.scope_lap_ids(session, scope, lap)
+            except Exception:  # noqa: BLE001 — a caption never blocks the export it describes
+                ids = [lap]
+        name = {export_video.SCOPE_BEST_LAP: "Best lap",
+                export_video.SCOPE_ALL_LAPS: "All laps"}.get(scope, "Selected lap")
+        if not ids:
+            return f"{name}  ·  none in this recording"
+        # A ⚠ lap among those that WILL render says so (the clip tags it too): it stays
+        # exportable — it is his footage — but never reads as a lap that counts. Best lap never
+        # carries it (the best is never a ⚠ lap); All laps says how many; a full session nothing.
+        if scope == export_video.SCOPE_ALL_LAPS:
+            uncounted = sum(1 for i in ids if i in self._not_counted_ids(session))
+            return (f"{name}  ·  {plural(len(ids), 'lap')}, one file each"
+                    + (f"  ·  ⚠ {uncounted} {data_quality.NOT_COUNTED}" if uncounted else ""))
+        # lap_time is a cheap pacer-free accessor (no ffprobe).
+        dur = session.lap_time(ids[0]) if session is not None else float("nan")
+        why = "" if scope == export_video.SCOPE_BEST_LAP else self._not_counted_line(session, ids[0])
+        return (f"{name} {lap_label(ids[0])}  ·  {fmt_time(dur)}"
+                + (f"  ·  {why}" if why else ""))
+
     def _export_dialog(self, title: str) -> tuple[QDialog, QVBoxLayout]:
         """The shell both export pickers are built in: a titled modal at ONE measure, a panel
         header, and a body column laid out on the panel gutter. Returns the dialog and the column
@@ -1127,17 +1171,10 @@ class ExportController:
         desc.setProperty("role", "Note")
         col.addWidget(desc)
 
-        # lap_time is a cheap pacer-free accessor (no ffprobe).
-        dur = self.win.session.lap_time(lap) if hasattr(self.win, "session") else float("nan")
-        lap_text = f"Selected lap {lap_label(lap)}  ·  {fmt_time(dur)}"
-        # A ⚠ lap says so here, where the export is chosen (the clip tags it too): it stays
-        # exportable — it is his footage — but never reads as a lap that counts.
-        why = self._not_counted_line(self.win.session if hasattr(self.win, "session") else None,
-                                     lap)
-        if why:
-            lap_text += f"  ·  {why}"
-        lap_line = QLabel(lap_text)
-        lap_line.setWordWrap(bool(why))        # the reason is a sentence: it wraps, never clips
+        # What the Export row WILL render (`_scope_line`), set by `_update_hint` below — with a ⚠
+        # lap's reason, a sentence, so the line wraps rather than clips.
+        lap_line = QLabel(self._scope_line(export_video.SCOPE_THIS_LAP, lap))
+        lap_line.setWordWrap(True)
         lap_line.setProperty("role", "Note")
         col.addWidget(lap_line)
         # With the pass row chosen the line names the pass, never the lap's time (a pass clip
@@ -1324,7 +1361,7 @@ class ExportController:
                 box.blockSignals(False)
             desc.setText(self._PASS_STYLE_DESC[_style()].format(noun=_pass_noun(pass_[0]))
                          if pass_scope else self._EXPORT_STYLE_DESC[_style()])
-            lap_line.setText(pass_text if pass_scope else lap_text)
+            lap_line.setText(pass_text if pass_scope else self._scope_line(scope, lap))
             provisional = not bool(getattr(getattr(self.win, "session", None),
                                            "timing_verified", True))
             cards_box.setToolTip(
