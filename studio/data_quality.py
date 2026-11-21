@@ -305,8 +305,10 @@ class TimingQuality:
         """The session notice's clause for the driving the verdict left out, when leaving it out
         is what kept the verdict clean: the whole drive's share would have read "GPS quality low".
         A lap there may have gone untimed (no fix, no crossing), and before this verdict was judged
-        over the laps that was the only sign of it; "" otherwise."""
-        if not self._in_laps or self.low_gps_quality or (
+        over the laps that was the only sign of it; "" otherwise. A verdict made low by the lap
+        vote alone (`line_dropouts`) still states it: the share inside the laps is clean, so the
+        low verdict's words are about the line, not about this driving."""
+        if not self._in_laps or self._share_low or (
                 self._moving_fraction < DROPPED_FIX_CONCERN_FRAC):
             return ""
         return (f"GPS fixes rejected for {round(self._outside_s)} s of driving outside your laps, "

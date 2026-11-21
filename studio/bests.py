@@ -66,6 +66,7 @@ class Bests:
     def __init__(self, *,
                  valid_lap_ids: Callable[[], list[int]],
                  lap_out_of_bests: Callable[[int], bool],
+                 lap_off_the_circuit: Callable[[int], bool],
                  lap_time: Callable[[int], float],
                  lap_sector_splits: Callable[[int], list[float]],
                  sector_line_count: Callable[[], int],
@@ -76,6 +77,7 @@ class Bests:
                  unset: object):
         self._valid_lap_ids = valid_lap_ids
         self._lap_out_of_bests = lap_out_of_bests
+        self._lap_off_the_circuit = lap_off_the_circuit
         self._lap_time = lap_time
         self._lap_sector_splits = lap_sector_splits
         self._sector_line_count = sector_line_count
@@ -93,11 +95,15 @@ class Bests:
         `corners.CORRIDOR_MAX_M`) did not drive the same circuit; both are already out of
         consistency σ and corner detection, and
         neither may become the 'best lap', the delta baseline, or a purple session-best cell.
-        Falls back to all valid laps when EVERY valid lap is flagged (a flagged best beats no
-        best). The lap table still SHOWS these laps, flagged ⚠."""
+        When EVERY valid lap is flagged it falls back to the laps whose only flag is a GPS dropout
+        (a lap of the circuit whose time is in doubt beats no best) — never to one that left the
+        line or was timed across a missing chapter (`lap_off_the_circuit`): those times are not
+        laps of the circuit at all, and the fallback once crowned a cut lap (wave 22). None of
+        those either: [], so there is no best lap, the state every surface already shows while
+        timing is provisional. The lap table still SHOWS these laps, flagged ⚠."""
         valid = self._valid_lap_ids()
         clean = [i for i in valid if not self._lap_out_of_bests(i)]
-        return clean if clean else valid
+        return clean if clean else [i for i in valid if not self._lap_off_the_circuit(i)]
 
     def best_lap_id(self) -> int | None:
         """The fastest dropout-free valid lap, else None. Memoized (same lifetime as
@@ -187,7 +193,7 @@ class Bests:
         a GPS dropout (else the timing is unreliable). Every complete valid lap is admitted as the
         S/F-aligned degenerate window, so best_rolling ≤ best lap time."""
         valid = self._valid_lap_ids()
-        if not valid:
+        if not valid or not self.best_candidate_ids():
             return None
         # Complete laps are themselves (S/F-aligned) rolling windows: rolling ≤ best. Seed the
         # floor from the dropout-free candidate set (same rule as best_lap_id) so a dropout lap's
