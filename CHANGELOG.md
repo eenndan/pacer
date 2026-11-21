@@ -6,6 +6,67 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-11-21
+
+A minor release: 9 pull requests, #679 to #687. Its theme: any session in the Library can be the
+reference, picked and named by its day, and a race day's sessions are told apart and kept in order.
+
+### Highlights
+
+- **Any Library session can be your reference.** ⌘L, select a row, press "Use as reference": the Δ
+  charts, the lap table and the map measure against that session's best lap (#686)
+- **A reference is named by its day.** The chip, the legend, the Δ hovers and the compare pane read
+  "2026-09-13 17:00 · best lap 0:45.046", not a file number (#686)
+- **A race day's sessions are told apart.** Library rows, the welcome list and Open Recent print
+  each session's start time after its date, and sort by it, newest first (#682)
+- **A reference driven the other way round is refused.** The Library never greys a row for a reason
+  the reference loader would not give, and the loader says why when it refuses one (#681, #687)
+- **Apex-speed gaps are coloured only past GPS noise.** Corners ▸ Lap N colours a Δapex from
+  1.75 km/h, the gate the speed chart shades from; a smaller one stays neutral (#684)
+- **The PB card no longer lingers.** It goes when another recording starts loading, and so do the
+  status line's short confirmations (#685)
+- **Wording fixes.** Same-day focus verdicts count their sessions, a refused reference names the one
+  it keeps, and a sector hover names its own step (#679, #683, #687)
+
+### Added
+
+- The Library's row menu leads with "Use as reference for the open session", and a "Use as
+  reference" button repeats it; a row that can't be one is greyed with the loader's own reason.
+  (#686)
+- A loaded reference is named by its day and best lap ("2026-09-13 17:00 · best lap 0:45.046") on
+  the reference chip, the chart legend, the Δ hovers and the compare pane, not by its file number.
+  (#686)
+
+### Changed
+
+- Corners ▸ Lap N's Δapex is coloured only from 1.75 km/h, the gate the speed chart shades from;
+  inside it the figure stays neutral, so a "0.0" is never green or red, and its hover says why.
+  (#684)
+- A race day's sessions are told apart: Library rows, the welcome list and Open Recent print each
+  session's local start time after its date ("2026-11-15 16:00"). (#682)
+- They also sort on date then start time, newest first, so one day's sessions no longer keep the
+  order they were opened in and the welcome's five newest reach a later session of an earlier day.
+  (#682)
+
+### Fixed
+
+- A reference pick refused while another reference is loaded says it keeps that one, not "the local
+  best lap" (which it never was). (#687)
+- "Compare vs reference recording" with none loaded points to Coaching ▸ Load reference recording…
+  (it said File ▸) or a Library row's Use as reference. (#687)
+- The personal-best card goes when another recording starts loading (or the session closes), instead
+  of lingering for its 6 s over a different session; so do status-line confirmations. (#685)
+- A focus verdict refused for want of a session record between sessions of one day names and counts
+  them ("any of the 3 sessions on 13 Sep"); "Mark … dry" names each day once. (#683)
+- A reference recording driven the other way round on the same track is refused with that reason,
+  instead of being adopted and measuring every corner's Δ against a different corner. (#681)
+- Quickest passes: a sector row's hovers name its step "the step for sector splits", not "the timing
+  step", which the legend beside them gives as the corners' smaller figure. (#679)
+- Stats SPLITS: the hover prints the ▼ floor as 0.30 s and says it only marks where a ▼ is drawn,
+  not the step two splits read level within. (#679)
+- "Inspect this number…" frees its panel when it is closed, instead of keeping every closed one.
+  (#679)
+
 ## [0.22.0] — 2026-11-21
 
 A minor release: 5 pull requests, #672 and #674 to #677. Its theme: sector times get the receiver
@@ -2712,7 +2773,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/eenndan/pacer/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/eenndan/pacer/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/eenndan/pacer/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/eenndan/pacer/compare/v0.20.0...v0.20.1

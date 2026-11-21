@@ -1817,3 +1817,93 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   and the release gate, not by an independent reviewer.
 - **Open for the owner** (carried from sections 18 to 22, untouched by this wave's changes): every
   item of section 22's last list stands as written there.
+
+## 26. Recorded at the 0.23.0 release, 2026-11-21
+
+- **v0.23.0 is a minor release**: 9 pull requests, #679 to #687, Wave 19 of the campaign section 8
+  records, its theme "any Library session can be the reference, picked and named by its day, and a
+  race day's sessions are told apart and kept in order".
+  - #679: section 25's three copy and leak findings: a sector row's hovers name "the step for
+    sector splits", the SPLITS hover prints its ▼ floor as 0.30 s and says what it marks, and
+    "Inspect this number…" frees its panel on close; refusal §39's sector figures re-read at the
+    de-drifted 0.15 s step.
+  - #680 (tests only): a Coaching page a test shows is closed by that test; a σ is never used as a
+    step; a missing sample says so.
+  - #681: a reference recording driven the other way round on the same track is refused, with
+    that reason.
+  - #682: Library rows, the welcome list and Open Recent print each session's local start time
+    after its ISO date and sort on date then start, newest first.
+  - #683: a focus verdict refused for want of a session record between sessions of one day names
+    and counts them.
+  - #684: Corners ▸ Lap N's Δapex is coloured only from `chart_stats.GAIN_GATE_KMH`, 1.75 km/h,
+    the gate the speed chart's gain shading uses; docs/ACCURACY.md "Two speeds".
+  - #685: the PB card and the status line's short confirmations end with the session they were
+    about.
+  - #686: the Library's row menu and a "Use as reference" button load a row as the open session's
+    reference; a reference is named by its date, start time and best lap on every surface.
+  - #687: the release QA's findings on #686 and its neighbours (below).
+- **No new owner ruling.** The wave ran under section 19's of 2026-11-19.
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **One speed gate for the table and the chart**: 1.75 km/h, the house rule (2√2σ) on the
+    per-sample speed noise measured on a real recording (σ 0.62 km/h, recording A, median of 24
+    laps). A synthetic 1.02 km/h step was refused on review: it depended on the assumed apex shape
+    and coloured 7.5–17 % of truly level cells on curved and V-shaped apexes.
+  - **A reversed reference is refused**; a way round the loader cannot read, or a pair where either
+    track is unnamed, is left to the loader, which decides by location first.
+  - **Rows keep the ISO date, with the start time after it** ("2026-11-15 16:00"), so the column
+    still sorts and reads as before for a day with one session.
+  - **The Library's entry reuses the one reference loader and its reasons**: a row is greyed only
+    with a phrase out of the loader's own refusal, in the loader's order, so the Library never
+    gives a reason the loader would not (#687's matrix, `tests/test_cross_reference.py`).
+  - **No best-of-the-day mark was built in the Library**: ★ already means a session's best lap,
+    and a second meaning for it would make the column ambiguous.
+- **Resolved from section 25**: the sector "timing step" wording, the ▼ floor's hover and refusal
+  §39's sector figures (#679); the provenance panel kept alive after close (#679); the Coaching
+  page left shown by `tests/test_coaching.py` (#680).
+- **Process.** The release QA drove every unreleased pull request (#679 to #686) in the real
+  window, offscreen and jailed, at 1440×900 with the theme applied, on a synthetic season of 19
+  recordings: four race days at the demo circuit (one wet, one driven the other way round, one
+  session with a planted GPS gap), two sessions at an unnamed circuit about 160 km away, and a
+  no-laps recording. It found one finding that held the release (the Library greyed an unnamed
+  other-circuit row as "driven
+  the other way round", where the loader refuses it for location) and six minor items, all fixed
+  in #687. A re-check on the merged tree, through the real dialogs: every row's reason matched what
+  the loader then said, in both directions between the circuits, before and after "Save as track"
+  named the second; a refused pick kept the loaded reference and said so by its date and best lap;
+  the button's no-selection and no-session states, the welcome's transients and the five same-day
+  wordings matched #687, and each "Mark … dry" wrote exactly the sessions its hover named.
+- **The media.** `hero.png`, `og.png`, `map.png`, `accuracy.png`, `debrief.png`, `moments.png`,
+  `quickest.png`, `report.png` (its own run) and `lapstrip.png` (its own run) were re-captured on
+  the pinned synthetic demo at 0.23.0 and are byte-identical to the files already committed. The
+  waivers of `data-trust.png` and `ideal-lap.png` are renewed: a demo render of each from 0.23.0
+  is byte-identical to 0.22.0's. Those of `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are
+  renewed: 0.23.0 changed no export code.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. A second circuit's second recording could be checked as a reference
+  only through Coaching's loader until "Save as track" named the circuit: the Library lists an
+  unnamed recording only once its start line is trusted. Hover timing, real macOS fullscreen and
+  a second monitor cannot be checked offscreen. The full gate, the soak and the smoke run on the
+  release branch, not in the QA pass.
+- **Found in this release's QA, not fixed** (each minor): a 0-lap row on an unnamed far-away track
+  is greyed "no valid laps", true of the row, where the loader's first words would be "different
+  location"; the command palette cannot reach a row action; a different-day focus refusal with
+  baselines on several days names only the first baseline's day in its collapsed line; beside
+  earlier days the open session is called "today" even when it was recorded on another day.
+- **Open for the owner** (new, most important first).
+  - **Should the focus list be kept per direction, as the PB is?** Today a day driven the other
+    way round reads "can't say" on every debrief line and promotes nothing.
+  - **Coaching's apex-speed reason needs its own measured step.** It names gaps of 0.5–0.9 km/h
+    that sit within 1–2× that statistic's own noise (sd 0.37–0.61 km/h on synthetic days).
+  - **A best-of-the-day mark in the Library** needs a new meaning for ★ or a new mark.
+  - **A wet day draws as an unmarked hump on "Best lap by session".**
+  - **A recording whose first chapter is missing opens as whole**, with no notice.
+  - **In mph the 1.75 km/h gate prints as 1.09** and colour starts at a printed 1.1 (a real
+    1.69 km/h): consistent as printed, a hair under the chart's gate.
+- **Open for the owner** (carried from section 25, re-checked against 0.23.0's changes): which
+  recording every step is referenced to (still C); the sector step's 30 s drift assumption and its
+  0.02 s headroom; whether a figure may ever be printed on the ideal lap; "Compare with my typical
+  pass" on a non-quickest pass carries no luck allowance; a sector line at a hairpin slower than
+  the synthetic track's slowest point is unmeasured; and section 25's list carried from section 24
+  stands as written there.
+- **Open for the owner** (carried from sections 18 to 22, untouched by this wave's changes): every
+  item of section 22's last list stands as written there.
