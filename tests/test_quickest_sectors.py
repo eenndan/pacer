@@ -444,10 +444,16 @@ def test_a_sector_pass_beside_its_typical_follows_the_corners_rule():
                 v.is_typical) == (c.lap_id, c.pass_s, c.typical_lap_id, c.typical_pass_s,
                                   c.gap_s, c.level, c.is_typical), (lap, v, c)
         assert v.cid == stats.sector_key(0) and v.level_s == 0.30
-    # lap 0's 10.00 against the typical 10.30 (lap 4): exactly the step apart is NOT level
+    # lap 0's 10.00 against the typical 10.30 (lap 4). Lap 0 is the QUICKEST of 5, so the step
+    # carries the quickest's luck (`stats.quickest_luck_s`, 0.022 s for a sector at n = 5,
+    # cool/quickest-is-partly-luck): 0.30 apart is level under 0.30 + 0.022, and exactly the step
+    # plus the luck apart is NOT level
     v = m.pass_vs_typical(0, 0, 0.30)
-    assert (v.typical_lap_id, v.gap_s, v.level) == (4, 0.3, False)
-    assert m.pass_vs_typical(0, 0, 0.31).level                 # the step decides it
+    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.022, True), v
+    assert not m.pass_vs_typical(0, 0, 0.278).level            # 0.278 + 0.022 = 0.300
+    assert m.pass_vs_typical(0, 0, 0.279).level                # the step decides it
+    # a pass that is not the quickest carries no luck: lap 3's 10.20, 0.10 under the typical
+    assert m.pass_vs_typical(0, 3, 0.10).luck_s == 0.0 and not m.pass_vs_typical(0, 3, 0.10).level
     assert m.pass_vs_typical(0, 4, 0.30).is_typical
     assert m.pass_vs_typical(0, 5, 0.30) is None, "a blank row is not counted"
     assert m.pass_vs_typical(2, 0, 0.30) is None, "no such column"

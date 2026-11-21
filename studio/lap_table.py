@@ -3380,8 +3380,19 @@ def quickest_no_star_tip(qp, level_s: float) -> str:
     """The Quickest cell's hover on a tie: why it wears no star. The Lap view's star means
     something else (that lap's time prints as the quickest), so the difference is said here."""
     n = len(qp.level_laps)
+    if n == 0:   # clear of the step, not of the step plus the quickest pass's luck (`qp.alone`)
+        passes = plural(qp.n_counted, "pass", "passes")
+        return (f"The next quickest is {qp.next_gap_s:.3f} s slower, within "
+                f"{level_s + qp.luck_s:.2f} s: the quickest of {passes} is expected to be about "
+                f"{qp.luck_s:.2f} s quicker than the next by luck alone, so no ★.")
     return (f"{plural(n, 'more lap')} {'is' if n == 1 else 'are'} level within {level_s:.2f} s, "
             "so no ★: here it marks a quickest pass no other lap matches.")
+
+
+def quickest_wants_no_star_tip(qp) -> bool:
+    """A named quickest that wears no ★ for a reason the row can say: laps level with it, or a gap
+    to the next that the quickest of this many passes could read by luck alone."""
+    return qp.lap_id is not None and qp.next_gap_s is not None and not qp.alone
 
 
 def quickest_status(label: str, qp, k: int) -> str:
@@ -4148,7 +4159,7 @@ class QuickestPassTable(QWidget):
                 else:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     item.setFont(self._num_font)
-                if col == 1 and qp.level_laps:
+                if col == 1 and quickest_wants_no_star_tip(qp):
                     item.setToolTip(quickest_no_star_tip(qp, level_s))
                 if col == 1 and star:
                     item.setForeground(QColor(theme.best_sector_colour()))

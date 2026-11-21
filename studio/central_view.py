@@ -64,7 +64,7 @@ from .race_controller import RaceController
 from .race_ladder import RaceCard
 from .scrub_controller import ScrubController
 from .session import fmt_time
-from .stats import sector_col, sector_key
+from .stats import is_level, sector_col, sector_key
 from .stats_panel import StatsView
 from .stats_trust import TIMING_TERM
 from .video_view import VideoView
@@ -2489,9 +2489,13 @@ class CentralView(QWidget):
         if v.is_typical:
             return (f"Lap {lap}'s pass ({v.pass_s:.{PRINT_DECIMALS}f}) is your typical pass "
                     f"through {label}: there is nothing typical to set beside it")
-        if v.level:   # what was measured, and no more: under the step, as timed
+        if v.level and is_level(v.gap_s, v.level_s):   # what was measured: under the step, as timed
             return (f"Lap {lap}'s pass through {label} is within {v.level_s:.2f} s of your typical "
                     "pass as timed")
+        if v.level:   # past the step, inside the step plus the quickest pass's luck (stats)
+            return (f"Lap {lap}'s pass through {label} is within {v.level_s + v.luck_s:.2f} s of "
+                    f"your typical pass as timed: the quickest of {plural(v.n, 'pass', 'passes')} is "
+                    f"expected to be about {v.luck_s:.2f} s quicker than typical by luck alone")
         if not self.video.compare_btn.isEnabled():
             return "Compare needs two laps"
         return None

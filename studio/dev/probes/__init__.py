@@ -257,4 +257,11 @@ sets, with the same difference against a lap of the SAME recording (Δbest's) be
 share of planted gains a step colours.
 
     pixi run python -m studio.dev.probes.reference_lap_corner
+
+`quickest_bias` measures how much the quickest of n noisy passes reads quick by luck alone, on the
+gap to the typical pass and on the gap to the next quickest, for corners and sector splits, over
+the same grid with planted-habit days for power: the fit `stats.quickest_luck_s` ships, which the
+typical offer on a Quickest row and the ★ must clear on top of the level step.
+
+    pixi run python -m studio.dev.probes.quickest_bias
 """
