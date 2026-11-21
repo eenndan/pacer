@@ -380,6 +380,86 @@ def test_part_of_a_new_recording_decides_nothing_until_the_whole_recording_loads
           "through chapter 2 alone said nothing")
 
 
+# ------------------------------------- 5. a chapter that is not in the folder at all
+def _folder_of(name: str, files: dict[str, str]) -> dict[str, str]:
+    """A folder of this test's own holding `files` ({basename: source chapter}), generated once."""
+    folder = os.path.join(_REC["folder"], name)
+    os.makedirs(folder, exist_ok=True)
+    out = {}
+    for base, src in files.items():
+        out[base] = os.path.join(folder, base)
+        if not os.path.exists(out[base]):
+            shutil.copyfile(src, out[base])
+    return out
+
+
+def _drop_window(paths: list[str]) -> StudioWindow:
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    win.show()
+    _until_loaded(win, lambda: win._open_recordings(paths))
+    return win
+
+
+def test_a_recording_missing_its_first_chapter_says_so_and_is_otherwise_whole():
+    """Chapter 2 dropped from a folder that does not hold chapter 1 (loop recording deletes early
+    chapters). On main it opened as whole, in silence: `chapter_subset` compares against the
+    chapters ON DISK, so nothing was a subset. Every lap in it is a real, correctly timed lap, so
+    the only change is the sentence that says where it starts: its verdict, PB and row are as on
+    main (DECISIONS: a truncated recording is never locked out)."""
+    ch1, ch2 = _recording()
+    whole = Session.load([ch1, ch2])
+    prior = round(whole.lap_time(whole.best_lap_id()) + 0.5, 3)
+    only2 = _folder_of("no_first", {"GX029001.MP4": ch2})["GX029001.MP4"]
+    with _no_modals(), _fresh_app_support(prior, whole.track_name):
+        win = _drop_window([only2])
+        try:
+            assert _chapter_names(win.session) == ["GX029001.MP4"]
+            notice = win._session_notice()
+            assert notice == ("This recording starts at chapter 2: chapter 1 (GX019001.MP4) is "
+                              "not in the folder, so the first minutes are missing"), notice
+            ctl = win.library_ctl
+            assert ctl.opened_new and not ctl.waiting_for_whole, ctl.verdict
+            got = _verdict(win)
+            assert got["debrief"] and got["row"] is not None, got
+            assert got["row"][2] == ["GX029001.MP4"], got["row"]
+            assert win._chapter_subset() is None and not win._full_action.isEnabled()
+        finally:
+            _close(win)
+    print(f"ok missing first chapter: {notice!r}, verdict {got['row']}")
+
+
+def test_a_missing_middle_chapter_says_so_and_waits_for_that_chapter():
+    """Chapters 1 and 3 of a recording whose chapter 2 is not in the folder: they are laid end to
+    end on one clock and a lap is timed across the gap (a 31.8 s lap of a ~45 s circuit, crowned
+    best, on a synthetic 3-chapter recording). It decides nothing and says what ends the wait —
+    that chapter in this folder — and, opened as a strict subset too, no clause promises that File
+    ▸ Load full recording brings the verdict: the gap would still be there."""
+    ch1, ch2 = _recording()
+    gap = _folder_of("no_middle", {"GX019001.MP4": ch1, "GX039001.MP4": ch2})
+    want = ("chapter 2 (GX029001.MP4) is not in the folder, so the recording jumps across it and "
+            "a lap timed across the gap is wrong; your PB and focus list wait until chapter 2 is "
+            "in this folder")
+    with _no_modals(), _fresh_app_support():
+        win = _drop_window([gap["GX039001.MP4"]])
+        try:
+            assert _chapter_names(win.session) == ["GX019001.MP4", "GX039001.MP4"]
+            notice = win._session_notice()
+            assert notice == want, notice
+            assert win.library_ctl.waiting_for_whole and _verdict(win)["row"] is None
+        finally:
+            _close(win)
+        win = _cli_window([gap["GX019001.MP4"]])
+        try:
+            both = win._session_notice()
+            assert both == want + " · 1 of 2 chapters — File ▸ Load full recording to analyse "\
+                "the whole recording", both
+            assert win.library_ctl.waiting_for_whole and win._full_action.isEnabled()
+        finally:
+            _close(win)
+    print(f"ok missing middle chapter: {want!r}; with a subset: {both!r}")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     try:

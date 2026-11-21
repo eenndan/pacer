@@ -1306,8 +1306,9 @@ def first_open_verdict(*, demo: bool, excluded: bool, new: bool = False, partial
                        track: str | None = None) -> Verdict:
     """The load's verdict, before any write (WRITE_FAILED is the write's outcome, not decided here).
     `excluded`: the bundled sample or no valid lap (the demo with no lap included); `new`: the index
-    holds no row of this recording's fingerprint; `partial`: a strict subset of its chapters on
-    disk; `verified`: a trusted start line; `degraded`: the row's ESTIMATED-timing flag; `track`:
+    holds no row of this recording's fingerprint; `partial`: `chapters.part_of_recording`, a strict
+    subset of its chapters on disk or a chapter missing between two on disk (a recording that only
+    lacks its FIRST chapters is whole for this: every lap in it is timed right); `verified`: a trusted start line; `degraded`: the row's ESTIMATED-timing flag; `track`:
     the circuit's name. The arguments after `excluded` are read only for a load that is neither the
     demo nor excluded. Degraded timing outranks a missing name: a name brings no PB and no focus
     list to it, so none is waited for (QA r4 CODE-2)."""

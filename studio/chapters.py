@@ -290,9 +290,10 @@ def chapter_subset(paths: list[str]) -> tuple[int, int] | None:
     its recording's on-disk chapters — else None (the whole recording, or a chapter set that cannot
     be resolved).
 
-    THE ONE PREDICATE for "this is part of a recording": the window's notice that says so and the
-    File ▸ Load full recording item that fixes it (`StudioWindow._chapter_subset`), and the library
-    controller that therefore decides no verdict on it, all read this, so they cannot disagree.
+    THE ONE PREDICATE for "the rest of this recording is on disk": the window's notice that says so
+    and the File ▸ Load full recording item that fixes it (`StudioWindow._chapter_subset`) both read
+    this, so they cannot disagree. The library controller reads `part_of_recording`, which is this
+    OR a chapter missing between two on disk (`missing_chapters`) — a gap no menu item can fill.
     Best-effort by construction: an unreadable folder answers None, "no partiality to report" —
     never invent a missing chapter. Compared on absolute paths and counted once each, so a
     relative command-line path or a repeated one is not mistaken for a whole recording."""
@@ -306,6 +307,111 @@ def chapter_subset(paths: list[str]) -> tuple[int, int] | None:
     if len(sibs) > len(have) and have <= sibs:
         return len(have), len(sibs)
     return None
+
+
+def missing_chapters(paths: list[str]) -> list[tuple[int, str]]:
+    """The chapters of `paths`' recording that are NOT in its folder although a later chapter is,
+    as ``(chapter number, the path the camera's own name would have)``, ascending. [] for a whole
+    recording, a lone chapter 1, a non-GoPro clip or a folder that cannot be listed.
+
+    `chapter_subset`'s blind spot: it compares the open chapters with the ones ON DISK, so a folder
+    that never held chapter 1 opened as the whole recording, in silence. Two different facts sit
+    in this list (`_split_missing`): the FIRST chapters missing (loop recording deletes them) leave
+    a truncated recording whose every lap is timed right; a MIDDLE chapter missing is worse, since
+    the chapters are laid end to end on one clock and a lap timed across the gap is short by the
+    chapter that is not there (a 31.8 s "best" of a ~45 s synthetic circuit). A missing LAST
+    chapter leaves no gap in the names, so none is invented.
+
+    Numbered as the camera numbers them: before HERO6 the first chapter is ``GOPRnnnn.MP4`` and
+    ``GP01nnnn.MP4`` is chapter 2. Names only, and the folder is listed once: whether a chapter on
+    disk is readable is `split_non_mp4`'s question, and its notice names one that is not."""
+    info = parse_gopro_name(paths[0]) if paths else None
+    if info is None:
+        return []
+    folder = os.path.dirname(os.path.abspath(paths[0]))
+    try:
+        entries = os.listdir(folder)
+    except OSError:
+        return []         # never invent a missing chapter (`chapter_subset`'s rule)
+    legacy = info.prefix == "GP"          # GOPRnnnn = chapter 1, GP01nnnn = chapter 2, …
+    gopr = f"GOPR{info.recording:04d}"
+    present = set()
+    for name in entries:
+        sib = parse_gopro_name(name)
+        if sib is not None and (sib.prefix, sib.recording) == (info.prefix, info.recording):
+            present.add(sib.chapter + 1 if legacy else sib.chapter)
+        elif legacy and os.path.splitext(name)[0].upper() == gopr:
+            present.add(1)
+    ext = os.path.splitext(paths[0])[1]
+
+    def name_of(n: int) -> str:
+        if legacy:
+            return gopr + ext if n == 1 else f"GP{n - 1:02d}{info.recording:04d}{ext}"
+        return f"{info.prefix}{n:02d}{info.recording:04d}{ext}"
+
+    return [(n, os.path.join(folder, name_of(n)))
+            for n in range(1, max(present, default=0)) if n not in present]
+
+
+def _split_missing(missing: list[tuple[int, str]]):
+    """(the leading run — chapters 1, 2, … k, where the recording starts — , the gaps after it)."""
+    lead = 0
+    while lead < len(missing) and missing[lead][0] == lead + 1:
+        lead += 1
+    return missing[:lead], missing[lead:]
+
+
+def part_of_recording(paths: list[str]) -> bool:
+    """Whether `paths` are provably PART of a recording, so its first open decides no verdict: a
+    strict subset of its chapters on disk (`chapter_subset`) or a chapter missing BETWEEN two on
+    disk (a lap is timed across it). A recording that only lacks its first chapters is whole for
+    this — truncated, and every lap in it timed right — so it is never locked out of a verdict."""
+    return chapter_subset(paths) is not None or bool(_split_missing(missing_chapters(paths))[1])
+
+
+def _numbers(missing: list[tuple[int, str]]) -> str:
+    """'chapter 2' / 'chapters 2 and 4' / 'chapters 2, 4 and 5'."""
+    nums = [str(n) for n, _ in missing]
+    if len(nums) == 1:
+        return f"chapter {nums[0]}"
+    return f"chapters {', '.join(nums[:-1])} and {nums[-1]}"
+
+
+def _files(missing: list[tuple[int, str]]) -> str:
+    shown = ", ".join(os.path.basename(p) for _, p in missing[:_MAX_NAMED_SKIPS])
+    if len(missing) > _MAX_NAMED_SKIPS:
+        shown += f", +{len(missing) - _MAX_NAMED_SKIPS} more"
+    return shown
+
+
+def missing_notice(missing: list[tuple[int, str]]) -> str | None:
+    """The session notice's sentence for `missing_chapters`, or None when none is missing: where
+    the recording starts when its first chapters are not there, and that it jumps across a missing
+    middle one."""
+    lead, gaps = _split_missing(missing)
+    if lead and gaps:
+        return (f"This recording starts at chapter {len(lead) + 1} and skips {_numbers(gaps)} "
+                f"({_files(missing)} are not in the folder): a lap timed across "
+                f"{'the gap' if len(gaps) == 1 else 'a gap'} is wrong")
+    if lead:
+        verb = "is" if len(lead) == 1 else "are"
+        return (f"This recording starts at chapter {len(lead) + 1}: {_numbers(lead)} "
+                f"({_files(lead)}) {verb} not in the folder, so the first minutes are missing")
+    if gaps:
+        verb, it, gap = ("is", "it", "the gap") if len(gaps) == 1 else ("are", "them", "a gap")
+        return (f"{_numbers(gaps)} ({_files(gaps)}) {verb} not in the folder, so the recording "
+                f"jumps across {it} and a lap timed across {gap} is wrong")
+    return None
+
+
+def gap_wait(missing: list[tuple[int, str]]) -> str:
+    """The tail that says what ends a gap's wait for the PB and focus list: the gap's own chapters
+    in this folder (with them back, missing FIRST chapters alone decide). "" without a gap."""
+    gaps = _split_missing(missing)[1]
+    if not gaps:
+        return ""
+    verb = "is" if len(gaps) == 1 else "are"
+    return f"; your PB and focus list wait until {_numbers(gaps)} {verb} in this folder"
 
 
 def group_into_recordings(paths: list[str]) -> list[list[str]]:
