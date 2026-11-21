@@ -46,15 +46,22 @@ next gaps and its two-parameter fit (`quickest_bias.bias_by_n` / `fit` on these 
 the step's basis placement (`worst_split`) is what `stats.quickest_luck_s` ships for a sector, which
 the summary checks (`luck_basis.app_fit_is_this_fit`).
 
-MEASURED (defaults: 40 habit-free + 24 planted days per noise, at 1.9, 4.0 and 6.5; about 40
-minutes as two processes; `--set-index 4,5,6,7 --plant-days 0` out of sample): at the reference
-noise 1.9 the split σ is 0.035-0.041 s pooled mid-straight (golden 0.0408, sets 0.0385-0.0434; its
-interior sector 0.0498), 0.047 at the apexes, 0.050 at the exits and 0.066 at the hairpins, whose
-interior sector, 0.0881 s, is the worst of all 13 placements and `stats.PUBLISHED_NOISE_SIGMAS`'
-split column (B 0.1873, A 0.3062; hairpin the worst at each), which the summary checks
-(`worst_split`). The luck fit there: typical +0.0019 + 0.0385·blom(n), next +0.0327 + 0.0103·blom(n).
-Out of sample the worst sector reads 0.0835 s. De-drifted: 0.023-0.033 s pooled, 0.038 s at the
-worst sector. The full table and the decisions are in `stats.SECTOR_LEVEL_S`'s comment.
+MEASURED (defaults: 40 habit-free + 24 planted days per noise, at 1.9, 4.0 and 6.5; about an hour
+as two processes; `--set-index 4,5,6,7 --plant-days 0` out of sample). The app's splits are
+de-drifted since cool/sector-dedrift (`Session._sector_drift`); row field 3 is the same lap timed
+as before (`uncorrected_splits`, summary `pair_uncorrected`). `--drift-tau 30` re-draws the
+receiver's drift with a 30 s time constant (`sector_dedrift`'s error model), the split column's
+basis (`stats.SPLIT_DRIFT_TAU_S`, an assumption; the summary says `is_table_*` only at that τ).
+At the reference noise and τ 30 s the split σ is 0.026-0.029 s pooled mid-straight and 0.040-0.042
+s at the slow lines; the worst sector of all 13 placements in sample, a 26 m sector across C5's
+0.0474 s, is `stats.PUBLISHED_NOISE_SIGMAS`' split column (B 0.0990, A 0.1621; the in-sample
+summary pins it — out of sample 0.0440, all 80 days 0.0456). The sector luck is
+`envelope_luck` over all of them (`--summarize` both logs pins it): typical -0.0006 +
+0.0257·blom(n), next +0.0232 + 0.0053·blom(n). At the shipped generator's τ 90 s: worst 0.0377 s
+(three slow lines; B 0.0796, A 0.1308), out of sample 0.0355. As timed before at τ 90 s: 0.0408 s
+golden pooled and 0.0881 s at the hairpin's worst sector (B 0.1873, A 0.3062), #675's figures to
+the digit. The full tables, the sampling headroom and the decisions are in
+`stats.SECTOR_LEVEL_S`'s comment.
 
 `--matrix` instead re-runs truth matrix row 2's own recordings (three seeds, noise 2, two chapters,
 the default origin, golden placement) and reports each seed's per-lap interior-split errors over
@@ -62,7 +69,7 @@ every valid lap and over the SPLITS grid's counted laps: where the matrix's σ c
 
 ARGV CONTRACT: named flags only. `--noises 1.9,4.0,6.5` (default NOISES), `--sets N` (default 4),
 `--set-index J[,J…]` (only those sets; 4-7 are out of sample: seeds 801-1110), `--days N` (default 10), `--plant-days N` (per gain per set, default
-2), `--matrix`. Every recording is generated into ONE `mkdtemp` under $TMPDIR and removed before
+2), `--drift-tau S` (the receiver drift's time constant; default the shipped generator), `--matrix`. Every recording is generated into ONE `mkdtemp` under $TMPDIR and removed before
 exit; the app-support store is jailed and the sidecar write stubbed. Output is stdout: one
 `{"day": …}` line per day, then the summary. `--summarize FILE[,FILE…]` READS such logs and prints
 the summary; it writes nothing.
@@ -101,7 +108,7 @@ sidecar.save = lambda *a, **k: None   # nothing is ever written beside a recordi
 NOISES = (1.9, 4.0, 6.5)          # recordings C, B and A (stats.PUBLISHED_NOISE_SIGMAS)
 PLANT_SEED = 3011                 # quickest_bias's planted days, so the two probes plant alike
 TRUE_LEVEL_S = 0.03               # a true gap this small is no difference a driver could act on
-STEPS = (0.07, 0.10, 0.12, 0.14, 0.25, 0.30)
+STEPS = (0.07, 0.10, 0.12, 0.13, 0.14, 0.15, 0.16, 0.18, 0.25, 0.30)
 
 
 def _configs(c) -> dict[str, list[float]]:
@@ -126,32 +133,34 @@ def _r(x) -> float:
     return round(float(x), 5)
 
 
-def dedrifted_splits(s: Session, lap: int) -> list[float]:
-    """What a SOURCE-level fix would give: `lap`'s splits with its trace first moved by the
-    session geometry's rigid receiver shift (`CornerModel.lap_shift`, which the corner cells
-    already remove) before it is crossed with the sector lines. Read through the app's own
-    `lap_sector_splits` with only the trace's xs/ys translated; nothing in the app changes."""
-    sx, sy = s.corners.lap_shift(lap)
-    orig = s._lap_columns
-
-    def shifted(lid):
-        t, xs, ys, v, cum = orig(lid)
-        return t, xs - sx, ys - sy, v, cum
-
-    s._lap_columns = shifted
+def splits_with(s: Session, lap: int, drift) -> list[float]:
+    """`lap`'s splits with `drift(lap_id) -> (dx, dy)` taken off each trace in place of the app's
+    own `Session._sector_drift`, read through the app's `lap_sector_splits`; the session is put
+    back after."""
+    s._sector_drift = drift
+    s._sector_collapse_cache = None
     try:
         return s.lap_sector_splits(lap)
     finally:
-        del s._lap_columns
+        del s._sector_drift
+        s._sector_collapse_cache = None
 
 
-def placements(s: Session, truth) -> dict:
+def uncorrected_splits(s: Session, lap: int) -> list[float]:
+    """`lap`'s splits as they were timed before cool/sector-dedrift: its trace crossed with the
+    sector lines WITHOUT its receiver shift taken off (`Session._sector_drift` held at (0, 0))."""
+    return splits_with(s, lap, lambda _lap: (0.0, 0.0))
+
+
+def placements(s: Session, truth, only=None) -> dict:
     """Every placement on session `s`: its lines' metres and true speeds, and per counted lap of
-    the SPLITS grid (lap, app splits, true splits, the de-drifted splits `dedrifted_splits`), with
-    the grid's column medians."""
+    the SPLITS grid (lap, app splits, true splits, the splits as timed before the de-drift
+    `uncorrected_splits`), with the grid's column medians. `only`: just those placement names."""
     out = {}
     start, _ = s.timing_lines_latlon()
     for name, metres in _configs(truth.circuit).items():
+        if only is not None and name not in only:
+            continue
         lines = [truth.line_at(m) for m in metres]
         if not s.apply_timing_lines_latlon(start, lines, confirmed=True):
             out[name] = None
@@ -162,7 +171,7 @@ def placements(s: Session, truth) -> dict:
                               strict=True):
             if lap in true and None not in cells and len(true[lap]) == len(cells):
                 rows.append([int(lap), [_r(v) for v in cells], [_r(v) for v in true[lap]],
-                             [_r(v) for v in dedrifted_splits(s, lap)]])
+                             [_r(v) for v in uncorrected_splits(s, lap)]])
         speeds = [float(np.median(truth.speed_at(truth.times_at(m)[1:-1]))) for m in metres]
         out[name] = {"metres": [round(m, 2) for m in metres],
                      "speed_ms": [round(v, 2) for v in speeds],
@@ -170,20 +179,31 @@ def placements(s: Session, truth) -> dict:
     return out
 
 
-def day_record(work: str, noise: float, seed: int, day_no: int, plant: float | None = None) -> dict:
+def day_record(work: str, noise: float, seed: int, day_no: int, plant: float | None = None,
+               drift_tau: float | None = None, only=None) -> dict:
     habit = None if plant is None else sg.Habit(cid=PLANT_CID, grip=PLANTS[plant], brake=1.0,
                                                 clean_laps=(PLANT_LAP,))
-    path = _generate(work, noise, seed, day_no, habit)
+    if drift_tau is None:
+        path = _generate(work, noise, seed, day_no, habit)
+    else:
+        # the receiver's drift re-drawn with this time constant (sector_dedrift's error model;
+        # every other term of the recording is the shipped generator's)
+        from studio.dev.probes import sector_dedrift
+        sector_dedrift._patch(f"tau{drift_tau:g}")
+        try:
+            path = _generate(work, noise, seed, day_no, habit)
+        finally:
+            sg._gps_rows = sector_dedrift._ORIG_GPS_ROWS
     s = Session.load(chapters.discover_siblings(path))
     truth = sg.simulate(seed, 14, origin=make_demo.DEMO_ORIGIN, habit=habit)
     return {"noise": noise, "seed": seed, "plant": plant, "set": (seed - BASE_SEED) // SET_STRIDE
-            if plant is None else None, "placements": placements(s, truth)}
+            if plant is None else None, "drift_tau": drift_tau, "placements": placements(s, truth, only)}
 
 
 # ------------------------------------------------------------------------------- the summary
 def _ss(days, name: str, app: int = 1) -> tuple[list[float], list[int]]:
     """Per sector column: (sum of squares of the error about each day's column mean, dof), the
-    app's splits read from row field `app` (1: as shipped, 3: de-drifted)."""
+    app's splits read from row field `app` (1: as shipped, 3: as timed before the de-drift)."""
     ss: list[float] = []
     dof: list[int] = []
     for d in days:
@@ -337,12 +357,33 @@ def luck(days, name: str) -> dict:
             "at_n": {n: (by_n[n]["typical"], by_n[n]["next"]) for n in (5, 9, top) if n in by_n}}
 
 
-def measure_luck(work: str, noise: float, seeds, name: str, ns) -> dict[int, tuple[float, float]]:
+def envelope_luck(days, names) -> dict:
+    """The sector luck that COVERS every placement (cool/sector-dedrift review): per n and gap the
+    largest bias of the placements `names` over `days`, fitted a + b·blom(n) (`quickest_bias.fit`,
+    weighted by draws), and the intercept raised until the fit is at or over that envelope at every
+    n measured."""
+    per = {nm: qb.bias_by_n(_luck_days(days, nm), "sectors") for nm in names}
+    ns = sorted(n for n in per[names[0]] if all(n in per[nm] for nm in names))
+    out = {"fit": {}, "raised_by": {}, "envelope": {}, "set_by": {}}
+    for g in ("typical", "next"):
+        top = {n: max(names, key=lambda nm, n=n: per[nm][n][g]) for n in ns}
+        envd = {n: per[top[n]][n] for n in ns}
+        f = qb.fit(envd, g)
+        up = max(0.0, max(per[top[n]][n][g] - (f["a"] + f["b"] * qb.blom(n)) for n in ns))
+        out["fit"][g] = (round(f["a"] + up, 4), f["b"])
+        out["raised_by"][g] = round(up, 4)
+        out["envelope"][g] = {n: round(per[top[n]][n][g], 4) for n in ns}
+        out["set_by"][g] = sorted(set(top.values()))
+    return out
+
+
+def measure_luck(work: str, noise: float, seeds, name: str, ns,
+                 drift_tau: float | None = stats.SPLIT_DRIFT_TAU_S) -> dict[int, tuple[float, float]]:
     """{n: (typical bias, next bias)} at placement `name` over habit-free days at `seeds` — the
     small fixed re-measure tests/test_quickest_passes.py checks the shipped sector luck against."""
     days = []
     for k, seed in enumerate(seeds):
-        days.append(day_record(work, noise, seed, k + 1))
+        days.append(day_record(work, noise, seed, k + 1, drift_tau=drift_tau, only=(name,)))
         for entry in os.listdir(work):
             shutil.rmtree(os.path.join(work, entry), ignore_errors=True)
     by_n = qb.bias_by_n(_luck_days(days, name), "sectors")
@@ -354,14 +395,20 @@ def summarize(days: list[dict]) -> dict:
     for noise in sorted({d["noise"] for d in days}):
         mine = [d for d in days if d["noise"] == noise]
         free = [d for d in mine if d["plant"] is None]
-        rec = {"habit_free_days": len(free), "planted_days": len(mine) - len(free)}
+        taus = {d.get("drift_tau") for d in mine}
+        # the table and the shipped luck are read at ONE drift time constant,
+        # `stats.SPLIT_DRIFT_TAU_S`; a grid at another (None: the shipped generator's 90 s) is a
+        # comparison and never "is the table"
+        tau_is_basis = taus == {stats.SPLIT_DRIFT_TAU_S}
+        rec = {"habit_free_days": len(free), "planted_days": len(mine) - len(free),
+               "drift_tau": sorted(taus, key=str)}
         names = list(free[0]["placements"]) if free else []
         for name in names:
             some = next((d["placements"][name] for d in free if d["placements"].get(name)), None)
             rec[name] = {"metres": some and some["metres"],
                          "speed_ms": some and some["speed_ms"],
                          "pair": pair_sigma(free, name), "typical": typical_rms(free, name),
-                         "pair_dedrifted": pair_sigma(free, name, app=3),
+                         "pair_uncorrected": pair_sigma(free, name, app=3),
                          "calls": {f"{st:g}": calls(mine, name, st) for st in STEPS}}
         # The σ one step must cover: the worst sector of the worst placement measured, which is
         # `stats.PUBLISHED_NOISE_SIGMAS`' split column at the noise matching each recording.
@@ -372,15 +419,16 @@ def summarize(days: list[dict]) -> dict:
                                   "step": stats.house_step(worst[0])}
             for rec_name, row in stats.PUBLISHED_NOISE_SIGMAS.items():
                 if row.noise == noise:
-                    rec["worst_split"][f"is_table_{rec_name}"] = row.split == worst[0]
-        # The quickest pass's luck, at the reference noise: per placement, and the fit at the
-        # step's own basis placement, which is what `stats.quickest_luck_s` ships for a sector.
+                    rec["worst_split"][f"is_table_{rec_name}"] = (row.split == worst[0]
+                                                                 and tau_is_basis)
+        # The quickest pass's luck, at the reference noise: per placement, and the fit that COVERS
+        # them all (`envelope_luck`), which is what `stats.quickest_luck_s` ships for a sector.
         if worst is not None and noise == stats.REFERENCE_SIGMAS.noise:
             rec["luck"] = {n: luck(mine, n) for n in names}
-            basis = rec["luck"][worst[1]]
-            rec["luck_basis"] = {"placement": worst[1], **basis, "app_fit_is_this_fit": all(
-                stats._QUICKEST_LUCK_FIT[("sector", g)] == tuple(basis["fit"][g])
-                for g in ("typical", "next"))}
+            env = envelope_luck(mine, names)
+            rec["luck_basis"] = {**env, "app_fit_is_this_fit": tau_is_basis
+                                 and all(stats._QUICKEST_LUCK_FIT[("sector", g)]
+                                         == tuple(env["fit"][g]) for g in ("typical", "next"))}
         out[f"noise {noise:g}"] = rec
     return out
 
@@ -427,6 +475,7 @@ def main() -> int:
     ap.add_argument("--plant-days", type=int, default=2)
     ap.add_argument("--matrix", action="store_true")
     ap.add_argument("--summarize", default="")
+    ap.add_argument("--drift-tau", type=float, default=None)
     a = ap.parse_args()
     if a.summarize:
         days = []
@@ -453,7 +502,7 @@ def main() -> int:
                 jobs += [(PLANT_SEED + SET_STRIDE * j + 10 * gi + k, 1000 * j + 100 + 10 * gi + k,
                           g) for gi, g in enumerate(PLANTS) for k in range(a.plant_days)]
                 for seed, day_no, plant in jobs:
-                    rec = day_record(work, noise, seed, day_no, plant)
+                    rec = day_record(work, noise, seed, day_no, plant, a.drift_tau)
                     print(json.dumps({"day": rec}), flush=True)
                     days.append(rec)
                     for name in os.listdir(work):

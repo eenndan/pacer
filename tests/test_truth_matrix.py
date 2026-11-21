@@ -110,7 +110,7 @@ class Row:
 
 
 MEASURED_ON = ("2026-09-29 on main 95694b9 (rows 1-7 first on 6301923, identical); row 2 on "
-               "TRUTH-5's tree; row 6c 2026-09-30 on main cc725ac; row 6's Δ trace 2026-09-30 on "
+               "cool/sector-dedrift's tree (2026-11-21); row 6c 2026-09-30 on main cc725ac; row 6's Δ trace 2026-09-30 on "
                "TRUTH-10's tree (main 696cb81)")
 G, R, S = "green", "known-red", "stated"
 _T9 = ("refused: the leave-one-window-out refit (TRUTH-9) cannot tell the stadium's two turns "
@@ -133,15 +133,19 @@ ROWS: tuple[Row, ...] = (
     # snap back). Left at noise 0: a bias of a few ms at each line, the same on every lap (the
     # column mean) — ~3.5 ms early at both as loaded, 1-3 ms either way with the boxcar off, so
     # not all the boxcar's. At noise 2 and 4.5 the spread is the GPS noise's.
-    Row("sector.interior_sd", 0.0, 0.000929368, G, tol=0.0010),
-    Row("sector.interior_sd", 2.0, 0.106567, G, tol=0.155),
-    Row("sector.interior_sd", 4.5, 0.241378, G, tol=0.33),
-    Row("sector.max", 0.0, 0.00861417, G, tol=0.010),
-    Row("sector.max", 2.0, 0.192723, G, tol=0.28),
-    Row("sector.max", 4.5, 0.428262, G, tol=0.64),
-    Row("sector.col_mean", 0.0, 0.0042235, G, tol=0.0060),
-    Row("sector.col_mean", 2.0, 0.010792, G, tol=0.016),
-    Row("sector.col_mean", 4.5, 0.0240203, G, tol=0.035),
+    # Since cool/sector-dedrift each lap's rigid receiver shift is taken off before the lines are
+    # crossed (`Session._sector_drift`), and the noisy rows fell to a quarter: interior sd 0.1066 →
+    # 0.0237 s at noise 2, 0.241 → 0.051 s at 4.5 (refusal §26's chip gate keeps the old figures,
+    # `clip_refusals.ROW2_SIGMA_BEFORE_DEDRIFT`).
+    Row("sector.interior_sd", 0.0, 0.0006249, G, tol=0.0009),
+    Row("sector.interior_sd", 2.0, 0.0236525, G, tol=0.034),
+    Row("sector.interior_sd", 4.5, 0.0508206, G, tol=0.074),
+    Row("sector.max", 0.0, 0.00876564, G, tol=0.012),
+    Row("sector.max", 2.0, 0.1154, G, tol=0.17),
+    Row("sector.max", 4.5, 0.266468, G, tol=0.39),
+    Row("sector.col_mean", 0.0, 0.00440983, G, tol=0.0064),
+    Row("sector.col_mean", 2.0, 0.00554892, G, tol=0.0080),
+    Row("sector.col_mean", 4.5, 0.0120714, G, tol=0.017),
     # 3 · the ideal lap: |mean over the seeds| of app − true ideal (an order statistic of noisy
     # cells reads fast). Stated, in words and with no figure, by both IDEAL LAP tooltips
     # (TRUTH-6: stats_ideal.IDEAL_NOISE_SENTENCE). The de-bias that was to fix it (TRUTH-11) is

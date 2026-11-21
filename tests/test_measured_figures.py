@@ -1424,6 +1424,9 @@ def _is_reference_sigma(node: ast.expr) -> bool:
             and ast.unparse(node.value).split(".")[-1] == "REFERENCE_SIGMAS")
 
 
+_HEADROOM_EXPR = "round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 2)"
+
+
 def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
     """Every step-like constant in `defs` that does not derive from the one reference. A value may
     only be: a bare alias of an accepted step (PB_PRECISION_S included); a σ read as
@@ -1479,8 +1482,23 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
             good = False
         return good
 
+    # THE ONE HEADROOM (cool/sector-dedrift): the split step is its house rule rounded up by a named
+    # sampling headroom, and only that exact expression, in stats.py, may use it.
+    headroom = "SPLIT_SAMPLING_HEADROOM_S"
+    for rel, n, v in defs:
+        uses = any(isinstance(x, ast.Name) and x.id == headroom
+                   or isinstance(x, ast.Attribute) and x.attr == headroom for x in ast.walk(v))
+        if n == headroom and (os.path.basename(rel) != "stats.py" or len(every[n]) > 1):
+            problems.append(f"{rel}: {n} belongs to stats.py only, defined once")
+        elif uses and not (n == "SECTOR_LEVEL_S" and os.path.basename(rel) == "stats.py"
+                           and ast.unparse(v) == _HEADROOM_EXPR):
+            problems.append(f"{rel}: {n} = {ast.unparse(v)} — {headroom} is SECTOR_LEVEL_S's alone, "
+                            f"as `{_HEADROOM_EXPR}`")
     for rel, n, v in steps:
         home = (_ANCHORS.get(n) or _NOT_A_GPS_STEP.get(n) or (None,))[0]
+        if n == "SECTOR_LEVEL_S" and os.path.basename(rel) == "stats.py" \
+                and ast.unparse(v) == _HEADROOM_EXPR and len(by_name[n]) == 1:
+            continue    # SECTOR_HOUSE_STEP_S is checked as a step of its own
         if home is not None and os.path.basename(rel) != home:
             problems.append(f"{rel}: {n} = {ast.unparse(v)} — {n} belongs to {home} only")
         elif not ok(n):
@@ -1553,6 +1571,19 @@ _GUARD_PLANTS = (
     ("studio/lap_table.py", "QUICK_LEVEL_S = round(DIFF_2SIGMA_K * 0.0435, 2)"),
     ("studio/lap_table.py", "SECTOR_LEVEL_S = 0.30"),
     ("studio/focus.py", "CORNER_DAY_SIGMA_S = 0.0351"),
+    # the independent review of cool/sector-dedrift: a "floor" anchor that any max() could borrow
+    ("studio/stats.py", "SECTOR_CALL_FLOOR_S = 0.30"),
+    ("studio/lap_table.py", "X_LEVEL_S = max(REFERENCE_CORNER_LEVEL_S, SECTOR_CALL_FLOOR_S)"),
+    ("studio/focus.py", "CORNER_X_LEVEL_S = max(CROSS_SESSION_LEVEL_S, stats.SECTOR_CALL_FLOOR_S)"),
+    ("studio/lap_table.py", "X_LEVEL_S = max(SECTOR_CALL_FLOOR_S, SECTOR_CALL_FLOOR_S)"),
+    ("studio/stats.py", "X_LEVEL_S = max(REFERENCE_LAP_SIGMA_S, SECTOR_CALL_FLOOR_S)"),
+    ("studio/stats.py", "SPLIT_MARGIN_FLOOR_S = 0.30\nX_LEVEL_S = max(SECTOR_HOUSE_STEP_S, SPLIT_MARGIN_FLOOR_S)"),
+    # the sampling headroom borrowed, re-sized, re-defined or bent
+    ("studio/lap_table.py", "X_LEVEL_S = round(REFERENCE_CORNER_LEVEL_S + SPLIT_SAMPLING_HEADROOM_S, 2)"),
+    ("studio/focus.py", "CORNER_X_LEVEL_S = CROSS_SESSION_LEVEL_S + stats.SPLIT_SAMPLING_HEADROOM_S"),
+    ("studio/lap_table.py", "SPLIT_SAMPLING_HEADROOM_S = 0.10"),
+    ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 1)"),
+    ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + 0.10, 2)"),
 )
 
 
@@ -1603,7 +1634,10 @@ def test_the_accuracy_step_table_is_the_published_noise_table():
     # one statistic with its own, wider step (cool/sector-step-one-reference), its own cell
     assert max(stats.house_step(s) for k, s in vars(ref).items()
                if s < 1 and k != "split") <= library.PB_PRECISION_S
-    assert stats.SECTOR_LEVEL_S == stats.house_step(ref.split) > library.PB_PRECISION_S
+    # the split step is the house rule on its cell rounded up by the one named sampling headroom
+    # (cool/sector-dedrift)
+    assert stats.SECTOR_LEVEL_S == round(stats.house_step(ref.split)
+                                         + stats.SPLIT_SAMPLING_HEADROOM_S, 2) > library.PB_PRECISION_S
     assert f"**The app uses {library.REFERENCE_RECORDING}'s row**" in acc
     assert "The lap column uses each recording's published per-lap σ" in " ".join(acc.split())
     # what the app says where it reads "level" is this table's arithmetic, each surface its own
@@ -1823,7 +1857,9 @@ def _timing_quote_problems(pages: dict[str, str], lap: dict[str, float],
       2. any other ms figure quoted at a noise, in a block naming a lap line, is a misquote;
       3. a noise-free split figure has a twin: after a GPS noise named in its block, with no full
          stop or semicolon between, a figure that is one of row 2's at a GPS noise;
-      4. ACCURACY.md's split sentence is row 2's σ, at the noise of the rows whose σ it compares."""
+      4. ACCURACY.md's split sentence is row 2's σ, at the noise of the rows whose σ it compares,
+         and "about a lap's" holds (within a factor of two of that row's lap σ; since
+         cool/sector-dedrift a split no longer carries "several times a lap's")."""
     quoted = {f"{v:.2f}": name for name, v in lap.items()}
     lines = [line for line, _ in _LAP_FIGURE.values()]
     split = {level: v for (stat, level), v in row2.items() if stat == "sector.interior_sd"}
@@ -1856,7 +1892,7 @@ def _timing_quote_problems(pages: dict[str, str], lap: dict[str, float],
                                     f"one of truth-matrix row 2's at a GPS noise: {b[:140]}")
     acc = pages["docs/ACCURACY.md"]
     m = re.search(r"interior split's σ is under (\d+) ms noise-free, but up to (\d\.\d\d) s at "
-                  r"recording C's GPS noise and (\d\.\d\d) s at B's: several times a lap's",
+                  r"recording C's GPS noise and (\d\.\d\d) s at B's: about a lap's",
                   " ".join(_blocks("docs/ACCURACY.md", acc)))
     if not m:
         return found, problems + ["docs/ACCURACY.md: the sector-split sentence this check reads is "
@@ -1878,8 +1914,8 @@ def _timing_quote_problems(pages: dict[str, str], lap: dict[str, float],
         if nz is None or min(split, key=lambda lv, nz=nz: abs(lv - nz)) != level:
             problems.append(f"docs/ACCURACY.md: row {row}'s σ {sig} s reads as noise {nz}, not the "
                             f"matrix's {level}")
-        if sd < 3 * sig:
-            problems.append(f"docs/ACCURACY.md: 'several times a lap's', but {sd:.3f} s is "
+        if not 0.5 * sig <= sd <= 2 * sig:
+            problems.append(f"docs/ACCURACY.md: 'about a lap's', but {sd:.3f} s is "
                             f"{sd / sig:.1f}× row {row}'s σ {sig} s")
     return found, problems
 
@@ -1913,9 +1949,10 @@ def test_the_timing_figure_guard_fails_on_each_planted_misquote():
     plants = (("README.md", "0.41 ms", "0.42 ms", "a lap figure one digit off"),
               ("README.md", "at a line mid-straight,", ",", "0.41 ms with its line dropped"),
               ("docs/index.html", "noise-free synthetic", "synthetic", "the card without noise-free"),
-              ("docs/ACCURACY.md", "0.11 s", "0.12 s", "the split σ at C's noise one digit off"),
-              ("docs/ACCURACY.md", "but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: "
-               "several times a lap's", "exactly", "the split's noise-level twin dropped"),
+              ("docs/ACCURACY.md", "but up to 0.02 s at", "but up to 0.03 s at",
+               "the split σ at C's noise one digit off"),
+              ("docs/ACCURACY.md", "but up to 0.02 s at recording C's GPS noise and 0.05 s at B's: "
+               "about a lap's", "exactly", "the split's noise-level twin dropped"),
               ("changes/planted.md", "", "### Fixed\n- Noise-free, a split is now within 9 ms (#1).\n",
                "a fragment quoting a noise-free split alone"),
               ("README.md", "0.41 ms` at a line mid-straight, `0.80 ms",
@@ -2730,7 +2767,8 @@ def _row_nums(section: str, label: str) -> list[list[str]]:
 def _clip_consts() -> dict:
     probe = {k: _constant(_CLIP_PROBE, k) for k in (
         "CHIP_NOISES", "PREDICT_NOISE", "FRACTIONS", "BAND_W_U", "BAND_H_U", "BAND_STROKE_PX",
-        "ROUNDS", "BUSY_MS", "BUDGET_ROUNDS", "BUDGET_SHARE", "SECTOR_STRAIGHTS", "BAND_HEADROOM", "BAND_FLOOR_S")}
+        "ROUNDS", "BUSY_MS", "BUDGET_ROUNDS", "BUDGET_SHARE", "SECTOR_STRAIGHTS", "BAND_HEADROOM", "BAND_FLOOR_S",
+        "ROW2_SIGMA_BEFORE_DEDRIFT")}
     return probe
 
 
@@ -2830,8 +2868,10 @@ def _clip_problems(doc: str, fig: dict) -> list[str]:
                 probs.append(f"§25: {p_lo:g}–{p_hi:g} % of the overlay, the table gives {want_pct}")
             if rule != 100 * c["BUDGET_SHARE"]:
                 probs.append(f"§25: the rule says {rule:g} %, BUDGET_SHARE is {c['BUDGET_SHARE']}")
-    # §26 — sector chips: σ is truth-matrix row 2's, the gate its 2√2 multiple, the rest the probe's.
-    row2 = {lv: v for (stat, lv), v in _row2().items() if stat == "sector.interior_sd"}
+    # §26 — sector chips: σ is truth-matrix row 2's AS MEASURED BEFORE cool/sector-dedrift, held in
+    # the probe as `ROW2_SIGMA_BEFORE_DEDRIFT` (row 2 now reads the de-drifted splits; the chips were
+    # not re-run), the gate its 2√2 multiple, the rest the probe's.
+    row2 = {float(lv): float(v) for lv, v in c["ROW2_SIGMA_BEFORE_DEDRIFT"].items()}
     ch = fig["chips"]
     assert tuple(c["CHIP_NOISES"]) == (2.0, 4.5), c["CHIP_NOISES"]
     order = [("`synth_gopro`, three seeds", "synth", 2.0), ("the demo's telemetry", "demo", 2.0),
@@ -2840,7 +2880,8 @@ def _clip_problems(doc: str, fig: dict) -> list[str]:
     for label, key, noise in order:
         r = ch[f"{key}_{noise:g}"]
         if abs(r["sigma"] - row2[noise]) > 1e-12:
-            probs.append(f"§26: the probe gated on σ {r['sigma']}, row 2 measured {row2[noise]}")
+            probs.append(f"§26: the probe gated on σ {r['sigma']}, row 2 before the de-drift "
+                         f"measured {row2[noise]}")
         gate = 2 * math.sqrt(2) * row2[noise]
         want(26, label, [f"{noise:g}", f2(row2[noise]), f2(gate), str(r["chips"]), str(r["new_best"]),
                          str(r["true_new_best"]), str(r["wrong_colour"]), str(r["clear_gate"]),

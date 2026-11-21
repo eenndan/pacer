@@ -27,7 +27,7 @@ keeps this module usable from the pure-numpy unit tests.
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 import numpy as np
@@ -160,6 +160,27 @@ class SessionGeometry:
     shift: dict[int, np.ndarray]
     residual_rms: dict[int, float]
     n_laps: int
+    # Each consensus lap's offset from the consensus at every station (what `shift` was fitted to),
+    # kept for the sector timing's robust refit (`timing_shift`); the corner match never reads it.
+    lap_offsets: dict[int, np.ndarray] = field(default_factory=dict)
+
+    def residual_scale(self) -> float:
+        """The SESSION's residual scale for the timing refit: 1.4826 × the median absolute
+        residual left after each consensus lap's own least-squares shift, over every lap and
+        station (a session-level MAD, which one lap's excursion cannot move, unlike that lap's own),
+        floored at `TIMING_SCALE_FLOOR_M`."""
+        nx, ny = self.frame[4], self.frame[5]
+        res = [off - (nx * self.shift[lid][0] + ny * self.shift[lid][1])
+               for lid, off in self.lap_offsets.items() if lid in self.shift]
+        r = np.abs(np.concatenate(res)) if res else np.array([])
+        r = r[np.isfinite(r)]
+        mad = 1.4826 * float(np.median(r)) if len(r) else 0.0
+        return max(mad, TIMING_SCALE_FLOOR_M)
+
+    def timing_shift(self, off: np.ndarray, scale: float) -> np.ndarray | None:
+        """`robust_shift` of one lap's offsets from the consensus (`offsets(...) - consensus`)
+        at the session's residual scale."""
+        return robust_shift(off, self.frame[4], self.frame[5], scale)
 
     def offsets(self, lap_xs, lap_ys, lap_cum) -> np.ndarray:
         """One lap's signed perpendicular offset from the reference lap at each station, with the
@@ -180,6 +201,55 @@ class SessionGeometry:
         return float(t[0]), float(t[1])
 
 
+# THE SECTOR TIMING'S SHIFT IS ROBUST (cool/sector-dedrift review). The corner match above takes the
+# plain least-squares shift, and a lap that runs wide for a stretch tilts it: a planted 8 m lateral
+# excursion over 150 m of one lap moved that lap's shift by about 1 m and its splits at slow lines
+# by up to 0.14 s, on lines nowhere near the excursion. A split turns that tilt straight into time,
+# so the sector timing refits each lap with the stations trimmed at a SESSION scale
+# (`SessionGeometry.residual_scale`): never the lap's own MAD, which collapses on a near-noise-free
+# lap (the trim refused above), and floored so a clean session keeps every station. A lap the trim
+# leaves too little of, or too little of the circuit's headings, has no trustworthy shift and is
+# timed as measured (`robust_shift` returns None).
+TIMING_TRIM_K = 3.0            # stations further than this × the session scale from the fit drop out
+TIMING_SCALE_FLOOR_M = 0.5     # the session scale's floor: about a consumer receiver's lateral noise
+TIMING_MIN_KEPT = 0.6          # the share of answering stations a trustworthy refit must keep
+TIMING_MIN_SPREAD = 0.1        # the smaller eigenvalue of the kept normals' mean outer product (0.5 on
+                               # a loop): below it one direction of the shift is not grounded
+
+
+def robust_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray, scale: float) -> np.ndarray | None:
+    """The rigid shift of one lap's offsets `off` (from the consensus, at each station), refitted
+    with the stations further than `TIMING_TRIM_K` × `scale` from the fit trimmed, until the kept
+    set stops changing; None when too few stations remain (`TIMING_MIN_KEPT`, and never under
+    `DRIFT_MIN_STATIONS`) or the kept stations' normals no longer span both directions
+    (`TIMING_MIN_SPREAD`)."""
+    ok = np.isfinite(off)
+    n_ok = int(ok.sum())
+    if n_ok < DRIFT_MIN_STATIONS:
+        return None
+    # Start from NO shift (the consensus frame, where a lap's drift is a metre or so), not from the
+    # least-squares fit: a long excursion tilts that fit far enough to keep itself and trim the rest
+    # (3 m over 400 m of a 1 km lap did). Only a lap displaced too far for that start begins from
+    # every station.
+    keep = ok & (np.abs(np.where(ok, off, np.inf)) <= TIMING_TRIM_K * scale)
+    if int(keep.sum()) < TIMING_MIN_KEPT * n_ok:
+        keep = ok
+    t = np.zeros(2)
+    for _ in range(12):
+        a = np.column_stack([nx[keep], ny[keep]])
+        if len(a) < max(DRIFT_MIN_STATIONS, TIMING_MIN_KEPT * n_ok):
+            return None
+        if float(np.linalg.eigvalsh(a.T @ a / len(a))[0]) < TIMING_MIN_SPREAD:
+            return None
+        t, *_ = np.linalg.lstsq(a, off[keep], rcond=None)
+        r = np.where(ok, off - (nx * t[0] + ny * t[1]), np.inf)
+        new = ok & (np.abs(r) <= TIMING_TRIM_K * scale)
+        if np.array_equal(new, keep):
+            break
+        keep = new
+    return t
+
+
 def _rigid_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray) -> tuple[np.ndarray, float]:
     """The least-squares rigid 2D translation T with `off_i ≈ n̂_i · T`, and the RMS residual.
     ((0, 0), 0.0) when too few stations answered to ground it.
@@ -191,8 +261,13 @@ def _rigid_shift(off: np.ndarray, nx: np.ndarray, ny: np.ndarray) -> tuple[np.nd
         a fit of the lap's offset from the reference lap and nothing else, so a consensus estimated
         from few or lopsided laps cannot bias it. Only the ANCHOR half uses the consensus itself,
         and that one waits for `ANCHOR_MIN_LAPS`;
-      * one excursion cannot run away with it. The stations are spread over the whole lap, so a
-        5 m excursion spanning 12 of 256 of them can tilt T by at most about 5 × 12/256 = 0.23 m.
+      * one excursion tilts it only in proportion to its size and length — and that is not small:
+        the tilt is about amplitude × the excursion's share of the stations, divided by how much of
+        the circuit's heading it covers, so an 8 m excursion over 150 m of a 1 km lap (37 of 256
+        stations) moved T by about 1 m when planted (cool/sector-dedrift's review), not the
+        5 × 12/256 = 0.23 m once written here for a 5 m one. The corner match spends that on its
+        3 m gate; the sector timing, which turns a tilt straight into time, refits robustly
+        (`robust_shift`).
     A one-pass MAD TRIM was tried here and REMOVED: on a near-noise-free lap the MAD collapses to
     millimetres, the trim then keeps only the stations nearest the median residual — which on a
     stadium loop are its two STRAIGHTS, where n̂ has no x component at all — and the refit on that
@@ -297,7 +372,7 @@ def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
         t, rms = _rigid_shift(offs[lid] - consensus, nx, ny)
         shift[lid], residual[lid] = t, rms
     return SessionGeometry(stations, total_ref, frame, self_offset, consensus, shift, residual,
-                           len(ids))
+                           len(ids), {lid: offs[lid] - consensus for lid in ids})
 
 
 def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,

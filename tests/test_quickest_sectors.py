@@ -21,7 +21,7 @@ through the same pass path a corner row takes. These tests pin:
     (`stats.pass_vs_typical_of`, one code path), offered only where the typical split beats the
     quickest by the split's step — on the demo with 2, 3 and 4 lines, S1 alone — both panes at
     the sector, and `compare_controller.PassAnchor`'s readout (blank in the lead-in, live inside,
-    held after, dropped outside the clip, neutral inside the split's 0.25 s); Esc leaves it.
+    held after, dropped outside the clip, neutral inside the split's 0.15 s); Esc leaves it.
 
 Its own file rather than test_quickest_passes.py (2,277 lines): the sector windows are built with
 lines added, which every one of these needs and none of those does.
@@ -68,7 +68,11 @@ def test_the_sector_step_is_the_house_rule_on_the_split_sigma_measured_at_the_on
     ref = stats.PUBLISHED_NOISE_SIGMAS[library.REFERENCE_RECORDING]
     assert stats.SPLIT_SIGMA_S == ref.split == stats.REFERENCE_SIGMAS.split
     assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
-    assert stats.SECTOR_LEVEL_S == stats.house_step(ref.split) == 0.25
+    # the column's second parameter, an assumption: a receiver drift that decorrelates over 30 s
+    assert stats.SPLIT_DRIFT_TAU_S == 30.0
+    # the house rule on that σ (0.13 s) rounded up by the named sampling headroom (cool/sector-dedrift)
+    assert stats.house_step(ref.split) == stats.SECTOR_HOUSE_STEP_S == 0.13
+    assert stats.SECTOR_LEVEL_S == round(0.13 + stats.SPLIT_SAMPLING_HEADROOM_S, 2) == 0.15
     # the lap step is the same formula on the lap σ (library.PB_PRECISION_S's comment: 0.0247 s)
     assert round(stats.DIFF_2SIGMA_K * 0.0247, 2) == stats.PB_PRECISION_S
     acc = _flat("docs", "ACCURACY.md")
@@ -86,31 +90,182 @@ def test_the_sector_step_is_the_house_rule_on_the_split_sigma_measured_at_the_on
     assert stats.sector_level_floor(True) >= stats.rolling_level_floor(True)
 
 
-def test_the_split_sigma_depends_on_placement_and_the_receiver_drift_dominates_it():
+def test_the_split_sigma_is_measured_on_de_drifted_splits_and_the_drift_dominated_it():
     """What the split column rests on, re-measured on four of the grid's days at the reference
-    noise (seeds 401-404, the probe's own `day_record`): the golden placement's interior sector
-    and the hairpin placement's both sit well over a corner pass's σ, the hairpin's the larger
-    (a slower line crossing turns the same position error into more time), and taking out each
-    lap's rigid receiver shift (`dedrifted_splits`, what a source-level fix would do) removes most
-    of it. The 40-day pooled figures are in the probe's summary and ACCURACY.md."""
+    noise and the split column's drift time constant (`stats.SPLIT_DRIFT_TAU_S`, 30 s; seeds
+    401-404, the probe's own `day_record`): the app's splits are crossed with each
+    lap's rigid receiver shift taken off (`Session._sector_drift`, cool/sector-dedrift), and the
+    worst of the slow-line placements sits inside the 40-day worst σ's seed spread; timed as they
+    were before (`uncorrected_splits`), the hairpin's worst sector carries well over a third
+    more again (the drift a split between two different lines keeps). The 40-day pooled figures are
+    in the probe's summary and ACCURACY.md."""
     from studio.dev.probes import sector_split_sigma as probe
     work = tempfile.mkdtemp(prefix="split_sigma_test_")
     try:
-        days = [probe.day_record(work, stats.REFERENCE_SIGMAS.noise, 401 + k, k + 1)
-                for k in range(4)]
+        # at the split column's drift time constant (`stats.SPLIT_DRIFT_TAU_S`), as the table is
+        days = [probe.day_record(work, stats.REFERENCE_SIGMAS.noise, 401 + k, k + 1,
+                                 drift_tau=stats.SPLIT_DRIFT_TAU_S) for k in range(4)]
     finally:
         import shutil
         shutil.rmtree(work, ignore_errors=True)
-    golden, hairpin = probe.pair_sigma(days, "golden"), probe.pair_sigma(days, "hairpin")
-    dd = probe.pair_sigma(days, "hairpin", app=3)
-    corner = stats.REFERENCE_SIGMAS.corner_pass
-    assert golden["interior"] > 1.5 * corner and hairpin["worst"] > golden["interior"], (
-        golden, hairpin)
+    slow = max((probe.pair_sigma(days, n) for n in ("hairpin", "maxg", "three_slow", "short_c5")),
+               key=lambda p: p["worst"])
+    hairpin, before = probe.pair_sigma(days, "hairpin"), probe.pair_sigma(days, "hairpin", app=3)
+    assert stats.REFERENCE_SIGMAS.corner_pass < slow["worst"], slow
     # four days sit inside the 40-day worst-placement σ's own seed spread (±25 %)
-    assert 0.75 * stats.SPLIT_SIGMA_S <= hairpin["worst"] <= 1.25 * stats.SPLIT_SIGMA_S, hairpin
-    assert dd["worst"] < 0.6 * hairpin["worst"], (dd, hairpin)
-    print(f"split σ, 4 days: golden interior {golden['interior']:.4f}, hairpin worst "
-          f"{hairpin['worst']:.4f}, de-drifted {dd['worst']:.4f}")
+    assert 0.75 * stats.SPLIT_SIGMA_S <= slow["worst"] <= 1.25 * stats.SPLIT_SIGMA_S, slow
+    assert before["worst"] > 1.4 * hairpin["worst"], (before, hairpin)
+    print(f"split σ, 4 days: slowest placements' worst {slow['worst']:.4f}, hairpin worst "
+          f"{hairpin['worst']:.4f}, as timed before the de-drift {before['worst']:.4f}")
+
+
+def test_a_lap_s_rigid_receiver_shift_does_not_move_its_splits_and_its_time_never_moves():
+    """cool/sector-dedrift on one synthetic recording at the reference noise, golden placement:
+    PLANT a rigid 1.5 m shift on one counted lap's trace (`Session._lap_columns`, what a receiver
+    offset does) and its splits stay within a few ms, because `_sector_drift` takes that lap's
+    shift onto the consensus line off before the lines are crossed; held at (0, 0) (as the splits
+    were timed before) the same plant moves the interior split by tens of ms. Every counted lap's
+    splits sum to its lap time, which a translation cannot move (the core times the lap)."""
+    import shutil
+
+    from studio import chapters
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    from studio.dev.probes import sector_split_sigma as probe
+    from studio.dev.probes.focus_cross_session import _generate
+    from studio.session import Session
+    work = tempfile.mkdtemp(prefix="split_dedrift_test_")
+    try:
+        s = Session.load(chapters.discover_siblings(
+            _generate(work, stats.REFERENCE_SIGMAS.noise, 401, 1, None)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    truth = sg.simulate(401, 14, origin=make_demo.DEMO_ORIGIN)
+    start, _ = s.timing_lines_latlon()
+    # the lines at C1's and C5's apexes, the slowest crossings (the most time per metre)
+    apex = {k.cid: k.apex_s for k in truth.circuit.corners}
+    assert s.apply_timing_lines_latlon(start, [truth.line_at(apex[1]), truth.line_at(apex[5])],
+                                       confirmed=True)
+    ids = s.consistency_lap_ids()
+    for i in ids:
+        assert abs(sum(s.lap_sector_splits(i)) - s.lap_time(i)) < 1e-9, i
+    lap = ids[len(ids) // 2]
+    times = {i: s.lap_time(i) for i in ids}
+    kept, kept_before = s.lap_sector_splits(lap), probe.uncorrected_splits(s, lap)
+    orig = s._lap_columns
+
+    def planted(lid):
+        t, xs, ys, v, cum = orig(lid)
+        return (t, xs + 1.2, ys - 0.9, v, cum) if lid == lap else (t, xs, ys, v, cum)
+
+    # the corner model holds its own handle on the lap columns (Session DI), so both see the plant
+    s._lap_columns = s.corners._lap_columns = planted
+    s.corners.invalidate_stats()
+    s._sector_collapse_cache = None
+    try:
+        moved = max(abs(a - b) for a, b in zip(s.lap_sector_splits(lap), kept, strict=True))
+        moved_before = max(abs(a - b) for a, b in
+                           zip(probe.uncorrected_splits(s, lap), kept_before, strict=True))
+        assert {i: s.lap_time(i) for i in ids} == times
+    finally:
+        del s._lap_columns
+        s.corners._lap_columns = orig
+        s.corners.invalidate_stats()
+    assert moved < 0.005 and moved_before > 0.04, (moved, moved_before)
+    print(f"a planted 1.5 m receiver shift moves the lap's splits by {moved * 1000:.1f} ms "
+          f"(as timed before: {moved_before * 1000:.1f} ms)")
+
+
+def test_a_lap_that_runs_wide_for_a_stretch_does_not_tilt_its_sector_shift():
+    """The independent review of cool/sector-dedrift: PLANT an 8 m lateral excursion over 150 m of
+    one counted lap (lap metres 250-400, a raised-cosine bump to the left of its trace), well
+    clear of the sector lines at C1's and C5's apexes. Its splits must not move by more than the
+    no-excursion noise: the robust timing shift (`corners.robust_shift`, stations trimmed at the
+    session's residual scale) moves them by a few ms, while the least-squares shift the corner
+    cells use (`CornerModel._fitted_shift`) would tilt by about a metre and move them by tens of
+    ms. Measured on the review's own recording (seed 23): least squares 0.197 s, robust 0.006 s
+    at these lines, against a split error sd of 0.062 s with no excursion."""
+    import shutil
+
+    import numpy as np
+
+    from studio import chapters
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    from studio.dev.probes import sector_split_sigma as probe
+    from studio.dev.probes.focus_cross_session import _generate
+    from studio.session import Session
+    work = tempfile.mkdtemp(prefix="split_excursion_test_")
+    try:
+        s = Session.load(chapters.discover_siblings(
+            _generate(work, stats.REFERENCE_SIGMAS.noise, 401, 1, None)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    truth = sg.simulate(401, 14, origin=make_demo.DEMO_ORIGIN)
+    start, _ = s.timing_lines_latlon()
+    apex = {k.cid: k.apex_s for k in truth.circuit.corners}
+    assert s.apply_timing_lines_latlon(start, [truth.line_at(apex[1]), truth.line_at(apex[5])],
+                                       confirmed=True)
+    ids = s.consistency_lap_ids()
+    lap = ids[len(ids) // 2]
+    assert all(not 200.0 < d < 450.0 for d in s.sector_boundary_distances(lap)), "lines too near"
+    geom = s.corners.geometry()
+
+    def ls_splits():
+        return probe.splits_with(s, lap, lambda lid: tuple(
+            float(v) for v in s.corners._fitted_shift(s.corners.geometry(), lid)))
+
+    kept, kept_ls = s.lap_sector_splits(lap), ls_splits()
+    assert geom is not None and s.sector_drift_status(lap) == "applied"
+    orig = s._lap_columns
+
+    def plant(amp, length):
+        def planted(lid):
+            t, xs, ys, v, cum = orig(lid)
+            if lid != lap:
+                return t, xs, ys, v, cum
+            u = np.clip((cum - 250.0) / length, 0.0, 1.0)
+            w = amp * np.sqrt(np.sin(np.pi * u))
+            hx, hy = np.gradient(xs), np.gradient(ys)
+            n = np.hypot(hx, hy)
+            n[n == 0] = 1.0
+            return t, xs - w * hy / n, ys + w * hx / n, v, cum
+        s._lap_columns = s.corners._lap_columns = planted
+        s.corners.invalidate_stats()
+        s._sector_collapse_cache = None
+
+    def unplant():
+        del s._lap_columns
+        s.corners._lap_columns = orig
+        s.corners.invalidate_stats()
+        s._sector_collapse_cache = None
+
+    plant(8.0, 150.0)
+    try:
+        moved = max(abs(a - b) for a, b in zip(s.lap_sector_splits(lap), kept, strict=True))
+        moved_ls = max(abs(a - b) for a, b in zip(ls_splits(), kept_ls, strict=True))
+        status = s.sector_drift_status(lap)
+        step0 = s.sector_split_provenance(lap, 0).steps[0]
+    finally:
+        unplant()
+    assert moved < 0.02 and moved_ls > 0.05, (moved, moved_ls, status)
+    assert status == "applied" and step0.label == "receiver drift" \
+        and step0.text.startswith("trace moved by"), step0
+    # 20 m over 400 m leaves too little of the lap for a trustworthy shift: THAT lap is timed as
+    # measured (its splits are the uncorrected ones) while the session stays de-drifted, and its
+    # provenance says so
+    plant(20.0, 400.0)
+    try:
+        status_far = s.sector_drift_status(lap)
+        same = s.lap_sector_splits(lap) == probe.uncorrected_splits(s, lap)
+        step_far = s.sector_split_provenance(lap, 0).steps[0]
+        others = {s.sector_drift_status(i) for i in ids if i != lap}
+    finally:
+        unplant()
+    assert status_far == "untrusted" and same and others == {"applied"}, (status_far, others)
+    assert step_far.text.startswith("not de-drifted"), step_far
+    print(f"a planted 8 m × 150 m excursion moves the lap's splits by {moved * 1000:.1f} ms "
+          f"({status}; least squares: {moved_ls * 1000:.1f} ms); 20 m × 400 m: {status_far}")
 
 
 def test_a_stretch_key_is_a_corner_cid_or_a_negative_sector_key():
@@ -119,21 +274,30 @@ def test_a_stretch_key_is_a_corner_cid_or_a_negative_sector_key():
     assert stats.sector_col(1) is None and stats.sector_col(7) is None
 
 
+def _level_reason(lap, label, v):
+    """The greyed compare's reason for a quickest pass level with its typical one: the step alone,
+    or the step plus the quickest's luck where only the luck makes it level (central_view.typical_luck_reason)."""
+    from studio.central_view import typical_luck_reason
+    if v.gap_s >= v.level_s:
+        return typical_luck_reason(str(lap + 1), label, v)
+    return f"Lap {lap + 1}'s pass through {label} is within {v.level_s:.2f} s of your typical pass as timed"
+
+
 def _splits(rows, ids=None):
     ids = list(range(len(rows))) if ids is None else ids
     return stats.split_matrix(ids, rows, columns=len(rows[0]))
 
 
 def test_quickest_sectors_names_ties_under_the_split_step_and_leaves_out_blank_laps():
-    rows = [[10.00, 20.0], [10.10, 20.5], [10.249, 20.6], [10.250, 20.7], [10.5, 20.8],
+    rows = [[10.00, 20.0], [10.08, 20.5], [10.149, 20.6], [10.150, 20.7], [10.5, 20.8],
             [9.9, float("nan")]]
     qs = stats.quickest_sectors(_splits(rows), lap_ids=range(7))
     s1, s2 = qs.passes
-    assert qs.level_s == stats.SECTOR_LEVEL_S == 0.25 and [p.cid for p in qs.passes] == [-1, -2]
+    assert qs.level_s == stats.SECTOR_LEVEL_S == 0.15 and [p.cid for p in qs.passes] == [-1, -2]
     # lap 5 has a blank split (a nan): not counted anywhere, never named, though its 9.9 is lowest
     assert (s1.time_s, s1.lap_id, s1.n_counted) == (10.00, 0, 5)
-    # +0.100 and +0.249 are level; +0.250 (exactly the step) is not
-    assert s1.level_laps == (1, 2) and not s1.alone and s1.next_gap_s == 0.1
+    # +0.080 and +0.149 are level; +0.150 (exactly the step) is not
+    assert s1.level_laps == (1, 2) and not s1.alone and s1.next_gap_s == 0.08
     assert s2.lap_id == 0 and s2.level_laps == () and s2.alone and s2.next_gap_s == 0.5
     assert qs.not_counted == (5, 6), qs.not_counted
     # under the corners' 0.07 s the same S1 would read clear of everything but nothing: the step
@@ -147,6 +311,8 @@ def test_quickest_sectors_names_ties_under_the_split_step_and_leaves_out_blank_l
 
 _DEMO: dict = {}
 CONFIGS = {2: (2, 5), 3: (1, 3, 5), 4: (1, 2, 4, 5)}   # Circuit.straights, mid-straight
+# the sector rows that offer "Compare with my typical pass" on the demo (cool/sector-dedrift)
+DEMO_OFFERS = {2: ["S1"], 3: ["S1"], 4: ["S1"]}
 
 
 def _demo_path() -> str:
@@ -323,19 +489,21 @@ def test_two_and_four_lines_list_their_sectors_below_the_corners():
             for c, row in enumerate(rows[7:]):
                 assert row[0] == f"S{c + 1}"
                 assert row[1] == f"{m.bests[c]:.2f}" and row[2] == str(m.best_lap[c] + 1), row
-                assert "★" not in row[1]   # no sector on the demo stands 0.25 s clear
-            assert page.level_label.text() == "Level = within 0.07 s · sectors 0.25 s"
+                assert "★" not in row[1]   # no sector on the demo stands 0.15 s clear
+            assert page.level_label.text() == "Level = within 0.07 s · sectors 0.15 s"
             tip = page.level_label.toolTip()
             # the split's σ (mid-straight, and the worst placement, with the measured limit), the
             # step once, and what a noisier recording would need (the split column's B and A)
-            assert ("σ 0.04 s with lines mid-straight, up to 0.09 s with a line at the measured "
-                    "track's slowest corners") in tip, tip
-            assert tip.count("within 0.25 s") == 1, tip
-            assert stats.split_covers_note() in tip and "up to 0.53 s" in tip \
-                and "0.87 s at the noisiest" in tip, tip
-            assert "tie" in tip
+            assert "σ about 0.03 s with lines mid-straight, up to 0.05 s at slow corners" in tip, tip
+            assert tip.count("closer than 0.15 s read level") == 1, tip
+            assert stats.split_covers_note() in tip and "up to 0.28 s" in tip \
+                and "0.46 s at the noisiest" in tip, tip
+            # the sector part is short and claims nothing about wrong calls (cool/sector-dedrift's
+            # review: the pass menu still makes a few wrong-sign offers at this step)
+            sector_part = tip.split("A sector split", 1)[1]
+            assert len("A sector split" + sector_part) <= 350 and "wrong" not in sector_part, tip
             tip = q.table.item(8, 3).toolTip()
-            assert "within 0.25 s" in tip and "timing noise" in tip, tip
+            assert "within 0.15 s" in tip and "timing noise" in tip, tip
             # the group's rule above S1, and ▶ says "sector"
             assert q.table.item(7, 0).data(GROUP_ROW_ROLE) and not q.table.item(6, 0).data(
                 GROUP_ROW_ROLE)
@@ -426,24 +594,25 @@ def test_the_menu_plays_and_exports_a_sector_and_greys_out_a_level_compare_and_c
         view, s = win.view, win.session
         plays = _record_plays(view)
         q = view.corners_page.quickest
-        pos = q.table.visualRect(q.table.model().index(9, 1)).center()   # S3
+        pos = q.table.visualRect(q.table.model().index(10, 1)).center()   # S4
         menu = view.pass_menu(view._quickest_menu_pass(q.table, pos))
         play, export, compare = menu.actions()
         assert play.isEnabled() and export.isEnabled() and not compare.isEnabled()
-        # S3's quickest is level with its typical split under the split's step: the true reason
-        lap = s.split_matrix().best_lap[2]
-        assert compare.toolTip() == (f"Lap {lap + 1}'s pass through S3 is within 0.25 s of your "
-                                     "typical pass as timed"), compare.toolTip()
+        # S4's quickest is level with its typical split under the split's step (plus the luck a
+        # quickest pass carries, where only that makes it level): the true reason
+        lap = s.split_matrix().best_lap[3]
+        assert compare.toolTip() == _level_reason(lap, "S4", s.pass_vs_typical(
+            lap, stats.sector_key(3))), compare.toolTip()
         play.trigger()
-        lap = s.split_matrix().best_lap[2]
-        assert plays[-1] == s.stretch_clip(lap, stats.sector_key(2))
+        lap = s.split_matrix().best_lap[3]
+        assert plays[-1] == s.stretch_clip(lap, stats.sector_key(3))
         titles = [e.title for e in command_palette.entries(win)]
         quick = [t for t in titles if t.startswith("Quickest ")]
         assert quick[7:] == [f"Quickest S{c + 1} — lap {s.split_matrix().best_lap[c] + 1}"
                              for c in range(4)], quick
         # ⌘K exports the sector pass being studied, as it does a corner's; no compare row for it,
-        # S3's quickest being level with its typical split (S1's is listed: the compare test)
-        assert f"Export the S3 pass — lap {lap + 1}…" in titles, titles
+        # S4's quickest being level with its typical split (the others' are: the compare test)
+        assert f"Export the S4 pass — lap {lap + 1}…" in titles, titles
         assert not any(" through S" in t for t in titles), titles
         # a lap the SPLITS grid does not count (a blank row) is refused, with the reason
         m = s.split_matrix()
@@ -475,13 +644,13 @@ def test_a_sector_pass_beside_its_typical_follows_the_corners_rule():
                                   c.gap_s, c.level, c.is_typical), (lap, v, c)
         assert v.cid == stats.sector_key(0) and v.level_s == 0.30
     # lap 0's 10.00 against the typical 10.30 (lap 4). Lap 0 is the QUICKEST of 5, so the step
-    # carries the quickest's luck (`stats.quickest_luck_s`, 0.047 s for a sector at n = 5, fitted
-    # at the split step's own placement, cool/sector-step-one-reference): 0.30 apart is level under
-    # 0.30 + 0.047, and exactly the step plus the luck apart is NOT level
+    # carries the quickest's luck (`stats.quickest_luck_s`, 0.030 s for a sector at n = 5, fitted
+    # at the split step's own placement, cool/sector-dedrift): 0.30 apart is level under
+    # 0.30 + 0.030, and exactly the step plus the luck apart is NOT level
     v = m.pass_vs_typical(0, 0, 0.30)
-    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.047, True), v
-    assert not m.pass_vs_typical(0, 0, 0.253).level            # 0.253 + 0.047 = 0.300
-    assert m.pass_vs_typical(0, 0, 0.254).level                # the step decides it
+    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.03, True), v
+    assert not m.pass_vs_typical(0, 0, 0.270).level            # 0.270 + 0.030 = 0.300
+    assert m.pass_vs_typical(0, 0, 0.271).level                # the step decides it
     # a pass that is not the quickest carries no luck: lap 3's 10.20, 0.10 under the typical
     assert m.pass_vs_typical(0, 3, 0.10).luck_s == 0.0 and not m.pass_vs_typical(0, 3, 0.10).level
     assert m.pass_vs_typical(0, 4, 0.30).is_typical
@@ -496,8 +665,9 @@ def _quickest_compare(view, q, row):
 
 def test_compare_with_the_typical_pass_is_offered_on_a_sector_row_only_past_the_split_step():
     """The demo with 2, 3 and 4 lines: each sector row's Compare item is enabled exactly where its
-    quickest split and its typical split are NOT level under 0.25 s (S1 alone, typical − quickest
-    0.47-0.55 s; studio/dev/probes/sector_typical_compare), and greyed with its own computed reason
+    quickest split and its typical split are NOT level under 0.15 s plus the luck (S1 alone with 2, 3
+    and 4 lines, a true gap of 0.45-0.52 s on the demo's truth; S2's 0.18 s with 2 lines sits a
+    long way inside 0.15 + its 0.043 luck), and greyed with its own computed reason
     everywhere else. On main every sector row was greyed "Not for sectors yet"."""
     prefs.set_corners_view("quickest")
     win = _window(2)
@@ -524,10 +694,9 @@ def test_compare_with_the_typical_pass_is_offered_on_a_sector_row_only_past_the_
                         f"Lap {lap + 1} and your typical pass through S{c + 1}, lap "
                         f"{v.typical_lap_id + 1}, side by side from the lead-in")
                 else:
-                    assert compare.toolTip() == (
-                        f"Lap {lap + 1}'s pass through S{c + 1} is within 0.25 s of your typical "
-                        "pass as timed"), compare.toolTip()
-            assert enabled == ["S1"], (n, enabled)
+                    assert compare.toolTip() == _level_reason(lap, f"S{c + 1}", v), \
+                        compare.toolTip()
+            assert enabled == DEMO_OFFERS[n], (n, enabled)
     finally:
         _close(win)
         prefs.set_corners_view("lap")
@@ -579,7 +748,7 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         assert msg == typical_compare_status(v, "S1") and " quicker through S1 as timed " in msg
         assert "fastest" not in msg.lower()
         tip = view.video.seam.toolTip()
-        assert "±0.25 s" in tip and "the whole sector" in tip, tip   # the sector's own step
+        assert "±0.15 s" in tip and "the whole sector" in tip, tip   # the sector's own step
         # the held figure is a measurement of these two passes, not a verdict: the tip says so
         assert "the difference between these two passes as timed" in tip, tip
         assert "partly luck" in tip and "Coloured only beyond timing precision" not in tip, tip
@@ -603,11 +772,11 @@ def test_a_sector_compare_lands_both_panes_at_the_sector_and_anchors_its_readout
         # inside the sector a Δ under the split's step is shown neutral, without its arrow
         anchor = view.compare._anchor
         assert anchor.level_s == stats.SECTOR_LEVEL_S and anchor.noun == "sector"
-        view.compare._set_pane_badge(0, 0.2)
-        view.compare._set_seam(0.2)
-        assert view.video._cell_a.badge.text() == theme.format_delta_run(0.2, arrow=False)
+        view.compare._set_pane_badge(0, 0.1)
+        view.compare._set_seam(0.1)
+        assert view.video._cell_a.badge.text() == theme.format_delta_run(0.1, arrow=False)
         assert view.video._cell_a._badge_colour is None, "neutral: no colour, not just no arrow"
-        assert view.video.seam.value.text() == theme.format_delta_run(0.2, arrow=False)
+        assert view.video.seam.value.text() == theme.format_delta_run(0.1, arrow=False)
         assert view.video.seam.value.colour() is None
         # a pane scrubbed out of its clip: the anchor goes, the whole-lap Δ under the plain caption
         seam, ba, _bb, cap_now = _panes_at(view, clip_a[1] + 10.0, xb + 0.2)
@@ -817,7 +986,7 @@ def test_provisional_timing_withholds_a_sectors_star():
         s.quickest_sectors = lambda: QuickestPasses([lone, *real.passes[1:]], real.level_s, ())
         q.refresh()
         assert q.table.item(7, 1).text() == "13.00 ★"
-        assert "no other lap took this sector within 0.25 s" in q.table.item(7, 1).toolTip()
+        assert "no other lap took this sector within 0.15 s" in q.table.item(7, 1).toolTip()
         cls = type(s)
         saved = cls.timing_verified
         cls.timing_verified = property(lambda _self: False)

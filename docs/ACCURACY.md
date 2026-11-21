@@ -167,25 +167,41 @@ with every technique evaluated and rejected on evidence, is in
 **Sector splits are read the same way**, interpolated where the lap crosses each sector line, not
 at the nearest fix. On a synthetic recording (row 2 of
 [`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)) the interior split's σ is under 1 ms
-noise-free, but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: several times a lap's.
-That "up to" is the worst of that row's three recordings (the other two read 0.02 and 0.06 s at
-C's noise); it is not the σ the app uses. Pooled over many days, the split's σ is two to four
-times a corner pass's, and it depends on where the lines are drawn. On the 40-day synthetic grid below, at recording C's noise
-([`studio/dev/probes/sector_split_sigma.py`](../studio/dev/probes/sector_split_sigma.py), 13
-line placements), one split against another of the same recording carries σ 0.035–0.041 s with
-lines mid-straight, 0.047–0.050 s at a corner's apex or exit, and 0.066 s at the two slowest
-apexes; its worst sector there reads 0.088 s. What dominates is the receiver's slowly drifting
-position error: a lap crosses the same line twice and cancels it, a split crosses two lines of
-different heading and speed and keeps it, most at a slow line. One step has to serve every sector
-a driver can draw, so the app's is set by that worst sector: one split's σ is 0.088 s at
-recording C's GPS noise, and the step is 0.25 s (2√2σ), the last column below. A mid-straight
-sector would need only 0.14 s. The measured track's slowest point is 13.5 m/s, and a split's
-error grows as the speed at its lines falls: a line at a slower hairpin than that is not covered
-by this measurement, and how much more it would carry is unmeasured. Taking each lap's rigid
-receiver shift out before crossing the
-lines (the correction the corner cells already make) would leave 0.038 s at the worst sector of
-any placement, a step of 0.11 s; that change is proposed, not made. No official timing has checked
-a split. (The truth matrix names its noise levels by its own three-seed calibration, which reads
+noise-free, but up to 0.02 s at recording C's GPS noise and 0.05 s at B's: about a lap's, since
+each lap's receiver drift is taken off before its splits are timed (described next). Before that
+the same row read 0.11 and 0.24 s, several times a lap's, and refusal §26's chip gate still uses
+those figures; that "up to" is the worst of the row's three recordings, not the σ the app uses.
+On the 40-day synthetic grid below, at recording C's
+noise ([`studio/dev/probes/sector_split_sigma.py`](../studio/dev/probes/sector_split_sigma.py),
+13 line placements), what dominated a split was the receiver's slowly drifting position error: a
+lap crosses the same line twice and cancels it, a split crosses two lines of different heading and
+speed and keeps it, most at a slow line (σ 0.035–0.041 s mid-straight, 0.088 s at the worst sector
+of the slowest lines). So each lap's trace is first moved by its own receiver shift onto the
+session's consensus line, the correction the corner cells already make, and only then crossed with
+the sector lines; a lap's start and finish do not move, so its time and the sum of its splits are
+exactly as before. The shift is fitted robustly, with the stretches where a lap leaves its usual
+line trimmed out, so a lap that runs wide somewhere keeps its correction; a lap too far off its line
+for that, or with too little trace, is timed as measured, and its provenance says so. How much
+the correction removes depends on how fast the receiver's drift decorrelates, which no recording
+has measured: it takes off the part that is one vector over a lap. The split's σ is read under an
+ASSUMPTION, a drift that decorrelates over about half a minute (an OU time constant of 30 s,
+`stats.SPLIT_DRIFT_TAU_S`); with drift that changes faster than that the step under-covers: at 10 s
+the worst sector reads 0.079 s, a 0.22 s rule
+([`studio/dev/probes/sector_dedrift.py`](../studio/dev/probes/sector_dedrift.py)). Under that
+assumption one split against another of the same recording carries σ 0.026–0.029 s with lines
+mid-straight and 0.040–0.042 s at the slowest lines, and one split's σ is 0.047 s at recording
+C's GPS noise, at the worst sector of any placement (0.044 s out of sample, 0.046 s over all 80
+days); the house rule gives 0.13 s (2√2σ), the last column below. The app's step is 0.15 s,
+rounded up from that for sampling headroom: single ten-day sets read 0.13–0.16 s. At the grid's
+own 90 s drift, the favourable case, the σ is 0.038 s and the rule 0.11 s. The step does not mean
+a split compare is never wrong: on the synthetic grid the right-click menu still offers a few of
+its thousands of compares on a pass truly within 0.03 s, or of the wrong sign. Its other limits:
+the measured track's slowest point is 13.5 m/s, and a line at a slower hairpin is not covered; a
+lap that runs about 3 m off its line for 40 % of the lap still moves its splits by up to 0.03 s
+(within the split's own noise; planted excursions of 3–20 m over 50–400 m, one across a sector
+line, moved them by at most 0.031 s); on position noise with no drift at all the fitted shift adds at
+most 2 ms; and a session too short to fit the shift (fewer than three
+clean laps) keeps its splits as measured. No official timing has checked a split. (The truth matrix names its noise levels by its own three-seed calibration, which reads
 C's per-lap σ as noise 2.1 and B's as 4.4; the 40-day grid below reproduces C's at noise 1.9 and
 B's at 4.0. Same recordings, two calibrations.)
 
@@ -202,14 +218,15 @@ checked, use the σ measured on the synthetic grid at the matching noise:
 
 | Published recording (per-lap σ) | Synthetic GPS noise (per-lap σ) | Lap | Corner pass | Corner typical, two days | Corner, against another recording's lap | Sector split |
 |---|---|---|---|---|---|---|
-| C (0.0247 s) | 1.9 (0.0253 s) | 0.07 s | 0.06 s | 0.05 s | 0.06 s | 0.25 s |
-| B (0.0527 s) | 4.0 (0.0532 s) | 0.15 s | 0.12 s | 0.10 s | 0.12 s | 0.53 s |
-| A (0.0871 s) | 6.5 (0.0863 s) | 0.25 s | 0.20 s | 0.16 s | 0.21 s | 0.87 s |
+| C (0.0247 s) | 1.9 (0.0253 s) | 0.07 s | 0.06 s | 0.05 s | 0.06 s | 0.13 s |
+| B (0.0527 s) | 4.0 (0.0532 s) | 0.15 s | 0.12 s | 0.10 s | 0.12 s | 0.28 s |
+| A (0.0871 s) | 6.5 (0.0863 s) | 0.25 s | 0.20 s | 0.16 s | 0.21 s | 0.46 s |
 
 **The app uses C's row**, so every lap and corner difference is level under 0.07 s, the widest of
-those cells, and two sector splits under 0.25 s, their own cell: the worst sector of the worst
-line placement measured (the paragraph above; with lines mid-straight the split column would read
-0.14 / 0.30 / 0.48 s). A noisier recording can differ by more than that from the GPS alone, up
+those cells, and two sector splits under 0.15 s: their own cell, the worst sector of the worst
+line placement measured on de-drifted splits under the 30 s drift assumption, rounded up for
+sampling headroom (with lines mid-straight the split column would read 0.10 / 0.20 / 0.33 s; at
+a 90 s drift 0.11 / 0.23 / 0.37 s). A noisier recording can differ by more than that from the GPS alone, up
 to B's and A's rows, and the app says so where it reads "level". A corner pass is one pass against
 another of the same recording (the Corners table's Δbest, Quickest passes); the corner typical is
 the focus list's two days; the next column is the Corners table's Δref and the export's corner
