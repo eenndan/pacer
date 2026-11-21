@@ -37,13 +37,13 @@ a call-out. A timed lap within a pixel of the base (a tie, a +0.001 s lap) is st
 slowest clean lap inside Tukey's upper fence (Q3 + 1.5 IQR of the clean gaps; the plain maximum
 under 4 clean laps). One spin or pit lap therefore cannot squash every honest bar to a sliver: a
 lap past the fence is CLIPPED at the top, drawn with the table's break mark, the cap line is
-dashed and labelled with the gap it stands for, and the legend names each cut lap with its real
-gap. The top never stands for less than `MIN_SPAN_S` (0.5 s): without that floor a tight session
+dashed and labelled with the gap it stands for, and the legend names each clipped lap with its real
+gap (CLIPPED, never "cut": the same card marks a lap that cut the track, "left the line"). The top never stands for less than `MIN_SPAN_S` (0.5 s): without that floor a tight session
 is stretched to fill the plot, and three laps 0.19 s apart looked like a 2 s spread. Gaps are taken
 between the PRINTED milliseconds (`lap_table.printed_ms`), so the strip and the table agree to
-the digit. Measured on the demo (14 laps: fence 1.26 s, one lap cut), a synthetic 3-lap session
+the digit. Measured on the demo (14 laps: fence 1.26 s, one lap clipped), a synthetic 3-lap session
 (0.19 s spread: the floor holds the top at 0.5 s) and a 62-lap one with a spin (fence 0.49 s,
-the spin cut, every other bar readable).
+the spin clipped, every other bar readable).
 
 COLOUR. The best lap wears the palette's best-lap hue and a ★ (one lap: a second lap at the same
 printed time is "level", not a second best). A lap whose gap is inside timing
@@ -64,11 +64,11 @@ times does not say why a lap was slow.
 bar keeps a ~35 % fill under its hatch so a thin one still reads as a bar.
 
 THE LEGEND NEVER PASSES THE FOOTER (`legend_plan`). Each entry is fitted to the row (24 then 22 px,
-else elided); four or more cut or quicker laps become a count ("5 laps cut at the +0.59 s line");
+else elided); four or more clipped or quicker laps become a count ("5 laps clipped at the +0.59 s line");
 the excluded reasons fold into "N laps left out" when the full line would not fit; the plot's base
 lifts (to `PLOT_BASE_MIN`) to make room for more rows; and only then are entries dropped, in
 `LEGEND_PRIORITY` order: the grey "height" key first, then the level key, then the best key (the
-★ call-out names the best lap anyway), then the dropout, quicker, cut and excluded facts, and the
+★ call-out names the best lap anyway), then the dropout, quicker, clipped and excluded facts, and the
 too-brief sentence last.
 """
 
@@ -309,12 +309,13 @@ def legend_entries(data: LapStripData, *, short: bool = False) -> list[tuple[str
                                          (KIND_GAP, "across a missing chapter"))
                           if any(b.kind == k for b in quick))
         out.append((TONE_QUICKER, f"{who}: quicker, {why} (not counted)"))
-    cut = [b for b in timed if b.clipped]
-    if cut and data.scale_s:
-        # The cut laps BY NAME with their real gap, up to three: the bar no longer says it.
-        who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in cut)
-               if len(cut) <= 3 else plural(len(cut), "lap"))
-        out.append(("clipped", f"{who} cut at the +{data.scale_s:.2f} s line"))
+    clipped = [b for b in timed if b.clipped]
+    if clipped and data.scale_s:
+        # The clipped laps BY NAME with their real gap, up to three: the bar no longer says it.
+        # "Clipped", not "cut": a cut lap on this card is one that left the line (above).
+        who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in clipped)
+               if len(clipped) <= 3 else plural(len(clipped), "lap"))
+        out.append(("clipped", f"{who} clipped at the +{data.scale_s:.2f} s line"))
     n_ex = sum(1 for b in data.bars if b.kind == KIND_EXCLUDED)
     if n_ex:
         out.append((KIND_EXCLUDED, f"{plural(n_ex, 'lap')} left out" if short
@@ -499,7 +500,7 @@ def _paint(data: LapStripData) -> QImage:
     grid_ys = []
     if data.scale_s:
         cap_pen = QPen(QColor(theme.C.text_muted if clipped_any else theme.C.border), 1.5)
-        if clipped_any:   # the cap is dashed when a lap is cut by it
+        if clipped_any:   # the cap is dashed when a lap is clipped by it
             cap_pen.setStyle(Qt.DashLine)
         p.setPen(cap_pen)
         p.drawLine(QPointF(plot_l, y_of(1.0)), QPointF(plot_r, y_of(1.0)))

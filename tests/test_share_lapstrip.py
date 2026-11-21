@@ -249,6 +249,9 @@ def test_the_outlier_is_clipped_and_the_cap_is_marked():
     assert d.scale_s is not None and d.scale_s < spin.gap_s
     cap = dict(ls.legend_entries(d))["clipped"]
     assert f"+{d.scale_s:.2f} s" in cap
+    # A bar past the scale is CLIPPED, not cut: the same card marks a lap that cut the track
+    # ("left the line ... not counted"), so "cut" here read a slow lap as a cut one.
+    assert f"clipped at the +{d.scale_s:.2f} s line" in cap and " cut" not in cap, cap
     # with no outlier nothing is clipped and no cap is claimed
     assert not any(b.clipped for b in ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.5})).bars)
 
@@ -258,10 +261,10 @@ def test_four_or_more_cut_laps_are_counted_not_named():
     for i in (3, 7, 11, 15):
         times[i] = 75.0 + i
     entry = dict(ls.legend_entries(ls.lapstrip_data(FakeSession(times))))["clipped"]
-    assert entry.startswith("4 laps cut at the +") and "lap 4" not in entry, entry
-    times[15] = 60.2   # three cut laps: named, each with its real gap
+    assert entry.startswith("4 laps clipped at the +") and "lap 4" not in entry, entry
+    times[15] = 60.2   # three clipped laps: named, each with its real gap
     entry = dict(ls.legend_entries(ls.lapstrip_data(FakeSession(times))))["clipped"]
-    assert entry.startswith("lap 4 +18.00 s, lap 8 +22.00 s, lap 12 +26.00 s cut at"), entry
+    assert entry.startswith("lap 4 +18.00 s, lap 8 +22.00 s, lap 12 +26.00 s clipped at"), entry
 
 
 def test_the_median_is_the_clean_laps_median_gap():
@@ -305,7 +308,7 @@ def test_the_worst_case_legend_stays_above_the_footer_and_inside_the_canvas():
     styles = [it.style for it in plan.items]
     assert "too_brief" in styles and "clipped" in styles
     cut = [it for it in plan.items if it.style == "clipped"][0]
-    assert cut.text.startswith("10 laps cut"), cut.text
+    assert cut.text.startswith("10 laps clipped"), cut.text
     assert plan.plot_base >= ls.PLOT_BASE_MIN    # the plot lifts, but is never squashed further
     # OVER-full: three named quicker laps and three named cut laps each take a row, so even with
     # the plot lifted something must go — the grey key first, the too-brief sentence kept

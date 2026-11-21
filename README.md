@@ -127,7 +127,7 @@ official timing measures the noise floor.
 
 <img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 
-<img src="docs/media/lapstrip.png" width="440" alt="The lap-strip card of the synthetic demo, as File ▸ Export ▸ Lap-strip card… saves it: the 14 laps as bars in the order driven, each as tall as its time off the best lap, lap 13's 0:44.950 marked with a star on the zero line, a dashed median 0.68 s off the best, and lap 6, 6.18 s off, cut at the +1.26 s line and named in the legend">
+<img src="docs/media/lapstrip.png" width="440" alt="The lap-strip card of the synthetic demo, as File ▸ Export ▸ Lap-strip card… saves it: the 14 laps as bars in the order driven, each as tall as its time off the best lap, lap 13's 0:44.950 marked with a star on the zero line, a dashed median 0.68 s off the best, and lap 6, 6.18 s off, clipped at the +1.26 s line and named in the legend">
 
 The rest of the window is in the **[first-lap walkthrough](docs/FIRST_LAP.md)**.
 
