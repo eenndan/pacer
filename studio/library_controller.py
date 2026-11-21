@@ -268,7 +268,8 @@ class LibraryController:
         suppressing on mere presence would swallow exactly that).
 
         PART OF A RECORDING DECIDES NOTHING (QA NEW-1). A load that is a strict subset of its
-        recording's chapters on disk (`chapters.chapter_subset`) returns no moment, sets no standing
+        recording's chapters on disk, or whose folder lacks a chapter between two it holds
+        (`chapters.part_of_recording`; missing FIRST chapters alone are whole for this), returns no moment, sets no standing
         and is never a first open: its best lap and ranked corners are a sample of the outing. On
         the owner's SD_19_09, chapter 1 announced "0:46.862, 0.05 s faster" for a true 0:46.808,
         0.10 s faster, and a focus list without the session's biggest loss. For a recording the
@@ -318,7 +319,7 @@ class LibraryController:
             verdict = library.first_open_verdict(
                 demo=False, excluded=False,
                 new=not any(e.get("fingerprint") == key for e in prior_index.get("entries", [])),
-                partial=chapters.chapter_subset(paths) is not None,
+                partial=chapters.part_of_recording(paths),
                 verified=self.win.session.timing_verified,
                 degraded=bool(entry.get("degraded")), track=entry.get("track"))
             if verdict in (library.Verdict.WAIT_WHOLE, library.Verdict.WAIT_LINE):
@@ -1419,7 +1420,7 @@ class LibraryController:
                 return
             items = self.win.session.focus_items([int(c) for c in cids], entry)
             if not items:
-                self._focus_failed("today's corners could not be measured on its clean laps")
+                self._focus_failed("this session's corners could not be measured on its clean laps")
                 return
             self._save_focus(track, items)
         except OSError as exc:

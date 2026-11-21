@@ -242,6 +242,85 @@ def test_map_unknown_duration_does_not_clamp_seek():
     assert abs(local - 457.8) < 1e-9
 
 
+# ------------------------------------------- chapters missing from the folder
+def _names(missing):
+    return [(n, os.path.basename(p)) for n, p in missing]
+
+
+def test_missing_chapters_names_the_chapters_before_the_last_one_on_disk():
+    """A recording whose chapter 1 (or a middle chapter) is not in the folder used to open as
+    whole, in silence: chapter_subset only compares against what IS on disk. Each missing chapter
+    comes with its number and the name the camera would have written, in the opened file's folder;
+    a missing LAST chapter cannot be told from the names, so none is invented."""
+    with tempfile.TemporaryDirectory() as d:
+        for n in ["GX020068.MP4", "GX030068.MP4", "GX050068.MP4", "GX010069.MP4", "GH010068.MP4"]:
+            _touch(d, n)
+        missing = chapters.missing_chapters([os.path.join(d, "GX030068.MP4")])
+        assert _names(missing) == [(1, "GX010068.MP4"), (4, "GX040068.MP4")], missing
+        assert all(os.path.dirname(p) == d for _, p in missing), missing
+        # Whole, a lone chapter 1, a non-GoPro clip, an unreadable folder: nothing is missing.
+        assert chapters.missing_chapters([os.path.join(d, "GX010069.MP4")]) == []
+        assert chapters.missing_chapters([os.path.join(d, "hero6.mp4")]) == []
+        assert chapters.missing_chapters([os.path.join(d, "nowhere", "GX020001.MP4")]) == []
+        assert chapters.missing_chapters([]) == []
+
+
+def test_missing_chapters_numbers_the_legacy_gopr_naming():
+    """Before HERO6 the first chapter is GOPRnnnn.MP4 and GP01nnnn.MP4 is chapter 2: numbering
+    GP02 as "chapter 2" would name the wrong chapter."""
+    with tempfile.TemporaryDirectory() as d:
+        _touch(d, "GP020070.MP4")
+        missing = chapters.missing_chapters([os.path.join(d, "GP020070.MP4")])
+        assert _names(missing) == [(1, "GOPR0070.MP4"), (2, "GP010070.MP4")], missing
+        _touch(d, "GOPR0070.MP4")
+        missing = chapters.missing_chapters([os.path.join(d, "GP020070.MP4")])
+        assert _names(missing) == [(2, "GP010070.MP4")], missing
+
+
+def test_only_a_gap_makes_part_of_a_recording():
+    """A recording that only lacks its first chapters is truncated, not wrong: each of its laps is
+    timed right, so it stays a whole recording for the verdict (loop recording deletes early
+    chapters). A gap in the middle times a lap across it, so that one is part of a recording."""
+    with tempfile.TemporaryDirectory() as d:
+        for n in ["GX020068.MP4", "GX030068.MP4", "GX010071.MP4", "GX030071.MP4"]:
+            _touch(d, n)
+        assert not chapters.part_of_recording([os.path.join(d, "GX020068.MP4"),
+                                               os.path.join(d, "GX030068.MP4")])
+        assert chapters.part_of_recording([os.path.join(d, "GX010071.MP4"),
+                                           os.path.join(d, "GX030071.MP4")])
+
+
+def _m(*pairs):
+    return [(n, f"/d/{name}") for n, name in pairs]
+
+
+def test_missing_notice_says_where_the_recording_starts_or_jumps():
+    first = chapters.missing_notice(_m((1, "GX010068.MP4")))
+    assert first == ("This recording starts at chapter 2: chapter 1 (GX010068.MP4) is not in the "
+                     "folder, so the first minutes are missing"), first
+    two = chapters.missing_notice(_m((1, "GX010068.MP4"), (2, "GX020068.MP4")))
+    assert two == ("This recording starts at chapter 3: chapters 1 and 2 (GX010068.MP4, "
+                   "GX020068.MP4) are not in the folder, so the first minutes are missing"), two
+    middle = chapters.missing_notice(_m((2, "GX020068.MP4")))
+    assert middle == ("chapter 2 (GX020068.MP4) is not in the folder, so the recording jumps "
+                      "across it and a lap timed across the gap is wrong"), middle
+    both = chapters.missing_notice(_m((1, "GX010068.MP4"), (3, "GX030068.MP4"), (5, "GX050068.MP4")))
+    assert both == ("This recording starts at chapter 2 and skips chapters 3 and 5 (GX010068.MP4, "
+                    "GX030068.MP4, GX050068.MP4 are not in the folder): a lap timed across a gap "
+                    "is wrong"), both
+    assert chapters.missing_notice([]) is None
+
+
+def test_gap_wait_names_what_ends_the_wait():
+    """The verdict waits for the GAP's chapters only: with them back, a recording that still lacks
+    its first chapters is decided (it is whole for the verdict)."""
+    assert chapters.gap_wait(_m((2, "GX020068.MP4"))) == \
+        "; your PB and focus list wait until chapter 2 is in this folder"
+    assert chapters.gap_wait(_m((1, "GX010068.MP4"), (3, "GX030068.MP4"), (5, "GX050068.MP4"))) \
+        == "; your PB and focus list wait until chapters 3 and 5 are in this folder"
+    assert chapters.gap_wait(_m((1, "GX010068.MP4"))) == ""
+    assert chapters.gap_wait([]) == ""
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

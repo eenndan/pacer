@@ -1616,6 +1616,10 @@ class StudioWindow(QMainWindow):
             library row stored from part of one; on a FIRST open it also says the PB and focus
             list are waiting. Stated alongside rather than instead of the clauses above, because it
             is the reason a chapter can have no laps or an unfamiliar best;
+          * a MISSING CHAPTER — one that is not in the folder although a later one is
+            (`chapters.missing_chapters`): a recording that starts at chapter 2 used to open as the
+            whole outing, and one with a gap timed a lap across it, both in silence. Only a gap
+            decides no verdict (`chapters.part_of_recording`): a truncated start is timed right;
           * an UNREADABLE TRACK DATABASE — tracks.json exists and this build cannot read a circuit
             out of it, so no track auto-detects and every recording opens as "unknown track" with
             no way to tell that from a genuinely new circuit (QA D2-16);
@@ -1665,9 +1669,19 @@ class StudioWindow(QMainWindow):
         subset = self._chapter_subset()
         chapter_notice = (f"{subset[0]} of {subset[1]} chapters — File ▸ Load full recording to "
                           "analyse the whole recording") if subset else None
+        # A chapter that is not in the folder at all: where the recording starts, or that it jumps
+        # across a gap. No menu item can fetch it, so this is only said, never offered. A GAP holds
+        # the verdict (a lap is timed across it), and only that chapter back in the folder ends the
+        # wait, so its clause says so and the subset clause promises nothing: Load full recording
+        # would still leave the gap. Missing FIRST chapters alone hold nothing back.
+        missing = chapters.missing_chapters(getattr(self, "_paths", None) or [])
+        missing_notice = chapters.missing_notice(missing)
+        gap_wait = chapters.gap_wait(missing)
+        if missing_notice and gap_wait and self.library_ctl.waiting_for_whole:
+            missing_notice += gap_wait
         # A partial FIRST open decides nothing (LibraryController.update_library), so this is the
         # one place that says the verdict is still to come — and what brings it.
-        if chapter_notice:
+        if chapter_notice and not gap_wait:
             chapter_notice += verdict.whole_wait
         tracks_notice = (TRACKS_UNREADABLE_NOTICE
                          if getattr(self, "_tracks_unreadable", False) else None)
@@ -1680,8 +1694,8 @@ class StudioWindow(QMainWindow):
                                            False) else None)
         drop_notice = getattr(self, "_drop_notice", None)
         return " · ".join(p for p in (notice, sidecar_notice, skipped_notice, ref_skipped_notice,
-                                      desync_notice, chapter_notice, tracks_notice, library_notice,
-                                      sidecar_write_notice, drop_notice) if p) or None
+                                      desync_notice, missing_notice, chapter_notice, tracks_notice,
+                                      library_notice, sidecar_write_notice, drop_notice) if p) or None
 
     def _retract_status(self, text: str) -> None:
         """Take `text` off the status bar if it is still what the bar shows: the view's sentence
@@ -4515,12 +4529,22 @@ class StudioWindow(QMainWindow):
     def _on_reference_load_failed(self, token: int, paths: list[str], exc: Exception):
         """Reference load failed (UI thread, queued signal): drop a STALE result, else surface the
         reason without a freeze and keep the local best lap (the feature is additive). Mirrors
-        load_reference's own could-not-load message, just off-thread."""
+        load_reference's own could-not-load message, just off-thread.
+
+        The sentence is the main open's (`_load_failure_message`) — the same file fails for the same
+        reason whichever door it came through — followed by what stays the baseline, as every
+        guard refusal ends. It used to print the exception's class and text: "could not load the
+        reference recording (TelemetryUnreadable: Failed to open file: /…/GX019201.MP4)". Those
+        go to the log."""
         if token != self._ref_load_token:
             return  # superseded by a newer reference load; drop this result
         self._pb_compare_token = None  # the compare that asked for it ends with it
-        reason = f"could not load the reference recording ({type(exc).__name__}: {exc})"
-        _log.warning("reference not loaded — %s", reason, exc_info=exc)
+        _log.warning("reference not loaded — %s: %s", type(exc).__name__, exc, exc_info=exc)
+        reason = self._load_failure_message(paths, exc)
+        session = getattr(self, "session", None)
+        if session is not None:
+            kept = session.reference_kept()
+            reason = f"{reason} {kept[:1].upper()}{kept[1:]}."
         self.statusBar().clearMessage()
         QMessageBox.information(self, f"{APP_NAME} — reference not loaded", reason)
 

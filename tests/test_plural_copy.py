@@ -35,6 +35,7 @@ flagged — the scanner is shown to see the class before its silence on the tree
 Run: python tests/test_plural_copy.py
 """
 import ast
+import datetime
 import importlib
 import os
 import re
@@ -287,6 +288,8 @@ ALLOWED = {
         "inside `if offerable:` — one more than a non-empty list",
     ("app", "StudioWindow._session_notice", "subset[1]", "chapters — File"):
         "`_chapter_subset` answers only for a STRICT subset of a recording's chapters",
+    ("chapters", "missing_notice", "_files(missing)", "are not in"):
+        "inside `if lead and gaps:` — at least one leading and one gap chapter, two files or more",
     ("central_view", "", "laps", "clean laps across"):
         "_IDEAL_CHIP_SAMPLE is filled only for a STITCHED ideal: two donor laps or more",
     ("coaching", "brake_direction_line", "d.n_laps", "laps)"):
@@ -475,7 +478,7 @@ def test_the_fixed_copy_reads_right_at_one():
     for n, want in ((1, "can't say: 1 clean lap through it today."),
                     (2, "can't say: 2 clean laps through it today.")):
         o = focus.verdict([item], now, [focus.CornerSample(median=4.4, iqr=0.1, n_laps=n)],
-                          store).outcomes[0]
+                          store, today=datetime.date(2026, 5, 24)).outcomes[0]   # its own day
         assert o.blocker == focus.BLOCK_FEW_LAPS, o
         assert focus.outcome_sentence(o).endswith(want), focus.outcome_sentence(o)
 

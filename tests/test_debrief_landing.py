@@ -464,7 +464,10 @@ def test_the_journey_on_the_real_window():
             assert panel.table.rowCount() == len(short)
             lead = panel.debrief_block.full_text()
             assert f"First session logged at {track}" in lead, lead
-            assert debrief_note(short) in lead, lead
+            # Its top corners named by the session's own day (`focus.open_day`), never "today's"
+            # on a recording made another day.
+            day = panel.focus_block.now_day
+            assert day != "today" and debrief_note(short, day=day) in lead, (day, lead)
             # The session log tells the pre-fill (Pacer's default, no click) from a hand edit, so a
             # race-day read can count the edits (FIRST-OPEN-LOOP-3).
             shown = _said(said, "debrief shown")

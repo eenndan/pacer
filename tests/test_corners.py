@@ -829,9 +829,9 @@ def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
     """cool/apex-delta-at-noise. Δapex was coloured by `theme.delta_colour(−Δ)`, whose 0.005 dead
     band is a TIME tolerance applied to km/h: +0.04 km/h printed "+0.0" in green. It is now coloured
     only at or past the app's one speed-gap step, `chart_stats.GAIN_GATE_KMH` (the gate the speed
-    chart shades from, 1.75 km/h), decided on the PRINTED figure in the display unit against the
-    gate as the hover prints it: inside it the figure stays, neutral; the first printed figure at
-    or past the gate is coloured (+ faster = green); "0.0" is never coloured — in km/h and mph,
+    chart shades from, 1.75 km/h), decided on the PRINTED figure in the display unit: coloured only
+    when every gap that prints as it is past the gate (cool/apex-gate-mph); inside it the figure
+    stays, neutral; the first such figure is coloured (+ faster = green), and the header names it; "0.0" is never coloured — in km/h and mph,
     against a lap of this recording and against another recording's. The header says it once."""
     _qapp()
     import dataclasses
@@ -849,17 +849,33 @@ def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
     inside = round(at - 0.1, 1)                      # the last printed figure under it
     assert (at, inside) == (1.8, 1.7)
     cases = [0.04, -0.04, 1.02, inside, -inside, 1.74, at, -at, 1.76, 3.0]
-    for unit in ("kmh", "mph"):
+    # cool/apex-gate-mph: in mph the gate, 1.087, sits INSIDE the printed figure 1.1 (1.05-1.15 mph,
+    # 1.69-1.85 km/h), and every printed 1.1 was coloured, gaps the speed chart leaves unshaded
+    # among them. On a dense sweep, in both units: a coloured cell is a gap the chart's gate passes;
+    # one printed string wears one colour; and the header's "from" figure is the first coloured.
+    first = {"kmh": 1.8, "mph": 1.2}
+    for unit in ("mph", "kmh"):
         u_gate = round(units.convert_speed(gate, unit), 2)       # as the hover prints it
-        for d in (*cases, 0.0, 0.049, -0.049, gate, -gate):
-            printed = float(fmt_signed(units.convert_speed(d, unit), 1).replace("−", "-"))
+        by_print: dict[str, set] = {}
+        sweep = [i / 2000 for i in range(-6000, 6001)]
+        for d in (*cases, *sweep, 0.049, -0.049, gate, -gate):
+            shown = fmt_signed(units.convert_speed(d, unit), 1)
+            printed = float(shown.replace("−", "-"))
             col = apex_delta_colour(d, unit)
-            assert (col is None) == (abs(printed) < u_gate - 1e-9), (unit, d, col)
+            by_print.setdefault(shown, set()).add(col is None)
+            if col is not None:
+                assert abs(d) >= gate - 1e-9, (unit, d, shown)            # the chart shades it
+                assert abs(printed) >= first[unit] > u_gate, (unit, d, shown)
+                assert col == (theme.ahead_colour() if d > 0 else theme.behind_colour())
+            else:
+                assert abs(printed) < first[unit], (unit, d, shown)
             if printed == 0.0:
                 assert col is None, (unit, d)
-            if col is not None:
-                assert col == (theme.ahead_colour() if d > 0 else theme.behind_colour())
-    assert apex_delta_colour(1.6, "mph") is None and apex_delta_colour(1.8, "mph") is not None
+        assert all(len(v) == 1 for v in by_print.values()), (unit, by_print)
+        assert f"So the first coloured figure is {first[unit]:.1f} {units.speed_label(unit)}." in \
+            _corner_col_tips(unit)[4], unit
+    assert apex_delta_colour(1.6, "mph") is None and apex_delta_colour(1.86, "mph") is not None
+    assert apex_delta_colour(1.72, "mph") is None                    # printed 1.1, under the gate
     # through the real table: the figure is printed, its colour as above (km/h)
     cs_n = [cs[i % len(cs)] for i in range(len(cases))]
     st_n = [dataclasses.replace(st[i % len(st)], delta=0.5, apex_speed_delta=d)
@@ -880,7 +896,7 @@ def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
     tip = table.table.horizontalHeaderItem(4).toolTip()
     note = ("A gap under 1.75 km/h is not coloured: two speed readings differ by up to that from "
             "the GPS alone (measured on a real recording), the same threshold the speed chart "
-            "shades from.")
+            "shades from. So the first coloured figure is 1.8 km/h.")
     assert tip.endswith(note) and tip.count("under") == 1, tip          # the step, said once
     ref_tip = _corner_col_tips("mph", "Other day")[4]
     assert "under 1.09 mph is not coloured" in ref_tip and "lap's's" not in ref_tip, ref_tip

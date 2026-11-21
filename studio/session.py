@@ -574,13 +574,19 @@ class Session:
         so with one loaded it is THAT reference the session keeps measuring against (w19 QA: a
         second Library pick refused while the first stayed the baseline, the notice naming the
         local best lap). The tail is rewritten here, once, for every guard."""
-        kept = self.reference_label() if self.has_reference() else None
+        kept = self.reference_kept()
         reason = self._adopt_reference_session(ref, source_label)
-        if reason is not None and kept:
-            reason = (reason.replace(KEEPING_LOCAL_BEST, f"keeping the loaded reference ({kept})")
-                      .replace(KEEPING_LOCAL_BEST.capitalize(),
-                               f"Keeping the loaded reference ({kept})"))
+        if reason is not None and kept != KEEPING_LOCAL_BEST:
+            reason = (reason.replace(KEEPING_LOCAL_BEST, kept)
+                      .replace(KEEPING_LOCAL_BEST.capitalize(), kept[:1].upper() + kept[1:]))
         return reason
+
+    def reference_kept(self) -> str:
+        """What a refused reference leaves this session measuring against, as the refusal's tail:
+        "keeping the loaded reference (<its label>)" while one is loaded, else KEEPING_LOCAL_BEST.
+        Also the tail of a reference that failed to LOAD (the window states that refusal)."""
+        kept = self.reference_label() if self.has_reference() else None
+        return f"keeping the loaded reference ({kept})" if kept else KEEPING_LOCAL_BEST
 
     def _adopt_reference_session(self, ref: Session, source_label: str) -> str | None:
         """`set_reference_session`'s guards and adoption; a refusal adopts nothing."""
@@ -836,6 +842,14 @@ class Session:
             the GPS centroid distance + footprint size (studio/track_match.py). Same place =>
             admit as UNVERIFIED; else refuse. This is the "race a friend's GoPro off an unknown
             track" path — the moat feature, previously dead on every unnamed track."""
+        # A reference with NO GPS trace has no laps and no place: the geometry path below measured
+        # its empty footprint and answered "different location" (discovery, a reference recorded
+        # with GPS switched off) — a wrong reason, and one that sends the user hunting for a track
+        # mix-up that is not there.
+        if data_quality.no_start_line(ref):
+            return (False, False,
+                    "that recording has no GPS, so it can't be a reference; keeping the local "
+                    "best lap")
         mine, theirs = self.track_name, ref.track_name
         if mine is not None and theirs is not None:
             if mine == theirs:
@@ -3668,7 +3682,8 @@ class Session:
         if not items:
             # Nothing to re-measure, but whether today's corners may start a list is still asked.
             return focus.Report(track=list_track or entry.get("track"),
-                                baseline_refusal=focus.baseline_refusal(self.focus_trust(entry)))
+                                baseline_refusal=focus.baseline_refusal(self.focus_trust(entry)),
+                                now_day=focus.open_day(entry.get("date")))
         # Each item re-measured by the instrument its baseline was measured with.
         samples: list[focus.CornerSample | None] = [None] * len(items)
         for method in {i.method for i in items}:

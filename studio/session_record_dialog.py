@@ -387,7 +387,7 @@ class SessionRecordDialog(QDialog):
         self.tyre_set.setClearButtonEnabled(True)
         form.addRow("Set", self.tyre_set)
 
-        self.tyre_laps = _int_edit(_LAPS_MAX, "laps before today")
+        self.tyre_laps = _int_edit(_LAPS_MAX, "laps before this session")
         if self._record.get("tyre_laps") is not None:
             self.tyre_laps.setText(str(self._record["tyre_laps"]))
         # The running total, computed rather than asked for: "42" in the box plus this session's

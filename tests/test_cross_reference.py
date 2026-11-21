@@ -742,6 +742,27 @@ def test_a_refusal_names_the_reference_it_keeps():
     print(f"test_a_refusal_names_the_reference_it_keeps OK: {reason!r}")
 
 
+def test_a_reference_with_no_gps_is_refused_for_that_reason():
+    """Discovery (a reference recorded with the GPS switched off): the geometry path measured its
+    empty footprint and refused it as "these don't look like the same track (different location)"
+    — a wrong reason. It is refused for having no GPS, with the same tail as every refusal."""
+    from studio import data_quality
+    primary, first = _way_round_pair(-1, -1)
+    blind = make_session({}, best=None, valid=[], track=None)
+    blind._timing_quality = data_quality.TimingQuality(clock=data_quality.NO_GPS_TRACE)
+    set_location(blind, clat=0.0, clon=0.0)
+    want = "that recording has no GPS, so it can't be a reference"
+    reason = primary.set_reference_session(blind)
+    assert reason == f"{want}; keeping the local best lap", reason
+    assert primary.reference_kept() == "keeping the local best lap"
+    assert primary.set_reference_session(first, source_label="recording 7114") is None
+    reason = primary.set_reference_session(blind)
+    assert reason == f"{want}; keeping the loaded reference (recording 7114)", reason
+    assert primary.reference_kept() == "keeping the loaded reference (recording 7114)"
+    assert primary.reference_label() == "recording 7114"
+    print(f"test_a_reference_with_no_gps_is_refused_for_that_reason OK: {reason!r}")
+
+
 def test_a_reference_driven_the_same_way_round_is_admitted():
     for way in (1, -1):
         primary, ref = _way_round_pair(way, way)
