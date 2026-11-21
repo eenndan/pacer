@@ -447,9 +447,54 @@ def test_a_recording_with_no_gps_asks_for_no_start_line():
     print("test_a_recording_with_no_gps_asks_for_no_start_line OK")
 
 
+def test_a_recording_with_no_gps_says_so_and_its_line_tools_claim_nothing():
+    """Discovery (a synthetic recording with the GPS stream switched off; karma.mp4 is the bundled
+    one): the map banner and the NO GPS chip were right, but the lap table, the charts and the map
+    card all said "The GPS may not have locked, or the recording is too short… drag the start/
+    finish line on the map" over an empty map, and the map's tools reported successes: Add sector
+    "Sector line 1 added — the lap is now split into 2 even sectors.", Reset sectors "1 sector
+    line cleared…". Every zero-lap body now names the known cause and what still works, the line
+    tools are off with that reason on their hover, and a direct call claims no edit either.
+
+    hero6.mp4 is the control: a media-clock trace with no laps, where the drag IS the way out."""
+    want = data_quality.NO_LAPS_NO_GPS_BODY
+    win, view, session = _loaded("karma.mp4")
+    try:
+        assert session.timing_quality.no_gps and not session.valid_lap_ids()
+        bodies = {"lap table": view.table._empty.body.text(),
+                  "charts": view.plots._empty.body.text(),
+                  "map card": view.map._empty_state.body.text()}
+        wrong = [f"{k}: {v!r}" for k, v in bodies.items() if v != want]
+        for btn in (view.map.snap_btn, view.map.add_sector_btn, view.map.reset_sectors_btn):
+            if btn.isEnabled() or not btn.toolTip().endswith(want):
+                wrong.append(f"{btn.text()}: enabled={btn.isEnabled()} tip={btn.toolTip()!r}")
+        posted = []
+        view.map._post_notice = posted.append
+        sectors = list(session.sector_lines)
+        view.map._add_sector()
+        view.map._reset_sectors()
+        if posted != [want, want]:
+            wrong.append(f"map tools posted {posted!r}")
+        if list(session.sector_lines) != sectors:
+            wrong.append("a map tool edited the sector lines")
+        assert not wrong, "a recording with no GPS is still described as a lock/line problem:\n  " \
+            + "\n  ".join(wrong)
+    finally:
+        _close(win)
+    win, view, session = _loaded("hero6.mp4")
+    try:
+        assert not session.timing_quality.no_gps and not session.valid_lap_ids()
+        assert view.map._empty_state.body.text() == data_quality.no_laps_body_for(session) != want
+        assert view.map.add_sector_btn.isEnabled() and view.map.reset_sectors_btn.isEnabled()
+    finally:
+        _close(win)
+    print("test_a_recording_with_no_gps_says_so_and_its_line_tools_claim_nothing OK")
+
+
 if __name__ == "__main__":
     test_every_state_the_chip_shows_names_the_same_fact_as_the_row_it_opens()
     test_a_recording_with_no_gps_asks_for_no_start_line()
+    test_a_recording_with_no_gps_says_so_and_its_line_tools_claim_nothing()
     test_a_clean_recording_keeps_its_timing_row_and_hides_the_chip()
     test_the_chip_is_a_keyboard_stop_only_while_it_is_shown()
     test_the_shown_chip_keeps_its_amber_pill_and_rings_on_focus_without_moving()
