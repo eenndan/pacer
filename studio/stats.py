@@ -605,6 +605,8 @@ class PassVsTypical:
     level: bool
     is_typical: bool
     level_s: float
+    luck_s: float = 0.0   # > 0 only for the stretch's quickest pass (`quickest_luck_s`)
+    n: int = 0            # the counted passes the typical is the median of
 
 
 def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: float | None,
@@ -612,17 +614,88 @@ def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: f
     """THE ONE RULE for a pass beside its stretch's typical pass, a corner's or a sector's
     (`CornerMatrix.pass_vs_typical`, `SplitMatrix.pass_vs_typical`): the other side is
     `typical_pass_lap` over the `counted` passes (lap → time) with `lap` excluded, `level` is their
-    printed gap under `level_s`, and `is_typical` asks the same with nothing excluded. None where
-    `lap` is not counted, there is no typical, or no other pass."""
+    printed gap under `level_s` — plus, when `lap`'s pass is the QUICKEST counted one (the Quickest
+    passes row's), what the quickest of that many passes reads quick of typical by luck alone
+    (`quickest_luck_s`) — and `is_typical` asks the same with nothing excluded. None where `lap` is
+    not counted, there is no typical, or no other pass."""
     lap = int(lap)
     other = typical_pass_lap(list(counted), list(counted.values()), typical, exclude=lap)
     if typical is None or lap not in counted or other is None:
         return None
     nearest = typical_pass_lap(list(counted), list(counted.values()), typical)
     gap = printed_gap_s(counted[other], counted[lap])
+    quickest = min((t, k) for k, t in counted.items())[1] == lap
+    luck = quickest_luck_s(key, len(counted), "typical") if quickest else 0.0
     return PassVsTypical(cid=int(key), lap_id=lap, pass_s=counted[lap], typical_lap_id=other,
-                         typical_pass_s=counted[other], gap_s=gap, level=is_level(gap, level_s),
-                         is_typical=nearest == lap, level_s=level_s)
+                         typical_pass_s=counted[other], gap_s=gap,
+                         level=is_level(gap, with_luck(level_s, luck)), is_typical=nearest == lap,
+                         level_s=level_s, luck_s=luck, n=len(counted))
+
+
+# THE QUICKEST OF n PASSES IS PARTLY LUCKY (cool/quickest-is-partly-luck). The level step is the
+# house rule for a difference of two figures that each carry symmetric noise. The quickest of n
+# passes is not one: it is CHOSEN for reading quickest, so its own timing error is chosen with it,
+# and it reads quick of its true time on average — the more passes, the more. Two gaps are read off
+# it, and each is overstated by its own bias: typical − quickest (the "Compare with my typical
+# pass" offer on a Quickest row) and the gap to the next quickest (the ★: a quickest no other pass
+# matches). MEASURED (studio/dev/probes/quickest_bias.py: the demo circuit at the one reference
+# recording's GPS noise, `library.REFERENCE_RECORDING`, 40 habit-free days in four seed sets; n
+# passes drawn from each day's counted passes; the bias is the mean of the gap as printed minus
+# the same laps' gap on truth, the next gap's truth being the quickest lap's true margin over every
+# other pass):
+#
+#   n                     5      7      9      11     13          fit a + b·blom(n)
+#   corner, typical       0.0127 0.0155 0.0174 0.0184 0.0199 s    −0.0049 + 0.0147·blom
+#   corner, next          0.0144 0.0158 0.0170 0.0176 0.0188 s    +0.0034 + 0.0091·blom
+#   sector, typical       0.0219 0.0259 0.0272 0.0295 0.0294 s    +0.0040 + 0.0154·blom
+#   sector, next          0.0213 0.0233 0.0238 0.0243 0.0259 s    +0.0109 + 0.0088·blom
+#
+# blom(n) is the expected largest of n standard normals (Blom's approximation): the selection of
+# one extreme among n is what the bias is made of, so it carries the shape, and two parameters per
+# row fit every measured n within 1.4 standard errors (the probe prints the residuals). Beyond the
+# measured n (14 laps a day) the form extrapolates slowly, as blom does (n = 30: blom 2.04). The
+# bias is a FACT about the statistic, not about the session: it is added to the step only where the
+# app reads one of these two gaps off the quickest pass (`pass_vs_typical_of`, `QuickestPass.alone`)
+# and nowhere else. At the reference noise, on 40 habit-free days × 7 corners at the full count,
+# 0.07 s alone offered the typical compare on 95 of 280 quickest rows, 55 of them truly under 0.07 s
+# (15 under 0.03 s), and wore 6 stars, 4 of them false by their own claim; with the luck term, 50
+# offers, 11 truly under 0.07 s (1 under 0.03 s), and no star. On days with one lap's C4 planted
+# quicker (8 per gain), the offer still names the planted pass at a true 0.10 / 0.15 / 0.20 s gain
+# on 5 / 8 / 8 days (7 / 8 / 8 before), and the ★ on 1 / 4 / 8 (2 / 7 / 8).
+_QUICKEST_LUCK_FIT = {
+    ("corner", "typical"): (-0.0049, 0.0147),
+    ("corner", "next"): (0.0034, 0.0091),
+    ("sector", "typical"): (0.0040, 0.0154),
+    ("sector", "next"): (0.0109, 0.0088),
+}
+
+
+def _blom(n: int) -> float:
+    """The expected largest of n standard normals (Blom's approximation), 0 under two."""
+    from statistics import NormalDist
+    return 0.0 if n < 2 else NormalDist().inv_cdf((n - 0.375) / (n + 0.25))
+
+
+def quickest_luck_s(key: int, n: int, gap: str) -> float:
+    """How much the quickest of `n` counted passes through stretch `key` (a corner's cid, or a
+    `sector_key`) is expected to read quick by luck alone, to the millisecond: on the gap to its
+    typical pass (`gap` "typical") or to the next quickest pass ("next"). 0 under two passes.
+
+    UNDER THE MEASURED RANGE IT HOLDS ITS SMALLEST MEASURED VALUE. The fit was measured from
+    MATRIX_MIN_LAPS (5) passes up; below that the form does not hold — at n = 2 the two gaps are
+    one statistic, yet the fit gives 0.004 and 0.009 s while a simulation gives 0.012-0.018 s for
+    both — so n is clamped up to MATRIX_MIN_LAPS: conservative (a wider bar), monotone in n, and
+    never 0 once there is a runner-up."""
+    if n < 2:
+        return 0.0
+    a, b = _QUICKEST_LUCK_FIT[("sector" if sector_col(key) is not None else "corner", gap)]
+    return max(0.0, round(a + b * _blom(max(n, MATRIX_MIN_LAPS)), 3))
+
+
+def with_luck(level_s: float, luck_s: float) -> float:
+    """The step a gap read off the quickest pass must clear: `level_s` itself when there is no luck
+    term (so `is_level` keeps its exact timing-step rule), else the sum to the millisecond."""
+    return level_s if luck_s <= 0 else round(level_s + luck_s, 3)
 
 
 
@@ -2055,11 +2128,22 @@ class QuickestPass:
     typical_s: float | None = None
     behind_laps: tuple[int, ...] = ()
 
+    level_s: float = PB_PRECISION_S       # the step `level_laps` was read under
+
+    @property
+    def luck_s(self) -> float:
+        """How much quicker than the next pass the quickest of `n_counted` is expected to read by
+        luck alone (`quickest_luck_s`, the next gap's)."""
+        return quickest_luck_s(self.cid, self.n_counted, "next")
+
     @property
     def alone(self) -> bool:
-        """The quickest stands clear of every other pass: nothing level with it, and a runner-up
-        exists to be clear of (one counted pass is not "alone", it is unchallenged)."""
-        return self.lap_id is not None and not self.level_laps and self.next_gap_s is not None
+        """The quickest stands clear of every other pass: nothing level with it, a runner-up exists
+        to be clear of (one counted pass is not "alone", it is unchallenged), and the gap to it
+        clears the step PLUS what the quickest of this many passes reads quick by luck alone
+        (`quickest_luck_s`): the ★ claims a pass no other lap matches, on the truth."""
+        return (self.lap_id is not None and not self.level_laps and self.next_gap_s is not None
+                and not is_level(self.next_gap_s, with_luck(self.level_s, self.luck_s)))
 
     def play_order(self) -> tuple[int, ...]:
         """The laps the view plays on repeated activation: the quickest, then each level lap."""
@@ -2122,7 +2206,7 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
     behind = tuple(int(rows[r]) for r in range(len(rows)) if matrix.is_behind(r, col))
     return QuickestPass(key, best, lap, tuple(lp for lp, _ in level),
                         round(gaps[0], 3) if gaps else None, len(counted),
-                        tuple(t for _, t in level), marks, matrix.medians[col], behind)
+                        tuple(t for _, t in level), marks, matrix.medians[col], behind, level_s)
 
 
 # ------------------------------------------------------------------------ quickest sectors

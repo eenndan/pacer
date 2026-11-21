@@ -64,7 +64,7 @@ from .race_controller import RaceController
 from .race_ladder import RaceCard
 from .scrub_controller import ScrubController
 from .session import fmt_time
-from .stats import sector_col, sector_key
+from .stats import is_level, sector_col, sector_key, with_luck
 from .stats_panel import StatsView
 from .stats_trust import TIMING_TERM
 from .video_view import VideoView
@@ -579,6 +579,16 @@ class _MapRaceButton(ToggleButton):
                              w, theme.CTRL_H)
         self.setVisible(fits)
 
+
+
+def typical_luck_reason(lap: str, label: str, v) -> str:
+    """Why the QUICKEST pass `v` (a `stats.PassVsTypical` level only through its luck term) is not
+    compared with its typical pass. The bound and the luck print to the millisecond: at two
+    decimals a 0.09 s gap read "within 0.09 s" beside a bound of 0.092, and a small luck "0.00"."""
+    bound = with_luck(v.level_s, v.luck_s)
+    return (f"Lap {lap}'s pass through {label} is within {bound:.3f} s of your typical pass as "
+            f"timed: the quickest of {plural(v.n, 'pass', 'passes')} is expected to read about "
+            f"{v.luck_s:.3f} s quicker than typical by luck alone")
 
 class CentralView(QWidget):
     """Session-scoped central widget for one loaded recording (see module docstring)."""
@@ -2489,9 +2499,11 @@ class CentralView(QWidget):
         if v.is_typical:
             return (f"Lap {lap}'s pass ({v.pass_s:.{PRINT_DECIMALS}f}) is your typical pass "
                     f"through {label}: there is nothing typical to set beside it")
-        if v.level:   # what was measured, and no more: under the step, as timed
+        if v.level and is_level(v.gap_s, v.level_s):   # what was measured: under the step, as timed
             return (f"Lap {lap}'s pass through {label} is within {v.level_s:.2f} s of your typical "
                     "pass as timed")
+        if v.level:   # past the step, inside the step plus the quickest pass's luck (stats)
+            return typical_luck_reason(lap, label, v)
         if not self.video.compare_btn.isEnabled():
             return "Compare needs two laps"
         return None

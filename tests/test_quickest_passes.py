@@ -38,6 +38,25 @@ from studio.library import PB_PRECISION_S  # noqa: E402
 
 theme.apply_theme(_APP)
 
+
+def _luck_free(fn):
+    """Run `fn` with no luck term (`stats.quickest_luck_s` → 0): the demo as it read before
+    cool/quickest-is-partly-luck, with C5's lone ★ and C3's typical compare. For the tests whose
+    subject is how a ★ is drawn or how a typical compare runs, not whether one is earned — the gate
+    itself is `test_the_quickest_of_n_must_clear_…`, and the demo's real state
+    `test_the_demo_has_no_star_and_two_typical_offers_once_luck_is_allowed_for`."""
+    import functools
+
+    @functools.wraps(fn)
+    def run():
+        keep = stats.quickest_luck_s
+        stats.quickest_luck_s = lambda key, n, gap: 0.0
+        try:
+            fn()
+        finally:
+            stats.quickest_luck_s = keep
+    return run
+
 # ------------------------------------------------------------------ the Qt-free function
 
 
@@ -221,7 +240,7 @@ def test_the_switch_the_rows_and_the_tab_title():
             ["C2", "2.62", "11", "10 more laps"],
             ["C3", "2.32", "13", "5 more laps"],
             ["C4", "3.02", "8", "7 more laps"],
-            ["C5", "3.52 ★", "10", "none · next +0.071"],
+            ["C5", "3.52", "10", "none · next +0.071"],   # clear of 0.07, not of its luck
             ["C6", "2.80", "13", "10 more laps"],
             ["C7", "3.42", "2", "5 more laps"],
         ], got
@@ -493,7 +512,10 @@ def test_a_tie_says_why_it_has_no_star():
         assert t.item(2, 1).toolTip() == ("5 more laps are level within 0.07 s, so no ★: here it "
                                           "marks a quickest pass no other lap matches."), \
             t.item(2, 1).toolTip()
-        assert "no other lap took this corner" in t.item(4, 1).toolTip()   # the lone C5
+        assert t.item(4, 1).toolTip() == (
+            "The next quickest is 0.071 s slower, within 0.089 s: with 14 passes, the quickest's "
+            "gap to the next is expected to read about 0.019 s larger than it truly is, by luck "
+            "alone, so no ★."), t.item(4, 1).toolTip()                     # C5: luck, no ★
         hdr = t.horizontalHeaderItem(3)
         assert hdr.textAlignment() & Qt.AlignLeft, "Level with sits over its left-aligned words"
     finally:
@@ -501,6 +523,7 @@ def test_a_tie_says_why_it_has_no_star():
         prefs.set_corners_view("lap")
 
 
+@_luck_free
 def test_provisional_timing_withholds_the_star():
     prefs.set_corners_view("quickest")
     win = _window()
@@ -1501,7 +1524,9 @@ def test_the_demo_strips_show_the_lone_quickest_the_habit_and_the_ties():
         assert p.typical_s is not None
     c5 = strips[5]
     others = [m.x for m in c5.marks if m.lap_id != 9]
-    assert qp.passes[4].alone and min(others) > c5.band_x, "C5's quickest stands alone"
+    # clear of the band (the step), but not of the step plus the quickest of 14's luck: no ★
+    assert min(others) > c5.band_x and not qp.passes[4].alone, "C5's quickest stands clear"
+    assert qp.passes[4].next_gap_s == 0.071 and qp.passes[4].luck_s == 0.019
     xs = sorted(m.x for m in strips[1].marks)
     gaps = [b - a for a, b in zip(xs, xs[1:], strict=False)]
     big = max(gaps)
@@ -1652,6 +1677,7 @@ def _paint_cell(delegate, table, row, col, margin=12):
     return img, cell
 
 
+@_luck_free
 def test_the_strip_paints_each_mark_where_its_time_is_and_nothing_outside_its_cell():
     from PySide6.QtCore import QPointF, QRectF
     from PySide6.QtGui import QColor
@@ -1747,6 +1773,7 @@ def test_the_strip_paints_each_mark_where_its_time_is_and_nothing_outside_its_ce
         prefs.set_corners_view("lap")
 
 
+@_luck_free
 def test_provisional_timing_withholds_the_strips_purple():
     from studio.lap_table import QUICKEST_STRIP_COL, STRIP_ROLE
     prefs.set_corners_view("quickest")
@@ -1794,6 +1821,7 @@ def test_a_playback_tick_never_repaints_the_strips_and_a_new_lap_repaints_one():
         prefs.set_corners_view("lap")
 
 
+@_luck_free
 def test_the_strip_says_its_dots_in_words():
     from PySide6.QtCore import QPoint
     from PySide6.QtGui import QHelpEvent
@@ -2290,7 +2318,9 @@ def test_a_click_on_the_strip_plays_the_row_and_a_tie_is_never_called_the_quicke
 def test_the_typical_pass_is_coachings_and_level_pairs_are_not_offered():
     """Qt-free: `Session.pass_vs_typical` picks Coaching's typical lap (the same
     `CornerMatrix.typical_pass`, this lap where the best lap stands); 4 of the demo's 7 quickest
-    passes clear the 0.07 s step against it; a lap whose pass IS the typical one says so."""
+    passes clear the 0.07 s step against it — 2 once the quickest pass's luck is allowed for
+    (`stats.quickest_luck_s`, cool/quickest-is-partly-luck); a lap whose pass IS the typical one
+    says so."""
     s = _demo_session()
     tps = s.typical_passes()
     offered = []
@@ -2301,13 +2331,15 @@ def test_the_typical_pass_is_coachings_and_level_pairs_are_not_offered():
         assert v.typical_lap_id != q.lap_id and not v.is_typical
         if not v.level:
             offered.append(q.cid)
-    assert offered == [1, 3, 5, 7], offered
+    assert offered == [1, 5], offered          # [1, 3, 5, 7] at the step alone
     c3 = s.pass_vs_typical(12, 3)
-    assert (c3.typical_lap_id, round(c3.gap_s, 2)) == (0, 0.08) and not c3.level, c3
+    assert (c3.typical_lap_id, round(c3.gap_s, 2)) == (0, 0.08) and c3.level, c3
+    assert (c3.luck_s, c3.n) == (0.020, 14), c3        # 0.08 < 0.07 + 0.020
     # lap 4's C1 pass is the corner's typical one (Coaching compares it with the best lap's)
     assert tps[1].lap_id == 3 and s.pass_vs_typical(3, 1).is_typical
 
 
+@_luck_free
 def test_compare_this_pass_with_the_typical_pass_at_the_corner():
     prefs.set_corners_view("quickest")
     win = _window()
@@ -2367,6 +2399,7 @@ def test_compare_this_pass_with_the_typical_pass_at_the_corner():
         prefs.set_corners_view("lap")
 
 
+@_luck_free
 def test_level_or_typical_passes_are_not_compared_and_say_why():
     prefs.set_corners_view("quickest")
     win = _window()
@@ -2551,6 +2584,7 @@ def test_the_corner_readout_is_blank_before_the_entry_live_inside_and_held_after
         _close(win)
 
 
+@_luck_free
 def test_the_held_gap_is_the_status_lines_gap_for_every_offered_pair():
     from studio.stats import printed_gap_s
     win = _window()
@@ -2576,6 +2610,7 @@ def test_the_held_gap_is_the_status_lines_gap_for_every_offered_pair():
         _close(win)
 
 
+@_luck_free
 def test_leaving_a_corner_compare_any_way_clears_it_and_its_status():
     from studio.app import LOOP_OFF_IN_COMPARE
     prefs.set_corners_view("quickest")
@@ -2768,6 +2803,7 @@ def test_a_quickest_walk_ends_on_the_corner_not_on_a_lap():
         prefs.set_corners_view("lap")
 
 
+@_luck_free
 def test_esc_leaves_either_corner_compare_and_keeps_its_meaning_in_a_whole_lap_one():
     """Esc left this-pass-vs-typical (its line says "C or Esc") but not a Coaching row's Compare,
     which C leaves. Now Esc leaves any compare AT A CORNER exactly as C does; in a whole-lap compare
@@ -2841,9 +2877,12 @@ def test_each_strip_mark_says_what_is_true_of_it_on_a_tie():
     assert "Quickest column" not in tip and "quickest" not in tip
     slower = next(m for m in marks.values() if not m.level and not m.behind)
     assert strip_mark_tip(slower, c2, (), qp.level_s).endswith("· slower than the band")
-    c5 = next(p for p in qp.passes if p.cid == 5)            # a lone quickest
+    c5 = next(p for p in qp.passes if p.cid == 5)            # clear of the step, not its luck
     m5 = next(m for m in stats.pass_strip(c5, qp.level_s).marks if m.lap_id == c5.lap_id)
-    assert strip_mark_tip(m5, c5, (), qp.level_s).endswith("· the quickest")
+    assert strip_mark_tip(m5, c5, (), qp.level_s).endswith("· the lap the Quickest column names")
+    lone = stats.quickest_passes(_grid([[3.000], [3.200], [3.3], [3.4], [3.5]])).passes[0]
+    m = next(m for m in stats.pass_strip(lone, PB_PRECISION_S).marks if m.lap_id == lone.lap_id)
+    assert lone.alone and strip_mark_tip(m, lone).endswith("· the quickest")
     # one more level lap: singular
     one = stats.quickest_passes(_grid([[3.000], [3.040], [3.3], [3.4], [3.5]])).passes[0]
     m = next(m for m in stats.pass_strip(one, PB_PRECISION_S).marks if m.lap_id == one.lap_id)
@@ -2994,6 +3033,184 @@ def test_f_and_its_command_while_comparing_say_why_the_video_cannot_fill_the_scr
         assert not view.is_video_focused()
     finally:
         _close(win)
+
+
+# ------------------------------------------- the quickest is partly luck (cool/quickest-is-partly-luck)
+def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_offer():
+    """The quickest of n noisy passes reads quick by luck (`stats.quickest_luck_s`, measured by
+    studio/dev/probes/quickest_bias.py): a ★ needs the next gap to clear the step PLUS the next
+    gap's luck at that n, and "Compare with my typical pass" on the quickest needs typical −
+    quickest to clear the step plus the typical gap's. Any other pass gets no luck term: it was not
+    chosen for being quick. Past both, as before. Pinned at the measured values, n = 5 and 14."""
+    luck = stats.quickest_luck_s
+    # under the measured range (5 passes up) it holds its smallest measured value, and it never
+    # falls as n grows (60 passes: a long sprint)
+    for key in (1, -1):
+        for gap in ("typical", "next"):
+            assert luck(key, 2, gap) == luck(key, 4, gap) == luck(key, 5, gap) > 0, (key, gap)
+            seq = [luck(key, n, gap) for n in range(1, 61)]
+            assert seq[0] == 0.0 and all(b >= a for a, b in zip(seq, seq[1:], strict=False)), seq
+    assert (luck(1, 5, "typical"), luck(1, 14, "typical")) == (0.012, 0.020)
+    assert (luck(1, 5, "next"), luck(1, 14, "next")) == (0.014, 0.019)
+    assert (luck(-1, 5, "typical"), luck(-1, 14, "next")) == (0.022, 0.026)
+    assert luck(1, 1, "next") == 0.0 and luck(1, 0, "typical") == 0.0
+    base = [3.30, 3.31, 3.32, 3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39, 3.40, 3.41, 3.42]
+    for next_gap, alone in ((0.075, False), (0.088, False), (0.089, True), (0.30, True)):
+        rows = [[round(3.30 - next_gap, 3)]] + [[t] for t in base]        # n = 14
+        q = stats.quickest_passes(_grid(rows)).passes[0]
+        assert q.n_counted == 14 and q.level_laps == () and q.luck_s == 0.019, q
+        assert q.alone is alone, (next_gap, q.next_gap_s, q.alone)
+    # a 5-pass corner needs less: 0.07 + 0.014
+    five = stats.quickest_passes(_grid([[3.000], [3.084], [3.2], [3.3], [3.4]])).passes[0]
+    assert five.luck_s == 0.014 and five.alone, five
+    four_short = stats.quickest_passes(_grid([[3.000], [3.083], [3.2], [3.3], [3.4]])).passes[0]
+    assert not four_short.alone, four_short
+    # the typical offer: 13 passes, the typical (the median) a real pass at 3.35. The quickest
+    # 0.08 s under it is level (0.07 + 0.020), 0.09 s under it is offered…
+    others = [[round(3.30 + 0.01 * k, 2)] for k in range(12)]            # 3.30 … 3.41
+    for quickest, gap, level in ((3.27, 0.08, True), (3.26, 0.09, False)):
+        v = _grid([[quickest]] + others).pass_vs_typical(1, 0, PB_PRECISION_S)
+        assert (v.n, v.luck_s, v.typical_pass_s) == (13, 0.020, 3.35), v
+        assert round(v.gap_s, 2) == gap and v.level is level, v
+    # …while a pass that is NOT the quickest carries no luck: 0.08 s under typical is offered
+    v = _grid([[3.10], [3.26]] + others[:-1]).pass_vs_typical(1, 1, PB_PRECISION_S)
+    assert v.luck_s == 0.0 and round(v.gap_s, 2) == 0.08 and not v.level, v
+
+
+def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
+    """`quickest_bias.measure_bias` on six habit-free days at the reference noise (CHECK_SEEDS,
+    about 40 s): at n = 5, 9 and 13 each measured bias lands within 0.006 s of the shipped
+    `quickest_luck_s` — the corners' typical and next gaps, and the sectors' (six days scatter:
+    the four ten-day seed sets ran within ±0.005 s of the pooled fit at these n). A hand-typed
+    constant, or a probe whose statistic drifted, fails here."""
+    import shutil
+
+    from studio import (
+        app_support,
+        demo,
+        focus,
+        library,
+        logsetup,
+        marks,
+        session_record,
+        sidecar,
+        track_db,
+    )
+    seams = (demo, focus, library, logsetup, marks, prefs, session_record, track_db)
+    keep = (sidecar.save, [m._app_support_dir for m in seams],
+            os.environ.get(app_support.DIR_ENV))
+    from studio.dev.probes import quickest_bias as probe
+    work = tempfile.mkdtemp(prefix="quickest_bias_check_")
+    try:
+        got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        sidecar.save = keep[0]
+        for m, seam in zip(seams, keep[1], strict=True):
+            m._app_support_dir = seam
+        if keep[2] is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = keep[2]
+    for kind, key in (("corners", 1), ("sectors", -1)):
+        for n in probe.CHECK_N:
+            typ, nxt = got[kind][n]
+            for gap, measured in (("typical", typ), ("next", nxt)):
+                shipped = stats.quickest_luck_s(key, n, gap)
+                assert abs(measured - shipped) <= 0.006, (kind, n, gap, measured, shipped)
+    print(f"ok luck re-measured: {got}")
+
+
+def test_the_demo_has_no_star_and_two_typical_offers_once_luck_is_allowed_for():
+    """cool/quickest-is-partly-luck on the real window over the demo: no row wears a ★ (C5's
+    quickest is 0.071 s clear of the next, inside 0.07 s + the 0.019 s the quickest of 14 reads by
+    luck alone), and "Compare with my typical pass" is offered on C1 and C5 only; C3's quickest,
+    0.08 s under its typical, is greyed out with one plain sentence that says why."""
+    prefs.set_corners_view("quickest")
+    win = _window()
+    try:
+        view = win.view
+        view.select_lap_tab(1)
+        _settle()
+        q = view.corners_page.quickest
+        t = q.table
+        assert not any(t.item(r, 1).text().endswith("★") for r in range(t.rowCount()))
+        enabled = {}
+        for r in range(7):
+            pos = t.visualRect(t.model().index(r, 1)).center()
+            compare = view.pass_menu(view._quickest_menu_pass(t, pos)).actions()[2]
+            enabled[r + 1] = (compare.isEnabled(), compare.toolTip())
+        assert [c for c, (on, _tip) in enabled.items() if on] == [1, 5], enabled
+        assert enabled[3][1] == (
+            "Lap 13's pass through C3 is within 0.090 s of your typical pass as timed: the "
+            "quickest of 14 passes is expected to read about 0.020 s quicker than typical by luck "
+            "alone"), enabled[3][1]
+        assert enabled[2][1] == ("Lap 11's pass through C2 is within 0.07 s of your typical pass "
+                                 "as timed"), enabled[2][1]
+        # …and the shipped demo's own offer runs, with no luck patch: C5's quickest (lap 10)
+        # beside its typical pass, held neutral
+        s = win.session
+        v = s.pass_vs_typical(9, 5)
+        assert not v.level and round(v.gap_s, 2) == 0.09 and v.luck_s == 0.020, v
+        assert view.compare_pass_with_typical(9, 5)
+        _settle()
+        assert view._comparing() and (view.compare.lap_a, view.compare.lap_b) == (9, v.typical_lap_id)
+        assert view.compare.pass_anchor() == "C5"
+        assert "0.09 s quicker through C5 as timed" in win.statusBar().currentMessage()
+    finally:
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
+def test_no_printed_gap_reaches_the_bound_it_is_said_to_be_within():
+    """The ★'s and the typical offer's luck sentences print the bound (step + luck) and the luck to
+    the millisecond, as the gap beside them: at two decimals n = 5 read "0.083 s slower, within
+    0.08 s" (bound 0.084), and n = 2 "about 0.00 s". Swept over n = 2…20 and gaps on a 1 ms grid
+    around the bound, corners and sectors: wherever "within" is said the printed gap is under the
+    printed bound, and wherever the ★ or the offer stands it is at or past it; the luck never
+    prints 0.000."""
+    import re
+
+    from studio.central_view import typical_luck_reason
+    from studio.lap_table import quickest_no_star_tip
+    for key, step in ((1, PB_PRECISION_S), (stats.sector_key(0), stats.SECTOR_LEVEL_S)):
+        for n in range(2, 21):
+            for gap_name in ("next", "typical"):
+                luck = stats.quickest_luck_s(key, n, gap_name)
+                bound = stats.with_luck(step, luck)
+                assert luck >= 0.012, (key, n, gap_name, luck)
+                for k in range(-8, 9):
+                    g = round(bound + 0.001 * k, 3)
+                    if gap_name == "next":
+                        if g < step:          # a level lap would be listed: another sentence
+                            continue
+                        qp = stats.QuickestPass(key, 10.0, 0, (), g, n, level_s=step)
+                        if qp.alone:
+                            assert g >= bound, (key, n, g, bound)
+                            continue
+                        tip = quickest_no_star_tip(qp, step)
+                        m = re.match(r"The next quickest is ([0-9.]+) s slower, within "
+                                     r"([0-9.]+) s: .* about ([0-9.]+) s larger", tip)
+                        assert m, tip
+                        gap_p, bound_p, luck_p = (float(x) for x in m.groups())
+                    else:
+                        g = round(g, 2)       # typical − quickest is a gap of two printed times
+                        level = stats.is_level(g, bound)
+                        if not level:
+                            assert g >= bound, (key, n, g, bound)
+                            continue
+                        if stats.is_level(g, step):   # under the step alone: its own sentence
+                            continue
+                        v = stats.PassVsTypical(key, 0, 10.0, 1, 10.0 + g, g, True, False, step,
+                                                luck, n)
+                        tip = typical_luck_reason("1", "C1", v)
+                        m = re.match(r".* within ([0-9.]+) s of your typical pass as timed: "
+                                     r".* about ([0-9.]+) s quicker", tip)
+                        assert m, tip
+                        # the gap is printed beside it at two decimals (the status line's)
+                        gap_p, (bound_p, luck_p) = float(f"{g:.2f}"), map(float, m.groups())
+                    assert gap_p < bound_p and luck_p > 0, (key, n, gap_name, g, tip)
+    print("ok no printed gap reaches its printed bound (n = 2…20, corners and sectors)")
 
 
 if __name__ == "__main__":

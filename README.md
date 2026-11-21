@@ -104,7 +104,7 @@ official timing measures the noise floor.
   charts and the map zoom onto the corner while it plays; L loops it, Slow plays it at 0.25×, and a
   right-click sets it beside your typical pass through the same corner.
 
-<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, only C5's 3.52 starred, the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass">
+<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, no ★ on any row (C5's 3.52 is 0.071 s clear of the next pass, inside the step plus what the quickest of 14 passes reads quick by luck), the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass">
 
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**

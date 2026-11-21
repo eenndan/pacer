@@ -66,9 +66,9 @@ class PassAnchor:
     `held_neutral` (a compare of the QUICKEST pass with the typical one, "Compare with my typical
     pass"): the held figure after the exit is printed as measured but never coloured, nor given
     a ▲/▼. It is the difference between these two passes as timed, not a verdict on them: the
-    quickest of 14 noisy times is partly a lucky one, so the true gap behind an offered pair is
-    under the step on 5 of 11 corner rows and 3 of 6 sector rows at GPS noise 2
-    (studio/dev/probes/corner_typical_compare, sector_typical_compare). A Coaching row's Compare
+    quickest of 14 noisy times is partly a lucky one. The offer itself now allows for that luck
+    (`stats.quickest_luck_s`), yet at the reference noise 11 of the 50 quickest rows it still
+    offers are truly under the step (studio/dev/probes/quickest_bias.py). A Coaching row's Compare
     (the typical pass against the BEST LAP's, on a row ranked by that loss) holds it neutral too:
     on synthetic seeds 1-8 with no planted habit, 8 of the 12 held gaps that would be coloured are
     truly under the step and 1 has the wrong sign (studio/dev/probes/coaching_compare_held_gap).
