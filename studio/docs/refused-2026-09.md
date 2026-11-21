@@ -748,9 +748,10 @@ line for corners, along with the fix (File ▸ Session record…). A second surf
 | 0065 → 0068 | −0.131 | 0.388 | 0.34 | 0.143 | 0.9 | −0.104 | −0.4 km/h |
 
 The bar is the one the focus list applies to a corner, `coaching.SPREAD_MARGIN` × the wider of the
-two IQRs. Since §38 a focus verdict also needs 0.10 s, what two recordings of the same driving
-differ by on a corner; every bar here is wider than that, so the three verdicts stand. The
-standard error (SE) uses the normal approximation that `focus.verdict`'s comment uses, 1.2533 × IQR / 1.349 / √laps, for each median.
+two IQRs. A focus verdict also needs the timing step, 0.07 s, which covers what two recordings of
+the same driving differ by on a corner at the reference recording's noise (§38); every bar here is
+wider than that, so the three verdicts stand. The standard error (SE) uses the normal
+approximation that `focus.verdict`'s comment uses, 1.2533 × IQR / 1.349 / √laps, for each median.
 
 - **Every change is inside the bar,** at 0.34 to 0.54 of it.
 - **The one pair with the same shape of day cannot be told from zero.** 0065 → 0068 is two runs
@@ -2757,29 +2758,35 @@ spans the three recordings docs/ACCURACY.md measures against official timing. Pe
 changed. Days with C4 planted quicker (true gains of 0.10, 0.15 and 0.20 s over the stored window)
 are each paired with the ten days of their set, 120 pairs per gain. Every corner of the earlier day
 is promoted and re-measured on the later one through the app's own `focus.verdict`, with both days
-recorded dry. The step is the verdict's own since this package, `focus.CROSS_SESSION_LEVEL_S`:
-2√2 × the σ of one session's corner-typical bias at recording B's noise (0.0351 s) = 0.10 s.
+recorded dry. The step a verdict needs is `focus.level_step`: 2√2 × the σ of one session's
+corner-typical bias at the ONE reference recording's noise (C's, `library.REFERENCE_RECORDING`:
+0.0178 s → 0.05 s), or the 0.07 s timing step where that is wider — so 0.07 s
+(cool/one-reference-level). The package that wrote this section first referenced it to recording
+B's noise (0.0351 s → 0.10 s); its column is kept as what a noisier recording would need.
 
 | per-lap σ (like) | 0.025 s (C) | 0.036 s | 0.053 s (B) | 0.064 s | 0.086 s (A) |
 |---|---|---|---|---|---|
 | one session's corner bias σ (four sets) → 2√2σ | 0.018 (0.014–0.021) → 0.05 s | 0.025 (0.019–0.029) → 0.07 s | 0.035 (0.034–0.036) → 0.10 s | 0.042 (0.041–0.043) → 0.12 s | 0.058 (0.056–0.062) → 0.16 s |
-| unchanged corners read faster or slower, bar before / 0.10 s | 31 / 1 of 1260 | 79 / 17 | 206 / 83 | 281 / 127 | 445 / 262 |
-| a day's top three with a false call on it, before / 0.10 s | 8 / 0 of 180 | 30 / 6 | 74 / 38 | 97 / 48 | 136 / 103 |
-| **every corner read: unchanged days with at least one false call, 0.10 s** | 1 of 180 | 17 | **69** | 94 | 142 |
-| planted C4 found, 0.10 / 0.15 / 0.20 s, 0.10 s step | 33 / 116 / 120 of 120 | 34 / 105 / 119 | 41 / 91 / 117 | 41 / 85 / 111 | 57 / 90 / 103 |
-| **…found with no other corner falsely called beside it** | 33 / 111 / 115 of 120 | 33 / 91 / 94 | **33 / 62 / 62** | 25 / 44 / 39 | 16 / 16 / 19 |
+| unchanged corners read faster or slower, 0.07 s / 0.10 s | 31 / 1 of 1260 | 79 / 17 | 206 / 83 | 281 / 127 | 445 / 262 |
+| a day's top three with a false call on it, 0.07 s / 0.10 s | 8 / 0 of 180 | 30 / 6 | 74 / 38 | 97 / 48 | 136 / 103 |
+| **every corner read: unchanged days with at least one false call, 0.07 s / 0.10 s** | **29 / 1 of 180** | 69 / 17 | 125 / 69 | 149 / 94 | 170 / 142 |
+| planted C4 found, 0.10 / 0.15 / 0.20 s, 0.07 s step | 92 / 120 / 120 of 120 | 82 / 119 / 120 | 77 / 115 / 119 | 69 / 105 / 119 | 80 / 102 / 111 |
+| **…found with no other corner falsely called beside it, 0.07 s step** | **73 / 96 / 93 of 120** | 64 / 63 / 65 | 33 / 38 / 25 | 21 / 21 / 15 | 8 / 7 / 5 |
+| …the same at a 0.10 s step | 33 / 111 / 115 of 120 | 33 / 91 / 94 | 33 / 62 / 62 | 25 / 44 / 39 | 16 / 16 / 19 |
 
-**What stops it.** A list of seven verdicts multiplies one corner's false share by seven. At
-recording B's noise, two unchanged days in five (69 of 180) would say some corner moved when none
-did. A real 0.10 s gain would be named alone, with nothing false beside it, on 33 of 120 pairs, and
-a 0.20 s gain on only 62. A wider step trades one for the other, fewer false reads for fewer gains
-found. On a noisier recording it is worse in both directions. The chosen list works because the
-driver picks one to three corners BEFORE the session, so the reading is not a search.
+**What stops it.** A list of seven verdicts multiplies one corner's false share by seven. At the
+reference recording's noise, with the step the app uses, about one unchanged day in six (29 of
+180) would say some corner moved when none did, and a real 0.15 s gain would be named alone, with
+nothing false beside it, on 96 of 120 pairs. At recording B's noise it is two days in three (125
+of 180), and the 0.10 s step that noise would need still leaves two in five (69) while naming a
+0.10 s gain alone on only 33 of 120. A wider step trades one for the other, fewer false reads for
+fewer gains found. On a noisier recording it is worse in both directions. The chosen list works
+because the driver picks one to three corners BEFORE the session, so the reading is not a search.
 
 **Not every corner is alike.** At B's noise C1's σ is 0.044 s and C5's 0.051 s, against the pooled
 0.035 s. C1 runs 1.3 to 1.65 times the pooled σ on three seed sets of four, but 0.48 times on the
 fourth. C5 is also the corner a day's top three holds most often (25 of 40 days). A top-three list
-with a false call on it happens on 38 of 180 pairs at the step, from 74 before.
+with a false call on it happens on 38 of 180 pairs at 0.10 s, and 74 at 0.07 s.
 
 **What moves because of this refusal: nothing in the app.** The focus list keeps its one to three
 chosen corners, behind the same step.
@@ -2787,10 +2794,10 @@ chosen corners, behind the same step.
 **Re-run it:** `pixi run python -m studio.dev.probes.focus_cross_session` (or one process per
 `--set-index`, then `--summarize` over their logs).
 
-**What would be new evidence:** a per-session corner bias σ under 0.012 s at recording B's
-per-lap σ, so that a step near 0.035 s keeps every-corner false reads under 1 in 20 while finding
-a 0.10 s gain alone on most pairs. Or a rule over seven corners that holds the whole read's
-false-call share to 5 %, measured on these days.
+**What would be new evidence:** a per-session corner bias σ under 0.006 s at the reference
+recording's per-lap σ, so that a step near 0.02 s keeps every-corner false reads under 1 in 20
+while finding a 0.10 s gain alone on most pairs. Or a rule over seven corners that holds the whole
+read's false-call share to 5 %, measured on these days.
 
 ---
 

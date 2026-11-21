@@ -1347,7 +1347,152 @@ def test_the_pb_floor_is_accuracy_row_c_s_arithmetic():
     floor = _constant(_LIBRARY, "PB_PRECISION_S")
     assert round(2 * math.sqrt(2) * sigma, 2) == floor, \
         f"2·√2·σ = {2 * math.sqrt(2) * sigma:.4f} s from row C's σ {sigma} s, but PB_PRECISION_S = {floor}"
+    assert _constant(_LIBRARY, "REFERENCE_RECORDING") == "C"
+    assert _constant(_LIBRARY, "REFERENCE_LAP_SIGMA_S") == sigma, \
+        "library.REFERENCE_LAP_SIGMA_S is not docs/ACCURACY.md row C's σ"
     print(f"test_the_pb_floor_is_accuracy_row_c_s_arithmetic OK (σ {sigma} s → {floor} s)")
+
+
+# ─── One reference level for every step (cool/one-reference-level) ───────────────────────────────
+# The app's steps must share ONE reference: library.REFERENCE_RECORDING (row C) and its per-lap σ.
+# #667 and #668 had referenced two new steps to recording B while PB_PRECISION_S stayed on C, so
+# the app held two reference levels at once. These read every step-like constant in studio/ (not
+# studio/dev/) off the code and hold each to a derivation from that one reference, or to a stated
+# reason it is not a GPS-noise step; a new step that names its own σ or recording fails here.
+_STEP_NAME = re.compile(r"^_?([A-Z0-9_]*_)?(LEVEL|STEP|PRECISION|TIE|SIGMA|FLOOR)_S$")
+# Literal constants that are no GPS-noise "level" step, and why.
+_NOT_A_GPS_STEP = {
+    "ESTIMATED_CLOCK_TIE_S": "the media clock's published bound (data_quality), not GPS noise",
+    "MAX_STEP_S": "a playback step of the race view, not a timing comparison",
+    "CORNER_MIDDLE_HALF_FLOOR_S": "a print floor (no 0.00 s width), it carries no precision claim",
+    "_SIGMA_HALF_S": "a coaching lap-to-lap σ scale, not a measurement step",
+}
+# The literal anchors, each tied to the one reference by its own test.
+_ANCHORS = {
+    "REFERENCE_LAP_SIGMA_S": "docs/ACCURACY.md row C's σ (test_the_pb_floor_…)",
+    "PB_PRECISION_S": "house rule on REFERENCE_LAP_SIGMA_S (test_the_pb_floor_…)",
+    "SPLIT_SIGMA_S": "truth matrix row 2 at noise 2, the matrix's C (test_quickest_sectors)",
+}
+
+
+def _studio_constants() -> dict[str, tuple[str, ast.expr]]:
+    """Every module-level `NAME = value` in studio/ outside studio/dev/: name → (file, value)."""
+    out: dict[str, tuple[str, ast.expr]] = {}
+    for root, _dirs, files in os.walk(os.path.join(_REPO, "studio")):
+        if os.sep + "dev" in root[len(_REPO):]:
+            continue
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            for node in ast.parse(_read(path)).body:
+                if isinstance(node, ast.Assign):
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            out.setdefault(t.id, (os.path.relpath(path, _REPO), node.value))
+    return out
+
+
+def _step_problem(name: str, consts: dict, seen=()) -> str | None:
+    """None when constant `name` derives from the one reference, else why not."""
+    if name in _ANCHORS or name in _NOT_A_GPS_STEP:
+        return None
+    rel, value = consts[name]
+    names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+    names |= {n.attr for n in ast.walk(value) if isinstance(n, ast.Attribute)}
+    if "PB_PRECISION_S" in names or "REFERENCE_SIGMAS" in names:
+        return None
+    if isinstance(value, (ast.Name, ast.Attribute)):        # an alias: follow it
+        target = value.id if isinstance(value, ast.Name) else value.attr
+        if target in seen or target not in consts:
+            return f"{rel}: {name} = {ast.unparse(value)}, which does not resolve"
+        return _step_problem(target, consts, (*seen, name))
+    if isinstance(value, ast.Call) and ast.unparse(value.func) in ("house_step", "round"):
+        sigmas = [n for n in names if n.endswith("_SIGMA_S")]
+        if sigmas and all(_step_problem(s, consts, (*seen, name)) is None for s in sigmas):
+            return None
+    return (f"{rel}: {name} = {ast.unparse(value)} does not derive from the one reference "
+            f"(library.REFERENCE_RECORDING) — read stats.REFERENCE_SIGMAS, or say why it is no step")
+
+
+def test_every_level_step_derives_from_the_one_reference():
+    """cool/one-reference-level. ONE reference names a recording and a per-lap σ, in library.py;
+    every step-like constant in studio/ derives from it (an alias of PB_PRECISION_S, a house step
+    of a σ read off `stats.REFERENCE_SIGMAS`, or one of the anchors each tested against row C) or
+    is listed with the reason it is not a GPS-noise step; the per-recording table is read only for
+    the reference row and for the words that say what a noisier one would need; and no comment
+    says a step is referenced to another recording."""
+    consts = _studio_constants()
+    steps = sorted(n for n in consts if _STEP_NAME.match(n))
+    assert {"PB_PRECISION_S", "CROSS_SESSION_LEVEL_S", "REFERENCE_CORNER_LEVEL_S",
+            "SECTOR_LEVEL_S", "CORNER_DAY_SIGMA_S", "REFERENCE_CORNER_SIGMA_S"} <= set(steps), steps
+    problems = [p for n in steps if (p := _step_problem(n, consts))]
+    assert not problems, "\n  ".join(["a step not derived from the one reference:", *problems])
+    # The reference is NAMED once: one recording, one per-lap σ, both in library.py.
+    for name in ("REFERENCE_RECORDING", "REFERENCE_LAP_SIGMA_S"):
+        assert consts[name][0] == os.path.join("studio", "library.py"), consts[name]
+    owners = []
+    for root, _dirs, files in os.walk(os.path.join(_REPO, "studio")):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(root, f)
+            text = _read(path)
+            rel = os.path.relpath(path, _REPO)
+            # a second per-lap σ assigned anywhere (probes included)
+            owners += [f"{rel}: {m.group(0)}" for m in
+                       re.finditer(r"(?m)^[A-Z_]*LAP_SIGMA_S\s*=\s*[0-9.]+", text)
+                       if rel != os.path.join("studio", "library.py")]
+            # a step's reference named as another recording
+            owners += [f"{rel}: {m.group(0)}" for m in
+                       re.finditer(r"(?i)\breference (?:is|level is|recording is) recording ([AB])\b",
+                                   _flatten(text))]
+            # the per-recording table read for anything but the reference row and the words
+            if rel.startswith(os.path.join("studio", "dev")):
+                continue
+            for node in ast.parse(text).body:
+                if not isinstance(node, ast.Assign):
+                    continue
+                target = ast.unparse(node.targets[0])
+                for sub in ast.walk(node.value):
+                    if (isinstance(sub, ast.Subscript)
+                            and ast.unparse(sub.value).endswith("PUBLISHED_NOISE_SIGMAS")
+                            and target not in ("REFERENCE_SIGMAS", "STEP_COVERS_NOTE")):
+                        owners.append(f"{rel}: {target} reads {ast.unparse(sub)}")
+    assert not owners, "a second reference level:\n  " + "\n  ".join(owners)
+    print(f"test_every_level_step_derives_from_the_one_reference OK ({len(steps)} constants)")
+
+
+def test_the_accuracy_step_table_is_the_published_noise_table():
+    """cool/one-reference-level. docs/ACCURACY.md's step table — per published recording, its σ,
+    the synthetic noise matching it, and the house step each kind of difference would need there —
+    is `stats.PUBLISHED_NOISE_SIGMAS` (which the two probes check against their pooled σ at each
+    noise) through `stats.house_step`, its recording σ column is the validated table's, the page
+    says the app uses the reference's row, and every cell of that row is within the timing step."""
+    from studio import library, stats
+    acc = _read(_ACCURACY)
+    validated = dict(re.findall(r"(?m)^\| \*\*([ABC])\*\*.*\| \*\*[+−-]?[0-9.]+ s\*\* \| "
+                                r"\*\*([0-9.]+) s\*\* \|\s*$", acc))
+    rows = re.findall(r"(?m)^\| ([ABC]) \(([0-9.]+) s\) \| ([0-9.]+) \(([0-9.]+) s\) \| "
+                      r"([0-9.]+) s \| ([0-9.]+) s \| ([0-9.]+) s \| ([0-9.]+) s \|\s*$", acc)
+    assert [r[0] for r in rows] == ["C", "B", "A"], rows
+    for rec, rec_sigma, noise, lap_sigma, *cells in rows:
+        row = stats.PUBLISHED_NOISE_SIGMAS[rec]
+        assert rec_sigma == validated[rec], (rec, rec_sigma, validated)
+        assert float(noise) == row.noise and float(lap_sigma) == row.lap, (rec, noise, lap_sigma)
+        want = [stats.house_step(s) for s in (row.lap, row.corner_pass, row.cross_session,
+                                              row.reference_corner)]
+        assert [float(c) for c in cells] == want, (rec, cells, want)
+        # the synthetic noise reproduces the recording's per-lap σ within 10 %
+        assert abs(row.lap / float(rec_sigma) - 1) <= 0.10, (rec, row.lap, rec_sigma)
+    ref = stats.PUBLISHED_NOISE_SIGMAS[library.REFERENCE_RECORDING]
+    assert max(stats.house_step(s) for s in vars(ref).values() if s < 1) <= library.PB_PRECISION_S
+    assert f"**The app uses {library.REFERENCE_RECORDING}'s row**" in acc
+    # what the app says where it reads "level" is this table's arithmetic
+    b, a = stats.PUBLISHED_NOISE_SIGMAS["B"], stats.PUBLISHED_NOISE_SIGMAS["A"]
+    for figure in (b.lap, b.corner_pass, a.lap, a.corner_pass):
+        assert f"{stats.house_step(figure):.2f} s" in stats.STEP_COVERS_NOTE, stats.STEP_COVERS_NOTE
+    print(f"test_the_accuracy_step_table_is_the_published_noise_table OK ({len(rows)} rows)")
 
 
 # ─── The naive-clock lap figure is twice media_clock's per-fix worst case ────────────────────────
@@ -4262,6 +4407,8 @@ def _run_all():
     test_the_floor_table_is_consistent_with_its_own_definitions()
     test_every_quote_of_the_floor_is_a_row_of_the_table()
     test_the_pb_floor_is_accuracy_row_c_s_arithmetic()
+    test_every_level_step_derives_from_the_one_reference()
+    test_the_accuracy_step_table_is_the_published_noise_table()
     test_the_naive_clock_lap_figure_is_twice_media_clock_s_worst_fix()
     test_the_naive_clock_guard_fails_on_each_planted_misquote()
     test_every_noise_free_timing_figure_names_its_line_and_its_noise()

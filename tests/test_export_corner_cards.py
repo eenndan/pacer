@@ -269,39 +269,35 @@ def test_inside_timing_precision_the_card_says_level_beyond_it_the_colour():
 
 
 def test_against_another_recording_the_card_says_level_under_the_reference_lap_step():
-    """cool/reference-lap-corner-floor: with ANOTHER recording's lap as the Δ baseline the card's
-    level step is the Corners table's Δref step (`stats.corner_delta_step(True)`), not timing
-    precision — one lap's corner time against one lap of another recording reads that far apart
-    with nothing changed. "≈ ref" in neutral under it (decided on the printed value), signed and
-    coloured past it; a reference that is this recording's own keeps the timing step."""
+    """cool/reference-lap-corner-floor, re-referenced by cool/one-reference-level: with ANOTHER
+    recording's lap as the Δ baseline the card's level step is the Corners table's Δref step
+    (`stats.corner_delta_step(True)`) — the reference-lap corner rule or the timing step, whichever
+    is wider, and at the one reference recording's noise that is the timing step. "≈ ref" in
+    neutral under it (decided on the printed value), signed and coloured from it; a reference that
+    is this recording's own reads the same step."""
     from studio import library, stats
     from studio._signal import fmt_signed
     f = _fixture()
     s, lap = f["s"], f["lap"]
     n = len(s.corners.lap_corner_stats(lap))
     step = stats.corner_delta_step(True)
-    assert step > library.PB_PRECISION_S
+    assert step == library.PB_PRECISION_S > stats.REFERENCE_CORNER_LEVEL_S
     below = round(step - 0.0051, 4)                   # prints one hundredth under the step
-    deltas = [0.08, -0.10, below, step + 0.001, -(step + 0.05)] + [0.0] * (n - 5)
+    deltas = [0.05, -0.06, below, 0.08, -0.10] + [0.0] * (n - 5)
     ahead, behind = ev.export_semantic_pair(theme.PALETTE_STANDARD)
-    with _with_deltas(s, lap, deltas), _Patched(
-            (s.corners, "lap_corner_resolved", lambda _lap: [True] * n),
-            (s, "has_reference", lambda: True), (s, "reference_is_own_recording", lambda: False)):
-        assert cc.level_step(s) == step
-        got = {c.cid: c for c in cc.card_rows(s, lap, None, theme.PALETTE_STANDARD)}
-        level = ("≈ ref", EXPORT.neutral)
-        want = {1: level, 2: level, 3: level,
-                4: (f"{fmt_signed(step + 0.001, 2)} s vs ref", behind),
-                5: (f"{fmt_signed(-(step + 0.05), 2)} s vs ref", ahead)}
-        for cid, w in want.items():
-            assert (got[cid].delta, got[cid].colour) == w, (cid, deltas[cid - 1], got[cid])
-    with _with_deltas(s, lap, deltas), _Patched(
-            (s.corners, "lap_corner_resolved", lambda _lap: [True] * n),
-            (s, "has_reference", lambda: True), (s, "reference_is_own_recording", lambda: True)):
-        assert cc.level_step(s) == library.PB_PRECISION_S
-        got = {c.cid: c for c in cc.card_rows(s, lap, None, theme.PALETTE_STANDARD)}
-        assert (got[1].delta, got[1].colour) == ("+0.08 s vs ref", behind), got[1]
-    print(f"ok ≈ ref under {step:.2f} s against another recording; its own keeps 0.07 s")
+    level = ("≈ ref", EXPORT.neutral)
+    want = {1: level, 2: level, 3: level, 4: ("+0.08 s vs ref", behind),
+            5: (f"{fmt_signed(-0.10, 2)} s vs ref", ahead)}
+    for own in (False, True):
+        with _with_deltas(s, lap, deltas), _Patched(
+                (s.corners, "lap_corner_resolved", lambda _lap: [True] * n),
+                (s, "has_reference", lambda: True),
+                (s, "reference_is_own_recording", lambda own=own: own)):
+            assert cc.level_step(s) == step
+            got = {c.cid: c for c in cc.card_rows(s, lap, None, theme.PALETTE_STANDARD)}
+            for cid, w in want.items():
+                assert (got[cid].delta, got[cid].colour) == w, (own, cid, deltas[cid - 1], got[cid])
+    print(f"ok ≈ ref under {step:.2f} s against another recording, and against its own")
 
 
 def test_no_card_for_an_unmatched_corner_and_none_at_all_without_one():

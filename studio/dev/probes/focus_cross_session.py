@@ -23,7 +23,8 @@ between the window's two edges mapped to the truth's arc length.
     over one stored window, the window's own mean removed (a constant offset cancels between two
     days), pooled over windows and over seed sets (sums of squares over degrees of freedom);
   * the step is the house rule for a difference of two figures that each carry σ, DIFF_2SIGMA_K
-    (2·√2) × sigma_one, at REFERENCE_NOISE (why that level: `focus.CORNER_DAY_SIGMA_S`);
+    (2·√2) × sigma_one, at REFERENCE_NOISE: the noise whose per-lap σ matches the one reference
+    recording's (`library.REFERENCE_RECORDING`, `library.REFERENCE_LAP_SIGMA_S`);
   * diff_sd — the sd of the app's unchanged-day difference over every pair and corner. It carries
     the bias of both days AND the driver's own day-to-day scatter (true_diff_sd, ~0.015 s at every
     noise), so 2 × diff_sd is not the step: it is larger, by most at low noise, where the scatter
@@ -35,9 +36,11 @@ before (0.07 s), under the shipped step (`focus.level_step`), and under the rule
 that noise.
 
 MEASURED (defaults, 4 sets × 10 days = 40 habit-free days per noise, about six minutes as four
-processes, one per `--set-index`): at REFERENCE_NOISE per-lap σ 0.0532 s, sigma_one 0.0351 s
-(sets 0.0342-0.0361) → 2√2σ = 0.099 → 0.10 s. The table across the noises is in
-`focus.CORNER_DAY_SIGMA_S`'s comment, and false calls and power in refused-2026-09 §38.
+processes, one per `--set-index`): at REFERENCE_NOISE per-lap σ 0.0253 s (the reference's 0.0247),
+sigma_one 0.0178 s (sets 0.0142-0.0206) → 2√2σ = 0.050 → 0.05 s, under the timing step, which
+`focus.level_step` then reads. The table across the noises is in `focus.CORNER_DAY_SIGMA_S`'s
+comment, false calls and power in refused-2026-09 §38, and every published recording's row in
+`stats.PUBLISHED_NOISE_SIGMAS`, which the summary checks at each noise it holds.
 
 ARGV CONTRACT: named flags only. `--noises 1.9,4.0` (default NOISES), `--sets N` (default 4),
 `--set-index J` (run only set J of them), `--days N` (default 10), `--plant-days N` (per gain, per
@@ -69,7 +72,7 @@ _JAIL = divert_app_support("focus_cross_session_")
 
 import numpy as np  # noqa: E402
 
-from studio import chapters, focus, library, session_record, sidecar  # noqa: E402
+from studio import chapters, focus, library, session_record, sidecar, stats  # noqa: E402
 from studio.coaching import SPREAD_MARGIN  # noqa: E402
 from studio.dev import make_demo  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
@@ -80,9 +83,9 @@ sidecar.save = lambda *a, **k: None   # nothing is ever written beside a recordi
 
 # Per-lap timing σ 0.025 (recording C), 0.036, 0.053 (B), 0.064 and 0.086 s (A's 0.087), measured.
 NOISES = (1.9, 2.7, 4.0, 4.8, 6.5)
-# The level the shipped step is measured at: per-lap σ REFERENCE_LAP_SIGMA_S, recording B's.
-REFERENCE_NOISE = 4.0
-REFERENCE_LAP_SIGMA_S = 0.0532
+# The level the shipped step is measured at: the noise whose per-lap σ matches the ONE reference
+# recording's (`library.REFERENCE_LAP_SIGMA_S`), as `stats.PUBLISHED_NOISE_SIGMAS` records it.
+REFERENCE_NOISE = stats.REFERENCE_SIGMAS.noise
 BASE_SEED = 401
 PLANT_SEED = 2011
 SET_STRIDE = 100
@@ -314,6 +317,12 @@ def summarize(recs: list[dict]) -> dict:
             f"shipped_{focus.level_step():.2f}": _rates(mine, focus.level_step()),
             f"rule_here_{rule:.2f}": _rates(mine, rule),
         }
+        for rec_name, row in stats.PUBLISHED_NOISE_SIGMAS.items():
+            if row.noise == noise:
+                # The published table's cells must be this probe's pooled σs at that noise.
+                out[f"noise {noise:g}"][f"table_{rec_name}_is_this_sigma"] = (
+                    round(sigma, 4) == row.cross_session
+                    and round(float(np.std(lap, ddof=1)), 4) == row.lap)
         if noise == REFERENCE_NOISE:
             # The constant the app ships must be this probe's pooled σ at the reference noise.
             out[f"noise {noise:g}"]["app_sigma_is_this_sigma"] = (

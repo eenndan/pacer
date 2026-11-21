@@ -819,12 +819,24 @@ def restore(path: str | None = None) -> dict:
         return load(path)
 
 
+# THE ONE REFERENCE LEVEL (cool/one-reference-level). Every step under which two of the app's
+# timings read "level" is referenced to ONE published recording: REFERENCE_RECORDING, docs/ACCURACY.md
+# row C (the MK sprint on a GPS9 Hero 13 against Club Speed timing — the owner's current instrument
+# and the cleanest of the three measured), whose per-lap σ against official timing is
+# REFERENCE_LAP_SIGMA_S. PB_PRECISION_S below is the house rule on that σ; every other step
+# (`focus.CROSS_SESSION_LEVEL_S`, `stats.REFERENCE_CORNER_LEVEL_S`, `stats.SECTOR_LEVEL_S`) is
+# measured at the synthetic GPS noise whose per-lap σ matches this one (`stats.PUBLISHED_NOISE_SIGMAS`)
+# and none names another recording. What that covers, and what a noisier recording would need, is
+# said once where the driver reads "level" (`stats.STEP_COVERS_NOTE`) and on docs/ACCURACY.md.
+REFERENCE_RECORDING = "C"
+REFERENCE_LAP_SIGMA_S = 0.0247
+
 # TWO BEST LAPS CLOSER THAN THE TIMING CAN TELL APART ARE LEVEL, IN WORDS (DOMAIN-6). A PB beaten by
 # 0.001 s or 0.004 s read "New personal best! … 0.00 s faster than your previous best", and the lap
 # card said "NEW PB · 0.00 s": a celebration of a difference the instrument cannot resolve, printed
 # to a precision the sentence itself rounded away. The floor is the difference of two laps timed by
-# the BEST instrument measured, at 2σ: 2 × √2 × σ, with σ = 0.0247 s from docs/ACCURACY.md row C (the
-# MK sprint against Club Speed timing) → 0.0699 s, rounded to 0.07 (tests/test_measured_figures.py
+# the BEST instrument measured, at 2σ: 2 × √2 × σ, with σ = REFERENCE_LAP_SIGMA_S, 0.0247 s from
+# docs/ACCURACY.md row C → 0.0699 s, rounded to 0.07 (tests/test_measured_figures.py
 # re-derives it from that row, so a re-measured row C fails loudly here). FLAT on purpose: a floor
 # scaled by each recording's own σ class was measured against the owner's real steps and rejected as
 # the default — at D24-A's class (2√2 × 0.087 = 0.246 s) his real 0.164 s and 0.104 s Sandown PBs

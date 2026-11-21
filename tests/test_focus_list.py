@@ -24,7 +24,8 @@ What is asserted here, on inputs whose answer is known by construction:
     (library.PB_PRECISION_S), whatever the spread, so a verdict reads the same in both directions;
     and, since cool/focus-cross-session-floor, so is one under the cross-session step
     (focus.CROSS_SESSION_LEVEL_S, 2√2 × the σ of one session's corner bias that
-    studio/dev/probes/focus_cross_session.py measures), which is the wider of the two;
+    studio/dev/probes/focus_cross_session.py measures at the one reference recording's noise,
+    cool/one-reference-level), or the timing step where that is the wider — as it is today;
   * the LAYOUT: a stored corner whose window today lies on a corner turning the other way (the
     demo's circuit driven as its mirror image) is not compared, and the headline says the layout
     looks different; nor is any corner on the same tarmac driven the other way round, whose
@@ -289,10 +290,10 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
     over it the spread test decides, unchanged; on an estimated clock nothing gets that far."""
     from studio import library
     alike = _records(("GX0060", _record()), ("GX0062", _record()))
-    # Since cool/focus-cross-session-floor the step a verdict must clear is the cross-session one,
-    # wider than the timing's (`test_the_cross_session_step_…`): under the timing step is under it.
+    # The step a verdict must clear is the wider of the cross-session step and the timing step;
+    # at the one reference the cross-session rule is the narrower (`test_the_cross_session_step_…`).
     step = F.level_step()
-    assert step == F.CROSS_SESSION_LEVEL_S > library.PB_PRECISION_S
+    assert step == library.PB_PRECISION_S > F.CROSS_SESSION_LEVEL_S
     tight = 0.02                      # a spread whose half (0.01 s) every gap below clears
     for gap in (0.020, 0.0517, library.PB_PRECISION_S - 1e-4, step - 1e-4):
         for sign in (1, -1):
@@ -321,10 +322,10 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
                      alike).outcomes[0]
     assert near.kind == F.OUTCOME_UNCHANGED, near
     assert F.outcome_sentence(near) == (
-        "C4 — no change you can act on: under 0.10 s apart, within what two recordings of the same "
+        "C4 — no change you can act on: under 0.07 s apart, within what two recordings of the same "
         "driving differ by (2.845 → 2.910 s, 38 → 65 laps)."), F.outcome_sentence(near)
-    # …and at the cross-session step the same rule needs a fourth digit: Δ = step − 0.0001 from
-    # 3.0337 prints "3.034 → 3.134 s" at three (0.100 apart, as printed) beside "under 0.10 s".
+    # …and at the step the same rule needs a fourth digit: Δ = step − 0.0001 from 3.0337 prints
+    # "3.034 → 3.104 s" at three (0.070 apart, as printed) beside "under 0.07 s".
     then = 3.0337
     edge = F.verdict([_item(median=then, iqr=tight)], _now(),
                      [_sample(then + step - 1e-4, iqr=tight)], alike).outcomes[0]
@@ -351,58 +352,63 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
 
 
 def test_the_cross_session_step_is_the_house_rule_on_the_measured_sigma():
-    """`focus.CROSS_SESSION_LEVEL_S` is derived, not picked: 2·√2 (`stats.DIFF_2SIGMA_K`, the lap
-    step's and the sector step's own factor) × the sd of ONE session's corner-typical bias that
-    `studio/dev/probes/focus_cross_session.py` measures over 40 days at the GPS noise whose per-lap
-    σ is recording B's, the middle of the three docs/ACCURACY.md measures against official timing.
-    That page publishes σ, its seed-set range, B's level and what is left at A's; the probe checks
-    its pooled σ and step against the app's constants at that same noise."""
+    """`focus.CROSS_SESSION_LEVEL_S` is derived, not picked: the house rule (`stats.house_step`,
+    2·√2 × σ, the lap step's and the sector step's own) on the sd of ONE session's corner-typical
+    bias that `studio/dev/probes/focus_cross_session.py` measures over 40 days at the GPS noise
+    whose per-lap σ matches the ONE reference recording's (`library.REFERENCE_RECORDING`, C), the
+    row of `stats.PUBLISHED_NOISE_SIGMAS` every step reads (cool/one-reference-level). At that noise
+    the rule is UNDER the timing step, so `level_step` reads the timing step: what is now true is
+    that a verdict needs what two laps need, and that would widen by itself at a noisier reference.
+    docs/ACCURACY.md publishes σ, its seed-set range, the rule and what is left at A's noise."""
     import math
     import re
 
     from studio import library, stats
     assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
-    assert F.CROSS_SESSION_LEVEL_S == round(stats.DIFF_2SIGMA_K * F.CORNER_DAY_SIGMA_S, 2) == 0.10
-    # wider than the timing step, so the timing step is never the one a verdict reads
-    assert F.level_step() == F.CROSS_SESSION_LEVEL_S > library.PB_PRECISION_S
+    ref = stats.PUBLISHED_NOISE_SIGMAS[library.REFERENCE_RECORDING]
+    assert ref is stats.REFERENCE_SIGMAS and F.CORNER_DAY_SIGMA_S == ref.cross_session
+    assert F.CROSS_SESSION_LEVEL_S == round(stats.DIFF_2SIGMA_K * F.CORNER_DAY_SIGMA_S, 2) == 0.05
+    # pinned: at the reference's noise the measured cross-session step is below the lap step…
+    assert F.CROSS_SESSION_LEVEL_S < library.PB_PRECISION_S == stats.house_step(ref.lap)
+    assert F.level_step() == library.PB_PRECISION_S
+    # …and at a noisier recording's it is not: the max() is what would follow it there.
+    assert stats.house_step(stats.PUBLISHED_NOISE_SIGMAS["B"].cross_session) > library.PB_PRECISION_S
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "docs", "ACCURACY.md"), encoding="utf-8") as f:
         accuracy = " ".join(f.read().split())
     m = re.search(r"On (\d+) synthetic race days .*? at GPS noise ([0-9.]+), whose per-lap σ is "
                   r"([0-9.]+) s, recording ([ABC])'s, one session's corner typical carries a bias of "
                   r"σ ([0-9.]+) s against truth \(([0-9.]+)–([0-9.]+) s over four seed sets of ten "
-                  r"days\), so two days' corner times closer than ([0-9.]+) s \(2√2σ\) read \"no "
-                  r"change you can act on\"\. At recording A's noise the same rule gives ([0-9.]+) s",
-                  accuracy)
+                  r"days\), so the rule gives ([0-9.]+) s \(2√2σ\), under the timing step, and two "
+                  r"days' corner times closer than ([0-9.]+) s read \"no change you can act on\"\. At "
+                  r"recording A's noise the same rule gives ([0-9.]+) s", accuracy)
     assert m, "docs/ACCURACY.md no longer publishes the cross-session step"
-    days, noise, lap, rec, sigma, lo, hi, step, at_a = m.groups()
-    assert int(days) >= 40 and rec == "B", m.groups()
+    days, noise, lap, rec, sigma, lo, hi, rule, step, at_a = m.groups()
+    assert int(days) >= 40 and rec == library.REFERENCE_RECORDING, m.groups()
     assert float(sigma) == F.CORNER_DAY_SIGMA_S and float(lo) <= float(sigma) <= float(hi)
-    assert float(step) == F.CROSS_SESSION_LEVEL_S, m.groups()
-    assert float(at_a) > F.CROSS_SESSION_LEVEL_S, m.groups()
-    # the per-lap σ it was measured at IS the probe's measured reference value, and that is B's
+    assert float(rule) == F.CROSS_SESSION_LEVEL_S and float(step) == F.level_step(), m.groups()
+    assert float(noise) == ref.noise and float(lap) == round(ref.lap, 3), (m.groups(), ref)
+    assert float(at_a) == stats.house_step(stats.PUBLISHED_NOISE_SIGMAS["A"].cross_session)
     with open(os.path.join(root, "studio", "dev", "probes", "focus_cross_session.py"),
               encoding="utf-8") as f:
         probe = f.read()
-    ref_lap = float(re.search(r"^REFERENCE_LAP_SIGMA_S = ([0-9.]+)$", probe, re.M).group(1))
-    assert float(lap) == round(ref_lap, 3), (lap, ref_lap)
-    b_row = re.search(r"\| \*\*B\*\* — [^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\| \*\*([0-9.]+) s\*\* \|",
-                      accuracy)
-    assert b_row and round(float(b_row.group(1)), 3) == float(lap), (b_row, lap)
-    assert re.search(rf"^REFERENCE_NOISE = {re.escape(noise)}$", probe, re.M), noise
+    assert re.search(r"^REFERENCE_NOISE = stats\.REFERENCE_SIGMAS\.noise$", probe, re.M)
     assert "from studio.stats import DIFF_2SIGMA_K" in probe
     assert '"app_sigma_is_this_sigma"' in probe and "round(sigma, 4) == focus.CORNER_DAY_SIGMA_S" \
         in probe
     assert 'rule == focus.CROSS_SESSION_LEVEL_S' in probe
-    print(f"ok cross-session step: 2√2 × {F.CORNER_DAY_SIGMA_S} s = {F.CROSS_SESSION_LEVEL_S} s")
+    assert "round(sigma, 4) == row.cross_session" in probe and "== row.lap" in probe
+    print(f"ok cross-session step: 2√2 × {F.CORNER_DAY_SIGMA_S} s = {F.CROSS_SESSION_LEVEL_S} s, "
+          f"so the verdict reads {F.level_step():.2f} s")
 
 
 def test_the_probe_re_measures_sigma_near_the_constant_on_a_small_seed_set():
     """The probe's own σ measurement (`focus_cross_session.measure_sigma`), on its four-day check
-    set (CHECK_SEEDS) at the reference noise — about 15 s: the corner-day σ lands within 25 % of
-    `focus.CORNER_DAY_SIGMA_S` (four days scatter; ten-day sets ran 0.0342-0.0361 s around the
-    pooled 0.0351 s) and the per-lap σ within 10 % of REFERENCE_LAP_SIGMA_S, recording B's. A
-    constant typed by hand, or a probe whose σ drifted, fails here rather than in a doc."""
+    set (CHECK_SEEDS) at the reference noise — about 15 s: the corner-day σ lands within 30 % of
+    `focus.CORNER_DAY_SIGMA_S` (four days scatter; ten-day sets ran 0.0142-0.0206 s around the
+    pooled 0.0178 s) and the per-lap σ within 10 % of `library.REFERENCE_LAP_SIGMA_S`, the one
+    reference recording's (C) published σ. A constant typed by hand, a probe whose σ drifted, or a
+    reference noise that stopped matching the reference recording fails here rather than in a doc."""
     import shutil
     import tempfile
 
@@ -425,36 +431,49 @@ def test_the_probe_re_measures_sigma_near_the_constant_on_a_small_seed_set():
             os.environ.pop(app_support.DIR_ENV, None)
         else:
             os.environ[app_support.DIR_ENV] = keep[2]
-    assert abs(sigma / F.CORNER_DAY_SIGMA_S - 1) <= 0.25, (sigma, F.CORNER_DAY_SIGMA_S)
-    assert abs(lap / probe.REFERENCE_LAP_SIGMA_S - 1) <= 0.10, (lap, probe.REFERENCE_LAP_SIGMA_S)
-    print(f"ok probe σ check: {sigma:.4f} s (constant {F.CORNER_DAY_SIGMA_S}), lap σ {lap:.4f} s")
+    assert abs(sigma / F.CORNER_DAY_SIGMA_S - 1) <= 0.30, (sigma, F.CORNER_DAY_SIGMA_S)
+    assert abs(lap / library.REFERENCE_LAP_SIGMA_S - 1) <= 0.10, (lap, library.REFERENCE_LAP_SIGMA_S)
+    print(f"ok probe σ check: {sigma:.4f} s (constant {F.CORNER_DAY_SIGMA_S}), lap σ {lap:.4f} s "
+          f"(reference {library.REFERENCE_LAP_SIGMA_S})")
 
 
-def test_an_unchanged_day_between_the_old_bar_and_the_step_is_no_change():
-    """The probe's unchanged pairs (one driver, nothing changed): at recording B's noise the bar
-    before called 206 of 1260 corners "faster"/"slower", and 83 still are with the step. Three
-    under the step, with spreads whose half sits under them, at +0.072, −0.077 and +0.095 s: a
-    claim on main, level now, and the line keeps both days' figures and says why once."""
+def test_an_unchanged_day_under_the_timing_step_is_no_change_and_says_what_the_step_covers():
+    """cool/one-reference-level. At the one reference the cross-session step is under the timing
+    step, so a verdict's bar is 0.07 s: three unchanged pairs (one driver, nothing changed) under
+    it with spreads whose half sits under them, at +0.065, −0.068 and +0.0699 s, read no change,
+    keep both days' figures with digits enough that their printed gap stays under the step, and
+    say why once; their hover says what the step covers (`stats.STEP_COVERS_NOTE`), and no other
+    line carries it. At 0.07 s and past it a true change still reads as one."""
+    from studio import library, stats
     alike = _records(("GX0060", _record()), ("GX0062", _record()))
-    for then, now, iqr in ((3.452, 3.524, 0.09), (2.861, 2.784, 0.06), (3.105, 3.200, 0.08)):
+    step = F.level_step()
+    assert step == library.PB_PRECISION_S
+    for then, now, iqr in ((3.452, 3.517, 0.09), (2.861, 2.793, 0.06), (3.0337, 3.1036, 0.08)):
         o = F.verdict([_item(median=then, iqr=iqr)], _now(), [_sample(now, iqr=iqr)],
                       alike).outcomes[0]
-        assert abs(o.delta) >= _spread_half(iqr) and abs(o.delta) >= 0.07, o
+        assert abs(o.delta) >= _spread_half(iqr) and abs(o.delta) < step, o
         assert o.kind == F.OUTCOME_UNCHANGED, (then, now, o.kind)
         text = F.outcome_sentence(o)
-        assert text == (f"C4 — no change you can act on: under 0.10 s apart, within what two "
-                        f"recordings of the same driving differ by ({then:.3f} → {now:.3f} s, "
-                        f"38 → 65 laps)."), text
+        assert text.startswith("C4 — no change you can act on: under 0.07 s apart, within what two "
+                               "recordings of the same driving differ by ("), text
+        shown = [float(x) for x in text.split("(")[1].split(" s,")[0].split(" → ")]
+        assert abs(shown[1] - shown[0]) < step, (text, step)
         assert text.count("recordings") == 1 and "faster" not in text and "slower" not in text
-    # …and a true change past the step still reads as one, with its sign and both figures.
-    for then, now, word in ((3.140, 3.040, "0.10 s faster"), (3.140, 2.990, "0.15 s faster"),
+        report = F.Report(track="x", outcomes=[o])
+        assert F.report_line_tips(report) == [stats.STEP_COVERS_NOTE], F.report_line_tips(report)
+    assert stats.STEP_COVERS_NOTE.startswith("0.07 s is what two timings differ by from the GPS "
+                                             "alone on the cleanest recording measured;")
+    # …and a true change at the step and past it still reads as one, with its sign, both figures
+    # and no hover (it is not a "level" line).
+    for then, now, word in ((3.140, 3.070, "0.07 s faster"), (3.140, 3.040, "0.10 s faster"),
                             (3.140, 3.340, "0.20 s slower")):
         o = F.verdict([_item(median=then, iqr=0.06)], _now(), [_sample(now, iqr=0.06)],
                       alike).outcomes[0]
         assert o.kind == (F.OUTCOME_IMPROVED if now < then else F.OUTCOME_SLOWER), o
         assert F.outcome_sentence(o) == (f"C4 — {word} than 23 May ({then:.2f} → {now:.2f} s, "
                                          f"38 → 65 laps)."), F.outcome_sentence(o)
-    print("ok cross-session step: unchanged days level, true changes still called")
+        assert F.report_line_tips(F.Report(track="x", outcomes=[o])) == [""]
+    print("ok one reference: unchanged days level under 0.07 s, the hover says what it covers")
 
 
 def _spread_half(iqr: float) -> float:

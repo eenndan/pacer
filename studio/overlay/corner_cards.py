@@ -24,9 +24,10 @@ THE RULES (`card_rows`, the one function the render and the tests read):
     speed only — the table dashes the same cells;
   * with a cross-recording REFERENCE loaded, the table's column is "Δref" against that lap, so the
     card says "vs ref" (and "≈ ref") — never "vs best", which would then be false — and its level
-    step is the table's Δref step, `stats.corner_delta_step` (one lap's corner time against one
-    lap of another recording reads up to that far apart with nothing changed,
-    cool/reference-lap-corner-floor), not timing precision;
+    step is the table's Δref step, `stats.corner_delta_step(True)` (one lap's corner time against
+    one lap of another recording reads up to that far apart with nothing changed,
+    cool/reference-lap-corner-floor) — at the one reference, `library.REFERENCE_RECORDING`, that is
+    the timing precision step too (cool/one-reference-level);
   * under PROVISIONAL timing the cards keep their Δ, as the Corners table does there: a corner time
     is measured between two corner edges, not from the start line, and the lap strip burning its
     Δ on the same frame is qualified by the honesty stamp the frame always carries.
@@ -107,8 +108,9 @@ def baseline_word(session) -> str:
 
 def level_step(session) -> float:
     """The step under which a card reads "≈ best" / "≈ ref": the Corners table's own
-    (`stats.corner_delta_step`) — the timing step against a lap of this recording, the wider
-    reference-lap corner step with a reference from ANOTHER recording loaded."""
+    (`stats.corner_delta_step`) — the timing step against a lap of this recording; with a
+    reference from ANOTHER recording loaded, the reference-lap corner step or the timing step,
+    whichever is wider."""
     own = getattr(session, "reference_is_own_recording", None)
     other = baseline_word(session) == "ref" and not (callable(own) and own())
     return corner_delta_step(other)
