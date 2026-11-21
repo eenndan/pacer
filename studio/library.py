@@ -1644,14 +1644,23 @@ def pb_points(index: dict, track: str) -> list[tuple[str, int | None, float]]:
     in the order the sessions were driven — by date, then by ``start_ms`` within a date (a race
     day is several heats on one date), rows with no stored start after those with one, by best.
     The PB chart places a day's sessions in this order (``library_dialog``)."""
-    pts = [
-        (e["date"], _start_ms(e), float(e["best"]))
-        for e in index.get("entries", [])
-        if e.get("track") == track and e.get("date") and e.get("best") is not None
-        and is_trustworthy(e)
-    ]
-    pts.sort(key=lambda p: (p[0], p[1] is None, p[1] or 0, p[2]))
-    return pts
+    return [(e["date"], _start_ms(e), float(e["best"])) for e in _pb_rows(index, track)]
+
+
+def pb_fingerprints(index: dict, track: str) -> list[str | None]:
+    """The fingerprint of each of ``pb_points(index, track)``'s rows, position for position: what
+    the PB chart joins a point's session record on (a wet day is drawn hollow, cool/wet-day-mark)."""
+    return [e.get("fingerprint") for e in _pb_rows(index, track)]
+
+
+def _pb_rows(index: dict, track: str) -> list[dict]:
+    """The entries behind ``pb_points``, in its order (one sort, so the two lists line up)."""
+    rows = [e for e in index.get("entries", [])
+            if e.get("track") == track and e.get("date") and e.get("best") is not None
+            and is_trustworthy(e)]
+    rows.sort(key=lambda e: (e["date"], _start_ms(e) is None, _start_ms(e) or 0,
+                             float(e["best"])))
+    return rows
 
 
 def pb_steps(bests: list[float]) -> list[int]:

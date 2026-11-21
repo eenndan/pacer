@@ -1851,6 +1851,48 @@ def test_the_best_lap_chart_is_named_for_what_it_draws_and_rings_the_pbs():
     dlg.deleteLater()
 
 
+def test_a_wet_session_is_hollow_on_the_best_lap_chart_and_hovers_wet():
+    """cool/wet-day-mark. A wet day's best lap is seconds off the dry ones and drew as an
+    unexplained hump: nothing on the chart said the session was wet, though its record did. Its
+    point is drawn hollow over its marker and hovers "Wet"; the title names the hollow marks only
+    when one is plotted; the line, the PB rings and the counts are unchanged. Damp is not wet."""
+    from studio import session_record as sr
+    bests = [45.40, 47.90, 47.60, 45.00, 44.70]
+    conds = ["dry", "wet", "wet", "damp", ""]
+    idx = library.empty_index()
+    records = sr.empty_store()
+    for i, (best, cond) in enumerate(zip(bests, conds, strict=True)):
+        e = _entry(f"W{i}", track="MK", date=f"2026-06-{i + 1:02d}", best=best, paths=[])
+        library.upsert(idx, e)
+        if cond:
+            sr.put(records, e["fingerprint"],
+                   sr._norm_record({**sr.blank_record(), "conditions": cond}))
+    assert library.pb_fingerprints(idx, "MK") == [library.fingerprint(f"W{i}") for i in range(5)]
+    dlg = LibraryDialog(idx, _OpenSpy(), records=records)
+    dlg._show_pb("MK")
+    _xs, ys = dlg._pb_curve.getData()
+    assert list(ys) == bests, ys                                   # the line is unchanged
+    assert list(dlg._pb_rings.getData()[1]) == [45.0, 44.7], dlg._pb_rings.getData()
+    wet_x, wet_y = dlg._pb_wet.getData()
+    assert list(wet_y) == [47.90, 47.60], wet_y                    # only the two wet sessions
+    assert list(wet_x) == [list(_xs)[1], list(_xs)[2]], (wet_x, _xs)  # on their own points
+    tips = [dlg._pb_wet.opts["tip"](x=p.pos().x(), y=p.pos().y(), data=p.data())
+            for p in dlg._pb_wet.points()]
+    assert tips == ["2026-06-02 · best 0:47.900 · Wet", "2026-06-03 · best 0:47.600 · Wet"], tips
+    title = dlg._pb_title.text()
+    assert title == ("Best lap by session — MK  (0:44.700 best over 5 sessions) · 2 PBs ringed"
+                     " · ○ wet"), title
+    # No wet session plotted: no hollow mark and no legend for one.
+    for e in idx["entries"]:
+        sr.put(records, e["fingerprint"], sr._norm_record({**sr.blank_record(),
+                                                           "conditions": "dry"}))
+    dlg._show_pb("MK")
+    assert len(dlg._pb_wet.getData()[0]) == 0 and "wet" not in dlg._pb_title.text()
+    dlg._show_pb(None)
+    assert len(dlg._pb_wet.getData()[0]) == 0
+    dlg.deleteLater()
+
+
 def test_pb_points_are_in_driven_order():
     """`library.pb_points`: by date, then by the first fix's clock within a date (rows with none
     after, by best); `pb_series` keeps its own (date, best) order for the summary's PB count."""
