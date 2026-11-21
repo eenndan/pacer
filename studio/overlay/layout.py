@@ -11,7 +11,8 @@ any size, 9:16, 1:1, a 4:3 or vertical source, crop or fit — tests/test_export
 that matrix): the Δ bar sits top-centre or, where the top row is too narrow, full width under it;
 the big speed sits bottom-centre or, where the (wide) minimap is in the way, bottom-left; the
 honesty stamp hangs under the tower or, where the g-meter is in the way, below the top row. The
-PORTRAIT OVERRIDE only reorders those for a tall frame.
+PORTRAIT OVERRIDE only reorders those for a tall frame, and a tall frame's safe area
+(`safe_area`) keeps every element of both styles out of the bands the apps cover.
 
 THE CLASSIC PLATES A STYLE KEEPS (the g-meter, the minimap) are not in the table: the Classic
 painter places them, and `resolve` takes their boxes as `keep_clear`; an element lands on none of
@@ -51,6 +52,15 @@ SPEED_PAD = 0.020
 MAP_H_FRAC = 0.30
 
 FULL = -1.0            # a slot width meaning "the safe area's full width"
+
+# THE PORTRAIT SAFE AREA (owner ruling, wave 22). A taller-than-wide export is made for the apps
+# that play it full screen, and they cover the bottom of the frame with their own buttons and
+# caption and the top with their header: at the margin alone the speed sat 13 px off the bottom of
+# a 608x1080 frame, under them. So in portrait no overlay element is painted in the top
+# PORTRAIT_TOP or the bottom PORTRAIT_BOTTOM of the frame's HEIGHT (fractions of the height, not of
+# `u`: the apps' bands scale with the screen's height). Landscape and square keep the margin alone.
+PORTRAIT_TOP = 0.08
+PORTRAIT_BOTTOM = 0.18
 
 
 @dataclass(frozen=True)
@@ -132,6 +142,17 @@ def table(out_w: int, out_h: int) -> dict[str, Slot]:
     return BROADCAST_PORTRAIT if out_h > out_w else BROADCAST
 
 
+def safe_area(out_w: int, out_h: int, margin: float = MARGIN) -> Box:
+    """The box every overlay element of an out_w x out_h frame stays inside, both styles: the frame
+    inset by `margin` (a fraction of the short side), and in portrait (taller than wide) also clear
+    of the top PORTRAIT_TOP and the bottom PORTRAIT_BOTTOM of the height."""
+    m = margin * float(min(out_w, out_h))
+    top = bottom = m
+    if out_h > out_w:
+        top, bottom = max(m, PORTRAIT_TOP * out_h), max(m, PORTRAIT_BOTTOM * out_h)
+    return Box(m, top, out_w - 2 * m, out_h - top - bottom)
+
+
 class LayoutError(ValueError):
     """An element would leave the safe area or land on another one at every place it may take."""
 
@@ -146,8 +167,11 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
     `LayoutError`, naming the element and what each place hit, when no anchor fits."""
     u = float(min(out_w, out_h))
     m, gap = MARGIN * u, GAP * u
-    safe = Box(m, m, out_w - 2 * m, out_h - 2 * m)
-    frame = Box(0.0, 0.0, float(out_w), float(out_h))
+    safe = safe_area(out_w, out_h)
+    # The "!" places' area: the frame across (into the side margins), and down to the margin in
+    # landscape; in portrait still between the bands the safe area keeps clear.
+    frame = Box(0.0, 0.0, float(out_w), float(out_h)) if out_h <= out_w else Box(
+        0.0, safe.y, float(out_w), safe.h)
     offsets: dict[str, tuple[float, float]] = dict(hang or {})
     out: dict[str, Box] = {}
     for name in names:
@@ -171,16 +195,16 @@ def resolve(slots: dict[str, Slot], names, out_w: int, out_h: int,
                 top = [b.bottom for b in (*out.values(), *keep_clear.values())
                        if b.h > 0 and b.y < out_h / 2]
                 x = out["tower"].x + dx if name in offsets else m
-                y = max(top, default=m - gap) + gap
+                y = max(top, default=safe.y - gap) + gap
             else:
                 x = {"l": m, "c": (out_w - w) / 2.0}[anchor[1]]
-                y = {"t": m, "b": out_h - m - h}[anchor[0]]
+                y = {"t": safe.y, "b": safe.bottom - h}[anchor[0]]
             fits_frame = False
             if area is frame:
                 x = max(0.0, min(x, out_w - w))    # slid left until every line is whole
                 # Wider than the frame itself: from its left edge, as far as it goes — the
                 # Classic stamp is cut off on that frame too, further in (see the table).
-                fits_frame = w > out_w and y >= 0 and y + h <= out_h
+                fits_frame = w > out_w and y >= frame.y and y + h <= frame.bottom
             box = Box(x, y, w, h)
             if not (area.contains(box) or fits_frame):
                 why.append(f"{anchor}: leaves the {'frame' if area is frame else 'safe area'}")

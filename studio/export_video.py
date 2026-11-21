@@ -3489,9 +3489,13 @@ class OverlayPainter:
         # self-scale from their own box height.
         self._k = self._u / OVERLAY_REF_SHORT_SIDE
         m = cfg.margin_frac * self._u
+        # THE SAFE AREA: the margin, and in portrait also the bands the apps that play a vertical
+        # video cover (`layout.safe_area`). Every plate below is anchored to it, top and bottom.
+        safe = overlay.layout.safe_area(out_w, out_h, cfg.margin_frac)
+        top, bottom = safe.y, safe.bottom
         # g-meter: square in the TOP-RIGHT.
         gside = cfg.gmeter_frac * self._u
-        self._g_rect = QRectF(out_w - m - gside, m, gside, gside)
+        self._g_rect = QRectF(out_w - m - gside, top, gside, gside)
         # map inset: BOTTOM-RIGHT, and AS WIDE AS THE TRACK NEEDS rather than a fixed 16:9 box.
         #
         # The box used to be `map_w_frac * out_w` by `map_h_frac * out_h` — 16:9 by construction,
@@ -3509,7 +3513,7 @@ class OverlayPainter:
         map_lap = None if spec.follow_laps else spec.lap_id
         mh = cfg.map_h_frac * self._u
         mw = _inset_width(session, map_lap, mh, mh * cfg.map_max_aspect)
-        map_rect = QRectF(out_w - m - mw, out_h - m - mh, mw, mh)
+        map_rect = QRectF(out_w - m - mw, bottom - mh, mw, mh)
         # Both pills are FITTED to the widest text this export WILL burn — enumerated once here by
         # replaying the render's own per-frame lookup over its own frame times, never re-derived
         # and never per frame (a pill that breathed as the speed gained a digit would be worse than
@@ -3518,11 +3522,11 @@ class OverlayPainter:
         # readout: BOTTOM-LEFT.
         rh = max(cfg.readout_h_frac * self._u, _MIN_READOUT_H_PX)
         self._readout_rect = QRectF(
-            m, out_h - m - rh,
+            m, bottom - rh,
             readout_pill_width(rh, speeds, units.speed_label(cfg.speed_unit)), rh)
         # lap strip: TOP-LEFT.
         sh = max(cfg.strip_h_frac * self._u, _MIN_STRIP_H_PX)
-        self._strip_rect = QRectF(m, m, strip_pill_width(sh, labels, tails), sh)
+        self._strip_rect = QRectF(m, top, strip_pill_width(sh, labels, tails), sh)
         # ...and, under it, the honesty stamp — resolved ONCE here for the same reason the pills
         # are: it is session-scoped, so a per-frame lookup could only reproduce the same answer
         # while giving it a chance to differ. [] on a clean recording, and then nothing is drawn.
@@ -3554,7 +3558,7 @@ class OverlayPainter:
                 "gmeter": QRectF(self._g_rect), "map": QRectF(map_rect),
                 "readout": QRectF(self._readout_rect), "strip": QRectF(self._strip_rect),
                 overlay.STAMP: QRectF(self._stamp_rect)}),
-            safe=QRectF(m, m, out_w - 2 * m, out_h - 2 * m),
+            safe=QRectF(safe.x, safe.y, safe.w, safe.h),
         ), notes=self.notes) if cfg.elements else []
         self._replaced = overlay.replaced(self.elements)   # Classic plates an element stands in for
         if self.elements:
