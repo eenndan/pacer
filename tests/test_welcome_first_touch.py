@@ -31,6 +31,7 @@ reach the network.
 
 Run: QT_QPA_PLATFORM=offscreen PACER_NO_MEDIA=1 python tests/test_welcome_first_touch.py
 """
+import datetime
 import json
 import os
 import subprocess
@@ -950,31 +951,74 @@ def test_a_long_missing_file_name_never_takes_the_other_rows():
     print("test_a_long_missing_file_name_never_takes_the_other_rows OK (41 + 70 chars, 3 sizes)")
 
 
+def _utc_ms(day: str, hhmm: str) -> int:
+    """Epoch ms of a UTC wall-clock instant — a row's `start_ms`."""
+    y, mo, d = (int(x) for x in day.split("-"))
+    h, mi = (int(x) for x in hhmm.split(":"))
+    return int(datetime.datetime(y, mo, d, h, mi, tzinfo=datetime.UTC).timestamp() * 1000)
+
+
 @_offline
 def test_same_day_sessions_read_in_the_library_windows_order():
-    """Review P3: three recordings of one day appear on the welcome in the order the Library window
-    lists them (its Date sort keeps a tie in index order), so the two screens agree."""
+    """Review P3, then cool/race-day-rows: a race day is several recordings on one date. They read
+    on the welcome as the Library window lists them — newest START first within the day (the date
+    alone left them in the order they were OPENED), an untimed row after its day's timed ones —
+    so the two screens agree; each row says its local start time after its date; the five newest
+    reach a later session of an earlier day; and the time widens the card rather than eat the
+    track name's room. The zone is pinned: a start prints in local time, as its date was read."""
     from studio.library_dialog import _COL_DATE, PATHS_ROLE, LibraryDialog
+    from studio.overlays import _ElidedLabel
 
-    rows = [{**_row(700 + k, date="2026-11-16"), "start_ms": 1000 + k} for k in range(3)]
-    rows.append(_row(703, date="2026-11-17"))
-    _with_rows(rows)
+    day = "2026-11-15"
+    # Index order = the order they were opened: the afternoon first, the untimed row in between.
+    rows = [{**_row(700, date=day), "start_ms": _utc_ms(day, "16:00")},
+            {**_row(701, date=day), "start_ms": _utc_ms(day, "10:30")},
+            _row(702, date=day),
+            {**_row(703, date=day), "start_ms": _utc_ms(day, "14:00")},
+            {**_row(704, date="2026-11-14"), "start_ms": _utc_ms("2026-11-14", "09:00")},
+            {**_row(705, date="2026-11-14"), "start_ms": _utc_ms("2026-11-14", "17:20")}]
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
     try:
+        _with_rows(rows)
         win = _window((1440, 900))
         try:
+            view = win.centralWidget()
+            dates = [btn.findChildren(QLabel)[1].text() for btn in view.recent_rows]
+            assert dates == ["2026-11-15 16:00", "2026-11-15 14:00", "2026-11-15 10:30",
+                             "2026-11-15", "2026-11-14 17:20"], dates
             loaded = []
             win._load = lambda paths, **kw: loaded.append(list(paths))
-            for btn in win.centralWidget().recent_rows:
+            for btn in view.recent_rows:
                 btn.click()
+            want = [r["paths"] for r in (rows[0], rows[3], rows[1], rows[2], rows[5])]
+            assert loaded == want, (loaded, want)
             dlg = LibraryDialog(library.load(), open_recording=lambda p: None)
             listed = [list(dlg.table.item(i, _COL_DATE).data(PATHS_ROLE))
                       for i in range(dlg.table.rowCount())]
+            shown = [dlg.table.item(i, _COL_DATE).text() for i in range(dlg.table.rowCount())]
             dlg.deleteLater()
-            assert loaded == listed, (loaded, listed)
+            assert loaded == listed[:5], (loaded, listed)
+            assert shown[:5] == dates, shown
+            timed_room = view.findChildren(_ElidedLabel)[0].width()
+        finally:
+            win.close()
+            _settle(0.1)
+        # The same rows without a start: the track name had exactly this room before.
+        _with_rows([{k: v for k, v in r.items() if k != "start_ms"} for r in rows])
+        win = _window((1440, 900))
+        try:
+            assert win.centralWidget().findChildren(_ElidedLabel)[0].width() == timed_room
         finally:
             win.close()
             _settle(0.1)
     finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
         _no_rows()
     print("test_same_day_sessions_read_in_the_library_windows_order OK")
 

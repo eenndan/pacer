@@ -626,17 +626,27 @@ def _ideal_cell(entry: dict) -> tuple[float | None, str | None, str | None]:
     return float(theo), None, None
 
 
-def _date_sort_key(date: str | None) -> float | None:
-    """A sortable numeric key for a "YYYY-MM-DD" date string: its ordinal (days). Lexical order
-    of an ISO date already equals chronological order, but a numeric key keeps the _NumItem path
-    uniform with the time columns. None (no date) → None (sorts last)."""
+def _date_sort_key(entry: dict) -> float | None:
+    """A sortable numeric key for a row's Date cell: the ordinal (days) of its "YYYY-MM-DD" date,
+    plus its start time within that day — the order `library.recency_key` gives the welcome
+    screen, as one number for the _NumItem path the time columns share. A row of a race day with
+    a start lands in the upper half of its day (``+0.5 + time-of-day / 2``), so ascending it sorts
+    after an untimed row of the same day and descending (the default) before it, as
+    `recency_key` puts it. None (no date) → None (sorts last)."""
+    date = entry.get("date")
     if not date:
         return None
     try:
         y, m, d = (int(x) for x in date.split("-"))
-        return float(datetime.date(y, m, d).toordinal())
+        day = float(datetime.date(y, m, d).toordinal())
     except (ValueError, TypeError):
         return None
+    start = _library.row_start_ms(entry)
+    if start is None:
+        return day
+    t = datetime.datetime.fromtimestamp(start / 1000.0)     # LOCAL, as `when_text` prints it
+    tod = t.hour * 3600 + t.minute * 60 + t.second + t.microsecond / 1e6   # ms kept: ties stay ties
+    return day + 0.5 + tod / 86400.0 / 2
 
 
 def _epoch_seconds(date: str) -> float | None:
@@ -1313,13 +1323,15 @@ class LibraryDialog(QDialog):
             missing = _entry_missing(e)
             junk = _entry_junk(e)
             disabled = missing or junk
-            date = e.get("date")
             track = e.get("track")
             best = e.get("best")
             theo, theo_reason, theo_stale = _ideal_cell(e)
 
-            date_item = _NumItem(date or "—")
-            date_item.setData(NUM_ROLE, _date_sort_key(date))
+            # The date and the start time (a race day is several rows on one date), sorted on
+            # both: `library.when_text` / `library.recency_key`, which the welcome screen reads.
+            when = _library.when_text(e)
+            date_item = _NumItem(when or "—")
+            date_item.setData(NUM_ROLE, _date_sort_key(e))
             date_item.setData(PATHS_ROLE, list(e.get("paths") or []))
             date_item.setData(TRACK_ROLE, track)
             date_item.setData(FP_ROLE, e.get("fingerprint"))
@@ -1341,7 +1353,7 @@ class LibraryDialog(QDialog):
             record = self._record_for(e)
             date_item.setData(
                 FILTER_ROLE,
-                " ".join(p for p in (track or _UNKNOWN_LABEL, date or "", _entry_name(e),
+                " ".join(p for p in (track or _UNKNOWN_LABEL, when or "", _entry_name(e),
                                      _records.conditions_text(record),
                                      _records.tyre_text(record)) if p).strip().lower())
             # The conditions TAG the filter combo matches on — "" for a row with no record, which
@@ -1390,8 +1402,9 @@ class LibraryDialog(QDialog):
             tooltip = _entry_tooltip(e)
             record_tip = _record_cell_tip(record)
             for col, it in enumerate(items):
-                # Every cell hovers to the recording's file identity — the columns show only track +
-                # date, so hovering anywhere on the row is what tells two same-day sessions apart.
+                # Every cell hovers to the recording's file identity — the columns show track, date
+                # and start time, and a row without a start (a legacy row) is told apart from its
+                # day's others only by hovering anywhere on it.
                 # Track is the one STRETCH column, so it is the one that elides (31 px of overflow
                 # at the dialog's own 489 px minimum width): its tooltip LEADS with its own full
                 # label, so the clipped tail is readable rather than merely truncated.

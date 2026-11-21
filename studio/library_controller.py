@@ -953,8 +953,8 @@ class LibraryController:
             if e.get("lap_count")
             and any(os.path.exists(p) for p in (e.get("paths") or []))
         ]
-        # Newest first; missing date sorts last.
-        usable.sort(key=lambda e: e.get("date") or "", reverse=True)
+        # Newest first — date, then start time within a day; missing date sorts last.
+        usable.sort(key=library.recency_key, reverse=True)
         return usable[:self._RECENT_LIMIT]
 
     def _recent_label(self, entry: dict) -> str:
@@ -965,7 +965,7 @@ class LibraryController:
         parts = [track]
         if best is not None:
             parts.append(f"— {fmt_time(best)}")
-        date = entry.get("date")
+        date = library.when_text(entry)   # with its start time: a race day is several rows
         if date:
             parts.append(f"({date})")
         return "  ".join(parts)
