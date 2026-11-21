@@ -2722,16 +2722,44 @@ def corner_delta_colour(delta: float, step: float = PB_PRECISION_S) -> str | Non
 
 def _apex_gate(unit: str | None) -> float:
     """The speed-gap step (`chart_stats.GAIN_GATE_KMH`) in the display unit, AS THE HOVER PRINTS IT
-    (two decimals): the cell's printed figure is compared with this, so the two never disagree."""
+    (two decimals)."""
     return round(units.convert_speed(chart_stats.GAIN_GATE_KMH, unit), 2)
 
 
+def _apex_prints_past_gate(printed: float, unit: str | None) -> bool:
+    """Does every gap that the Δapex cell prints as `printed` (`SPEED_DECIMALS`, display unit) lie
+    at or past `chart_stats.GAIN_GATE_KMH`? The one rule the cell's colour and the header's "from"
+    figure are both read from (cool/apex-gate-mph).
+
+    A printed figure stands for every gap within half its last digit. In km/h the gate, 1.75, is
+    where 1.7 meets 1.8, so the figure and the gate agree exactly. In mph it is 1.087, inside the
+    figure 1.1, which covers 1.05–1.15 mph (1.69–1.85 km/h): colouring every printed 1.1 coloured
+    a Δapex of +1.1 that may be under the speed chart's 1.09 mph threshold. A figure is coloured
+    only when ALL the gaps it stands for are past the gate, so a coloured cell's gap is always past
+    the threshold, and one printed string always wears one colour."""
+    half = 0.5 * 10.0 ** -SPEED_DECIMALS
+    return abs(printed) - half >= units.convert_speed(chart_stats.GAIN_GATE_KMH, unit) - 1e-9
+
+
+def _apex_first_coloured(unit: str | None) -> float:
+    """The smallest |Δapex| figure the cell colours in `unit` (`_apex_prints_past_gate`): 1.8 km/h,
+    1.2 mph. Stated by the header, so the first coloured figure is never a surprise."""
+    step = 10.0 ** -SPEED_DECIMALS
+    figure = round(math.ceil(units.convert_speed(chart_stats.GAIN_GATE_KMH, unit) / step) * step,
+                   SPEED_DECIMALS)
+    while not _apex_prints_past_gate(figure, unit):
+        figure = round(figure + step, SPEED_DECIMALS)
+    return figure
+
+
 def apex_level_note(unit: str | None) -> str:
-    """The Δapex header's one sentence: the speed-gap step in the display unit, and where it is
-    from. One step for both baselines: an apex speed's noise is at most one fix's."""
-    return (f"A gap under {_apex_gate(unit):.2f} {units.speed_label(unit)} is not coloured: two "
-            "speed readings differ by up to that from the GPS alone (measured on a real "
-            "recording), the same threshold the speed chart shades from.")
+    """The Δapex header's note: the speed-gap step in the display unit, where it is from, and the
+    first figure coloured. One step for both baselines: an apex speed's noise is at most one fix's."""
+    u = units.speed_label(unit)
+    return (f"A gap under {_apex_gate(unit):.2f} {u} is not coloured: two speed readings differ "
+            "by up to that from the GPS alone (measured on a real recording), the same threshold "
+            f"the speed chart shades from. So the first coloured figure is "
+            f"{_apex_first_coloured(unit):.1f} {u}.")
 
 
 def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
@@ -2742,11 +2770,13 @@ def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
     to km/h, so "+0.0" could print green. The step is the speed chart's gain gate,
     `chart_stats.GAIN_GATE_KMH` (1.75 km/h, the house rule on the speed noise measured on a real
     recording), against a lap of this recording or another's: an apex speed is the lowest fix in
-    the corner, so its noise is at most one fix's. Decided on the PRINTED value (`fmt_signed(·, 1)`
-    in the display unit, as the cell prints it) against the gate as the hover prints it, so "0.0"
-    is never coloured and the first coloured figure is the first printed one at or past the gate."""
-    printed = float(fmt_signed(units.convert_speed(delta_kmh, unit), 1).replace("−", "-"))
-    if abs(printed) < _apex_gate(unit) - 1e-9:
+    the corner, so its noise is at most one fix's. Decided on the PRINTED value (`fmt_signed` at
+    `SPEED_DECIMALS` in the display unit, as the cell prints it): coloured only when every gap that
+    prints as it is past the gate (`_apex_prints_past_gate`), so "0.0" is never coloured, one
+    printed figure never wears two colours, and in mph a printed 1.1 (1.69–1.85 km/h) is neutral."""
+    printed = float(fmt_signed(units.convert_speed(delta_kmh, unit),
+                               SPEED_DECIMALS).replace("−", "-"))
+    if not _apex_prints_past_gate(printed, unit):
         return None
     return theme.delta_colour(-delta_kmh)
 
@@ -3248,7 +3278,7 @@ class CornerTable(QWidget):
                 # Apex-speed Δ: FASTER through the corner is better (green), coloured only at
                 # or past the speed-gap step, on the printed figure (`apex_delta_colour`).
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
-                 (fmt_signed(conv(st.apex_speed_delta, u), 1),
+                 (fmt_signed(conv(st.apex_speed_delta, u), SPEED_DECIMALS),
                   apex_delta_colour(st.apex_speed_delta, u))),
                 (f"{conv(st.entry_speed, u):.{SPEED_DECIMALS}f}", None),
                 (f"{conv(st.exit_speed, u):.{SPEED_DECIMALS}f}", None),
