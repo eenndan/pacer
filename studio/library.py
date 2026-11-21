@@ -821,13 +821,13 @@ def restore(path: str | None = None) -> dict:
 
 # THE ONE REFERENCE LEVEL (cool/one-reference-level). Every step under which two of the app's
 # timings read "level" is referenced to ONE published recording: REFERENCE_RECORDING, docs/ACCURACY.md
-# row C (the MK sprint on a GPS9 Hero 13 against Club Speed timing — the owner's current instrument
-# and the cleanest of the three measured), whose per-lap σ against official timing is
+# row C (the MK sprint on a GPS9 Hero 13 against Club Speed timing — the GPS9-generation camera's
+# row, and the cleanest of the three measured), whose per-lap σ against official timing is
 # REFERENCE_LAP_SIGMA_S. PB_PRECISION_S below is the house rule on that σ; every other step
 # (`focus.CROSS_SESSION_LEVEL_S`, `stats.REFERENCE_CORNER_LEVEL_S`, `stats.SECTOR_LEVEL_S`) is
 # measured at the synthetic GPS noise whose per-lap σ matches this one (`stats.PUBLISHED_NOISE_SIGMAS`)
 # and none names another recording. What that covers, and what a noisier recording would need, is
-# said once where the driver reads "level" (`stats.STEP_COVERS_NOTE`) and on docs/ACCURACY.md.
+# said where the driver reads "level" (`stats.step_covers_note`) and on docs/ACCURACY.md.
 REFERENCE_RECORDING = "C"
 REFERENCE_LAP_SIGMA_S = 0.0247
 

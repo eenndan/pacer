@@ -2222,9 +2222,23 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 # 0.055 s), yet at 0.07 s four sectors at noise 2 and ten at noise 4.5 would wear a lone ★, six of
 # those ten on the wrong lap; at SECTOR_LEVEL_S none does, at any noise. On such sessions every
 # sector is a tie: the view names the quickest lap, plays each level lap in turn, and says why.
+# ON THE EARLIER CALIBRATION: SPLIT_SIGMA_S is the truth matrix's max-over-three-seeds sd at its
+# noise 2, not a σ measured on the 40-day grid PUBLISHED_NOISE_SIGMAS uses (whose split σ at C's
+# noise reads 0.035 s pooled, 0.050 s at the worst sector, at another sector placement). That
+# re-measurement at the golden placement is deferred to its own package, with refused-2026-09 §26
+# (whose new-evidence clause it is); until then this anchor is exempt from the one-table rule
+# (tests/test_measured_figures.py `_ANCHORS`).
 DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
+
+
+def house_step(sigma: float) -> float:
+    """The house rule for "level": 2σ of the difference of two figures that each carry `sigma`
+    (DIFF_2SIGMA_K × σ), to the hundredth — the lap step's, the sector step's and every other's."""
+    return round(DIFF_2SIGMA_K * sigma, 2)
+
+
 SPLIT_SIGMA_S = 0.106567
-SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
+SECTOR_LEVEL_S = house_step(SPLIT_SIGMA_S)
 
 
 # WHAT EACH PUBLISHED RECORDING'S NOISE WOULD NEED (cool/one-reference-level). The σ of ONE figure,
@@ -2236,42 +2250,47 @@ SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
 # a corner pass against another of the same recording, Δbest's error RMS / √2; reference_corner:
 # one lap's corner time against one lap of another recording, its error RMS / √2). Each probe
 # checks its pooled σ against this table at every noise in it, and docs/ACCURACY.md prints the
-# house step (`house_step`) of every cell. The app uses ONE row, the reference's
-# (`library.REFERENCE_RECORDING`): REFERENCE_SIGMAS. The other two rows are what a noisier
-# recording would need, said where the driver reads "level" (STEP_COVERS_NOTE), never applied.
+# house step (`house_step`) of every cell — the lap column from the recording's PUBLISHED per-lap
+# σ (`published_lap`, its docs/ACCURACY.md row), which is what that row measured against official
+# timing; the corner columns, which no official timing has checked, from the synthetic grid. The
+# app uses ONE row, the reference's (`library.REFERENCE_RECORDING`): REFERENCE_SIGMAS. The other
+# two rows are what a noisier recording would need, said where the driver reads "level"
+# (`step_covers_note`), never applied.
 @dataclass(frozen=True)
 class NoiseSigmas:
+    published_lap: float     # the recording's per-lap σ against official timing (ACCURACY.md)
     noise: float             # the synthetic GPS noise whose per-lap σ matches the recording's
-    lap: float               # one lap time
+    lap: float               # one lap time, synthetic, at that noise (the match)
     corner_pass: float       # one corner pass, against another pass of the same recording
     cross_session: float     # one session's corner typical (the focus verdict's two days)
     reference_corner: float  # one lap's corner time, against one lap of another recording
 
 
 PUBLISHED_NOISE_SIGMAS = {
-    "C": NoiseSigmas(1.9, 0.0253, 0.0203, 0.0178, 0.0205),
-    "B": NoiseSigmas(4.0, 0.0532, 0.0428, 0.0351, 0.0435),
-    "A": NoiseSigmas(6.5, 0.0863, 0.0699, 0.0583, 0.0730),
+    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205),
+    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435),
+    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730),
 }
 REFERENCE_SIGMAS = PUBLISHED_NOISE_SIGMAS[REFERENCE_RECORDING]
 
 
-def house_step(sigma: float) -> float:
-    """The house rule for "level": 2σ of the difference of two figures that each carry `sigma`
-    (DIFF_2SIGMA_K × σ), to the hundredth — the lap step's, the sector step's and every other's."""
-    return round(DIFF_2SIGMA_K * sigma, 2)
+def step_covers_note(column: str, what: str) -> str:
+    """What the timing step covers for ONE statistic (`column` of PUBLISHED_NOISE_SIGMAS, `what` in
+    words), said where the driver reads "level" for it: the reference row's house step — an upper
+    bound (2σ of a difference), so "up to" — inside the step, and what the noisier rows would need.
+    Every figure is read off the table above."""
+    c, b, a = (house_step(getattr(PUBLISHED_NOISE_SIGMAS[r], column)) for r in ("C", "B", "A"))
+    return (f"From the GPS alone, on the cleanest recording measured, {what} can differ by up to "
+            f"{c:.2f} s, inside this {PB_PRECISION_S:.2f} s step; on a noisier recording by more: "
+            f"up to {b:.2f} s at the middle published recording's noise, {a:.2f} s at the "
+            "noisiest.")
 
 
-# What the step covers, said ONCE where the driver reads "level" (the Corners Δ header, the Quickest
-# passes legend, a focus line's hover): the reference row's lap step is the timing step, and the
-# noisier rows say what the same rule would need. Every figure is read off the table above.
-STEP_COVERS_NOTE = (
-    f"{PB_PRECISION_S:.2f} s is what two timings differ by from the GPS alone on the cleanest "
-    "recording measured; a noisier recording can differ by more: at the middle published "
-    f"recording's noise the same rule gives {house_step(PUBLISHED_NOISE_SIGMAS['B'].lap):.2f} s for "
-    f"laps and {house_step(PUBLISHED_NOISE_SIGMAS['B'].corner_pass):.2f} s for corners, at the "
-    f"noisiest {house_step(PUBLISHED_NOISE_SIGMAS['A'].lap):.2f} s and "
-    f"{house_step(PUBLISHED_NOISE_SIGMAS['A'].corner_pass):.2f} s.")
+# One note per surface, each from its own statistic's column.
+STEP_COVERS_PASS = step_covers_note("corner_pass", "two passes through a corner")
+STEP_COVERS_REFERENCE = step_covers_note("reference_corner",
+                                         "a lap's corner time and another recording's")
+STEP_COVERS_FOCUS = step_covers_note("cross_session", "two days' typical times through a corner")
 
 # THE REFERENCE-LAP CORNER STEP (cool/reference-lap-corner-floor; re-referenced by
 # cool/one-reference-level). With a reference RECORDING

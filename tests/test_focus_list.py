@@ -302,7 +302,7 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
             assert o.kind == F.OUTCOME_UNCHANGED, (gap, sign, o)
             text = F.outcome_sentence(o)
             assert text.startswith(f"C4 — no change you can act on: under {step:.2f} s apart, "
-                                   "within what two recordings of the same driving differ by ("), text
+                                   "within timing precision ("), text
             assert "s faster" not in text and "s slower" not in text, text
     # AT the step is not under it. Around 0.125 s both 0.125 ± 0.10 (and ± 0.101, ± 0.30)
     # difference back to at least the gap in floating point (around 0.25 or 1.0 s some do not).
@@ -322,8 +322,8 @@ def test_a_difference_under_the_timing_step_is_no_change_whatever_the_spread():
                      alike).outcomes[0]
     assert near.kind == F.OUTCOME_UNCHANGED, near
     assert F.outcome_sentence(near) == (
-        "C4 — no change you can act on: under 0.07 s apart, within what two recordings of the same "
-        "driving differ by (2.845 → 2.910 s, 38 → 65 laps)."), F.outcome_sentence(near)
+        "C4 — no change you can act on: under 0.07 s apart, within timing precision (2.845 → "
+        "2.910 s, 38 → 65 laps)."), F.outcome_sentence(near)
     # …and at the step the same rule needs a fourth digit: Δ = step − 0.0001 from 3.0337 prints
     # "3.034 → 3.104 s" at three (0.070 apart, as printed) beside "under 0.07 s".
     then = 3.0337
@@ -442,7 +442,7 @@ def test_an_unchanged_day_under_the_timing_step_is_no_change_and_says_what_the_s
     step, so a verdict's bar is 0.07 s: three unchanged pairs (one driver, nothing changed) under
     it with spreads whose half sits under them, at +0.065, −0.068 and +0.0699 s, read no change,
     keep both days' figures with digits enough that their printed gap stays under the step, and
-    say why once; their hover says what the step covers (`stats.STEP_COVERS_NOTE`), and no other
+    say why once; their hover says what the step covers (`stats.STEP_COVERS_FOCUS`), and no other
     line carries it. At 0.07 s and past it a true change still reads as one."""
     from studio import library, stats
     alike = _records(("GX0060", _record()), ("GX0062", _record()))
@@ -454,15 +454,20 @@ def test_an_unchanged_day_under_the_timing_step_is_no_change_and_says_what_the_s
         assert abs(o.delta) >= _spread_half(iqr) and abs(o.delta) < step, o
         assert o.kind == F.OUTCOME_UNCHANGED, (then, now, o.kind)
         text = F.outcome_sentence(o)
-        assert text.startswith("C4 — no change you can act on: under 0.07 s apart, within what two "
-                               "recordings of the same driving differ by ("), text
+        # v0.20.1's words: at the reference two recordings differ on a corner by up to 0.05 s,
+        # so "within what two recordings differ by" would be false for these gaps
+        assert text.startswith("C4 — no change you can act on: under 0.07 s apart, within timing "
+                               "precision ("), text
         shown = [float(x) for x in text.split("(")[1].split(" s,")[0].split(" → ")]
         assert abs(shown[1] - shown[0]) < step, (text, step)
-        assert text.count("recordings") == 1 and "faster" not in text and "slower" not in text
+        assert "recordings" not in text and "faster" not in text and "slower" not in text
         report = F.Report(track="x", outcomes=[o])
-        assert F.report_line_tips(report) == [stats.STEP_COVERS_NOTE], F.report_line_tips(report)
-    assert stats.STEP_COVERS_NOTE.startswith("0.07 s is what two timings differ by from the GPS "
-                                             "alone on the cleanest recording measured;")
+        assert F.report_line_tips(report) == [stats.STEP_COVERS_FOCUS], F.report_line_tips(report)
+    assert stats.STEP_COVERS_FOCUS == (
+        "From the GPS alone, on the cleanest recording measured, two days' typical times through a "
+        "corner can differ by up to 0.05 s, inside this 0.07 s step; on a noisier recording by "
+        "more: up to 0.10 s at the middle published recording's noise, 0.16 s at the noisiest."), \
+        stats.STEP_COVERS_FOCUS
     # …and a true change at the step and past it still reads as one, with its sign, both figures
     # and no hover (it is not a "level" line).
     for then, now, word in ((3.140, 3.070, "0.07 s faster"), (3.140, 3.040, "0.10 s faster"),

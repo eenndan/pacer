@@ -179,13 +179,15 @@ other kind of difference is measured at the synthetic GPS noise whose per-lap σ
 synthetic race days per noise of one driver with nothing changed
 ([`studio/dev/probes/focus_cross_session.py`](../studio/dev/probes/focus_cross_session.py) and
 [`studio/dev/probes/reference_lap_corner.py`](../studio/dev/probes/reference_lap_corner.py)), the
-same rule, 2√2σ, gives each recording's noise these steps:
+same rule, 2√2σ, gives each recording's noise these steps. The lap column uses each recording's
+published per-lap σ (the table at the top); the corner columns, which no official timing has
+checked, use the σ measured on the synthetic grid at the matching noise:
 
 | Published recording (per-lap σ) | Synthetic GPS noise (per-lap σ) | Lap | Corner pass | Corner typical, two days | Corner, against another recording's lap |
 |---|---|---|---|---|---|
 | C (0.0247 s) | 1.9 (0.0253 s) | 0.07 s | 0.06 s | 0.05 s | 0.06 s |
 | B (0.0527 s) | 4.0 (0.0532 s) | 0.15 s | 0.12 s | 0.10 s | 0.12 s |
-| A (0.0871 s) | 6.5 (0.0863 s) | 0.24 s | 0.20 s | 0.16 s | 0.21 s |
+| A (0.0871 s) | 6.5 (0.0863 s) | 0.25 s | 0.20 s | 0.16 s | 0.21 s |
 
 **The app uses C's row**, so every one of these differences is level under 0.07 s, the widest of
 C's cells. A noisier recording can differ by more than that from the GPS alone, up to B's and A's
