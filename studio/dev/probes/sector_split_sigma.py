@@ -20,7 +20,9 @@ them, applied through `apply_timing_lines_latlon` as a reload applies them):
     matrix's placement; mid3 / mid4 — the 3- and 4-line mid-straight sets `sector_quickest` uses;
   * entry — 5 m before the end of the same two straights (braking into the corner);
   * apex — the apex of the corner after each (C3, C6); exit — 5 m into the two straights (leaving
-    C2 and C5); hairpin — the apexes of the two slowest corners (C1 and C5).
+    C2 and C5); hairpin — the apexes of the two slowest corners (C1 and C5);
+  * the PR #675 review's six: maxg (244 m and 726 m), c4c5, c1_c5exit, short_c5 (26 m across the
+    hairpin), short_straight (10 m mid-straight) and three_slow (three slow lines).
 
 THE STATISTICS, one per consumer (each as app − truth over the SAME laps):
   * pair — one split against another of the same recording (the Quickest passes sector rows'
@@ -39,20 +41,27 @@ habit-free days (false: the truth's gap under 0.03 s, or under the step itself) 
 (C4 slowed on every lap but one, `quickest_bias.PLANTS`: the sector holding C4 has a true quickest
 by about the gain), with the luck allowance (`stats.quickest_luck_s`) where the app adds it.
 
-MEASURED (defaults, 40 habit-free + 24 planted days per noise; noises 2.7 and 4.8 added for the
-table, about 20 minutes as two processes): at the reference noise 1.9 the split σ is 0.035-0.041 s
-pooled mid-straight (golden 0.0408, sets 0.0385-0.0434; its interior sector 0.0498), 0.047 at the
-apexes, 0.050 at the exits and 0.066 at the hairpins, whose interior sector, 0.0881 s, is the worst
-of every placement and `stats.PUBLISHED_NOISE_SIGMAS`' split column (B 0.1873, A 0.3062), which the
-summary checks (`worst_split`). De-drifted: 0.023-0.033 s pooled, 0.038 s at the worst sector. The
-full table and the decisions are in `stats.SECTOR_LEVEL_S`'s comment.
+THE LUCK (at the reference noise): per placement, the quickest pass's bias by n on the typical and
+next gaps and its two-parameter fit (`quickest_bias.bias_by_n` / `fit` on these splits); the fit at
+the step's basis placement (`worst_split`) is what `stats.quickest_luck_s` ships for a sector, which
+the summary checks (`luck_basis.app_fit_is_this_fit`).
+
+MEASURED (defaults: 40 habit-free + 24 planted days per noise, at 1.9, 4.0 and 6.5; about 40
+minutes as two processes; `--set-index 4,5,6,7 --plant-days 0` out of sample): at the reference
+noise 1.9 the split σ is 0.035-0.041 s pooled mid-straight (golden 0.0408, sets 0.0385-0.0434; its
+interior sector 0.0498), 0.047 at the apexes, 0.050 at the exits and 0.066 at the hairpins, whose
+interior sector, 0.0881 s, is the worst of all 13 placements and `stats.PUBLISHED_NOISE_SIGMAS`'
+split column (B 0.1873, A 0.3062; hairpin the worst at each), which the summary checks
+(`worst_split`). The luck fit there: typical +0.0019 + 0.0385·blom(n), next +0.0327 + 0.0103·blom(n).
+Out of sample the worst sector reads 0.0835 s. De-drifted: 0.023-0.033 s pooled, 0.038 s at the
+worst sector. The full table and the decisions are in `stats.SECTOR_LEVEL_S`'s comment.
 
 `--matrix` instead re-runs truth matrix row 2's own recordings (three seeds, noise 2, two chapters,
 the default origin, golden placement) and reports each seed's per-lap interior-split errors over
 every valid lap and over the SPLITS grid's counted laps: where the matrix's σ came from.
 
 ARGV CONTRACT: named flags only. `--noises 1.9,4.0,6.5` (default NOISES), `--sets N` (default 4),
-`--set-index J` (only set J), `--days N` (default 10), `--plant-days N` (per gain per set, default
+`--set-index J[,J…]` (only those sets; 4-7 are out of sample: seeds 801-1110), `--days N` (default 10), `--plant-days N` (per gain per set, default
 2), `--matrix`. Every recording is generated into ONE `mkdtemp` under $TMPDIR and removed before
 exit; the app-support store is jailed and the sidecar write stubbed. Output is stdout: one
 `{"day": …}` line per day, then the summary. `--summarize FILE[,FILE…]` READS such logs and prints
@@ -81,6 +90,7 @@ import numpy as np  # noqa: E402
 from studio import chapters, sidecar, stats  # noqa: E402
 from studio.dev import make_demo  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
+from studio.dev.probes import quickest_bias as qb  # noqa: E402
 from studio.dev.probes.clip_refusals import _true_splits  # noqa: E402
 from studio.dev.probes.focus_cross_session import BASE_SEED, SET_STRIDE, _generate  # noqa: E402
 from studio.dev.probes.quickest_bias import PLANT_CID, PLANT_LAP, PLANTS  # noqa: E402
@@ -103,7 +113,13 @@ def _configs(c) -> dict[str, list[float]]:
             "entry": [c.straights[2][1] - 5.0, c.straights[5][1] - 5.0],
             "apex": [apex[3], apex[6]],
             "exit": [c.straights[2][0] + 5.0, c.straights[5][0] + 5.0],
-            "hairpin": [apex[1], apex[5]]}
+            "hairpin": [apex[1], apex[5]],
+            # the independent review's placements (PR #675): the drift model's worst pair, C4's
+            # apex to just past C5's, C1's apex to 5 m out of C5, a 26 m sector across the
+            # hairpin, a 10 m sector mid-straight, and three slow lines
+            "maxg": [244.0, 726.0], "c4c5": [578.0, 742.0],
+            "c1_c5exit": [apex[1], c.straights[5][0] + 5.0], "short_c5": [724.0, 750.0],
+            "short_straight": [400.0, 410.0], "three_slow": [244.0, 578.0, 730.0]}
 
 
 def _r(x) -> float:
@@ -294,6 +310,45 @@ def calls(days, name: str, step: float) -> dict:
     return out
 
 
+def _luck_days(days, name: str) -> list[dict]:
+    """`days` at placement `name` in `quickest_bias`'s day shape (its `bias_by_n` and `fit` read
+    the quickest pass's luck exactly as they read the mid-straight sectors' there)."""
+    out = []
+    for d in days:
+        p = d["placements"].get(name)
+        if not p:
+            continue
+        out.append({"plant": d["plant"], "seed": d["seed"], "sectors": {
+            str(stats.sector_key(c)): [[r[0], r[1][c], r[2][c]] for r in p["rows"]]
+            for c in range(len(p["medians"]))}})
+    return out
+
+
+def luck(days, name: str) -> dict:
+    """The quickest pass's luck at placement `name`: bias by n of the typical and next gaps (app −
+    truth) and the two-parameter fit `stats.quickest_luck_s` ships for sectors, a + b·blom(n)."""
+    by_n = qb.bias_by_n(_luck_days(days, name), "sectors")
+    if not by_n:
+        return {}
+    fits = {g: qb.fit(by_n, g) for g in ("typical", "next")}
+    top = max(by_n)
+    return {"fit": {g: (f["a"], f["b"]) for g, f in fits.items()},
+            "max_abs_residual_in_se": {g: f["max_abs_residual_in_se"] for g, f in fits.items()},
+            "at_n": {n: (by_n[n]["typical"], by_n[n]["next"]) for n in (5, 9, top) if n in by_n}}
+
+
+def measure_luck(work: str, noise: float, seeds, name: str, ns) -> dict[int, tuple[float, float]]:
+    """{n: (typical bias, next bias)} at placement `name` over habit-free days at `seeds` — the
+    small fixed re-measure tests/test_quickest_passes.py checks the shipped sector luck against."""
+    days = []
+    for k, seed in enumerate(seeds):
+        days.append(day_record(work, noise, seed, k + 1))
+        for entry in os.listdir(work):
+            shutil.rmtree(os.path.join(work, entry), ignore_errors=True)
+    by_n = qb.bias_by_n(_luck_days(days, name), "sectors")
+    return {n: (by_n[n]["typical"], by_n[n]["next"]) for n in ns if n in by_n}
+
+
 def summarize(days: list[dict]) -> dict:
     out = {}
     for noise in sorted({d["noise"] for d in days}):
@@ -318,6 +373,14 @@ def summarize(days: list[dict]) -> dict:
             for rec_name, row in stats.PUBLISHED_NOISE_SIGMAS.items():
                 if row.noise == noise:
                     rec["worst_split"][f"is_table_{rec_name}"] = row.split == worst[0]
+        # The quickest pass's luck, at the reference noise: per placement, and the fit at the
+        # step's own basis placement, which is what `stats.quickest_luck_s` ships for a sector.
+        if worst is not None and noise == stats.REFERENCE_SIGMAS.noise:
+            rec["luck"] = {n: luck(mine, n) for n in names}
+            basis = rec["luck"][worst[1]]
+            rec["luck_basis"] = {"placement": worst[1], **basis, "app_fit_is_this_fit": all(
+                stats._QUICKEST_LUCK_FIT[("sector", g)] == tuple(basis["fit"][g])
+                for g in ("typical", "next"))}
         out[f"noise {noise:g}"] = rec
     return out
 
@@ -359,7 +422,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--noises", default=",".join(f"{n:g}" for n in NOISES))
     ap.add_argument("--sets", type=int, default=4)
-    ap.add_argument("--set-index", type=int)
+    ap.add_argument("--set-index", default="")
     ap.add_argument("--days", type=int, default=10)
     ap.add_argument("--plant-days", type=int, default=2)
     ap.add_argument("--matrix", action="store_true")
@@ -377,11 +440,15 @@ def main() -> int:
         if a.matrix:
             print(json.dumps({"matrix_summary": matrix_rerun(work)}))
             return 0
-        sets = [a.set_index] if a.set_index is not None else list(range(a.sets))
+        sets = ([int(j) for j in a.set_index.split(",")] if a.set_index
+                else list(range(a.sets)))
         days = []
         for noise in (float(n) for n in a.noises.split(",")):
             for j in sets:
-                jobs = [(BASE_SEED + SET_STRIDE * j + k, 1000 * j + k + 1, None)
+                # A day's number dates its recording; past ~4000 days the MP4's 32-bit date
+                # overflows, so the out-of-sample sets (4+) are numbered from 3500.
+                base = 1000 * j if j < 4 else 3500 + 100 * (j - 4)
+                jobs = [(BASE_SEED + SET_STRIDE * j + k, base + k + 1, None)
                         for k in range(a.days)]
                 jobs += [(PLANT_SEED + SET_STRIDE * j + 10 * gi + k, 1000 * j + 100 + 10 * gi + k,
                           g) for gi, g in enumerate(PLANTS) for k in range(a.plant_days)]

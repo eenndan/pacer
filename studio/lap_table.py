@@ -3331,12 +3331,13 @@ LEVEL_NOTE_TIP = ("Two passes closer than this are level: the timing cannot tell
 # its step is wider (stats.SECTOR_LEVEL_S, set by the noisiest line placement measured), and on the
 # sessions it was measured on most sectors are a tie, which the legend says rather than leaving a
 # row of "N more laps" unexplained.
-SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time (σ up to "
-                         "{sigma:.2f} s at the cleanest recording's noise, most with a line at a "
-                         "slow corner, docs/ACCURACY.md), so two splits are level within "
-                         "{step:.2f} s, twice the noise of their difference, the rule the lap step "
-                         "follows. Most sectors are then a tie: the row names the quickest lap and "
-                         "plays each level lap in turn.")
+SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time: at the "
+                         "cleanest recording's noise, σ {mid:.2f} s with lines mid-straight, up "
+                         "to {sigma:.2f} s with a line at the measured track's slowest corners "
+                         "(docs/ACCURACY.md). So two splits are level within {step:.2f} s, twice "
+                         "the noise of their difference, the rule the lap step follows, and most "
+                         "sectors are then a tie: the row names the quickest lap and plays each "
+                         "level lap in turn. {covers}")
 
 
 def level_note(level_s: float, sector_s: float | None = None) -> str:
@@ -4324,4 +4325,5 @@ class CornersPage(QWidget):
         self.level_label.setText(level_note(self.quickest.level_s(), sector_s))
         self.level_label.setToolTip(LEVEL_NOTE_TIP if sector_s is None else (
             LEVEL_NOTE_TIP + " " + SECTOR_LEVEL_NOTE_TIP.format(
-                sigma=stats_service.SPLIT_SIGMA_S, step=sector_s)))
+                mid=stats_service.SPLIT_MID_STRAIGHT_S, sigma=stats_service.SPLIT_SIGMA_S,
+                step=sector_s, covers=stats_service.split_covers_note())))

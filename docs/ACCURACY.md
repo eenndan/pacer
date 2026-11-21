@@ -168,10 +168,10 @@ with every technique evaluated and rejected on evidence, is in
 at the nearest fix. On a synthetic recording (row 2 of
 [`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)) the interior split's σ is under 1 ms
 noise-free, but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: several times a lap's.
-"Up to" is the worst of that row's three recordings (the other two read 0.02 and 0.06 s at C's
-noise). Pooled over many days, the split's σ is two to four times a corner pass's, and it depends
-on where the lines are drawn. On the 40-day synthetic grid below, at recording C's noise
-([`studio/dev/probes/sector_split_sigma.py`](../studio/dev/probes/sector_split_sigma.py), seven
+That "up to" is the worst of that row's three recordings (the other two read 0.02 and 0.06 s at
+C's noise); it is not the σ the app uses. Pooled over many days, the split's σ is two to four
+times a corner pass's, and it depends on where the lines are drawn. On the 40-day synthetic grid below, at recording C's noise
+([`studio/dev/probes/sector_split_sigma.py`](../studio/dev/probes/sector_split_sigma.py), 13
 line placements), one split against another of the same recording carries σ 0.035–0.041 s with
 lines mid-straight, 0.047–0.050 s at a corner's apex or exit, and 0.066 s at the two slowest
 apexes; its worst sector there reads 0.088 s. What dominates is the receiver's slowly drifting
@@ -179,7 +179,10 @@ position error: a lap crosses the same line twice and cancels it, a split crosse
 different heading and speed and keeps it, most at a slow line. One step has to serve every sector
 a driver can draw, so the app's is set by that worst sector: one split's σ is 0.088 s at
 recording C's GPS noise, and the step is 0.25 s (2√2σ), the last column below. A mid-straight
-sector would need only 0.14 s. Taking each lap's rigid receiver shift out before crossing the
+sector would need only 0.14 s. The measured track's slowest point is 13.5 m/s, and a split's
+error grows as the speed at its lines falls: a line at a slower hairpin than that is not covered
+by this measurement, and how much more it would carry is unmeasured. Taking each lap's rigid
+receiver shift out before crossing the
 lines (the correction the corner cells already make) would leave 0.038 s at the worst sector of
 any placement, a step of 0.11 s; that change is proposed, not made. No official timing has checked
 a split. (The truth matrix names its noise levels by its own three-seed calibration, which reads

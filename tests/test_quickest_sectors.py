@@ -325,8 +325,15 @@ def test_two_and_four_lines_list_their_sectors_below_the_corners():
                 assert row[1] == f"{m.bests[c]:.2f}" and row[2] == str(m.best_lap[c] + 1), row
                 assert "★" not in row[1]   # no sector on the demo stands 0.25 s clear
             assert page.level_label.text() == "Level = within 0.07 s · sectors 0.25 s"
-            assert "σ up to 0.09 s" in page.level_label.toolTip(), page.level_label.toolTip()
-            assert "tie" in page.level_label.toolTip()
+            tip = page.level_label.toolTip()
+            # the split's σ (mid-straight, and the worst placement, with the measured limit), the
+            # step once, and what a noisier recording would need (the split column's B and A)
+            assert ("σ 0.04 s with lines mid-straight, up to 0.09 s with a line at the measured "
+                    "track's slowest corners") in tip, tip
+            assert tip.count("within 0.25 s") == 1, tip
+            assert stats.split_covers_note() in tip and "up to 0.53 s" in tip \
+                and "0.87 s at the noisiest" in tip, tip
+            assert "tie" in tip
             tip = q.table.item(8, 3).toolTip()
             assert "within 0.25 s" in tip and "timing noise" in tip, tip
             # the group's rule above S1, and ▶ says "sector"
@@ -468,13 +475,13 @@ def test_a_sector_pass_beside_its_typical_follows_the_corners_rule():
                                   c.gap_s, c.level, c.is_typical), (lap, v, c)
         assert v.cid == stats.sector_key(0) and v.level_s == 0.30
     # lap 0's 10.00 against the typical 10.30 (lap 4). Lap 0 is the QUICKEST of 5, so the step
-    # carries the quickest's luck (`stats.quickest_luck_s`, 0.022 s for a sector at n = 5,
-    # cool/quickest-is-partly-luck): 0.30 apart is level under 0.30 + 0.022, and exactly the step
-    # plus the luck apart is NOT level
+    # carries the quickest's luck (`stats.quickest_luck_s`, 0.047 s for a sector at n = 5, fitted
+    # at the split step's own placement, cool/sector-step-one-reference): 0.30 apart is level under
+    # 0.30 + 0.047, and exactly the step plus the luck apart is NOT level
     v = m.pass_vs_typical(0, 0, 0.30)
-    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.022, True), v
-    assert not m.pass_vs_typical(0, 0, 0.278).level            # 0.278 + 0.022 = 0.300
-    assert m.pass_vs_typical(0, 0, 0.279).level                # the step decides it
+    assert (v.typical_lap_id, v.gap_s, v.luck_s, v.level) == (4, 0.3, 0.047, True), v
+    assert not m.pass_vs_typical(0, 0, 0.253).level            # 0.253 + 0.047 = 0.300
+    assert m.pass_vs_typical(0, 0, 0.254).level                # the step decides it
     # a pass that is not the quickest carries no luck: lap 3's 10.20, 0.10 under the typical
     assert m.pass_vs_typical(0, 3, 0.10).luck_s == 0.0 and not m.pass_vs_typical(0, 3, 0.10).level
     assert m.pass_vs_typical(0, 4, 0.30).is_typical

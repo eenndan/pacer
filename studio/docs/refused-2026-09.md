@@ -2069,8 +2069,10 @@ interior sector) and 0.066 s at the two slowest apexes (0.088 s at their worst s
 first half of the clause is met for a mid-straight line, but the σ depends on where the lines
 are: it is the receiver's slowly drifting position error, which a lap cancels and a split between
 two differently placed lines keeps. A chip, like every split surface, has one gate for every
-sector a driver can draw, and the split step is now 0.25 s (2√2 × 0.088 s): about the gate this
-section measured, and above the true margins of most sessions. What would reopen it: splits
+sector a driver can draw, and the split step is now 0.25 s (2√2 × 0.088 s), near the 0.30 s gate
+this section measured (the chips were not re-run at 0.25 s; the probe still gates on row 2's σ).
+At the measured track's slowest point, 13.5 m/s, a split's error is largest; a line at a slower
+hairpin than that is unmeasured. What would reopen it: splits
 de-drifted at the source (each lap's rigid receiver shift removed before the lines are crossed,
 as the corner cells already do), which on the same grid leaves 0.038 s at the worst sector of any
 placement, a gate of 0.11 s.
@@ -2918,8 +2920,10 @@ luck, not time to find, and no single recording can measure how much."
    - The error's sd is 0.050 s against a bias of 0.032 s. With the bias removed and the same
      spread, about one cell in twelve would still pass 0.07 s (a normal approximation, not
      measured).
-   - Splits are read at `stats.SECTOR_LEVEL_S`, 0.30 s, which no cell's error reaches.
-   - Whether 0.30 s is the right sector step is refused §26's open re-measure, not a luck question.
+   - Splits are read at `stats.SECTOR_LEVEL_S`: 0.30 s when this was measured, which no cell's
+     error reached; 0.25 s since cool/sector-step-one-reference, which 2 of the 2,080 cells'
+     errors pass (the same days, re-summarized).
+   - That step was re-measured with §26 (its re-measure paragraph), not as a luck question.
 4. **The ranking's own errors are not selection bias, and an allowance does not touch them.**
    - Coaching's named lead (with its ties) misses the truly biggest loss by more than 0.07 s on 6
      of 38 days.
