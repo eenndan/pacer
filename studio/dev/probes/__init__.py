@@ -248,4 +248,13 @@ under the bar before it and with it. Its every-corner refusal is
 `studio/docs/refused-2026-09.md` §38.
 
     pixi run python -m studio.dev.probes.focus_cross_session
+
+`reference_lap_corner` measures how far the Corners table's Δref — one lap's corner time against
+one lap of a reference RECORDING — reads from the truth with nothing changed, the step its colour
+and the corner cards' "≈ ref" must clear (`stats.REFERENCE_CORNER_LEVEL_S`, 2√2 × one lap's corner
+σ at recording B's per-lap noise), over the same five noise levels and four seed sets, with the
+same difference against a lap of the SAME recording (Δbest's) beside it and the share of planted
+gains a step colours.
+
+    pixi run python -m studio.dev.probes.reference_lap_corner
 """

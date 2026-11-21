@@ -734,9 +734,179 @@ def test_corner_delta_inside_timing_precision_is_not_coloured():
     # The header says what the colour means, for both baselines.
     tip = table.table.horizontalHeaderItem(2).toolTip()
     assert f"under {step:.2f} s is inside timing precision" in tip, tip
+    from studio import stats
     from studio.lap_table import _corner_col_tips
-    assert f"under {step:.2f} s" in _corner_col_tips("kmh", "Other day")[2]
+    # Δref's tip names its own, wider step (cool/reference-lap-corner-floor, the test below).
+    assert f"under {stats.corner_delta_step(True):.2f} s" in _corner_col_tips("kmh", "Other day")[2]
     print("ok corner Δ: level inside timing precision, coloured outside, header says so")
+
+
+class _RefStub(_StubSession):
+    """`_StubSession` with a reference loaded: another recording's (`own` False) or this one's."""
+
+    def __init__(self, *a, own=False, **kw):
+        super().__init__(*a, **kw)
+        self._own = own
+
+    def has_reference(self):
+        return True
+
+    def reference_is_own_recording(self):
+        return self._own
+
+    def reference_label(self):
+        return "Other day"
+
+    def reference_lap_id(self):
+        return 0
+
+
+def test_corner_delta_ref_is_neutral_under_the_reference_lap_corner_step():
+    """cool/reference-lap-corner-floor. Δref is ONE lap's corner time minus ONE lap of ANOTHER
+    recording's: with nothing changed the two read apart by an error of RMS √2σ (σ one lap's corner
+    timing σ at recording B's noise, `stats.REFERENCE_CORNER_SIGMA_S`), so it was coloured at the
+    0.07 s timing step on about one cell in three where the truth was level. Under
+    `stats.corner_delta_step(True)` the figure is still printed, neutral; past it, coloured —
+    decided on the printed value. Against a lap of this recording (Δbest, or a reference that is
+    this recording's own) nothing changes: 0.08 s is still coloured there."""
+    _qapp()
+    import dataclasses
+
+    from PySide6.QtGui import QColor
+
+    from studio import library, stats, theme
+    from studio.lap_table import BASE_COLOR, CornerTable, reference_from_another_recording
+    step = stats.corner_delta_step(True)
+    assert step == stats.REFERENCE_CORNER_LEVEL_S > library.PB_PRECISION_S
+    assert stats.corner_delta_step(False) == library.PB_PRECISION_S
+    cs, cum_a, sp_a, el_a, cum_b, sp_b, el_b = _two_laps()
+    ref = C.lap_corner_stats(cs, float(cum_a[-1]), cum_a, sp_a * 3.6, el_a)
+    st = C.lap_corner_stats(cs, float(cum_a[-1]), cum_b, sp_b * 3.6, el_b, ref=ref)
+    # under the step / printing under it / printing AT it / past it, both signs
+    below = round(step - 0.0051, 4)      # prints one hundredth under the step
+    cases = [0.08, -0.10, below, -below, step + 0.001, -(step + 0.05)]
+    cs_n = [cs[i % len(cs)] for i in range(len(cases))]
+    st_n = [dataclasses.replace(st[i % len(st)], delta=d) for i, d in enumerate(cases)]
+    by_lap = {0: [dataclasses.replace(s, delta=0.0) for s in st_n], 1: st_n}
+    bests = [s.time - 1.0 for s in st_n]
+
+    def colours(session):
+        table = CornerTable(session)
+        table.set_lap(1)
+        out = {}
+        for r, d in enumerate(cases):
+            item = table.table.item(r, 2)
+            assert item.text() == fmt_signed(d, 2), (item.text(), d)    # the figure is still shown
+            out[d] = item.foreground().color()
+        return table, out
+
+    other = _RefStub(cs_n, by_lap, bests)
+    assert reference_from_another_recording(other)
+    table, got = colours(other)
+    neutral = BASE_COLOR
+    for d in (0.08, -0.10, below, -below):
+        assert got[d] == neutral, (d, got[d].name())
+    assert got[step + 0.001] == QColor(theme.behind_colour()), got
+    assert got[-(step + 0.05)] == QColor(theme.ahead_colour()), got
+    tip = table.table.horizontalHeaderItem(2).toolTip()
+    assert table.table.horizontalHeaderItem(2).text() == "Δref"
+    assert f"A gap under {step:.2f} s is not coloured" in tip and "another recording" in tip, tip
+    # A lap of THIS recording keeps the timing step: no reference, or a reference that is its own.
+    for session in (_StubSession(cs_n, by_lap, bests), _RefStub(cs_n, by_lap, bests, own=True)):
+        assert not reference_from_another_recording(session)
+        _t, got = colours(session)
+        assert got[0.08] == QColor(theme.behind_colour()), got
+        assert got[-0.10] == QColor(theme.ahead_colour()), got
+    print(f"ok Δref: neutral under {step:.2f} s against another recording, Δbest keeps 0.07 s")
+
+
+def test_the_reference_lap_corner_step_is_the_house_rule_on_the_measured_sigma():
+    """`stats.REFERENCE_CORNER_LEVEL_S` is derived, not picked: 2·√2 (`stats.DIFF_2SIGMA_K`) × the
+    per-lap corner σ `studio/dev/probes/reference_lap_corner.py` measures over 40 synthetic days at
+    the GPS noise whose per-lap σ is recording B's, the reference level `focus.CORNER_DAY_SIGMA_S`
+    uses. docs/ACCURACY.md publishes σ, its seed-set range, the step and what is left at A's; the
+    probe checks its pooled σ and step against these constants at that same noise."""
+    import math
+    import re
+
+    from studio import library, stats
+    assert stats.REFERENCE_CORNER_LEVEL_S == round(
+        stats.DIFF_2SIGMA_K * stats.REFERENCE_CORNER_SIGMA_S, 2) == 0.12
+    assert stats.DIFF_2SIGMA_K == 2 * math.sqrt(2)
+    assert stats.REFERENCE_CORNER_LEVEL_S > library.PB_PRECISION_S
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docs", "ACCURACY.md"), encoding="utf-8") as f:
+        accuracy = " ".join(f.read().split())
+    m = re.search(r"\*\*One lap's corner time against one lap of another recording\*\* .*? On "
+                  r"(\d+) synthetic race days .*? at GPS noise ([0-9.]+), recording ([ABC])'s, one "
+                  r"lap's corner time carries σ ([0-9.]+) s \(([0-9.]+)–([0-9.]+) s over four seed "
+                  r"sets\), so a Δref under ([0-9.]+) s \(2√2σ\) is shown uncoloured\. At recording "
+                  r"A's noise the same rule gives ([0-9.]+) s", accuracy)
+    assert m, "docs/ACCURACY.md no longer publishes the reference-lap corner step"
+    days, noise, rec, sigma, lo, hi, step, at_a = m.groups()
+    assert int(days) >= 40 and rec == "B", m.groups()
+    assert float(sigma) == stats.REFERENCE_CORNER_SIGMA_S and float(lo) <= float(sigma) <= float(hi)
+    assert float(step) == stats.REFERENCE_CORNER_LEVEL_S, m.groups()
+    assert float(at_a) > stats.REFERENCE_CORNER_LEVEL_S, m.groups()
+    with open(os.path.join(root, "studio", "dev", "probes", "reference_lap_corner.py"),
+              encoding="utf-8") as f:
+        probe = f.read()
+    with open(os.path.join(root, "studio", "dev", "probes", "focus_cross_session.py"),
+              encoding="utf-8") as f:
+        assert re.search(rf"^REFERENCE_NOISE = {re.escape(noise)}$", f.read(), re.M), noise
+    assert "REFERENCE_NOISE" in probe and "stats.DIFF_2SIGMA_K * sigma_one" in probe
+    assert "round(sigma_one, 4) == stats.REFERENCE_CORNER_SIGMA_S" in probe
+    assert "rule == stats.REFERENCE_CORNER_LEVEL_S" in probe
+    print(f"ok reference-lap corner step: 2√2 × {stats.REFERENCE_CORNER_SIGMA_S} s = "
+          f"{stats.REFERENCE_CORNER_LEVEL_S} s")
+
+
+def test_the_probe_re_measures_the_reference_lap_corner_sigma_on_a_small_seed_set():
+    """`reference_lap_corner.measure_sigma` on its three-day check set (CHECK_SEEDS, every ordered
+    pair) at the reference noise — under ten seconds: σ lands within 25 % of
+    `stats.REFERENCE_CORNER_SIGMA_S` (ten-day sets scatter by about ±7 % around the pooled value) and
+    the per-lap σ within 10 % of recording B's. A constant typed by hand, or a probe whose σ
+    drifted, fails here rather than in a doc."""
+    import shutil
+    import tempfile
+
+    from studio import (
+        app_support,
+        demo,
+        focus,
+        library,
+        logsetup,
+        marks,
+        prefs,
+        session_record,
+        sidecar,
+        stats,
+        track_db,
+    )
+    # The probe jails the app-support seams and stubs the sidecar write on import; every seam it
+    # touches is handed back afterwards (as tests/test_focus_list.py does for its sibling).
+    seams = (demo, focus, library, logsetup, marks, prefs, session_record, track_db)
+    keep = (sidecar.save, [m._app_support_dir for m in seams],
+            os.environ.get(app_support.DIR_ENV))
+    from studio.dev.probes import focus_cross_session as sibling
+    from studio.dev.probes import reference_lap_corner as probe
+    work = tempfile.mkdtemp(prefix="reference_corner_sigma_check_")
+    try:
+        sigma, lap = probe.measure_sigma(work, sibling.REFERENCE_NOISE, probe.CHECK_SEEDS)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        sidecar.save = keep[0]
+        for m, seam in zip(seams, keep[1], strict=True):
+            m._app_support_dir = seam
+        if keep[2] is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = keep[2]
+    assert abs(sigma / stats.REFERENCE_CORNER_SIGMA_S - 1) <= 0.25, (sigma,
+                                                                     stats.REFERENCE_CORNER_SIGMA_S)
+    assert abs(lap / sibling.REFERENCE_LAP_SIGMA_S - 1) <= 0.10, (lap, sibling.REFERENCE_LAP_SIGMA_S)
+    print(f"ok probe σ check: {sigma:.4f} s (constant {stats.REFERENCE_CORNER_SIGMA_S}), "
+          f"lap σ {lap:.4f} s")
 
 
 def test_map_corner_markers_overlay():

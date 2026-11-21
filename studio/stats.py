@@ -2146,6 +2146,52 @@ DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
 SPLIT_SIGMA_S = 0.106567
 SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
 
+# THE REFERENCE-LAP CORNER STEP (cool/reference-lap-corner-floor). With a reference RECORDING
+# loaded, the Corners table's Δref and the export's corner cards ("vs ref") difference ONE lap's
+# corner time against ONE lap of another recording. Each is a duration between two corner edges
+# placed through its own recording's noisy fixes. MEASURED
+# (studio/dev/probes/reference_lap_corner.py: the demo circuit, 40 habit-free days per noise in four
+# seed sets of ten, every ordered pair of a set's days, every clean lap × every corner, against the
+# truth over the table's own frame window): the error of that difference has an RMS of √2 × σ, and
+# the house rule for a difference of two figures that each carry σ is DIFF_2SIGMA_K × σ.
+#
+#   GPS noise  per-lap σ  one lap's corner σ (four sets)   2√2σ   Δbest's error, same lap  like
+#   1.9        0.025 s    0.0205 s (0.0183-0.0222)         0.058  0.0203 s                 C
+#   2.7        0.036 s    0.0292 s (0.0265-0.0318)         0.083  0.0289 s
+#   4.0        0.053 s    0.0435 s (0.0388-0.0481)         0.123  0.0429 s                 B
+#   4.8        0.064 s    0.0529 s (0.0470-0.0583)         0.150  0.0515 s
+#   6.5        0.086 s    0.0730 s (0.0653-0.0794)         0.206  0.0699 s                 A
+#
+# (Δbest's column: the same σ, read off a local lap against the local best lap, no reference.)
+#
+# THE MODEL: err = e_lap − e_ref, each one lap's own corner timing error, so RMS(err) = √2σ. The
+# cross-recording warp (`CornerModel.reference_alignment`) adds next to nothing: the reference's
+# corner edges land a median 1.2 m from where this session's frame puts them (95th percentile
+# 3.2 m, at B's noise), and the same difference against a lap of the SAME recording carries the
+# same error within a millisecond of σ. So Δref is not a noisier cross-session statistic: it is
+# one lap's corner time, whose noise the 0.07 s step (`library.PB_PRECISION_S`, two LAP times on
+# the best instrument) was never measured on. The error's mean is +0.008 s at B's noise (the
+# reference is its recording's QUICKEST lap, partly a lucky one); RMS keeps it in.
+# THE REFERENCE IS RECORDING B, as `focus.CORNER_DAY_SIGMA_S`'s is: the step holds for the typical
+# real recording; at C's noise the rule would give 0.06 s, and at A's 0.21 s, where 0.12 s
+# under-covers. The driver's own scatter (a best lap against another day's best differs truly by
+# 0.041 s sd) is a fact about two laps, NOT in σ: the colour must beat the measurement alone.
+# Power at B's noise, a true corner gain coloured "faster": 0.10 s on 35 %, 0.15 s on 70 %,
+# 0.20 s on 90 % (0.07 s: 70 / 90 / 97 %, but it coloured 14007 of 35280 unchanged cells, 4896 of
+# them under 0.03 s on truth; 0.12 s colours 5931, 1295). Δbest keeps the timing step: this
+# package changes no single-recording surface, though the table shows it carries the same σ.
+REFERENCE_CORNER_SIGMA_S = 0.0435
+REFERENCE_CORNER_LEVEL_S = round(DIFF_2SIGMA_K * REFERENCE_CORNER_SIGMA_S, 2)
+
+
+def corner_delta_step(cross_recording: bool) -> float:
+    """The step under which a corner's Δ column (and a corner card) reads level: the timing step
+    against a lap of this recording, the reference-lap corner step against another recording's
+    (never the narrower of the two)."""
+    if not cross_recording:
+        return PB_PRECISION_S
+    return max(REFERENCE_CORNER_LEVEL_S, PB_PRECISION_S)
+
 
 def sector_key(col: int) -> int:
     """The stretch key of sector column `col` (0-based: S1 is -1)."""
