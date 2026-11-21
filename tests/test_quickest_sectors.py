@@ -586,6 +586,70 @@ def test_the_walk_stays_among_the_sectors_and_says_where_it_ends():
         prefs.set_corners_view("lap")
 
 
+def test_a_lap_timed_as_measured_says_so_in_every_split_cell_and_the_row_it_leads():
+    """cool/sector-dedrift-followup, on the real window over the demo with 2 lines: PLANT the 20 m ×
+    400 m excursion (the planted-shift tests' construction) on S1's quickest lap, so its robust
+    shift is refused and its splits are timed as measured inside a de-drifted session. The lap still
+    counts (the SPLITS grid's best and Quickest passes stay one source), and every split cell of it
+    — the Stats page's SPLITS grid, the lap table's S columns — and a sector row it is the quickest
+    of carry `stats.SPLIT_AS_MEASURED_NOTE`; no other lap's cells do."""
+    import numpy as np
+
+    from studio.lap_table import QUICKEST_AS_MEASURED_TIP, lap_label
+    prefs.set_corners_view("quickest")
+    win = _window(2)
+    try:
+        view, s = win.view, win.session
+        lap = s.split_matrix().best_lap[0]
+        orig = s._lap_columns
+
+        def planted(lid):
+            t, xs, ys, v, cum = orig(lid)
+            if lid != lap:
+                return t, xs, ys, v, cum
+            u = np.clip((cum - 250.0) / 400.0, 0.0, 1.0)
+            w = 20.0 * np.sqrt(np.sin(np.pi * u))
+            hx, hy = np.gradient(xs), np.gradient(ys)
+            n = np.hypot(hx, hy)
+            n[n == 0] = 1.0
+            return t, xs - w * hy / n, ys + w * hx / n, v, cum
+
+        s._lap_columns = s.corners._lap_columns = planted
+        s.corners.invalidate_stats()
+        s._sector_collapse_cache = None
+        assert s.sector_as_measured_ids() == {lap}, s.sector_as_measured_ids()
+        m = s.split_matrix()
+        assert lap in m.lap_ids          # still counted
+        view.rebuild_derived_views()
+        _settle()
+        note = stats.SPLIT_AS_MEASURED_NOTE
+        grid = view.stats_view.splits_table
+        for r, lid in enumerate(m.lap_ids):
+            for c in range(m.columns):
+                tip = grid.item(r, c + 1).toolTip()
+                assert (note in tip) == (lid == lap), (lid, c, tip)
+        lt = view.table
+        first_s = lt.table.columnCount() - lt._n_split_cols() - 1     # the S columns, then spacer
+        for r in range(lt.table.rowCount()):
+            for c in range(first_s, first_s + lt._n_split_cols()):
+                item = lt.table.item(r, c)
+                if item is not None and item.text():
+                    assert (note in item.toolTip()) == (lt._lap_id(r) == lap), (r, c)
+        q = view.corners_page.quickest
+        led = [p for p in q.sectors.passes if p.lap_id == lap]
+        for p in q.sectors.passes:
+            tip = q.table.item(q.row_of(p.cid), 1).toolTip()
+            want = QUICKEST_AS_MEASURED_TIP.format(lap=lap_label(lap))
+            assert (want in tip) == (p.lap_id == lap), (p.cid, tip)
+        print(f"lap {lap + 1} timed as measured; it leads {len(led)} sector row(s)")
+    finally:
+        del s._lap_columns
+        s.corners._lap_columns = orig
+        s.corners.invalidate_stats()
+        _close(win)
+        prefs.set_corners_view("lap")
+
+
 def test_the_menu_plays_and_exports_a_sector_and_greys_out_a_level_compare_and_cmd_k_lists_it():
     from studio import command_palette
     prefs.set_corners_view("quickest")

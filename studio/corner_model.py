@@ -704,18 +704,25 @@ class CornerModel:
         # reproduce an old one's value.
         self.generation = object()
 
-    def invalidate(self) -> None:
+    def invalidate(self, keep_geometry: bool = False) -> None:
         """Drop EVERY corner cache — called from Session.set_timing_lines (the single
         re-segmentation point): the corner set is detected on + projected through the
-        segmentation, so all of them are stale after a timing-line change."""
+        segmentation, so all of them are stale after a timing-line change.
+
+        `keep_geometry`: the start line did NOT move (a sector line was drawn, dragged or
+        removed), so the laps are the same laps and the session geometry, its per-lap shifts and
+        the sector timing's robust shifts — functions of the laps' traces, the clean-lap set and
+        the best lap only — are kept rather than refitted on every drag (cool/sector-dedrift-
+        followup: they were about 6 ms of a sector drag's ~10)."""
         self._basis_cache = _UNSET
         self._stats_cache.clear()
         self._bests_cache = _UNSET
         self._segment_bests_cache = _UNSET
         self._align_cache.clear()
-        self._geometry_cache = _UNSET
-        self._shift_cache.clear()
-        self._timing_cache.clear()
+        if not keep_geometry:
+            self._geometry_cache = _UNSET
+            self._shift_cache.clear()
+            self._timing_cache.clear()
         self._ref_align_cache = None
         self.generation = object()
 

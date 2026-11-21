@@ -43,6 +43,7 @@ Run (the output directory must not exist yet, or be empty — nothing is ever ov
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import math
@@ -757,8 +758,41 @@ def _track_id(trak: bytes) -> int:
     raise ValueError("trak without a tkhd")
 
 
+# Within `reuse_placeholder_video()`: (frames, ffmpeg, per_payload) -> an already-encoded copy.
+_PLACEHOLDER_CACHE: dict | None = None
+
+
+@contextlib.contextmanager
+def reuse_placeholder_video():
+    """Within the block, the flat placeholder picture is encoded ONCE per length and copied for every
+    later recording of that length: ffmpeg's ~1 s per recording was most of a test that generates
+    thirty (tests/test_quickest_passes.py's luck re-measure). The bytes are ffmpeg's own output for
+    the same arguments, so every file is what it would have been; the copies live in a temporary
+    directory removed on exit."""
+    global _PLACEHOLDER_CACHE
+    keep = _PLACEHOLDER_CACHE
+    with tempfile.TemporaryDirectory(prefix="synth_placeholder_") as tmp:
+        _PLACEHOLDER_CACHE = {"dir": tmp}
+        try:
+            yield
+        finally:
+            _PLACEHOLDER_CACHE = keep
+
+
 def _encode_video(out_path: str, frames: int, ffmpeg: str,
                   per_payload: int = FRAMES_PER_PAYLOAD) -> None:
+    cache = _PLACEHOLDER_CACHE
+    if cache is not None:
+        key = (frames, ffmpeg, per_payload)
+        if key not in cache:
+            cache[key] = os.path.join(cache["dir"], f"placeholder_{len(cache)}.mp4")
+            _encode_video_now(cache[key], frames, ffmpeg, per_payload)
+        shutil.copyfile(cache[key], out_path)
+        return
+    _encode_video_now(out_path, frames, ffmpeg, per_payload)
+
+
+def _encode_video_now(out_path: str, frames: int, ffmpeg: str, per_payload: int) -> None:
     rate = per_payload * 1000                             # 30 -> 30000/1001 (29.97 fps)
     subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     f"color=c=0x1d2330:s=320x180:r={rate}/1001", "-frames:v", str(frames),
