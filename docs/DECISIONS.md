@@ -2038,8 +2038,8 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 
 ## 28. Recorded at the 0.25.0 release, 2026-11-21
 
-- **v0.25.0 is a minor release**: 9 pull requests, #704 to #712, Wave 22 of the campaign section 8
-  records, its theme "what leaves the app, and what a missing GPS fix does".
+- **v0.25.0 is a minor release**: 10 pull requests, #704 to #712 and #714, Wave 22 of the campaign
+  section 8 records, its theme "what leaves the app, and what a missing GPS fix does".
   - #704: each ⚠ lap is counted once, under the kind it wears, in DATA TRUST and the report's
     summary; the Lap Race names a GPS-dropout lap it leaves out "GPS dropout", not "no on-track
     match".
@@ -2059,6 +2059,11 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - #712: a lap with a GPS fix missing within the smoother's reach of its start/finish crossing,
     or with the trace starting or ending there, wears the GPS-dropout ⚠; when more than half the
     valid laps wear it the session reads GPS quality low.
+  - #714 (from this release's QA, below): the off-line rule measures every lap whose trace is
+    whole, skipping only a gap inside the lap or a lap timed across a missing chapter; when every
+    lap is ⚠ the best lap is a dropout-only lap or none, never one off the line or timed across a
+    missing chapter; the "outside your laps" notice stays when the lap vote made the session low;
+    one dropout mark per hole.
 - **No new owner ruling.** The wave ran under section 19's of 2026-11-19.
 - **What was decided for him**, each open to his overrule and each reversible:
   - **Excluded laps go in laps.csv's trailer, not as rows.** The file promises one row per valid
@@ -2097,42 +2102,71 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   (44.631 s) read as in 0.24.0, no lap is ⚠ and the verdict is clean; its laps.csv, lap card and
   best-lap and lap-12 clips (decoded at 20 s and at the last frame) are byte-identical from
   v0.24.0's studio/ and from 0.25.0.
+- **Round 2, after #714**, on the merged tree: the infield-cut recording with fixes missing at six
+  crossings now names lap 10 "left the line … by 34 m" in the Laps tab, laps.csv (`off-line`),
+  the report and the Lap Race card, and the best lap is lap 9 (0:45.190), a lap with no ⚠; with
+  a hole at lap 10's own crossing it still reads off the line. With a fix missing at every
+  crossing, lap 10 is off the line and the best is a dropout-only lap. A session in the lap-vote
+  low state keeps its "outside your laps" notice, and one hole draws one mark. A forced state
+  with every lap off the line (no dropout-only lap) shows no best on the Laps tab, Stats and
+  report, decides no debrief or Library best, refuses the lap card and lap strip, and crashes
+  nothing. The demo's figures and its laps.csv, lap card and clip frames are again
+  byte-identical to v0.24.0's.
 - **The media.** `hero.png`, `og.png`, `map.png`, `accuracy.png`, `moments.png`, `quickest.png`,
   `debrief.png`, `lapstrip.png` and `report.png` (its own run) were re-captured on the pinned
   synthetic demo at 0.25.0 and are byte-identical to the files already committed. One capture of
   `lapstrip.png` came out different in its "median" and "best" labels (442 pixels, the same two
   labels as at 0.24.0) and a second reproduced the committed file: that render is not
-  deterministic in those labels, and the committed pixels are the ones kept. The waivers of
-  `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are
-  renewed: a demo render of the data-trust shot changed in its Timing row's words only (#709:
-  "0% of fixes inside your laps rejected"), the ideal-lap shot is byte-identical, and the export
-  changes (#710, #711) reach neither a landscape best-lap clip nor a frame of a lap with no ⚠.
+  deterministic in those labels, and the committed pixels are the ones kept. Re-checked after
+  #714: `map.png`, `accuracy.png`, `moments.png`, `quickest.png`, `debrief.png` and `report.png`
+  are byte-identical again; `hero.png` (and `og.png`, cut from it) came out different in the Δ
+  chart's axis gutter only (0.37 % of pixels), the same output from the tree before #714 as from
+  the one after it, as at 0.24.0; `lapstrip.png` flickered between its two states. The committed
+  pixels are kept. The waivers of `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg`
+  and `best-lap.mp4` are renewed: a demo render of the data-trust shot changed in its Timing
+  row's words only (#709: "0% of fixes inside your laps rejected"), the ideal-lap shot is
+  byte-identical, and the export changes (#710, #711) reach neither a landscape best-lap clip nor
+  a frame of a lap with no ⚠; each was re-checked after #714 with the same result.
 - **What could not run for it.** No real footage was used, so every `footage.*` check reports
   Skipped by name, and whether any lap of Sandown 3h wears the new dropout ⚠ was not re-measured
   here (#712's real-footage golden dump was unchanged). The full gate, the soak and the smoke run
   on the release branch, not in the QA pass.
-- **Found in this release's QA between its pull requests** (#712 × #698): the off-line test
-  measures only laps with no dropout, and #712 widened the dropout to near-line holes. A cut lap
-  whose session has most laps holed is no longer measured against enough laps, and is crowned
-  best: on the infield-cut recording with single fixes missing at six crossings (11 of 14 laps
-  ⚠, the session low), lap 10, 929 m and 34 m off the line, is "★ Session best" at 0:44.227 in
-  the Laps tab, the lap strip, the lap card and the report, where 0.24.0 kept it out on the same
-  input. A cut lap that also has a near-line hole is named "GPS dropout" instead of "left the
-  line".
-- **Found in the QA, not fixed** (each minor): the status bar's "rejected for N s of driving
-  outside your laps, so a lap there may be missing" is dropped when the lap vote makes the session
-  low; one hole at a crossing gives two identical dropout marks, the second lap's lying before its
-  start; the ghost's reason says a near-line dropout lap's "place on track is a guess"; the
-  report's "Not counted" cell wraps "gps-dropout" at its hyphen; DATA TRUST's Timing row can read
-  "0% of fixes inside your laps rejected — GPS fixes missing at the line on 8 of 14 laps"; the lap
-  card and the lap strip stamp "estimated timing (est)" on a true-clock session that is low by the
-  vote, as they already did for a low share.
+- **Found in this release's QA between its pull requests, and fixed before the tag** (#712 ×
+  #698): the off-line test measured only laps with no dropout, and #712 widened the dropout to
+  near-line holes. On the infield-cut recording with single fixes missing at six crossings (11 of
+  14 laps ⚠, the session low), lap 10, 929 m and 34 m off the line, was "★ Session best" at
+  0:44.227 in the Laps tab, the lap strip, the lap card and the report, where 0.24.0 kept it out
+  on the same input; and a cut lap with a near-line hole was named "GPS dropout". Fixed in #714,
+  with two minor ones found beside it: the "outside your laps" notice dropped in the lap-vote low
+  state, and two identical marks for one hole.
+- **Found in the round-2 QA, not fixed.**
+  - **A cut lap is still the best when fewer than four laps have a whole trace**, as in 0.24.0:
+    on the infield-cut recording with a 1 s gap inside 11 of its laps, lap 10 (0:44.227) is
+    unflagged and best, in a session that reads low; v0.24.0's studio/ gives the same on that
+    input. The off-line rule needs four laps to fit its line.
+  - **The lap-vote sentence says "GPS fixes are missing at the line on 11 of 14 laps"** when the
+    laps' dropouts are gaps inside them, not at the line.
+  - **With no best lap, File ▸ Export overlay video… warns that the timing is provisional** and the
+    clip will carry a PROVISIONAL mark, on a verified start line; the lap card and lap strip say
+    "no verified lap". Seen only in a forced state with every lap off the line.
+  - **The lap strip's legend truncates** "quicker, GPS dropout or left the line (not …" when
+    quicker ⚠ laps of two kinds share a line.
 - **Open for the owner** (new, most important first).
   - **Sector splits and the ideal lap can move by about ±46 ms when a fix is missing near a
     sector line**, with nothing flagged: the new rule looks only at the start/finish crossings.
-  - **The bests fallback still crowns a ⚠ lap when every lap is flagged** (in the session only;
-    the PB is refused).
+  - **The bests fallback still crowns a dropout-only ⚠ lap when every lap is flagged** (in the
+    session only; the PB is refused), and the lap card shows it as "BEST LAP" with no ⚠.
   - **The time-centred smoother's re-cut**, which would fix the values instead of flagging them.
+  - **A dropout shorter than 0.35 s in the last 0.7 s before the line counts as a whole trace** for
+    the off-line rule.
+  - **A ⚠ lap whose only hole sits just past its finish has its mark under the neighbouring lap.**
+  - **The ghost's reason says a lap with one fix missing at its line has a "place on track [that]
+    is a guess".**
+  - **The report's "Not counted" cell wraps "gps-dropout" at its hyphen.**
+  - **DATA TRUST's Timing row can read "0% of fixes inside your laps rejected — GPS fixes missing
+    at the line on 8 of 14 laps".**
+  - **The lap card and the lap strip stamp "estimated timing (est)"** on a true-clock session that
+    is low by the lap vote, as they already did for a low share.
   - **laps.csv has no key row for `flag`.**
   - **A ⚠ lap's corner-pass clip is untagged.**
   - **An off-line lap has no Quality code** in the report or laps.csv.

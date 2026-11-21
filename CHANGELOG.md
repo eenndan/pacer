@@ -11,8 +11,8 @@ All notable changes to Pacer are documented here. The format is based on
 ### Highlights
 
 - **A missing GPS fix at the line is flagged.** A lap with a fix missing within the smoother's
-  reach of its start/finish crossing wears the GPS-dropout ⚠ and is kept out of the bests; no
-  lap time is changed (#712)
+  reach of its start/finish crossing wears the GPS-dropout ⚠ and is kept out of the bests; a lap
+  that cut the track still reads "off the line" (#712, #714)
 - **Most laps flagged means GPS quality low.** When more than half the laps wear that ⚠, the
   session says so and judges no PB, focus list or debrief on it (#712)
 - **"GPS quality low" is judged inside your laps.** Fixes rejected on the out-lap or in-lap no
@@ -38,6 +38,13 @@ All notable changes to Pacer are documented here. The format is based on
 
 ### Fixed
 
+- A lap that cut across the infield is flagged off the line again when most laps miss a GPS fix
+  at the line; it was crowned best lap. Such a lap reads "left the line", not "GPS dropout". (#714)
+- When every lap is ⚠, the best lap is never one off the line or timed across a missing chapter.
+  (#714)
+- One GPS fix missing at a start/finish line draws one dropout mark, not two. (#714)
+- "GPS fixes rejected … outside your laps" still shows when most laps miss a fix at the line.
+  (#714)
 - A lap with a GPS fix missing just before or after its start/finish line now wears the dropout ⚠
   and stays out of the bests: the missing fix could move its time by tens of ms, unflagged. (#712)
 - A ⚠ lap's clip and compare say "⚠ not counted", draw its Δ neutral (never a green "faster than
