@@ -1057,12 +1057,15 @@ def test_the_focus_prose_is_its_tables_arithmetic():
     then, now = _focus_pair()
     text = _flatten(_read(_FOCUS))
     margin = _constant(_COACHING, "SPREAD_MARGIN")
-    # The bar is the WIDER of the two spreads, and a change under the timing step is no change
-    # either (cool/focus-verdict-gates) — read both off the code rather than assume them.
+    # The bar is the WIDER of the two spreads, and a change under the step is no change either:
+    # the timing step (cool/focus-verdict-gates), widened to the cross-session one
+    # (cool/focus-cross-session-floor) — read both off the code rather than assume them.
     assert re.search(r"spread = max\(item\.iqr_s, now\.iqr\)\s+if abs\(delta\) < SPREAD_MARGIN \* spread "
-                     r"or library\.within_timing_precision\(delta\):",
+                     r"or abs\(delta\) < level_step\(\):",
                      _read(_FOCUS)), "focus.verdict's spread test changed; update this check and the table"
-    step = _constant(_LIBRARY, "PB_PRECISION_S")
+    from studio import focus
+    step = focus.level_step()
+    assert step == max(_constant(_LIBRARY, "PB_PRECISION_S"), focus.CROSS_SESSION_LEVEL_S)
     words = {k: _constant(_FOCUS, k) for k in ("OUTCOME_UNCHANGED", "OUTCOME_IMPROVED", "OUTCOME_SLOWER")}
     for r in rows:
         assert abs(r.change - (r.now_med - r.then_med)) <= 0.001 + 1e-9, f"{r!r}: change is not now − then"

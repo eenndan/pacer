@@ -170,6 +170,16 @@ at the nearest fix. On a synthetic recording (row 2 of
 noise-free, but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: several times a lap's.
 No official timing has checked a split.
 
+**A corner's typical time on two different days** is what the focus list compares, and each
+recording brings its own bias that more laps of it do not remove. On 40 synthetic race days of one
+driver with nothing changed
+([`studio/dev/probes/focus_cross_session.py`](../studio/dev/probes/focus_cross_session.py)), at
+GPS noise 4.0, whose per-lap σ is 0.053 s, recording B's, one session's corner typical carries a
+bias of σ 0.0351 s against truth (0.0342–0.0361 s over four seed sets of ten days), so two days'
+corner times closer than 0.10 s (2√2σ) read "no change you can act on". At recording A's noise
+the same rule gives 0.16 s, and the 0.10 s step still calls 262 of 1260 unchanged corners faster
+or slower. No official timing has checked a corner either.
+
 ## Why this matters
 
 Lap-timer makers publish a resolution, such as 0.01 s; this page publishes the **residuals**
