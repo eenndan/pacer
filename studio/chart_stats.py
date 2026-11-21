@@ -14,6 +14,8 @@ from typing import NamedTuple
 
 import numpy as np
 
+from .stats import house_step
+
 # ---------------------------------------------------------------- the window-statistic vocabulary
 # The six statistics the visible-range readout can show, in the order the selector lists them.
 # `current` is the value under the playhead; the other five are reductions over whatever x-range
@@ -93,13 +95,22 @@ STAT_LABELS = {
 # GPS (telemetry) clock whatever that name says, never a ∫ds/v reconstruction of it.
 SLOPE_MIN_INTERVAL_S = 1.0
 # The measured speed-channel noise above (sigma of the 10 Hz residual, median of 24 laps), as the
-# ONE named number: the slope note below prints it, and the speed chart's gain shading (plots_view)
-# leaves a gap between two laps' traces unshaded while it is inside it.
-SPEED_NOISE_KMH = 0.62
+# ONE named number: the slope note below prints it, and GAIN_GATE_KMH below is the house rule on it.
+# It is the only speed noise ever measured on a real recording, so it is the app's speed anchor
+# (tests/test_measured_figures.py pins it here, as library.py's REFERENCE_LAP_SIGMA_S for time).
+SPEED_SIGMA_KMH = 0.62
+# THE ONE SPEED-GAP STEP (cool/apex-delta-at-noise): twice the noise of a difference of two speed
+# readings, the house rule (stats.house_step, 2·√2σ) on SPEED_SIGMA_KMH — 1.75 km/h. The speed
+# chart's gain shading (plots_view) leaves a gap between two laps' traces unshaded inside it, and the
+# Corners table's Δapex (lap_table.apex_delta_colour) is coloured only from it. An apex speed is the
+# lowest fix in a corner, so its noise is at most one fix's: on the synthetic grid, whatever the
+# apex's shape, one apex speed carries 0.32-0.53 km/h, never more than a single fix
+# (studio/dev/probes/apex_speed_sigma.py) — so the table needs no step of its own.
+GAIN_GATE_KMH = house_step(SPEED_SIGMA_KMH)
 # ...and the sentence the UI says instead of a number, so the reason travels with the refusal.
 SLOPE_FLOOR_NOTE = (
     f"slope needs ≥ {SLOPE_MIN_INTERVAL_S:.1f} s between the cursors. The GPS is 10 Hz and its "
-    f"speed noise is ±{SPEED_NOISE_KMH:.2f} km/h, so a shorter interval reports mostly that "
+    f"speed noise is ±{SPEED_SIGMA_KMH:.2f} km/h, so a shorter interval reports mostly that "
     "noise — 10% of the value at 1.0 s, 20% at 0.5 s, and over half of it one sample apart.")
 
 

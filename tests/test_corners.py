@@ -9,6 +9,7 @@ EXACTLY. The Session wiring runs on a bare Session (tests/_synthetic seeding idi
 pacer Laps, no telemetry file); the CornerTable + map corner-marker overlay run offscreen
 on stubs. Run:  QT_QPA_PLATFORM=offscreen python tests/test_corners.py
 """
+import math
 import os
 import sys
 from types import SimpleNamespace
@@ -822,6 +823,119 @@ def test_corner_delta_ref_is_neutral_under_the_reference_lap_corner_step():
         assert got[0.08] == QColor(theme.behind_colour()), got
         assert got[-0.10] == QColor(theme.ahead_colour()), got
     print(f"ok Δref: neutral under {step:.2f} s against another recording, as Δbest")
+
+
+def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
+    """cool/apex-delta-at-noise. Δapex was coloured by `theme.delta_colour(−Δ)`, whose 0.005 dead
+    band is a TIME tolerance applied to km/h: +0.04 km/h printed "+0.0" in green. It is now coloured
+    only at or past the app's one speed-gap step, `chart_stats.GAIN_GATE_KMH` (the gate the speed
+    chart shades from, 1.75 km/h), decided on the PRINTED figure in the display unit against the
+    gate as the hover prints it: inside it the figure stays, neutral; the first printed figure at
+    or past the gate is coloured (+ faster = green); "0.0" is never coloured — in km/h and mph,
+    against a lap of this recording and against another recording's. The header says it once."""
+    _qapp()
+    import dataclasses
+
+    from PySide6.QtGui import QColor
+
+    from studio import chart_stats, theme, units
+    from studio.lap_table import BASE_COLOR, CornerTable, _corner_col_tips, apex_delta_colour
+    gate = chart_stats.GAIN_GATE_KMH
+    assert gate == 1.75
+    cs, cum_a, sp_a, el_a, cum_b, sp_b, el_b = _two_laps()
+    ref = C.lap_corner_stats(cs, float(cum_a[-1]), cum_a, sp_a * 3.6, el_a)
+    st = C.lap_corner_stats(cs, float(cum_a[-1]), cum_b, sp_b * 3.6, el_b, ref=ref)
+    at = math.ceil(gate * 10 - 1e-9) / 10            # the first printed figure at or past the gate
+    inside = round(at - 0.1, 1)                      # the last printed figure under it
+    assert (at, inside) == (1.8, 1.7)
+    cases = [0.04, -0.04, 1.02, inside, -inside, 1.74, at, -at, 1.76, 3.0]
+    for unit in ("kmh", "mph"):
+        u_gate = round(units.convert_speed(gate, unit), 2)       # as the hover prints it
+        for d in (*cases, 0.0, 0.049, -0.049, gate, -gate):
+            printed = float(fmt_signed(units.convert_speed(d, unit), 1).replace("−", "-"))
+            col = apex_delta_colour(d, unit)
+            assert (col is None) == (abs(printed) < u_gate - 1e-9), (unit, d, col)
+            if printed == 0.0:
+                assert col is None, (unit, d)
+            if col is not None:
+                assert col == (theme.ahead_colour() if d > 0 else theme.behind_colour())
+    assert apex_delta_colour(1.6, "mph") is None and apex_delta_colour(1.8, "mph") is not None
+    # through the real table: the figure is printed, its colour as above (km/h)
+    cs_n = [cs[i % len(cs)] for i in range(len(cases))]
+    st_n = [dataclasses.replace(st[i % len(st)], delta=0.5, apex_speed_delta=d)
+            for i, d in enumerate(cases)]
+    stub = _StubSession(cs_n, {0: [dataclasses.replace(s, delta=0.0, apex_speed_delta=0.0)
+                                   for s in st_n], 1: st_n}, [s.time - 1.0 for s in st_n])
+    table = CornerTable(stub)
+    table.set_lap(1)
+    got = {}
+    for r, d in enumerate(cases):
+        item = table.table.item(r, 4)
+        assert item.text() == fmt_signed(d, 1), (item.text(), d)       # the figure is still shown
+        got[d] = item.foreground().color()
+    for d in (0.04, -0.04, 1.02, inside, -inside, 1.74):
+        assert got[d] == BASE_COLOR, (d, got[d].name())
+    assert got[at] == QColor(theme.ahead_colour()) == got[1.76] == got[3.0], got   # faster: green
+    assert got[-at] == QColor(theme.behind_colour()), got
+    tip = table.table.horizontalHeaderItem(4).toolTip()
+    note = ("A gap under 1.75 km/h is not coloured: two speed readings differ by up to that from "
+            "the GPS alone (measured on a real recording), the same threshold the speed chart "
+            "shades from.")
+    assert tip.endswith(note) and tip.count("under") == 1, tip          # the step, said once
+    ref_tip = _corner_col_tips("mph", "Other day")[4]
+    assert "under 1.09 mph is not coloured" in ref_tip and "lap's's" not in ref_tip, ref_tip
+    print(f"ok Δapex: neutral under {gate:.2f} km/h, coloured from {at:.1f}, '0.0' never coloured")
+
+
+def test_the_apex_speed_noise_is_capped_by_one_fix_on_the_worst_shape():
+    """Why Δapex reads the speed chart's gate and no step of its own: an apex speed is the lowest
+    fix in the corner, so its σ depends on the apex's shape (`studio/dev/probes/apex_speed_sigma.py`:
+    about 0.33 km/h on a flat arc, 0.53 on a straight-sided 10 km/h V, where one fix carries the
+    minimum) but never exceeds one fix's. On the probe's worst shape, at a small fixed seed set at
+    the reference noise, the apex σ is within the synthetic per-sample speed σ (the chart's own
+    statistic) plus two standard errors; and the gate is the house rule on the per-sample σ
+    measured on a real recording, read by the chart and the table from one place."""
+    import shutil
+    import tempfile
+
+    from studio import (
+        app_support,
+        chart_stats,
+        demo,
+        focus,
+        library,
+        logsetup,
+        marks,
+        prefs,
+        session_record,
+        sidecar,
+        stats,
+        track_db,
+    )
+    assert chart_stats.GAIN_GATE_KMH == stats.house_step(chart_stats.SPEED_SIGMA_KMH)
+    seams = (demo, focus, library, logsetup, marks, prefs, session_record, track_db)
+    keep = (sidecar.save, [m._app_support_dir for m in seams],
+            os.environ.get(app_support.DIR_ENV))
+    from studio.dev.probes import apex_speed_sigma as probe
+    from studio.dev.probes import focus_cross_session as sibling
+    work = tempfile.mkdtemp(prefix="apex_speed_cap_check_")
+    try:
+        got = probe.cap_check(work, sibling.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.WORST_SHAPE)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        sidecar.save = keep[0]
+        for m, seam in zip(seams, keep[1], strict=True):
+            m._app_support_dir = seam
+        if keep[2] is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = keep[2]
+    assert probe.WORST_SHAPE == probe.SHAPES[-1] == "vee:10"
+    assert got["apex"] <= got["sample"] + 2.0 * got["apex_se"], got
+    # ...and the worst shape is not a quiet one: its σ is well past the flat arc's ~0.33 km/h
+    assert got["apex"] > 0.40, got
+    print(f"ok apex σ cap: {probe.WORST_SHAPE} {got['apex']:.3f} ± {got['apex_se']:.3f} km/h ≤ "
+          f"one fix {got['sample']:.3f} km/h")
 
 
 def test_the_reference_lap_corner_step_is_the_house_rule_on_the_measured_sigma():

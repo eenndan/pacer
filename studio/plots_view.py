@@ -165,12 +165,13 @@ def _ideal_line_pen():
 # opposite of the visible gap. Built once per refresh (a selection, axis or palette change), never
 # on the tick.
 GAIN_FILL_ALPHA = 110
-# THE GATE IS TWICE THE NOISE OF A DIFFERENCE OF TWO TRACES. `SPEED_NOISE_KMH` is ONE trace's
+# THE GATE IS TWICE THE NOISE OF A DIFFERENCE OF TWO TRACES. `chart_stats.SPEED_SIGMA_KMH` is ONE trace's
 # residual sigma; the gap between two independent noisy traces has sigma * sqrt(2), so a gate at
 # one trace's sigma passes about half of pure-noise samples. Two sigma of the difference
 # (1.75 km/h) is the floor. Measured on noise-only pairs (`tests/_synthetic.drift_noise_laps`,
-# one recipe, ten seed pairs): a gate of SPEED_NOISE_KMH filled a median 18 % of the lap, all noise.
-GAIN_GATE_KMH = 2.0 * np.sqrt(2.0) * chart_stats.SPEED_NOISE_KMH
+# one recipe, ten seed pairs): a gate of SPEED_SIGMA_KMH filled a median 18 % of the lap, all noise.
+# The gate is `chart_stats.GAIN_GATE_KMH`, the app's one speed-gap step (the Corners table's Δapex
+# reads it too); imported, never redefined here.
 # A Δ-rate under this has no sign: the map's own floor for "no rate worth painting"
 # (`map_render.RATE_FLAT_EPS_SS`, the display floor of its legend). Without it, two laps with
 # identical motion carry a Δ-rate of float round-off (|rate| ~ 1e-14), whose sign the gap then
@@ -181,7 +182,7 @@ GAIN_LEGEND_SLOWER = "lap {lap} slower here"
 GAIN_TIME_MODE_NOTE = "gain shading: x = distance only"
 GAIN_TIP = (
     "Shaded where the speed gap is beyond twice the noise of two traces "
-    f"(±{GAIN_GATE_KMH:.2f} km/h) and the Δ-rate agrees: green "
+    f"(±{chart_stats.GAIN_GATE_KMH:.2f} km/h) and the Δ-rate agrees: green "
     "where this lap is quicker at that place, red where slower. It shows SPEED; the Δ chart below "
     "shows time — a gain made by line (a tighter line at a lower speed) can stay unshaded. "
     "Distance axis only: at the same time the two karts are at different places.")
@@ -195,7 +196,7 @@ def gain_signs(t_this, d_this, d_other, v_this, v_other):
     # Δ falling = gaining (the map's sign); a rate under the floor has no sign at all.
     sign = np.where(rate < -GAIN_RATE_FLOOR_SS, 1, np.where(rate > GAIN_RATE_FLOOR_SS, -1, 0))
     dv = np.asarray(v_this, float) - np.asarray(v_other, float)
-    shade = (np.abs(dv) > GAIN_GATE_KMH) & (np.sign(dv) == sign)
+    shade = (np.abs(dv) > chart_stats.GAIN_GATE_KMH) & (np.sign(dv) == sign)
     return np.where(shade, sign, 0).astype(int)
 
 

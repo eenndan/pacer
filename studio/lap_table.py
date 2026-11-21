@@ -74,7 +74,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import data_quality, motion, prefs, provenance_panel, story, theme, units
+from . import chart_stats, data_quality, motion, prefs, provenance_panel, story, theme, units
 from . import stats as stats_service
 from ._signal import (
     DIST_DECIMALS,
@@ -2720,6 +2720,37 @@ def corner_delta_colour(delta: float, step: float = PB_PRECISION_S) -> str | Non
     return theme.delta_colour(delta)
 
 
+def _apex_gate(unit: str | None) -> float:
+    """The speed-gap step (`chart_stats.GAIN_GATE_KMH`) in the display unit, AS THE HOVER PRINTS IT
+    (two decimals): the cell's printed figure is compared with this, so the two never disagree."""
+    return round(units.convert_speed(chart_stats.GAIN_GATE_KMH, unit), 2)
+
+
+def apex_level_note(unit: str | None) -> str:
+    """The Δapex header's one sentence: the speed-gap step in the display unit, and where it is
+    from. One step for both baselines: an apex speed's noise is at most one fix's."""
+    return (f"A gap under {_apex_gate(unit):.2f} {units.speed_label(unit)} is not coloured: two "
+            "speed readings differ by up to that from the GPS alone (measured on a real "
+            "recording), the same threshold the speed chart shades from.")
+
+
+def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
+    """The Corners table's Δapex colour: neutral (None) under the speed-gap step, else the shared
+    ahead/behind colour for a FASTER (green) or slower (red) apex (cool/apex-delta-at-noise).
+
+    It was `theme.delta_colour(-Δ)`, whose 0.005 dead band is a TIME tolerance in seconds applied
+    to km/h, so "+0.0" could print green. The step is the speed chart's gain gate,
+    `chart_stats.GAIN_GATE_KMH` (1.75 km/h, the house rule on the speed noise measured on a real
+    recording), against a lap of this recording or another's: an apex speed is the lowest fix in
+    the corner, so its noise is at most one fix's. Decided on the PRINTED value (`fmt_signed(·, 1)`
+    in the display unit, as the cell prints it) against the gate as the hover prints it, so "0.0"
+    is never coloured and the first coloured figure is the first printed one at or past the gate."""
+    printed = float(fmt_signed(units.convert_speed(delta_kmh, unit), 1).replace("−", "-"))
+    if abs(printed) < _apex_gate(unit) - 1e-9:
+        return None
+    return theme.delta_colour(-delta_kmh)
+
+
 def reference_from_another_recording(session) -> bool:
     """Is the Δ baseline a lap of ANOTHER recording — a reference loaded, and not this recording's
     own? getattr-guarded for the lighter test doubles (no reference seam: no reference)."""
@@ -2744,11 +2775,11 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
         delta_tip = (f"Δ vs the same corner on the reference recording's lap — {ref_label} "
                      f"(seconds; − is faster). {CORNER_DELTA_REF_LEVEL_NOTE}")
         apex_tip = (f"Δ apex speed vs the reference recording's lap — {ref_label} "
-                    f"({u}; + is faster)")
+                    f"({u}; + is faster). {apex_level_note(unit)}")
     else:
         delta_tip = ("Δ vs the best lap's same corner (seconds; − is faster). "
                      f"{CORNER_DELTA_LEVEL_NOTE}")
-        apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster)"
+        apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster). {apex_level_note(unit)}"
     return [
         "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
         "left-hander, clockwise a right. Click a row to play this lap's pass through that corner "
@@ -2853,7 +2884,7 @@ class CornerTable(QWidget):
 
     Session-best corner time is purple+bold; the Δ time column is coloured only outside its step
     (`corner_delta_colour`: timing precision, or the reference-lap corner step for Δref), Δapex
-    uses the shared delta colour.
+    only at or past the speed chart's gain gate (`apex_delta_colour`).
     Read-only/unsorted — track order is the meaning. A row click emits ``corner_clicked``
     so the app can ring that corner's apex on the map (B4: the Stats CORNERS and Coaching
     rows already did this — these rows were the odd surface out)."""
@@ -3214,11 +3245,11 @@ class CornerTable(QWidget):
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (fmt_signed(st.delta, 2), corner_delta_colour(st.delta, step))),
                 (f"{conv(st.apex_speed, u):.{SPEED_DECIMALS}f}", None),
-                # Apex-speed Δ: FASTER through the corner is better, so the shared Δ colour
-                # rule (negative = green) is applied to the NEGATED speed delta.
+                # Apex-speed Δ: FASTER through the corner is better (green), coloured only at
+                # or past the speed-gap step, on the printed figure (`apex_delta_colour`).
                 ((SELF_DELTA, theme.PROVISIONAL_COLOR) if baseline else
                  (fmt_signed(conv(st.apex_speed_delta, u), 1),
-                  theme.delta_colour(-st.apex_speed_delta))),
+                  apex_delta_colour(st.apex_speed_delta, u))),
                 (f"{conv(st.entry_speed, u):.{SPEED_DECIMALS}f}", None),
                 (f"{conv(st.exit_speed, u):.{SPEED_DECIMALS}f}", None),
                 (grip_pct, None),
