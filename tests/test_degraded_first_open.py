@@ -154,7 +154,9 @@ def _check_the_degraded_landing(win):
     assert not win.view.is_debrief(), (
         "a first open on degraded timing landed on a debrief it can fill with nothing: "
         f"{win.view.opportunities.debrief_block.full_text()!r}")
-    line = (f"GPS quality low ({quality.dropped_pct()}% of fixes rejected): too uncertain to judge "
+    # The share is of the fixes inside the timed laps (TimingQuality.over_laps), and says so.
+    line = (f"GPS quality low ({quality.dropped_pct()}% of fixes inside your laps rejected): too "
+            "uncertain to judge "
             "a PB or set a focus list, so no debrief")
     assert line in (win.statusBar().currentMessage() or ""), win.statusBar().currentMessage()
     assert focus.for_track(focus.load(), track) == [], "a default was promoted from this session"
@@ -197,8 +199,9 @@ def test_a_degraded_first_open_at_an_unnamed_circuit_promises_nothing():
             a, _b = _two_recordings(folder)
             _open(win, a)
             ctl, quality = win.library_ctl, win.session.timing_quality
-            # The measure's prefix only: at gate 0.0 it reads "0% of fixes rejected".
-            why = f"GPS quality low ({quality.dropped_pct()}% of fixes rejected)"
+            # The measure's prefix only: at gate 0.0 it reads "0% of fixes inside your laps
+            # rejected".
+            why = f"GPS quality low ({quality.dropped_pct()}% of fixes inside your laps rejected)"
             clause = f"{why}: too uncertain to judge a PB or set a focus list, so no debrief"
             # 1. Before the drag: the line still needs placing (lap times depend on it), and the
             #    notice says why placing it will decide nothing.
@@ -228,6 +231,43 @@ def test_a_degraded_first_open_at_an_unnamed_circuit_promises_nothing():
         QInputDialog.getText = ask
     print("ok unnamed: the pre-drag notice says why, no name is waited for, Save as track brings "
           "nothing")
+
+
+def test_driving_left_out_of_the_verdict_is_named_in_the_session_notice():
+    """The verdict is judged over the timed laps (`TimingQuality.over_laps`), so 20 s of fixes
+    rejected before the first crossing no longer downgrade the session; they may still have cost
+    it a lap with no crossing to start from, and the status line is where that is said, beside the
+    session's other clauses. A verdict that is low anyway adds nothing: its own clause says it."""
+    import numpy as np
+    from test_central_view_realqt import _studiowindow_with_view
+    from test_debrief_landing import _settle
+
+    from studio.data_quality import FixCensus, TimingQuality
+
+    t = np.arange(1000) * 0.1
+    win, _view = _studiowindow_with_view()
+    try:
+        for name, value in (("_drop_notice", None), ("_timing_restore_failed", False),
+                            ("_timing_restore_unreadable", False), ("_tracks_unreadable", False),
+                            ("_notice", None), ("_load_token", 0), ("_ref_load_token", 0),
+                            ("_load_workers", set()), ("_pending_load", None),
+                            ("_placeholder_timer", None)):
+            setattr(win, name, value)
+        base = win._session_notice() or ""
+        win.session._timing_quality = TimingQuality(
+            _census=FixCensus(t=t, rejected=t < 20.0)).over_laps((30.0, 90.0))
+        notice = win._session_notice() or ""
+        clause = ("GPS fixes rejected for 20 s of driving outside your laps, so a lap there may "
+                  "be missing")
+        assert clause in notice and notice.startswith(base), (base, notice)
+        win.session._timing_quality = TimingQuality(
+            _census=FixCensus(t=t, rejected=(t >= 40.0) & (t < 46.0))).over_laps((30.0, 90.0))
+        assert "outside your laps" not in (win._session_notice() or ""), win._session_notice()
+    finally:
+        win.close()
+        win.deleteLater()
+        _settle(0.1)
+    print("ok outside the laps: named in the session notice, and only when the verdict is clean")
 
 
 if __name__ == "__main__":

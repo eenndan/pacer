@@ -8,6 +8,7 @@ studio/_signal.py.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 
@@ -433,11 +434,17 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
     # below removes the rejected fixes and `_clean` removes the stationary lead-in they cluster in,
     # and the GPS9 re-anchoring after that moves the axis off the clock the scrubber runs on. The
     # verdict `_quality_ok` is the gate's own, so the strip cannot disagree with it.
+    raw_rejected = np.array([not _quality_ok(s) for s in samples], bool)
     strip = data_quality.build_quality_timeline(
         naive,
-        [not _quality_ok(s) for s in samples],
+        list(raw_rejected),
         [getattr(s, "dop", -1.0) for s in samples],
         span_s=float(sum(durations)))
+    # The moving raw fixes, kept for the verdict's census (`TimingQuality.over_laps`): the same
+    # "moving" `_gate_quality` counts, on the naive clock until the telemetry axis exists.
+    raw_naive = np.asarray(naive, float)
+    raw_speed = np.array([s.full_speed for s in samples], float)
+    raw_moving = np.isfinite(raw_speed) & (raw_speed > MIN_START_SPEED)
     # The offset table for the video layer: each chapter's VIDEO duration on one global axis — the
     # same number the C++ chain shifted this chapter's telemetry by. The GPMF durations ride along
     # only so `ChapterMap.desynced_chapters` can state where the two tracks disagree.
@@ -448,7 +455,9 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
     # a clean recording as "degraded" purely on how it was opened (D24 chapter 1 read 0.12 while the
     # SAME footage as all 3 chapters read 0.04). Judging quality on the fixes taken WHILE DRIVING
     # makes the verdict consistent; a recording that drops many fixes DURING MOTION still flags.
-    # (_gate_quality still logs the raw dropped count; `dropped` is unused past the log.)
+    # (_gate_quality still logs the raw dropped count; `dropped` is unused past the log.) Once the
+    # laps exist the share is judged again over the timed laps only (`timed_window`, at the foot),
+    # for the same reason one step further: an out-lap's rejected fixes time no lap either.
     samples, spans, naive, _dropped, dropped_fraction = _gate_quality(
         samples, spans, naive, moving_speed=MIN_START_SPEED)
     samples, spans, naive = _clean(samples, spans, naive)
@@ -475,6 +484,12 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
 
     # GPS9 true-clock spacing (re-anchored to the media clock); naive otherwise.
     times = _gps9_times(samples, naive)
+    # Every moving raw fix placed on that axis (a rejected one between its kept neighbours), so
+    # the verdict can be judged over the timed laps once they exist (`timed_window`, below).
+    spacing = float(np.median(np.diff(raw_naive))) if len(raw_naive) > 1 else 0.1
+    quality = replace(quality, _census=data_quality.FixCensus(
+        t=np.interp(raw_naive[raw_moving], np.asarray(naive, float), np.asarray(times, float)),
+        rejected=raw_rejected[raw_moving], spacing_s=spacing))
 
     # …and the conversion BACK, for the consumers that have to seek the picture (the exporter and
     # the player). This is the residual the comment at the head of this module measures: the axis
@@ -516,8 +531,18 @@ def load_recording(paths: list[str], smooth_window: int = SMOOTH_WINDOW):
         ys = np.fromiter((cs.local(s)[1] for s in samples), float, len(samples))
         speeds = np.fromiter((s.full_speed for s in samples), float, len(samples))
         _place_unknown_start_line(laps, xs, ys, speeds)
+    quality = quality.over_laps(timed_window(laps))
     return laps, cs, video_path, chapter_map, (accl, grav, cori, gyro, device), (
         track.name if track is not None else None), quality, strip
+
+
+def timed_window(laps) -> tuple[float, float] | None:
+    """(first, last) start/finish crossing on the telemetry axis — the span of the timed laps the
+    GPS-quality verdict is judged over (`TimingQuality.over_laps`) — or None below two crossings.
+    Every crossing opens a lap and the last one stays open, so the last crossing is the start of
+    the last lap."""
+    n = laps.laps_count()
+    return (laps.start_timestamp(0), laps.start_timestamp(n - 1)) if n >= 2 else None
 
 
 def _place_unknown_start_line(laps, xs, ys, speeds) -> None:

@@ -1597,6 +1597,9 @@ class StudioWindow(QMainWindow):
             it survived byte-identical across the very drag that answered it (QA MAP-06);
           * a FIRST OPEN ON DEGRADED TIMING — why it decided nothing (no PB, no focus list, no
             debrief), with the measure (``LibraryController.verdict_notice``, QA REG-2);
+          * DRIVING OUTSIDE THE LAPS that lost its GPS — fixes the verdict left out because they
+            time no lap, stated when they alone would have made it "GPS quality low": a lap there
+            may never have been timed (``TimingQuality.outside_laps``);
           * a SAVED-LINES failure — a sidecar that is on disk and could not be used. Distinct from
             the revert-guard rejection below it and from the (correctly silent) absent case: the
             user's hand-placed start/finish line is being discarded, and the app then goes on to
@@ -1648,7 +1651,11 @@ class StudioWindow(QMainWindow):
                           "drag it into place to fix lap timing") + verdict.line_wait
         # The first open's own clause: the name its PB and focus list wait for, or why degraded
         # timing decided nothing, with the measure (QA REG-2).
-        notice = " · ".join(p for p in (notice, verdict.clause) if p) or None
+        # Driving whose rejected fixes the GPS verdict left out because no lap was timed there —
+        # the only place a lap that never got a crossing is named (TimingQuality.outside_laps).
+        quality = getattr(session, "timing_quality", None)
+        outside = quality.outside_laps() if hasattr(quality, "outside_laps") else ""
+        notice = " · ".join(p for p in (notice, verdict.clause, outside) if p) or None
         # Its OWN clause, not a branch of the chain above: a detected track keeps timing_verified
         # True, so a discarded sidecar would otherwise be stated nowhere at all on exactly the
         # recording whose saved lines the user cared enough to place by hand.

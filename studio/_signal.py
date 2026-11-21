@@ -462,7 +462,9 @@ def _gate_quality(samples, spans, naive, moving_speed: float = 0.0):
         dividing the fixed lead-in drop count by the RAW total flags a clean recording as
         "degraded" purely on how it was opened (see the D24 chapter-1-vs-all-3 artifact). A
         recording that genuinely drops many fixes DURING MOTION still flags. ``moving_speed=0``
-        (the default) keeps the fraction over every fix — the historical behaviour."""
+        (the default) keeps the fraction over every fix — the historical behaviour. The load path
+        then narrows it once more, to the timed laps (`data_quality.TimingQuality.over_laps`); this
+        whole-drive share is what a recording with fewer than two crossings keeps."""
     keep = [i for i, s in enumerate(samples) if _quality_ok(s)]
     dropped = len(samples) - len(keep)
     if dropped:

@@ -2479,6 +2479,18 @@ def test_stats_view_trust_card_names_the_moving_fix_population():
     assert "WHILE MOVING" in v.trust.card.toolTip()
     # The measured value is the shipped one — the fix was the sentence, not the maths.
     assert sess.timing_quality.dropped_pct() == 0
+    # Judged over the timed laps (TimingQuality.over_laps), the row names THAT population, and
+    # the hover says where it runs: first crossing to last.
+    import numpy as np
+
+    from studio.data_quality import FixCensus
+    t = np.arange(1000) * 0.1
+    sess.timing_quality = TimingQuality(
+        _census=FixCensus(t=t, rejected=t < 20.0)).over_laps((30.0, 90.0))
+    v = StatsView(sess)
+    line = next(ln for ln in v.trust.card.text().split("\n") if ln.startswith("Timing:"))
+    assert line == "Timing: GPS9 true clock · 0% of fixes inside your laps rejected", line
+    assert "first start/finish crossing to your last" in v.trust.card.toolTip()
     print("test_stats_view_trust_card_names_the_moving_fix_population OK")
 
 

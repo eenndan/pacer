@@ -413,11 +413,19 @@ class TrustSection:
             # why the chip was lit found nothing that said so, and an amber chip landing on an
             # unmarked row is two surfaces disagreeing about one fact. The clause is
             # TimingQuality's own (`cost`), so it says what the banner and the chip's hover say.
-            value = f"{clock} · {quality.dropped_pct()}% of moving fixes rejected"
+            # `in_laps` is false only without two crossings (or on a stand-in quality): then the
+            # share is the whole drive's, and the row and its hover keep saying so.
+            in_laps = bool(getattr(quality, "in_laps", False))
+            fixes = "fixes inside your laps" if in_laps else "moving fixes"
+            value = f"{clock} · {quality.dropped_pct()}% of {fixes} rejected"
             cost = quality.cost()
             rows.append((TIMING_TERM, f"{value} — {cost}" if cost else value,
                          bool(quality.degraded)))
-            tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING. "
+            tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING, "
+                        "from your first start/finish crossing to your last. The stationary "
+                        "lead-in, the out-lap and the in-lap time no lap, so they are left out of "
+                        "the verdict." if in_laps else
+                        "The rejected-fix share is measured over the fixes taken WHILE MOVING. "
                         "The stationary lead-in before you drive off is trimmed by the loader "
                         "and left out of the verdict, so opening one chapter or all of them "
                         "gives the same answer.")

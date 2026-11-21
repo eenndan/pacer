@@ -158,6 +158,53 @@ def test_the_strip_does_not_blame_the_gps5_era_when_no_fix_ever_arrived():
     print("test_the_strip_does_not_blame_the_gps5_era_when_no_fix_ever_arrived OK")
 
 
+def _census(rejected_where):
+    """100 s of driving at 10 Hz on the telemetry axis, rejected where `rejected_where(t)`."""
+    import numpy as np
+    t = np.arange(1000) * 0.1
+    return dq.FixCensus(t=t, rejected=rejected_where(t), spacing_s=0.1)
+
+
+def test_the_share_is_judged_over_the_timed_laps():
+    """Fixes rejected before the first crossing time no lap: 20 s of them are 20% of the drive,
+    which used to read "GPS quality low" for laps that are untouched. Over the laps (30-90 s) the
+    share is 0, and the session notice names the 20 s instead (`outside_laps`)."""
+    q = TimingQuality(_census=_census(lambda t: t < 20.0)).over_laps((30.0, 90.0))
+    assert q.in_laps and q.dropped_fraction == 0.0 and not q.degraded, q
+    assert q.outside_laps() == ("GPS fixes rejected for 20 s of driving outside your laps, so a "
+                                "lap there may be missing"), q.outside_laps()
+    # A little rejected driving that would not have downgraded the drive is nothing to state.
+    small = TimingQuality(_census=_census(lambda t: t < 5.0)).over_laps((30.0, 90.0))
+    assert small.outside_laps() == "", small.outside_laps()
+    print("test_the_share_is_judged_over_the_timed_laps OK")
+
+
+def test_rejections_inside_the_laps_still_downgrade_in_plain_words():
+    """6 s rejected inside a 60 s span of laps is 10% of the laps' fixes (6% of the whole drive):
+    low, and every sentence says the share is of the fixes inside the laps."""
+    q = TimingQuality(_census=_census(lambda t: (t >= 40.0) & (t < 46.0))).over_laps((30.0, 90.0))
+    assert q.low_gps_quality and q.dropped_pct() == 10, q
+    assert q.untrusted() == "GPS quality low (10% of fixes inside your laps rejected)", q.untrusted()
+    assert q.summary() == ("GPS quality low — 10% of fixes inside your laps rejected; times may be "
+                           "less accurate."), q.summary()
+    assert "10% of fixes inside your laps were rejected" in q.detail(), q.detail()
+    assert "10% of fixes inside your laps were rejected" in q.concerns()[0], q.concerns()
+    assert q.outside_laps() == "", "a low verdict already says the GPS was poor"
+    print("test_rejections_inside_the_laps_still_downgrade_in_plain_words OK")
+
+
+def test_without_two_crossings_the_whole_drive_decides():
+    """No timed laps (fewer than two crossings): the share stays the whole drive's, worded as
+    before; and a verdict with no census (a stand-in, the default) is returned unchanged."""
+    q = TimingQuality(_census=_census(lambda t: t < 20.0)).over_laps(None)
+    assert not q.in_laps and abs(q.dropped_fraction - 0.2) < 1e-12, q
+    assert q.untrusted() == "GPS quality low (20% of fixes rejected)", q.untrusted()
+    assert q.outside_laps() == "", q.outside_laps()
+    plain = TimingQuality(dropped_fraction=0.5)
+    assert plain.over_laps((30.0, 90.0)) is plain
+    print("test_without_two_crossings_the_whole_drive_decides OK")
+
+
 def test_frozen_value_object():
     """It's an immutable verdict — safe to share one default instance as a class attribute."""
     q = TimingQuality()
