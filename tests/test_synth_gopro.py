@@ -221,6 +221,61 @@ def test_a_gap_ending_just_before_the_line_flags_the_lap_after_it():
     assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by a gap at its start, unflagged"
 
 
+TRACE_END_MARGIN_S = 0.4   # the kept trace starts (or ends) this close to a lap's crossing
+
+
+def test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap():
+    """The trace's own first fix is a run edge like any gap's: a recording whose kept fixes start
+    0.4 s before the first crossing averages them one-sidedly, and that lap moved +276 ms on the
+    demo circuit (review of #712), unflagged. Its lap now wears the dropout ⚠."""
+    rec, s = _load()
+    k = s.valid_lap_ids()[0]
+    c = s.laps.start_timestamp(k)
+    moved, dropout = _moved_by_rejection(lambda t: t < c - TRACE_END_MARGIN_S)
+    print(f"  first lap {k}: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
+    assert abs(moved[k]) > MOVED_S, f"the first crossing did not move ({moved[k] * 1e3:+.1f} ms)"
+    assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by the trace's start, unflagged"
+
+
+def test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap():
+    """…and its last fix: kept fixes that stop 0.4 s after the last crossing move the last lap."""
+    rec, s = _load()
+    k = s.valid_lap_ids()[-1]
+    c = s.laps.start_timestamp(k) + s.lap_time(k)
+    moved, dropout = _moved_by_rejection(lambda t: t > c + TRACE_END_MARGIN_S)
+    print(f"  last lap {k}: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
+    assert abs(moved[k]) > MOVED_S, f"the last crossing did not move ({moved[k] * 1e3:+.1f} ms)"
+    assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by the trace's end, unflagged"
+
+
+def test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb():
+    """The cost side (`data_quality.LINE_DROPOUT_MAJORITY`): 5 % of fixes rejected at random leave
+    the rejected-fix share far under its concern line, but most laps ⚠ — and their one clean lap
+    is no best to judge a PB by. The session reads low in plain words, keeps its PB out
+    (`untrusted`) and writes its Library row degraded. One ⚠ lap of 14 does not, and the clean
+    recording is untouched."""
+    rec, clean = _load()
+    assert clean.timing_quality.line_dropouts is None and not clean.timing_quality.degraded
+    keep = np.random.default_rng(REJECT_SEED).random(1_000_000) >= REJECT_SHARE
+    holed = _load_rejecting(rec, lambda t: not keep[int(round(t * 10))])
+    q = holed.timing_quality
+    flagged, laps = len(holed.dropout_lap_ids()), len(holed.valid_lap_ids())
+    print(f"  {flagged} of {laps} laps ⚠, {q.dropped_pct()}% rejected: {q.concerns()}")
+    assert q.dropped_fraction < data_quality.DROPPED_FIX_CONCERN_FRAC, "the share alone reads low"
+    assert q.line_dropouts == (flagged, laps) and q.low_gps_quality and q.degraded
+    assert q.concerns() == [f"GPS fixes are missing at the line on {flagged} of {laps} laps, so "
+                            "lap times can't be trusted enough to judge a PB."], q.concerns()
+    assert q.untrusted(), "a PB could still be judged on this recording"
+    assert holed.library_entry(rec.paths)["degraded"] is True
+    # One ⚠ lap (the trace starting just before the first line) is not a majority.
+    k = clean.valid_lap_ids()[0]
+    c = clean.laps.start_timestamp(k)
+    one = _load_rejecting(rec, lambda t: t < c - TRACE_END_MARGIN_S)
+    assert len(one.dropout_lap_ids()) == 1 and not one.timing_quality.degraded, (
+        one.dropout_lap_ids(), one.timing_quality.concerns())
+    assert one.library_entry(rec.paths)["degraded"] is False
+
+
 def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():
     """The lap table's `entry` column (and laps.csv's, which reads the same row) is km/h at the
     moment the lap began: within ENTRY_KMH of 3.6 × the TRUE speed where the kart crossed the app's
@@ -394,6 +449,9 @@ def _run_all():
                test_the_auto_fitted_line_is_off_the_braking_point,
                test_scattered_missing_fixes_never_move_a_lap_that_stays_in_the_bests,
                test_a_gap_ending_just_before_the_line_flags_the_lap_after_it,
+               test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap,
+               test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap,
+               test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb,
                test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing,
                test_the_corners_are_the_circuits,
                test_the_stats_tiles_and_the_coaching_page_are_populated,

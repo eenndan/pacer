@@ -43,7 +43,9 @@ SMOOTH_GAP_S = 1.0  # s — a jump larger than ~10x the 10 Hz period starts a ne
 # fix within SMOOTH_REACH_FIXES carries the GPS-dropout ⚠ and leaves the bests
 # (`Session.lap_dropout_spans`); every other lap is timed exactly as on the clean trace. The price,
 # over a 10-lap synthetic matrix (5 seeds): 1 / 2 / 5 / 10 % of fixes rejected at random puts the ⚠
-# on 18 / 42 / 80 / 100 % of laps. Re-centring the window in time instead keeps those laps within
+# on 18 / 42 / 80 / 100 % of laps, and past half of them the whole session reads low GPS quality
+# (`data_quality.LINE_DROPOUT_MAJORITY`). The trace's own first and last fix are run edges too
+# (`Session._missing_fix_steps`). Re-centring the window in time instead keeps those laps within
 # 6 ms of their clean time at native noise, and was measured too: it also moves every position
 # beside ANY missing fix in a trace — 25,665 leaves of the synthetic golden, which carries two
 # cleaner-removed teleports — so it is not what this does.

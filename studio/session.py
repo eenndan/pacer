@@ -1544,8 +1544,24 @@ class Session:
         ``timing_quality.degraded`` is what the data-quality banner + the lap-table de-emphasis
         read; a normal GPS9, clean-fix recording reports not-degraded so the UI is unchanged.
         getattr-guarded (defaults to high quality) for the bare-Session (no-__init__) test path —
-        see ``_ref``."""
-        return getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
+        see ``_ref``.
+
+        THE LAPS VOTE TOO: the loader's verdict is handed the share of valid laps wearing the GPS
+        dropout ⚠ (`data_quality.TimingQuality.with_lap_dropouts`), because scattered missing fixes
+        can leave most laps ⚠ while the rejected-fix share stays under its concern line. Laps
+        timed across a missing chapter wear a ⚠ for another reason and do not vote. Memoized on
+        the loader's verdict object and cleared on re-segment; a bare Session has no laps to ask."""
+        base = getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
+        memo = getattr(self, "_judged_quality", None)
+        if memo is not None and memo[0] is base:
+            return memo[1]
+        judged = base
+        if hasattr(getattr(self, "laps", None), "track_columns"):
+            gap = self.chapter_gap_notes()
+            flagged = sum(1 for i in self.dropout_lap_ids() if i not in gap)
+            judged = base.with_lap_dropouts(flagged, len(self.valid_lap_ids()))
+        self._judged_quality = (base, judged)
+        return judged
 
     # ----------------------------------------------------------- timing lines
     @property
@@ -1576,9 +1592,10 @@ class Session:
         )
         self.laps.update()
         # The GPS verdict is judged over the timed laps, and the line just moved their ends.
-        quality = self.timing_quality
+        quality = getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
         if quality._census is not None:
             self._timing_quality = quality.over_laps(timed_window(self.laps))
+        self._judged_quality = None   # …and the laps' own vote (`timing_quality`) is re-cast
         self._cols_cache.clear()
         self._dist_cache.clear()
         self._xyt_cache.clear()
@@ -2127,8 +2144,11 @@ class Session:
         """``(t0, t1, period)``: the start and end TELEMETRY time of every step of the kept trace
         long enough to have a fix missing inside it (`_signal.MISSING_FIX_PERIODS` median
         periods), and that median period, over the very fixes the loader smoothed (`_track_times`).
-        Memoized: moving a timing line re-cuts laps, never moves a fix. A bare Session with no
-        pacer trace behind it (a seeded test double) has none."""
+        The trace's own two ENDS are steps too — (-inf, first fix) and (last fix, +inf) — because
+        the smoother averages one-sidedly there exactly as at a gap: a recording that starts 0.4 s
+        before its first crossing moved that lap +276 ms on the demo circuit. Memoized: moving a
+        timing line re-cuts laps, never moves a fix. A bare Session with no pacer trace behind it
+        (a seeded test double) has none."""
         memo = getattr(self, "_missing_fix_memo", None)
         if memo is None:
             t = getattr(self, "_track_times_cache", None)
@@ -2137,8 +2157,13 @@ class Session:
             t = np.asarray(() if t is None else t, float)
             dt = np.diff(t)
             period = float(np.median(dt)) if len(dt) else 0.0
-            hole = dt >= MISSING_FIX_PERIODS * period if period > 0 else np.zeros(len(dt), bool)
-            memo = self._missing_fix_memo = (t[:-1][hole], t[1:][hole], period)
+            if period > 0:
+                hole = dt >= MISSING_FIX_PERIODS * period
+                memo = (np.concatenate([[-np.inf], t[:-1][hole], t[-1:]]),
+                        np.concatenate([t[:1], t[1:][hole], [np.inf]]), period)
+            else:
+                memo = (np.empty(0), np.empty(0), 0.0)
+            self._missing_fix_memo = memo
         return memo
 
     def lap_dropout_spans(self, lap_id: int) -> list[tuple[float, float]]:
@@ -2146,8 +2171,10 @@ class Session:
         INTERIOR gap of its kept points longer than gapfill.GAP_TIME_S (0.35 s, the gap-aware draw
         logic's threshold), and every missing fix within the smoother's reach of its start or
         finish crossing (`_signal.SMOOTH_REACH_FIXES` periods, however short the gap — see
-        `_signal.MISSING_FIX_PERIODS` for why a single missing fix there moves the lap time). The
-        ONE detector behind `lap_has_dropout` and the dropout marks (`auto_marks`)."""
+        `_signal.MISSING_FIX_PERIODS` for why a single missing fix there moves the lap time) —
+        the trace's first and last fix included, each as the edge of a gap. A span at a trace end
+        runs to the smoother's reach: the part of the window with no fix in it. The ONE
+        detector behind `lap_has_dropout` and the dropout marks (`auto_marks`)."""
         times = self._lap_point_times(lap_id)
         spans = {(float(times[g["i"]]), float(times[g["j"]])) for g in gapfill.find_gaps(times)}
         t0, t1, period = self._missing_fix_steps()
@@ -2155,7 +2182,9 @@ class Session:
             reach = SMOOTH_REACH_FIXES * period
             for crossing in (float(times[0]), float(times[-1])):
                 near = (t1 > crossing - reach) & (t0 < crossing + reach)
-                spans.update(zip(t0[near].tolist(), t1[near].tolist(), strict=True))
+                lo = np.where(np.isinf(t0[near]), crossing - reach, t0[near])
+                hi = np.where(np.isinf(t1[near]), crossing + reach, t1[near])
+                spans.update(zip(lo.tolist(), hi.tolist(), strict=True))
         return sorted(spans)
 
     def lap_has_dropout(self, lap_id: int) -> bool:

@@ -346,7 +346,7 @@ class TrustSection:
         dropouts = by_kind[data_quality.WARN_DROPOUT]
         if dropouts:
             rows.append(("GPS dropout",
-                         f"inside {len(dropouts)} of {plural(len(valid), 'lap')} — "
+                         f"at {len(dropouts)} of {plural(len(valid), 'lap')} — "
                          f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
         # A lap that left the line the other laps drive (a cut): the other half of the ⚠ set, out
         # of the same numbers the dropout row names. Its own words — it had no dropout.

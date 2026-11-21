@@ -168,9 +168,13 @@ position's instant by up to ~46 ms, and the crossing moves with it; a hole of ov
 just before the line leaves the next fixes averaged from one side only. On the synthetic recording
 in `tests/test_synth_gopro.py`, rejecting 5 % of its fixes at random moved 13 of its 14 laps by up
 to 49 ms, faster as often as slower, and a 1.5 s hole ending 0.5 s before a crossing moved the next
-lap by 125 ms. So a lap with a missing fix within the smoother's reach of its start or finish
-crossing (7 fixes) wears the GPS-dropout ⚠ and stays out of the bests, and every other lap is timed
-to the bit as before. A receiver that drops scattered fixes shows many ⚠ laps, never a false best.
+lap by 125 ms, and a recording whose fixes start or stop 0.4 s from a crossing moved that lap by
+over a quarter of a second. So a lap with a missing fix within the smoother's reach of its start
+or finish crossing (7 fixes; the recording's first and last fix count as the edge of a gap) wears
+the GPS-dropout ⚠ and is kept out of the bests, and every other lap is timed to the bit as before.
+A receiver that drops scattered fixes leaves most laps ⚠, and the few clean ones are no fair best:
+when more than half the valid laps wear the ⚠, the session is judged low GPS quality, says why, and
+claims no PB.
 
 **3. Sub-tick "refine the millisecond at the line" tricks buy nothing at 10 Hz.** Phone lap-timers
 that run on 1 Hz GPS use IMU acceleration to interpolate the exact instant the car crossed the line,

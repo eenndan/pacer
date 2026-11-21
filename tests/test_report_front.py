@@ -44,8 +44,8 @@ _SESSIONS: dict = {}
 def _sessions() -> dict:
     """demo (verified, planted C1 habit), seed7 (verified, a tie), seed7prov (the same drive at an
     unknown origin: PROVISIONAL), twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
-    3, one lap: the ideal is that lap, every corner one pass), onedonor (seed 29, two laps, one of
-    them won every segment). Generated once
+    3, one lap, driven in reverse: the ideal is that lap, every corner one pass), onedonor (seed
+    29, two laps, one of them won every segment). Generated once
     per process; the TemporaryDirectory stays alive with them (sessions read their files lazily)."""
     if not _SESSIONS:
         from studio.dev import make_demo as md
@@ -61,7 +61,12 @@ def _sessions() -> dict:
                                          ("twolaps", md.DEMO_SEED, 2, md.DEMO_ORIGIN),
                                          ("onelap", 3, 1, md.DEMO_ORIGIN),
                                          ("onedonor", 29, 2, md.DEMO_ORIGIN)):
-            rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin)
+            # onelap is driven the other way round: forwards, at one lap, the generator's second
+            # lone teleport lands 0.51 s after the only finish, a missing fix within the smoother's
+            # reach of that line, so the lap wears the dropout ⚠ (every seed: the teleport sits at
+            # a fixed fraction of the drive) and the session reads low. Reversed, it lands clear.
+            rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin,
+                              reverse=name == "onelap")
             _SESSIONS[name] = Session.load(rec.paths)
     return _SESSIONS
 
