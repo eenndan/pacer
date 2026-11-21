@@ -1204,6 +1204,13 @@ def _reason_when_level(reason: Reason, time_lost: float) -> Reason:
     return replace(reason, kind=kind, contribution=time_lost * best)
 
 
+# THE APEX LEVER HAS NO STEP OF ITS OWN (`studio/docs/refused-2026-09.md` §40). Its statistic, the
+# median over the counted laps of (best apex − lap apex), carries sd 0.33–0.58 km/h on habit-free
+# synthetic days, most of it the best lap's own reading, which every difference shares and which
+# does not average down with laps. Yet 513 of the 583 apex reasons those days named are true
+# deficits of 0.5 km/h or more: a corner must lose time and the lever must outscore the others
+# before it is named. Every step measured withheld more true reasons than false ones (at
+# `chart_stats.GAIN_GATE_KMH`, 1.75 km/h: 69 false, 410 true).
 def _pick_reason(time_lost: float, apex_gain: float, brake_extra: float, coast_extra: float,
                  sigma: float, exit_gain: float = 0.0) -> Reason:
     """Choose the dominant reason for one corner: the strongest of the five comparable strengths
