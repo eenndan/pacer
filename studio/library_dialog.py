@@ -312,6 +312,20 @@ def _pb_ring_pen():
     return pg.mkPen(C.accent, width=theme.line_width(2))
 
 
+# A WET SESSION IS DRAWN HOLLOW (cool/wet-day-mark). A wet day's best lap is seconds off the dry
+# ones, so on this chart it read as an unexplained hump. Its marker keeps its size, place and
+# colour and loses its fill — the surface shows through — and hovers to say "Wet"; the title names
+# the hollow marks only when one is plotted. Only the record's "wet" tag counts: damp and mixed are
+# the driver's own in-between words, and the chart does not guess how wet they were.
+_PB_WET_TAG = "wet"
+_PB_WET_LEGEND = "○ wet"
+
+
+def _pb_wet_pen():
+    """The hollow marker's outline: the accent, so the point still reads as one of the line's."""
+    return pg.mkPen(C.accent, width=theme.line_width(1.5))
+
+
 # WHAT THE CHART DRAWS, NAMED FOR IT (cool/library-chart-name). It was titled "PB progression" over
 # a line through EVERY session's best lap, so a slower day drew the line upward under a title that
 # said the personal best had progressed there. The line stays — each session's best is the data a
@@ -987,6 +1001,11 @@ class LibraryDialog(QDialog):
             pen=_pb_pen(), symbol="o", symbolSize=7,
             symbolBrush=_PB_BRUSH, symbolPen=_pb_symbol_pen())
         self.pb_plot.addItem(self._pb_curve)
+        # …a hollow marker over each wet session's (see _PB_WET_TAG), the one item that hovers…
+        self._pb_wet = pg.ScatterPlotItem(
+            symbol="o", size=7, pen=_pb_wet_pen(), brush=pg.mkBrush(C.surface),
+            hoverable=True, tip=lambda x, y, data: data)
+        self.pb_plot.addItem(self._pb_wet)
         # …and a ring round each session that set a PB (PB_CHART_TITLE), drawn over its marker.
         self._pb_rings = pg.ScatterPlotItem(symbol="o", size=15, pen=_pb_ring_pen(), brush=None)
         self.pb_plot.addItem(self._pb_rings)
@@ -1713,6 +1732,7 @@ class LibraryDialog(QDialog):
         instruction that cannot be carried out)."""
         if not track:
             self._pb_curve.setData([], [])
+            self._pb_wet.setData([], [])
             self._pb_rings.setData([], [])
             self._pb_title.setText(PB_CHART_TITLE)
             self._set_pb_axes(False)
@@ -1729,14 +1749,24 @@ class LibraryDialog(QDialog):
         # one line would draw the other way's best as a PB of this one (cool/pb-per-direction).
         index, name = self._one_way(track, rotation)
         points = _library.pb_points(index, track)
-        xs, ys = [], []
-        for x, (_date, _start, best) in zip(_pb_xs(points), points, strict=True):
+        xs, ys, wet = [], [], []
+        for x, (date, _start, best), fp in zip(_pb_xs(points), points,
+                                               _library.pb_fingerprints(index, track), strict=True):
             if math.isfinite(x):
                 xs.append(x)
                 ys.append(best)
+                record = _records.get(self._records, fp) if fp else None
+                if (record or {}).get("conditions") == _PB_WET_TAG:
+                    wet.append((x, best, f"{date} · best {fmt_time(best)} · "
+                                         f"{_records.CONDITION_LABELS[_PB_WET_TAG]}"))
         self._pb_curve.setData(xs, ys)
+        self._pb_wet.setData([w[0] for w in wet], [w[1] for w in wet], data=[w[2] for w in wet])
         steps = _library.pb_steps(ys)
         self._pb_rings.setData([xs[i] for i in steps], [ys[i] for i in steps])
+        # The hollow marks' legend rides in the title, as the rings' does: only when there is one.
+        # Its own glyph and one word, so it widens a title that already sets the dialog's minimum
+        # width by as little as it can: 41 px on a long name, where "· 2 wet sessions hollow" took 125.
+        wet_note = f" · {_PB_WET_LEGEND}" if wet else ""
         self._set_pb_axes(bool(ys))
         # U2: the summary line above counts EVERY row of the track ("3 sessions") while this title
         # counted only the charted ones ("best over 2 sessions") — two totals for one track on one
@@ -1749,7 +1779,8 @@ class LibraryDialog(QDialog):
             # The rings' legend rides in the title, only when there is a ring to explain.
             rings = f" · {_plural(len(steps), 'PB')} ringed" if steps else ""
             self._pb_title.setText(
-                f"{PB_CHART_TITLE} — {name}  ({fmt_time(min(ys))} best over {over}){rings}")
+                f"{PB_CHART_TITLE} — {name}  ({fmt_time(min(ys))} best over {over}){rings}"
+                f"{wet_note}")
             self._set_pb_empty(None)
             self._frame_pb(xs, ys)
         elif len(ys) == 1:
@@ -1760,7 +1791,8 @@ class LibraryDialog(QDialog):
             # count and the time — "Best lap by session — <track>  (1 session: 1:08.201)" — which is
             # the same fact stated where it does not overlap the mark. Empty state and data layer
             # are mutually exclusive now, in both directions.
-            self._pb_title.setText(f"{PB_CHART_TITLE} — {name}  ({over}: {fmt_time(ys[0])})")
+            self._pb_title.setText(
+                f"{PB_CHART_TITLE} — {name}  ({over}: {fmt_time(ys[0])}){wet_note}")
             self._frame_pb(xs, ys)
             self._set_pb_empty(None)
         else:
