@@ -101,6 +101,12 @@ class _Unset(enum.Enum):
 
 _UNSET: Final = _Unset.TOKEN
 
+#: The two kinds of `Session.lap_dropout_kinds` span: a gap INSIDE the lap (its trace is a chord
+#: across the hole) and a fix missing beside its start/finish line (its trace is whole, its time
+#: is not to be trusted).
+DROPOUT_IN_LAP: Final = "in lap"
+DROPOUT_AT_LINE: Final = "at line"
+
 _EMPTY = np.empty(0)  # the `speed` slot for a LapCurve whose speed series isn't needed (Δ family)
 
 
@@ -1037,6 +1043,7 @@ class Session:
         return bests_service.Bests(
             valid_lap_ids=self.valid_lap_ids,
             lap_out_of_bests=self.lap_out_of_bests,
+            lap_off_the_circuit=self.lap_off_the_circuit,
             lap_time=lambda i: self.laps.lap_time(i),
             lap_sector_splits=self.lap_sector_splits,
             # The EFFECTIVE count (placed lines minus the session-wide collapsed ones), because it
@@ -2166,17 +2173,18 @@ class Session:
             self._missing_fix_memo = memo
         return memo
 
-    def lap_dropout_spans(self, lap_id: int) -> list[tuple[float, float]]:
-        """The ``(t0, t1)`` TELEMETRY spans that make a lap a GPS-dropout lap, in time order: every
-        INTERIOR gap of its kept points longer than gapfill.GAP_TIME_S (0.35 s, the gap-aware draw
-        logic's threshold), and every missing fix within the smoother's reach of its start or
-        finish crossing (`_signal.SMOOTH_REACH_FIXES` periods, however short the gap — see
-        `_signal.MISSING_FIX_PERIODS` for why a single missing fix there moves the lap time) —
-        the trace's first and last fix included, each as the edge of a gap. A span at a trace end
-        runs to the smoother's reach: the part of the window with no fix in it. The ONE
-        detector behind `lap_has_dropout` and the dropout marks (`auto_marks`)."""
+    def lap_dropout_kinds(self, lap_id: int) -> list[tuple[float, float, str]]:
+        """The ``(t0, t1, kind)`` TELEMETRY spans that make a lap a GPS-dropout lap, in time order:
+        `DROPOUT_IN_LAP` for every INTERIOR gap of its kept points longer than gapfill.GAP_TIME_S
+        (0.35 s, the gap-aware draw logic's threshold), and `DROPOUT_AT_LINE` for every missing fix
+        within the smoother's reach of its start or finish crossing (`_signal.SMOOTH_REACH_FIXES`
+        periods, however short the gap — see `_signal.MISSING_FIX_PERIODS` for why a single missing
+        fix there moves the lap time) — the trace's first and last fix included, each as the edge
+        of a gap. A span at a trace end runs to the smoother's reach: the part of the window with no
+        fix in it. A gap that is both is `DROPOUT_IN_LAP`. The ONE detector behind
+        `lap_has_dropout`, the dropout marks (`auto_marks`) and `lap_has_gap_inside`."""
         times = self._lap_point_times(lap_id)
-        spans = {(float(times[g["i"]]), float(times[g["j"]])) for g in gapfill.find_gaps(times)}
+        kinds: dict[tuple[float, float], str] = {}
         t0, t1, period = self._missing_fix_steps()
         if len(t0) and len(times) >= 2:
             reach = SMOOTH_REACH_FIXES * period
@@ -2184,8 +2192,22 @@ class Session:
                 near = (t1 > crossing - reach) & (t0 < crossing + reach)
                 lo = np.where(np.isinf(t0[near]), crossing - reach, t0[near])
                 hi = np.where(np.isinf(t1[near]), crossing + reach, t1[near])
-                spans.update(zip(lo.tolist(), hi.tolist(), strict=True))
-        return sorted(spans)
+                kinds.update(dict.fromkeys(zip(lo.tolist(), hi.tolist(), strict=True),
+                                           DROPOUT_AT_LINE))
+        for g in gapfill.find_gaps(times):
+            kinds[(float(times[g["i"]]), float(times[g["j"]]))] = DROPOUT_IN_LAP
+        return [(a, b, kind) for (a, b), kind in sorted(kinds.items())]
+
+    def lap_dropout_spans(self, lap_id: int) -> list[tuple[float, float]]:
+        """The ``(t0, t1)`` spans of `lap_dropout_kinds`, in time order, without their kind."""
+        return [(a, b) for a, b, _kind in self.lap_dropout_kinds(lap_id)]
+
+    def lap_has_gap_inside(self, lap_id: int) -> bool:
+        """True if the lap's own TRACE is broken: a `DROPOUT_IN_LAP` span, whose draw is a straight
+        line across the hole (it jumped 48-86 m on the recordings that set the threshold). A lap
+        whose only dropout is a fix missing beside its line (`DROPOUT_AT_LINE`) has a whole trace:
+        its time is in doubt, not where it drove."""
+        return any(kind == DROPOUT_IN_LAP for *_span, kind in self.lap_dropout_kinds(lap_id))
 
     def lap_has_dropout(self, lap_id: int) -> bool:
         """True if a lap had a GPS dropout that its time can feel (`lap_dropout_spans`): a gap
@@ -2202,15 +2224,18 @@ class Session:
         return {lap_id for lap_id in self.valid_lap_ids() if self.lap_has_dropout(lap_id)}
 
     def off_line_metres(self) -> dict[int, float]:
-        """``{lap_id: metres}`` of every VALID, dropout-free lap that left the line the other laps
-        drive — its trace held more than `corners.CORRIDOR_MAX_M` from the session's consensus line
-        for `corners.CORRIDOR_SUSTAIN_M` (a cut across the infield, or an off) — with how far it
-        went. Such a lap stays counted and listed; `lap_out_of_bests` keeps it from winning.
+        """``{lap_id: metres}`` of every VALID lap with a whole trace that left the line the other
+        laps drive — its trace held more than `corners.CORRIDOR_MAX_M` from the session's consensus
+        line for `corners.CORRIDOR_SUSTAIN_M` (a cut across the infield, or an off) — with how far
+        it went. Such a lap stays counted and listed; `lap_out_of_bests` keeps it from winning.
 
         The consensus is fitted over those laps, against the one whose length is the median (never
-        the best lap: which lap is best is what this decides). A dropout lap neither votes nor is
-        measured: its gap is a straight line drawn across the hole, and it is out of the bests
-        already. Fewer than `corners.CORRIDOR_MIN_LAPS` such laps: none. Memoized against the
+        the best lap: which lap is best is what this decides). A lap with a gap INSIDE it
+        (`lap_has_gap_inside`) neither votes nor is measured: its gap is a straight line drawn
+        across the hole. A lap whose only dropout is a fix missing beside its line IS measured and
+        votes: its trace is whole, and leaving it out let scattered missing fixes empty the vote
+        until a cut lap won (wave 22: 11 of 14 laps ⚠, three left to vote, the cut crowned).
+        Fewer than `corners.CORRIDOR_MIN_LAPS` measured laps: none. Memoized against the
         `valid_lap_ids` list it was computed from (held by identity), so a re-segment, which
         replaces that list, recomputes without an invalidation of its own."""
         valid = self.valid_lap_ids()
@@ -2223,7 +2248,7 @@ class Session:
         for i in valid:
             # A lap timed across a missing chapter is not measured either: its trace jumps from
             # one chapter's end to a later one's start, a chord no driver drove.
-            if self.lap_has_dropout(i) or i in gap:
+            if self.lap_has_gap_inside(i) or i in gap:
                 continue
             _t, xs, ys, _v, cum = self._lap_columns(i)
             if len(cum) >= 2 and float(cum[-1]) > 0:
@@ -2307,8 +2332,14 @@ class Session:
         chapter (`chapter_gap_notes`: its time is short by the chapter). All are still listed and
         timed, flagged ⚠. The one predicate the bests service, the corner model and the map's
         reference fit are built on, so they all exclude the same laps."""
-        return (self.lap_has_dropout(lap_id) or lap_id in self.chapter_gap_notes()
-                or lap_id in self.off_line_metres())
+        return self.lap_has_dropout(lap_id) or self.lap_off_the_circuit(lap_id)
+
+    def lap_off_the_circuit(self, lap_id: int) -> bool:
+        """Is this lap's time not a time of the circuit at all — it left the line the other laps
+        drive (`off_line_metres`) or was timed across a missing chapter (`chapter_gap_notes`)?
+        Unlike a GPS dropout (a lap of the circuit whose time is in doubt), such a lap may not be
+        the best even when every lap is ⚠ (`bests.Bests.best_candidate_ids`)."""
+        return lap_id in self.chapter_gap_notes() or lap_id in self.off_line_metres()
 
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
@@ -4722,16 +4753,25 @@ class Session:
         THE HONESTY RULE IS STRUCTURAL HERE. Every input is the SAME call the surface that already
         reports it makes — `lap_dropout_spans` is verbatim what `lap_has_dropout` runs,
         `excluded_lap_ids` is the list the lap panel's ⊘ strip renders, and `quality_timeline` is
-        the array the scrub bar's quality strip paints. So a lap carries a dropout mark exactly
-        when the lap table flags it, and the marks band and the quality strip cannot disagree about
+        the array the scrub bar's quality strip paints. So every span that puts the dropout ⚠ on a
+        lap is marked, once (a hole two laps share goes to the lap that holds it), no mark exists
+        without a ⚠ lap behind it, and the marks band and the quality strip cannot disagree about
         a second of this recording: there is no second detector to drift.
 
         Measured on the owner's recordings (both full chains, all five single chapters and the
         bundled sample): ZERO dropout marks and ZERO excluded-lap marks anywhere, and one degraded
         mark in total — the 49 s block at the head of recording 0062 where the receiver is
         acquiring its lock. See `marks.MIN_DEGRADED_S` for the run-length census behind that."""
-        dropouts = [(lap_id, t0, t1) for lap_id in self.valid_lap_ids()
-                    for t0, t1 in self.lap_dropout_spans(lap_id)]
+        # One mark per HOLE: a fix missing beside a crossing is in both the lap it ends and the
+        # lap it starts (each wears the ⚠), and drew two identical marks, one of them labelled
+        # with a lap that had not begun. The mark goes to the lap whose window holds the hole.
+        owners: dict[tuple[float, float], int] = {}
+        for lap_id in self.valid_lap_ids():
+            for span in self.lap_dropout_spans(lap_id):
+                w = self.lap_window(lap_id) if span in owners else None
+                if span not in owners or (w is not None and w[0] <= sum(span) / 2 <= w[1]):
+                    owners[span] = lap_id
+        dropouts = sorted((lap_id, t0, t1) for (t0, t1), lap_id in owners.items())
         excluded = []
         reasons = self.excluded_lap_reasons()
         for lap_id in self.excluded_lap_ids():

@@ -157,19 +157,30 @@ MOVED_S = 0.020        # a lap this far off its clean-trace time was moved by th
 EDGE_GAP_S = (2.0, 0.5)   # a 1.5 s hole (it splits the smoothing run) ending 0.5 s before a crossing
 
 
-def _load_rejecting(rec, bad):
+def _load_rejecting(rec, bad, chord=None):
     """`rec` loaded with every fix whose media time satisfies `bad(t)` reported as a 2D fix, so the
-    quality gate drops it. Patches the loader's read for the one call."""
+    quality gate drops it — and, with `chord` (t0, t1), every fix between those media times moved
+    onto the straight line between the two fixes there: a lap that cut across the infield. Patches
+    the loader's read for the one call."""
     import pacer
     from studio import load
     real = load.read_recording
 
     def read(paths):
         out = real(paths)
-        samples = [s if not bad(t) else pacer.GPSSample(
-            lat=s.lat, lon=s.lon, altitude=s.altitude, full_speed=s.full_speed,
-            ground_speed=s.ground_speed, timestamp_ms=s.timestamp_ms, dop=s.dop, fix=2)
-            for s, t in zip(out[0], out[2], strict=True)]
+        t = np.asarray(out[2], float)
+        a, b = np.searchsorted(t, chord) if chord is not None else (0, 0)
+        samples = []
+        for i, (s, ti) in enumerate(zip(out[0], t, strict=True)):
+            lat, lon = s.lat, s.lon
+            if a < i < b:
+                f = (i - a) / (b - a)
+                lat = out[0][a].lat + f * (out[0][b].lat - out[0][a].lat)
+                lon = out[0][a].lon + f * (out[0][b].lon - out[0][a].lon)
+            samples.append(s if (lat, lon) == (s.lat, s.lon) and not bad(ti) else pacer.GPSSample(
+                lat=lat, lon=lon, altitude=s.altitude, full_speed=s.full_speed,
+                ground_speed=s.ground_speed, timestamp_ms=s.timestamp_ms, dop=s.dop,
+                fix=2 if bad(ti) else s.fix))
         return (samples, *out[1:])
     load.read_recording = read
     try:
@@ -274,6 +285,60 @@ def test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb():
     assert len(one.dropout_lap_ids()) == 1 and not one.timing_quality.degraded, (
         one.dropout_lap_ids(), one.timing_quality.concerns())
     assert one.library_entry(rec.paths)["degraded"] is False
+
+
+CUT_INTO_LAP_S = 22.5   # the chord starts this far into the cut lap…
+CUT_S = 5.0             # …and lasts this long: ~32 m inside the corner it skips (measured)
+HOLE_AFTER_S = 0.25     # one fix rejected this long after a crossing: inside the smoother's reach
+
+
+def test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line():
+    """THE DEFECT (release QA, wave 22; #712 × #698). The off-the-line rule measured only laps with
+    no GPS dropout, and needs four. A single fix missing beside a crossing puts the dropout ⚠ on
+    both laps that share it, so holes at most crossings left three laps to measure: none, and the
+    quickest lap — a cut across the infield, `CUT_S` of chord — was crowned best lap. A lap whose
+    only dropout is beside its line has a whole trace, so it is measured; the cut is off the line
+    and the best is the quickest lap that drove the circuit. With the cut lap holed too it still
+    reads off the line, not GPS dropout. One hole draws one mark, in the lap that holds it."""
+    rec, clean = _load()
+    times = {i: clean.lap_time(i) for i in clean.valid_lap_ids()}
+    k = min(times, key=times.get)
+    ids = clean.valid_lap_ids()
+    cross = [clean.laps.start_timestamp(i) for i in ids] + [
+        clean.laps.start_timestamp(ids[-1]) + times[ids[-1]]]
+    chord = (cross[k] + CUT_INTO_LAP_S, cross[k] + CUT_INTO_LAP_S + CUT_S)
+
+    def holed(whole):
+        """Reject the fix nearest `HOLE_AFTER_S` after every crossing but those in `whole`."""
+        at = np.array([c + HOLE_AFTER_S for j, c in enumerate(cross) if j not in whole])
+        return lambda t: bool(np.min(np.abs(at - t)) < 0.05)
+
+    # Crossings k-1 .. k+2 whole: laps k-1, k, k+1 clean, every other lap ⚠ (QA: 11 of 14).
+    s = _load_rejecting(rec, holed({k - 1, k, k + 1, k + 2}), chord)
+    assert len(s.dropout_lap_ids()) == len(ids) - 3 and s.timing_quality.low_gps_quality
+    off = s.off_line_metres()
+    print(f"  cut lap {k} ({times[k]:.3f} s): off the line {off}; best {s.best_lap_id()}")
+    assert list(off) == [k] and off[k] > 2 * 10.0, off
+    want = min((i for i in (k - 1, k + 1)), key=s.lap_time)
+    assert s.best_lap_id() == want, f"lap {s.best_lap_id()} is best, not lap {want}"
+    assert data_quality.lap_warning_kinds(s)[k] == data_quality.WARN_OFF_LINE
+    auto, _ = s.auto_marks()
+    drops = [m for m in auto if m["type"] == "dropout"]
+    assert len(drops) == len(cross) - 4, f"{len(drops)} marks for {len(cross) - 4} holes"
+    for m in drops:
+        w = s.lap_window(m["lap"])
+        assert w[0] <= (m["t"] + m["t_end"]) / 2 <= w[1], f"a mark sits outside lap {m['lap']}"
+    assert {i for m in drops for i in s.valid_lap_ids()
+            if (m["t"], m["t_end"]) in s.lap_dropout_spans(i)} == s.dropout_lap_ids()
+    # A hole at every crossing, the cut lap's too: every lap ⚠, the cut still reads off the line,
+    # and the all-⚠ fallback crowns the quickest lap of the circuit, never the cut.
+    s = _load_rejecting(rec, holed(set()), chord)
+    assert s.dropout_lap_ids() == set(ids) and list(s.off_line_metres()) == [k], s.off_line_metres()
+    assert data_quality.lap_warning_kinds(s)[k] == data_quality.WARN_OFF_LINE
+    assert "left the line" in s.lap_warnings()[k]
+    assert s.best_lap_id() == min((i for i in ids if i != k), key=s.lap_time), s.best_lap_id()
+    # The holes alone (no cut): no lap off the line.
+    assert _load_rejecting(rec, holed({k - 1, k, k + 1, k + 2})).off_line_metres() == {}
 
 
 def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():
@@ -452,6 +517,7 @@ def _run_all():
                test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap,
                test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap,
                test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb,
+               test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line,
                test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing,
                test_the_corners_are_the_circuits,
                test_the_stats_tiles_and_the_coaching_page_are_populated,

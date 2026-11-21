@@ -1962,10 +1962,13 @@ def test_a_lap_that_left_the_line_is_listed_but_never_the_best():
 
 
 def test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap():
-    """Three laps (or three dropout-free laps) are no consensus to leave: nothing is flagged. A GPS
-    dropout lap is neither measured nor counted toward the consensus — its gap is a straight line
-    drawn across the hole, and it is out of the bests already."""
+    """Three laps (or three laps with a whole trace) are no consensus to leave: nothing is flagged.
+    A lap with a gap INSIDE it is neither measured nor counted toward the consensus — its gap is a
+    straight line drawn across the hole. A lap whose only dropout is a fix missing beside its line
+    has a whole trace, and is both (wave 22: leaving those out emptied the vote and crowned a cut)."""
+    from studio import data_quality
     from studio.dev import synth_gopro as sg
+    from studio.session import DROPOUT_AT_LINE, DROPOUT_IN_LAP
     c4 = next(k for k in sg.build_circuit().corners if k.cid == 4).apex_s
     s, _c = _corridor_session([{}, {}, {"chord_about": c4}], {0: 45.3, 1: 45.2, 2: 44.2})
     assert s.off_line_metres() == {} and s.best_lap_id() == 2
@@ -1973,9 +1976,37 @@ def test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap():
     s, _c = _corridor_session(four, {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.2})
     assert list(s.off_line_metres()) == [3]
     s, _c = _corridor_session(four, {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.2})
-    s.lap_has_dropout = lambda lid: lid == 0
-    assert s.off_line_metres() == {}, "three dropout-free laps flagged a lap"
+    s.lap_dropout_kinds = lambda lid: [(1.0, 2.0, DROPOUT_IN_LAP)] if lid == 0 else []
+    assert s.off_line_metres() == {}, "three laps with a whole trace flagged a lap"
+    # Every lap missing a fix beside its line, the cut lap too: all four measured, the cut flagged,
+    # and it reads as off the line, not as a GPS dropout.
+    s, _c = _corridor_session(four, {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.2})
+    s.lap_dropout_kinds = lambda lid: [(100.0 * lid, 100.0 * lid + 0.2, DROPOUT_AT_LINE)]
+    assert s.dropout_lap_ids() == {0, 1, 2, 3}
+    assert list(s.off_line_metres()) == [3], s.off_line_metres()
+    assert data_quality.lap_warning_kinds(s) == {0: data_quality.WARN_DROPOUT,
+                                                 1: data_quality.WARN_DROPOUT,
+                                                 2: data_quality.WARN_DROPOUT,
+                                                 3: data_quality.WARN_OFF_LINE}
     print("test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap OK")
+
+
+def test_when_every_lap_is_flagged_the_best_is_never_a_lap_off_the_circuit():
+    """The all-⚠ fallback (`bests.Bests.best_candidate_ids`) used to take EVERY valid lap, so the
+    quickest ⚠ lap won — and the quickest was the cut (wave 22). It falls back to the laps whose
+    only flag is a GPS dropout; with none of those (every lap off the line or across a missing
+    chapter) there is no best at all, as while timing is provisional."""
+    times = {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.2, 4: 45.25}
+    s, _c = _corridor_session([{}] * 5, times)
+    s.lap_has_dropout = lambda lid: lid != 3
+    s.off_line_metres = lambda: {3: 30.0}
+    assert all(s.lap_out_of_bests(i) for i in times), "the case has no teeth: a lap is clean"
+    assert s.bests.best_candidate_ids() == [0, 1, 2, 4] and s.best_lap_id() == 1, s.best_lap_id()
+    s, _c = _corridor_session([{}] * 5, times)
+    s.chapter_gap_notes = lambda: dict.fromkeys(times, "timed across a missing chapter")
+    assert s.bests.best_candidate_ids() == [] and s.best_lap_id() is None
+    assert s.bests.best_rolling_lap() is None and s.session_best_splits() == [None]
+    print("test_when_every_lap_is_flagged_the_best_is_never_a_lap_off_the_circuit OK")
 
 
 def test_a_lap_timed_across_a_missing_chapter_says_so_and_is_never_the_best():
