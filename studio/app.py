@@ -929,6 +929,11 @@ class StudioWindow(QMainWindow):
         load hands back lists the session just analysed at the top."""
         self._paths = getattr(self, "_paths", [])
         self.setWindowTitle(APP_NAME)
+        # No session on screen any more: its PB card goes with it (the status line keeps a load
+        # failure's own words, which a caller may have just put there).
+        ctl = getattr(self, "library_ctl", None)
+        if ctl is not None:
+            ctl.clear_pb_card()
         self._welcome_error = (error, error_path)
         self.setCentralWidget(self._welcome_view(error, error_path, parent=self))
         if getattr(self, "_full_action", None) is not None:
@@ -1112,6 +1117,7 @@ class StudioWindow(QMainWindow):
         # doing it here too makes `_paths` — the row written back, the title, the Load-full
         # predicate — describe the session that actually loads.
         paths = chapters.load_order(list(paths))
+        self._end_session_transients()
         self._drop_notice = drop_notice
         # Bump the token: any in-flight worker started by a previous _load is now stale and its
         # result will be ignored when it finishes.
@@ -1130,6 +1136,26 @@ class StudioWindow(QMainWindow):
             self._load_worker.cancel()
             return
         self._start_load_worker(token, paths)
+
+    def _end_session_transients(self):
+        """Take down what was said, for a few seconds, about the session on screen: a load is
+        starting (or the session is gone), and the words would otherwise sit over the next one.
+
+        THE PB CARD lived on its own 6 s clock (`PBToast.AUTO_DISMISS_MS`) and was replaced only by
+        the next card, so a recording opened inside those 6 s kept "Level with your personal best"
+        over a different session — over a no-laps one too, measured on a synthetic season.
+        THE STATUS LINE's transient confirmations (`STATUS_MS`: "lap card copied", an undo summary,
+        "mark deleted") are about that session's actions too. The session NOTICE is left alone: it
+        is untimed, it describes the session still on screen while the next one loads, and the
+        load's end re-decides it (`_apply_session_notice`); a drop's notice is shown after this.
+        Guarded getattrs: partial harnesses build the window without its controllers."""
+        ctl = getattr(self, "library_ctl", None)
+        if ctl is not None:
+            ctl.clear_pb_card()
+        bar = self.statusBar()
+        said = bar.currentMessage()
+        if said and said != getattr(self, "_notice", None):
+            bar.clearMessage()
 
     def _arm_loading_placeholder(self, token: int, paths: list[str]):
         """Decide WHEN the "Loading telemetry…" card replaces what's on screen.

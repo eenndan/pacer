@@ -662,6 +662,11 @@ class LibraryController:
         except Exception:  # noqa: BLE001 — see above: this must never reach the load path
             _log.warning("previous personal-best card not dismissed", exc_info=True)
 
+    def clear_pb_card(self):
+        """The window's door to `_clear_pb_toast`: a load starting, or the session going, ends the
+        card that celebrated it (`StudioWindow._end_session_transients`). Never raises."""
+        self._clear_pb_toast()
+
     def _pb_card_keepout(self):
         """The rectangles the PB card must not cover, in this window's coordinates: the lap grid's
         SELECTED row, full viewport width, and the excluded-laps strip under the grid. None when
