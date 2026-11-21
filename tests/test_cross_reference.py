@@ -11,6 +11,9 @@ the asserts are the contract the feature must hold:
     without disturbing the local best;
   * the LAP-LENGTH band refuses a same-track recording segmented into laps of a different length
     (QA-W2R-02) while still admitting a genuinely comparable one;
+  * the WAY-ROUND guard refuses the same circuit driven the other way round (same name, same
+    length), read on the reference's restored start line, and admits when either side's direction
+    is unknown;
   * the IDENTITY guard refuses the recording already open as its own reference (QA-W2R-04) — every
     other guard passes there — while admitting a different recording, and `reference_is_own_-
     recording` reports that state for the surfaces downstream of the baseline;
@@ -660,6 +663,114 @@ def test_no_valid_laps_reference_refused():
     assert reason is not None and "no valid laps" in reason, reason
     assert not primary.has_reference()
     print("test_no_valid_laps_reference_refused OK")
+
+
+# ------------------------------- the same circuit driven the OTHER WAY ROUND is not a reference
+# A kart track's other layout is its own tarmac reversed: the same name, the same place, the same
+# lap length to the metre — so the track gate and the lap-length band both pass it, and on the
+# synthetic season it was adopted silently, every Δ measured between different corners. Which way
+# round a lap runs is `Session._lap_rotation`, off the session's own detected corners; these lay a
+# real closed loop into each bare Session so the corner model measures it (nothing stubbed).
+def lay_loop(session, lap_id, times, dists, way):
+    """Re-seed `lap_id`'s `_cols_cache` trace as a closed egg loop (no symmetry) driven
+    anticlockwise (`way` +1) or clockwise (−1), on the same odometer — the shape the corner model
+    detects corners on, so `_lap_rotation` reads the way round off it."""
+    times, dists = np.asarray(times, float), np.asarray(dists, float)
+    cum = dists - dists[0]
+    th = way * 2 * np.pi * cum / float(cum[-1])
+    r = (float(cum[-1]) / (2 * np.pi)) * (1.0 + 0.3 * np.cos(th) + 0.15 * np.sin(2 * th))
+    session._cols_cache[lap_id] = (times, r * np.cos(th), r * np.sin(th),
+                                   np.gradient(dists, times), cum)
+
+
+def _way_round_pair(mine, theirs, track="Synthetic demo circuit"):
+    """A primary + a reference of the same named track and the SAME lap length (900 m), each laid
+    on a loop run `mine` / `theirs` (+1 / −1, or None for a straight trace: no direction)."""
+    p_times, p_dists = odometer(400, 0.15, 0.0, 900.0)
+    primary = make_session({1: (p_times, p_dists)}, best=1, valid=[1], track=track)
+    r_times, r_dists = odometer(400, 0.148, 0.0, 900.0)
+    ref = make_session({4: (r_times, r_dists)}, best=4, valid=[4], track=track)
+    if mine is not None:
+        lay_loop(primary, 1, p_times, p_dists, mine)
+    if theirs is not None:
+        lay_loop(ref, 4, r_times, r_dists, theirs)
+    _stub_loops(primary, ref)
+    return primary, ref
+
+
+def test_a_reference_driven_the_other_way_round_is_refused():
+    for mine, theirs, words in ((-1, 1, ("anticlockwise", "clockwise")),
+                                (1, -1, ("clockwise", "anticlockwise"))):
+        primary, ref = _way_round_pair(mine, theirs)
+        assert primary._lap_rotation() == mine and ref._lap_rotation() == theirs
+        reason = primary.set_reference_session(ref, source_label="recording 7111")
+        assert reason is not None and "driven the other way round" in reason, reason
+        assert f"({words[0]}; this session runs {words[1]})" in reason, reason
+        assert "corners don't line up with this session's" in reason, reason
+        assert "keeping the local best lap" in reason, reason
+        assert not primary.has_reference(), "a refused reference must never become the baseline"
+        assert primary.delta([1], x_mode="distance")[0] == 1, "the local best stays the baseline"
+    print(f"test_a_reference_driven_the_other_way_round_is_refused OK: {reason!r}")
+
+
+def test_a_reference_driven_the_same_way_round_is_admitted():
+    for way in (1, -1):
+        primary, ref = _way_round_pair(way, way)
+        assert primary._lap_rotation() == ref._lap_rotation() == way
+        assert primary.set_reference_session(ref, source_label="recording 7104") is None
+        assert primary.has_reference()
+    print("test_a_reference_driven_the_same_way_round_is_admitted OK")
+
+
+def test_an_unknown_way_round_on_either_side_admits_as_before():
+    """0 is "the corners do not add up to a direction", not evidence of the other way round: a
+    straight trace (no corners) on either side, or a corner model that cannot be read at all,
+    admits exactly as before the guard — and never raises."""
+    for mine, theirs in ((None, 1), (-1, None), (None, None)):
+        primary, ref = _way_round_pair(mine, theirs)
+        assert 0 in (primary._known_lap_rotation(), ref._known_lap_rotation())
+        assert primary.set_reference_session(ref) is None, (mine, theirs)
+    primary, ref = _way_round_pair(-1, 1)
+
+    def unreadable():
+        raise RuntimeError("corner model unavailable")
+    ref._lap_rotation = unreadable
+    assert ref._known_lap_rotation() == 0
+    assert primary.set_reference_session(ref) is None, "an unreadable direction is an unknown one"
+    print("test_an_unknown_way_round_on_either_side_admits_as_before OK")
+
+
+def test_the_way_round_is_read_on_the_references_restored_start_line():
+    """The restore route: a reference arrives at the loader's fitted line (a 198.7 m fragment run
+    straight — no direction, and the length band would refuse it for that) and carries its owner's
+    saved line. The way round must be read AFTER that restore, on the laps the owner confirmed, so
+    the refusal says what is actually wrong — and a same-way recording is admitted."""
+    for theirs, admitted in ((1, False), (-1, True)):
+        primary, ref = _way_round_pair(-1, None, track="Sandown Park")
+        ref._cols_cache.clear()
+        ref._dist_cache.clear()
+        seed_lap(ref, 4, *odometer(60, 0.22, 0.0, 198.7))
+        seed_cols(ref, 4, *odometer(60, 0.22, 0.0, 198.7))
+        with tempfile.TemporaryDirectory() as folder:
+            recording = _write_sidecar(folder, "GX017111", [[51.3760, -0.3610], [51.3761, -0.3609]])
+            give_paths(ref, recording)
+            saved_times, saved_dists = odometer(400, 0.148, 0.0, 900.0)
+            restore = _restore_stub(ref, 4, saved_times, saved_dists, 900.0, log := [])
+
+            def apply(start, sectors, confirmed=True, restore=restore, theirs=theirs,
+                      times=saved_times, dists=saved_dists, ref=ref):
+                ok = restore(start, sectors, confirmed)
+                lay_loop(ref, 4, times, dists, theirs)
+                return ok
+            ref.apply_timing_lines_latlon = apply
+            reason = primary.set_reference_session(ref, source_label="recording 7111")
+        assert log, "the saved line must be restored before any guard reads the reference"
+        if admitted:
+            assert reason is None and primary.has_reference(), reason
+        else:
+            assert reason is not None and "driven the other way round" in reason, reason
+            assert not primary.has_reference()
+    print("test_the_way_round_is_read_on_the_references_restored_start_line OK")
 
 
 def test_clear_reverts_to_own_best():
