@@ -616,6 +616,15 @@ def test_a_lap_kept_out_of_the_bests_burns_neutral_and_says_not_counted():
                     ev.overlay_values_at(s, spec.lap_t0 + 20.0, spec))
                 assert st[0] == f"LAP {lap + 1} · {tag}" and st[3] == EXPORT.neutral, st
                 assert st[5] is not None, "the bar went with the colour"
+            # The tagged name is the widest the top-left plate gets: it stays inside the portrait
+            # safe area (`layout.safe_area`, #710) at the narrowest shapes the dialog offers.
+            for w, h in ((608, 1080), (1080, 1920)):
+                pp = _painter(s, spec, w, h)
+                plate = (_element(pp, "broadcast").tower if style == broadcast.STYLE_BROADCAST
+                         else pp._strip_rect)
+                sa = layout.safe_area(w, h)
+                assert sa.x <= plate.x() and plate.right() <= sa.x + sa.w + 1e-6 and \
+                    sa.y <= plate.y() and plate.bottom() <= sa.y + sa.h + 1e-6, (style, w, h, plate)
         cards = corner_cards.card_rows(s, lap, None, None)
         assert cards and all(c.colour in (None, EXPORT.neutral) for c in cards), cards
         # The whole recording: no tag (the refusal), the ⚠ lap's Δ still neutral.
