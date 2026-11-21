@@ -2008,6 +2008,12 @@ already paints for all of them.
 **It does not fit a 9:16 clip.** At 1080×1920 the readout and the map leave 516 px between them
 once the overlay's one-margin gaps are kept, and the band is 540 px wide. Centred as in landscape,
 it covers 21.8 % of its area with the map inset; anywhere else it is one more row over the picture.
+*2026-11-21, the portrait safe area (#710):* a 9:16 overlay now keeps out of the bottom 18 % and
+the top 8 % of the height, which the apps that play vertical video cover (`layout.safe_area`), so
+the readout and the map moved up together and the band is measured on that same bottom row
+(`clip_refusals._band_bottom`). Anchored at the frame's margin as before, the probe read 0.0 %:
+the band sat alone in the strip no element may use, not in a gap. On the row the overlay uses,
+the figures above are unchanged, so this ground still holds.
 
 **What moves because of this refusal: nothing in the app.** The clip keeps the Δ on the strip.
 

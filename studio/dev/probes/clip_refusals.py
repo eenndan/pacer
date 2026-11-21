@@ -201,6 +201,12 @@ def band_geometry(s: Session, work: str) -> dict:
             "stroke_px": BAND_STROKE_PX}
 
 
+def _band_bottom(w: int, h: int, margin_frac: float) -> float:
+    """The band's bottom edge: the overlay's safe area's (`layout.safe_area`)."""
+    from studio.overlay import layout
+    return layout.safe_area(w, h, margin_frac).bottom
+
+
 def band_collision(s: Session, work: str) -> dict:
     """Where a bottom-centre band lands at 16:9 and at 9:16, against the shipped overlay's rects."""
     from studio import export_video as ev
@@ -216,7 +222,11 @@ def band_collision(s: Session, work: str) -> dict:
             spec.source.cleanup()
         u, m = p._u, cfg.margin_frac * p._u
         bw, bh = BAND_W_U * u, BAND_H_U * u
-        band = (0.5 * (w - bw), h - m - bh, bw, bh)
+        # On the overlay's bottom row: the safe area's bottom, which is the margin in landscape
+        # and, in portrait, clear of the bottom band the apps cover (`layout.safe_area`) — the
+        # place every shipped element is held to, so a band below it would be measured where no
+        # element may go.
+        band = (0.5 * (w - bw), _band_bottom(w, h, cfg.margin_frac) - bh, bw, bh)
         rects = {"readout": p._readout_rect, "map": p._map._box}
         hits = {}
         for k, r in rects.items():
@@ -246,7 +256,7 @@ class _DeltaBand:
         from studio import lap_race
         self.k, self.tie = k, lap_race.RACE_TIE_S
         bw, bh = BAND_W_U * u, BAND_H_U * u
-        self.r = QRectF(0.5 * (out_w - bw), out_h - m - bh, bw, bh)
+        self.r = QRectF(0.5 * (out_w - bw), _band_bottom(out_w, out_h, m / u) - bh, bw, bh)
         self.win = s.lap_window(spec.lap_id)
         fr, ds = [], []
         for t in ev.frame_times(spec.t0, spec.t1, FPS):
