@@ -260,7 +260,9 @@ speed is the lowest GPS fix in the corner, so its noise is at most one fix's, an
 noise is measured on a real recording: σ 0.62 km/h per sample (recording A's 10 Hz speed against
 its 0.5 s average, the median of 24 laps). So apex gaps are coloured from twice the noise of a
 difference of two readings, 2√2 × 0.62 = 1.75 km/h, on the table as on the speed chart's gain
-shading: one threshold. On the synthetic grid
+shading: one threshold. A printed figure is coloured only when every gap it rounds from is past
+it, so a coloured cell is always a gap the chart shades: from 1.8 km/h, and from 1.2 mph, where
+the threshold (1.09 mph) falls inside the figure 1.1. On the synthetic grid
 ([`studio/dev/probes/apex_speed_sigma.py`](../studio/dev/probes/apex_speed_sigma.py), 40 days at
 recording C's noise) one apex speed carries σ 0.32–0.54 km/h depending on the apex's shape, from a
 flat arc to a straight-sided V where one fix carries the minimum, never more than one fix's
