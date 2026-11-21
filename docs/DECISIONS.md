@@ -1594,3 +1594,112 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   the fix; the unit test's race does fail with the fix disabled.
 - **Open for the owner**: section 22's lists stand, re-checked against this release, which touched
   none of their code. Its item on #649 now reads: re-land it unchanged.
+
+## 24. Recorded at the 0.21.0 release, 2026-11-21
+
+- **v0.21.0 is a minor release**: 9 pull requests, #659, #661 and #663 to #670, Waves 16 and 17 of
+  the campaign section 8 records, its theme "every 'level' is read at one reference and says what
+  that covers, and the quickest of many passes is allowed its luck".
+  - #659: the reference centerline (the map's last-resort gap-fill donor) is fitted only for a
+    session with a GPS gap long enough to need it; a session without one no longer spends ~0.2 s
+    on it, and a session with one draws its map as before.
+  - #661: the Quickest passes window tests wait on their condition instead of a fixed 0.3 s.
+  - #663: #649 re-landed unchanged: the H.264 encoder is probed in the background, so the first
+    File ▸ Export overlay video… of a session opens at once; the hint says it is measuring the
+    encoder until it knows.
+  - #664: the Library's summary counts a PB only where the debrief would (`library.pb_steps`): a
+    best lap within 0.07 s of the earlier PB reads "level with your PB".
+  - #665: Corners ▸ Lap N leaves a Δbest or Δref under 0.07 s, as printed, in the neutral colour.
+  - #666: the Library's chart is titled "Best lap by session" and rings the sessions that set a PB.
+  - #667: the focus verdict's cross-session step, measured on 40 synthetic days per GPS noise (two
+    days' corner typicals each carry a bias that more laps do not remove), and both medians of a
+    level line printed with digits enough that their printed gap stays under the step.
+  - #668: the reference-lap corner step, measured the same way, for Δref and the "vs ref" cards.
+  - #669: one reference level for every step, `library.REFERENCE_RECORDING` (published recording C),
+    and a hover where the driver reads "level" saying what the step covers and what a noisier
+    recording would need. #667 and #668 had each set its step at recording B's noise (0.10 s and
+    0.12 s); at C's both rules fall under the timing step, so both read 0.07 s at release.
+  - #670: the ★ and a quickest row's "Compare with my typical pass" must clear the step plus what
+    the quickest of n passes reads quick by luck alone (`stats.quickest_luck_s`, about 0.02 s at
+    14 passes). The demo's one ★ (its fifth corner, 0.071 s clear) went, and `quickest.png` was re-captured.
+- **No new owner ruling.** The waves ran under section 19's of 2026-11-19 ("continue and don't
+  come back to me").
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **One reference level, recording C's**: the cleanest of the three recordings
+    docs/ACCURACY.md times against official timing, the GPS9 camera's, and the level the timing
+    step `library.PB_PRECISION_S` was always derived at. Every other step is measured
+    at the synthetic noise whose per-lap σ matches C's, and the app applies the wider of that rule
+    and 0.07 s. Changing it is one constant, `REFERENCE_RECORDING`: every step follows by itself.
+  - **The luck allowance is added only where a gap is read off the quickest pass** (the ★ and a
+    quickest row's typical offer), never to the step itself. Measured on 40 habit-free synthetic
+    days × 7 corners at C's noise: 0.07 s alone offered the typical compare on 95 of 280 quickest
+    rows, 55 of them truly under 0.07 s, and wore 6 stars, 4 false by their own claim; with the
+    allowance, 50 offers, 11 truly under 0.07 s, and no star. A planted 0.10 / 0.15 / 0.20 s gain
+    is still offered on 5 / 8 / 8 of 8 days (7 / 8 / 8 before), starred on 1 / 4 / 8 (2 / 7 / 8).
+  - **The Library counts PBs by the debrief's rule** (#664); the bar a later session must beat is
+    the fastest earlier best, level steps included, as the debrief's.
+  - **A corner Δ's colour is decided on its printed value** (#665), as the corner cards decide.
+- **Process.** The QA pass drove the merged tree in the real window, offscreen and jailed, at
+  1440×900, with the theme applied: on the demo (Corners ▸ Lap N on all 14 laps, 98 Δ cells, 40
+  coloured and none under 0.07 s as printed; Quickest passes with and without three mid-straight
+  sector lines; every lap × stretch pass menu, 154 of them; each Coaching Jump's status line) and
+  on five synthetic race days at one track, opened one after another with the focus list and the
+  dry records written through the app's own gestures. On every surface the printed gap stayed
+  under the bound it is said to be within: the luck reasons print theirs to the millisecond
+  ("within 0.090 s"), the focus lines theirs to three decimals ("2.316 → 2.353 s"). The Library's
+  summary and chart read "1 PB · level with your PB" and one ring where the debrief of each day
+  said "level" or "New personal best". A reference recording set and cleared turned the header to
+  Δref and back with the same colouring, and the cards to "vs ref" and back. The first export
+  click opened its dialog 44-47 ms after the menu action, with the hint measuring the encoder; 20
+  more opens of the export dialog and 20 of the Library through their real `exec()` left the
+  top-level and widget counts level (78 and 1,090; 78 and 1,079).
+- **The media.** `hero.png`, `og.png`, `map.png`, `accuracy.png`, `debrief.png`, `moments.png`,
+  `report.png` (its own run), `quickest.png` (as #670 re-captured it) and `lapstrip.png` (its own
+  run) were re-captured on the synthetic demo at 0.21.0 and are byte-identical to the files already
+  committed, so the social card did not change. A report captured in the same run as the other
+  shots differed from the committed one by a few hundred anti-aliased pixels round two corner
+  labels; the same tree captured alone reproduces it byte for byte, as v0.20.1's studio/ does. The
+  waivers of `data-trust.png` and `ideal-lap.png` are renewed: a demo render of both from v0.20.1's
+  studio/ and from 0.21.0 is byte-identical. Those of `overlay.jpg`, `best-lap.jpg` and
+  `best-lap.mp4` are renewed: 0.21.0 changed no export painter.
+- **What could not run for it.** The real-footage checks whose recordings are not on this machine
+  report Skipped by name. A session with a long GPS gap (the side of #659 that still fits the
+  reference line) was not opened in the window; `tests/test_reference.py` holds it. Hover timing,
+  real macOS fullscreen and a second monitor cannot be checked offscreen. The full gate, the soak
+  and the smoke run on the release branch, not in the QA pass.
+- **Resolved from sections 22 and 23**: #649, the background encoder probe, re-landed unchanged
+  (#663); the selection effect on the quickest row's typical offer and on the ★ (#670).
+- **Open for the owner** (new).
+  - **Which recording every step is referenced to.** Today it is C, the cleanest recording
+    measured: lap, corner pass, two days' corner typicals and a corner against another recording's
+    lap all read level under 0.07 s, and the hover says a noisier recording can differ by more. The
+    alternative is B, the middle recording: lap 0.15 s, corner 0.12 s, cross-session 0.10 s, so
+    more differences read "level" and fewer are claimed, and a best lap 0.10 s under the PB would
+    read level too. The measured table is docs/ACCURACY.md's "What the 0.07 s step covers" (C 0.07 / 0.06 / 0.05 /
+    0.06 s, B 0.15 / 0.12 / 0.10 / 0.12 s, A 0.25 / 0.20 / 0.16 / 0.21 s). In this release's QA a
+    habit-free synthetic day at B's noise read one focus corner "0.08 s slower" than a habit-free
+    day at C's: a change a B reference would have called level.
+  - The luck allowance is fitted at C's noise only; at a noisier recording's the quickest pass is
+    luckier than it allows.
+  - Surfaces not yet luck-corrected: Coaching's time lost (against the best lap's pass), the story
+    moments, the share card, the Stats sector hovers and the ideal lap's gap.
+  - The split σ's re-measurement at the golden placement on the 40-day grid is deferred to its own
+    package, with refused-2026-09 §26, whose new-evidence clause it is; `stats.SECTOR_LEVEL_S`
+    (0.30 s) stands until then.
+  - With a reference recording loaded, the Δref header's hover gives the bound twice: "reads up to
+    that far apart" of the 0.07 s step, then "can differ by up to 0.06 s".
+  - The Library counts no PB for a run of sessions that each beat the last by less than 0.07 s,
+    however far they add up to (the debrief's own rule, now on both surfaces).
+- **Open for the owner** (carried from section 22, re-checked against 0.21.0's changes): the
+  selection effect stays on Coaching's ranking (the best lap's pass is partly a lucky one); the
+  free-space estimate sizes a pass comparison by pane A's clip, up to 6.5 % low on the demo;
+  section 13's question (should Coaching rank corners that lose under 0.07 s, and name a habit
+  there?); Quickest passes is still not the Corners tab's default view; the readout and the
+  overlays on real macOS fullscreen Spaces and a second monitor are unverified offscreen; the strip
+  hides at 1280×800 docked for sessions of about 60 laps or more; at 1440×900 docked the Stats
+  page's even gaps put three tile labels below the fold; sound after a chapter seam on the
+  synthetic chapters runs 16.7 ms early; at a 30.000 fps output over a 59.94 source about 3 frames
+  in 300 show the next source frame; hardware-decode exports were verified by the author's sweep
+  and the release gate, not by an independent reviewer.
+- **Open for the owner** (carried from sections 18 to 22, untouched by this wave's changes): every
+  item of section 22's last list stands as written there.
