@@ -243,7 +243,7 @@ def reconstruct_lap(xs, ys, times, donors: Sequence[dict] | Callable[[], Sequenc
             # section — exactly the priority the task brief requires.
             if donor_list is None:
                 donor_list = donors() if callable(donors) else donors
-            tol =max(DONOR_ENDPOINT_TOL_FRAC * chord, DONOR_ENDPOINT_TOL_MIN_M)
+            tol = max(DONOR_ENDPOINT_TOL_FRAC * chord, DONOR_ENDPOINT_TOL_MIN_M)
             best_lap = None  # (endpoint_err, sub_xy, name)
             best_ref = None  # (endpoint_err, sub_xy, name)
             for dn in donor_list:
