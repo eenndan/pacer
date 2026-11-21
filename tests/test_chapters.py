@@ -277,6 +277,27 @@ def test_missing_chapters_numbers_the_legacy_gopr_naming():
         assert _names(missing) == [(2, "GP010070.MP4")], missing
 
 
+def test_gap_joins_names_the_chapters_the_chain_jumps_across():
+    """Where the CHAINED files skip chapters — the clock's fact a lap's ⚠ is read from: the index
+    of the chapter after the jump and the chapters missing from it, named as the camera would.
+    Names only (no folder listing). Consecutive chapters, a lone file, a chain that starts late
+    (missing FIRST chapters: nothing is chained across them), another recording's file and a
+    non-GoPro clip are no gap; the legacy GOPR naming is numbered as `missing_chapters` numbers it."""
+    j = chapters.gap_joins(["/r/GX010068.MP4", "/r/GX030068.MP4", "/r/GX040068.MP4",
+                            "/r/GX070068.MP4"])
+    assert [(k, _names(m)) for k, m in j] == [
+        (1, [(2, "GX020068.MP4")]), (3, [(5, "GX050068.MP4"), (6, "GX060068.MP4")])], j
+    assert chapters.missing_names(j[1][1]) == "chapters 5 and 6, GX050068.MP4, GX060068.MP4"
+    assert all(os.path.dirname(p) == "/r" for _k, m in j for _n, p in m)
+    for chain in (["/r/GX010068.MP4", "/r/GX020068.MP4"], ["/r/GX020068.MP4", "/r/GX030068.MP4"],
+                  ["/r/GX010068.MP4"], [], ["/r/GX010068.MP4", "/r/GX030069.MP4"],
+                  ["/r/hero6.mp4", "/r/GX030068.MP4"]):
+        assert chapters.gap_joins(chain) == [], chain
+    legacy = chapters.gap_joins(["/r/GOPR0070.MP4", "/r/GP020070.MP4"])
+    assert [(k, _names(m)) for k, m in legacy] == [(1, [(2, "GP010070.MP4")])], legacy
+    assert chapters.gap_joins(["/r/GOPR0070.MP4", "/r/GP010070.MP4"]) == []
+
+
 def test_only_a_gap_makes_part_of_a_recording():
     """A recording that only lacks its first chapters is truncated, not wrong: each of its laps is
     timed right, so it stays a whole recording for the verdict (loop recording deletes early

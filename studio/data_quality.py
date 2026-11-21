@@ -883,13 +883,23 @@ def session_marks(session) -> list[str]:
 
 def lap_warnings(session) -> dict[int, str | None]:
     """The ⚠ set with each lap's reason (`Session.lap_warnings`): None for a GPS dropout, the
-    off-line sentence for a lap that left the line the other laps drive. A lighter double with
+    off-line sentence for a lap that left the line the other laps drive, and the missing-chapter
+    sentence for a lap timed across one (`gap_lap_ids` tells it from off-line). A lighter double with
     only `dropout_lap_ids` reads as dropouts alone; one with neither has no ⚠ lap."""
     ask: Callable[[], dict[int, str | None]] | None = getattr(session, "lap_warnings", None)
     if callable(ask):
         return dict(ask())
     drop: Callable[[], Iterable[int]] | None = getattr(session, "dropout_lap_ids", None)
     return {i: None for i in (drop() if callable(drop) else ())}
+
+
+def gap_lap_ids(session) -> set[int]:
+    """The laps of the ⚠ set timed across a missing chapter (`Session.chapter_gap_notes`) — the
+    ones whose `lap_warnings` sentence is about the clock, not the line, so a surface that counts
+    "off the line" laps by their sentence leaves these out and names them as what they are. A
+    double without the accessor has none."""
+    ask: Callable[[], dict[int, str]] | None = getattr(session, "chapter_gap_notes", None)
+    return set(ask()) if callable(ask) else set()
 
 
 def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:

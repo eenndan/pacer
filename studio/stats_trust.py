@@ -347,13 +347,26 @@ class TrustSection:
                          f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
         # A lap that left the line the other laps drive (a cut): the other half of the ⚠ set, out
         # of the same numbers the dropout row names. Its own words — it had no dropout.
-        off_line = sorted(i for i, why in data_quality.lap_warnings(session).items() if why)
-        if off_line:
-            nums = [str(i + 1) for i in off_line]
+        # A lap timed across a missing chapter wears the ⚠ with a sentence too, but about the
+        # clock: it is named on its own row, never counted as off the line.
+        gap = data_quality.gap_lap_ids(session)
+        off_line = sorted(i for i, why in data_quality.lap_warnings(session).items()
+                          if why and i not in gap)
+
+        def _laps(ids):
+            nums = [str(i + 1) for i in sorted(ids)]
             laps = nums[0] if len(nums) == 1 else f"{', '.join(nums[:-1])} and {nums[-1]}"
+            return f"{'lap' if len(nums) == 1 else 'laps'} {laps}"
+        if off_line:
             rows.append(("Off the line",
-                         f"{'lap' if len(nums) == 1 else 'laps'} {laps} left the line the other "
+                         f"{_laps(off_line)} left the line the other "
                          f"laps drive — flagged {DROPOUT_MARK} and left out of bests, σ and pace",
+                         True))
+        if gap:
+            rows.append(("Missing chapter",
+                         f"{_laps(gap)} {'was' if len(gap) == 1 else 'were'} timed across a "
+                         f"missing chapter — flagged {DROPOUT_MARK} and left out of bests, σ "
+                         "and pace",
                          True))
         # BREAK IN SERIES — the fourth trust-breaking fact, and the one the card had no name for.
         # A skipped chapter or a chapter whose telemetry stops covering its video means the times
