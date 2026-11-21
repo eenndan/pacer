@@ -462,12 +462,13 @@ SPLITS_TOOLTIP = (
     "sector.\n\n"
     "TWO ANCHORS, ON PURPOSE. The ★ is the target: the quickest anyone went. The behind mark is "
     "measured against that sector's MEDIAN, scaled by that sector's own spread (its 90th "
-    f"percentile above the median, floored at {stats_service.MATRIX_SCALE_MIN_S:g} s), because a "
+    f"percentile above the median, floored at {stats_service.MATRIX_SCALE_MIN_S:.2f} s), because a "
     "minimum cannot answer 'which lap lost time here'. Measured with three lines on D24: S2's "
     "best is 15.40 s against a 16.70 s median — one lap 0.8 s clear of every other — and marking "
     "against it flagged 14 of that column's 38 cells for being ordinary. The floor stops the "
-    "percentile becoming a rank: where every lap is within a tenth, nothing is marked. Hover any "
-    "cell for both numbers.")
+    "percentile becoming a rank: where every lap is within a tenth, nothing is marked. It is only "
+    "where a ▼ starts to be drawn, not the step two splits read level within (Quickest passes "
+    "gives that). Hover any cell for both numbers.")
 #: The line under the SPLITS grid — the sample it is over, stated where the grid is read.
 SPLITS_NOTE = ("{n} clean laps × {c} sectors. ★ is the sector's best to the hundredth (Quickest "
                "passes, on the Corners tab, says how many laps are level with it); ▼ is {scale} or more "

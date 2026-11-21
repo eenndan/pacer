@@ -280,5 +280,9 @@ def open_for(prov, parent=None) -> ProvenancePanel | None:
     if prov is None:
         return None
     panel = ProvenancePanel(prov, parent)
+    # Freed on close, not hidden: it is parented to the window and nobody keeps it, so a closed
+    # panel (~53 widgets) stayed until the window went, one more per inspection
+    # (tests/test_dialog_census.py). Non-modal, so there is no exec() to deleteLater() after.
+    panel.setAttribute(Qt.WA_DeleteOnClose)
     panel.show()
     return panel
