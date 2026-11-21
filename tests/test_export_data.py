@@ -216,6 +216,23 @@ def test_laps_table_schema_and_values():
     assert by_id[0][4] == "" and by_id[1][4] == ""
 
 
+def test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report():
+    """ONE ⚠ set (Session.lap_warnings): laps.csv's `flag` (and the report's copy of the table)
+    marks a lap that left the line the other laps drive with its own short word, never blank and
+    never "gps-dropout"; the report's lap count spells it out beside the dropouts."""
+    s = make_session()
+    s.off_line_metres = lambda: {0: 34.2}           # lap 1 cut across the infield
+    headers, rows = export_data.laps_table(s)
+    by_id = dict(rows)
+    col = headers.index("flag")
+    assert by_id[0][col] == export_data.OFF_LINE_FLAG == "off-line", by_id[0][col]
+    assert by_id[2][col] == export_data.DROPOUT_FLAG and by_id[1][col] == ""
+    assert dict(export_data.laps_table(s, display=True)[1])[0][col] == "off-line"
+    laps_row = dict(export_data.stats_summary(s)[0].rows)["laps"]
+    assert "1 with a GPS dropout" in laps_row and "1 off the line" in laps_row, laps_row
+    print("test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report OK")
+
+
 def test_the_display_table_prints_the_apps_precision_from_the_raw_values():
     """cool/report-laps-precision: `display=True` (the report's copy) prints each kind of value at
     the app's precision — lap time 3, distance 0, speeds 1, splits and corner times PRINT_DECIMALS —
@@ -1121,6 +1138,7 @@ def test_the_report_laps_table_speaks_the_apps_words_and_keeps_every_column():
 
 if __name__ == "__main__":
     test_laps_table_schema_and_values()
+    test_a_lap_that_left_the_line_is_flagged_in_the_file_and_the_report()
     test_the_display_table_prints_the_apps_precision_from_the_raw_values()
     test_laps_table_degenerate_schema()
     test_write_laps_csv_matches_table()

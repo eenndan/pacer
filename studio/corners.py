@@ -375,6 +375,103 @@ def session_geometry(ref_trace, lap_traces: dict) -> SessionGeometry | None:
                            len(ids), {lid: offs[lid] - consensus for lid in ids})
 
 
+# --- A LAP THAT LEFT THE LINE THE OTHER LAPS DRIVE ---------------------------------------------------
+# A lap straight across the infield passed every validity test (the distance band is ±10 %) and was
+# quicker, so it was crowned best lap, PB, Δ reference and ideal-lap segment owner. It is still a lap
+# the driver ran, so it stays counted and listed; it is kept out of the bests
+# (`Session.lap_out_of_bests`) and the lap table flags it ⚠ with how far it left the line.
+#
+# LAP LENGTH CANNOT TELL A CUT FROM A LINE (studio/docs/refused-2026-09.md §41): a tighter line
+# shortens a lap by its lateral offset × the track's total turning, a fixed number of metres, so on
+# a short twisty layout one kart width tighter in every corner is as short as a corner cut. WHERE
+# the lap went can: a line moves a few metres across the track, a cut leaves it. So each lap's
+# trace is measured against the session's consensus line (`session_geometry`, receiver drift taken
+# out by the lap's robust shift), and a lap is OFF THE LINE when its lateral distance from that line
+# stays above CORRIDOR_MAX_M for CORRIDOR_SUSTAIN_M of track. Measured through the real loader on
+# synthetic recordings (studio/dev/synth_gopro; the demo circuit, 971 m, a 601 m twisty club layout
+# and a 410 m one), the largest such distance held for 10 m:
+#
+#   legitimate laps (687 over 45 sessions)                                  largest
+#   clean receiver / 3× / 6× GPS noise (demo)                               0.67 / 1.84 / 3.96 m
+#   6× noise at DOP 4 for 90 s (demo)                                       4.24 m
+#   one lap 4 m inside / 4 m wide through every corner (demo)               4.05 / 4.82 m
+#   wet laps 3 m wide, dry laps 2 m inside, one session (demo)              3.63 m
+#   last 3 laps 4 m inside every corner (twisty); last 2 (410 m, 3× noise)  3.48 / 4.07 m
+#   slow receiver wander (σ 2 m, τ 60 s) + 6× noise + 4 m lines (twisty)    4.80 m
+#   a 3 m receiver JUMP between laps (demo; twisty at 6× noise) — harsher   6.99 / 6.78 m
+#   than any receiver measured here, kept as the worst case
+#   synthetic season, 18 sessions, 161 laps                                 1.01 m
+#
+#   cuts                                       saves        largest held 10 m
+#   across one corner's infield (demo)         31 m         34.2 m (33.4 m, drift + 3× noise)
+#   across one corner's infield (twisty)       23 m         14.9 m (15.0 m, drift + 6× noise)
+#   across one corner's infield (410 m, 3×)    18 m         13.5 m
+#   one corner taken short (demo, 3× noise)    8.9 m        10.1 m
+#   one corner taken short (410 m)             5.9 m        7.1 m
+#   a chicane straight-lined (twisty)          5.0 m        5.5 m
+#   a kerb clipped (demo / twisty)             1.5 / 0.5 m  2.7 / 0.7 m
+#   honest offs, 10 m / 8 m wide (demo / twisty)            7.4 / 5.9 m
+#
+#   * CORRIDOR_MAX_M = 10 m sits between the widest legitimate lap (7.0 m under the receiver jump,
+#     4.8 m otherwise) and the narrowest cut across an infield (13.5 m): 3.0 m (×1.4) clear of the
+#     one and 3.5 m (×1.35) of the other, on all three track lengths. It is also about a kart
+#     track's width: 10 m off the line the other laps drive is off the tarmac. A corner taken short
+#     or a chicane straightened (5-9 m saved) stays under it, and so does an honest off; a lap that
+#     IS flagged left the line by the metres its hover says, which is true of a cut and of an off.
+#   * CORRIDOR_SUSTAIN_M = 10 m, so one stray fix is not an excursion. Held longer, a cut shrinks
+#     faster than a line does (the twisty infield cut at 6× noise reads 11.9 m held 15 m and 9.6 m
+#     held 20 m), so
+#     the hold stays short.
+#   * CORRIDOR_MIN_LAPS = 4: with three laps or fewer there is no consensus to leave.
+#   * CORRIDOR_MAX_SHARE = 2/5: the rule only ever flags a clear MINORITY of the laps measured.
+#     The consensus is a per-station median, so it is the line only while a clear majority drives
+#     it. With half the laps cutting the same corner it lands BETWEEN the two lines and every lap
+#     reads ~17 m off it; with 3 cutters of 5 it IS the cut and the two honest laps read off it.
+#     So the flagged laps must be FEWER than two-fifths of those measured, or nothing is flagged:
+#     the session has no single line to measure against. That band is symmetric about one half —
+#     cutters under 40 % are flagged, a cutting majority leaves the honest laps flagged only when
+#     it passes 60 % (and then the cut is the line the laps drive), and from 40 to 60 % nothing is
+#     flagged. Two cutters of five are therefore not flagged; one of four and three of eight are.
+CORRIDOR_MAX_M = 10.0
+CORRIDOR_SUSTAIN_M = 10.0
+CORRIDOR_MIN_LAPS = 4
+CORRIDOR_MAX_SHARE = 0.4
+
+
+def corridor_residuals(ref_trace, lap_traces: dict) -> tuple[float, dict[int, np.ndarray]] | None:
+    """(station spacing m, {lap id: |lateral distance| from the consensus line at each station,
+    receiver drift removed}) over `lap_traces`, or None when no session geometry can be fitted.
+
+    The consensus and the per-lap offsets are `session_geometry`'s, fitted over every lap given;
+    each lap is de-drifted by its ROBUST shift (`robust_shift`, at the session's residual scale), so
+    the excursion being measured cannot tilt the shift that is taken out of it. A lap whose robust
+    refit is refused falls back to its least-squares shift. NaN where the lap did not answer."""
+    geom = session_geometry(ref_trace, lap_traces)
+    if geom is None:
+        return None
+    nx, ny = geom.frame[4], geom.frame[5]
+    scale = geom.residual_scale()
+    out = {}
+    for lid, off in geom.lap_offsets.items():
+        t = robust_shift(off, nx, ny, scale)
+        if t is None:
+            t = geom.shift[lid]
+        out[lid] = np.abs(off - (nx * t[0] + ny * t[1]))
+    return geom.total_ref / DRIFT_STATIONS, out
+
+
+def sustained_max(r: np.ndarray, k: int) -> float:
+    """The largest value `r` (one closed lap's stations) holds for `k` consecutive stations: the
+    max over every circular window of the window's minimum. A NaN station breaks a window (counts
+    as 0), so a stretch the lap did not answer is never read as an excursion."""
+    r = np.nan_to_num(np.asarray(r, float), nan=0.0)
+    if len(r) == 0:
+        return 0.0
+    k = int(min(max(k, 1), len(r)))
+    ext = np.concatenate([r, r[:k - 1]])
+    return float(np.max(np.lib.stride_tricks.sliding_window_view(ext, k).min(axis=1)))
+
+
 def anchor_offsets(d_ref, geometry: SessionGeometry | None, ref_id: int,
                    ref_xs, ref_ys, ref_cum):
     """Per-boundary (dx, dy) that cancels the REFERENCE lap's own NON-RIGID deviation from the

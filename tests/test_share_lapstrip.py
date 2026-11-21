@@ -362,6 +362,28 @@ def test_offered_needs_two_clean_laps():
     assert ls.clean_lap_count(FakeSession({0: 60.0, 1: 60.4, 2: 61.0}, dropouts={2})) == 2
 
 
+def test_a_lap_that_left_the_line_is_not_a_clean_lap_and_says_why():
+    """ONE ⚠ set (Session.lap_warnings): a lap that left the line the other laps drive — the cut
+    lap timed 0.75 s under the honest best — is hatched like any ⚠ lap, counted out of the clean
+    laps, and the legend names what it did, not a GPS dropout it never had."""
+    s = FakeSession({0: 60.0, 1: 60.3, 2: 59.25, 3: 60.5})
+    why = "Lap 3 left the line your other laps drive by 34 m, so it is kept out of the bests."
+    s.lap_warnings = lambda: {2: why}
+    s.best_lap_id = lambda: 0
+    d = ls.lapstrip_data(s)
+    cut = [b for b in d.bars if b.lap_id == 2][0]
+    assert cut.kind == ls.KIND_OFF_LINE and cut.tone == ls.TONE_QUICKER, cut
+    assert d.clean_laps == 3 and ls.clean_lap_count(s) == 3
+    words = dict(ls.legend_entries(d))[ls.TONE_QUICKER]
+    assert words == "lap 3 −0.75 s: quicker, left the line (not counted)", words
+    assert "dropout" not in " ".join(w for _k, w in ls.legend_entries(d)).lower()
+    s.times[2] = 60.6                                   # slower than the best: its own key
+    assert dict(ls.legend_entries(ls.lapstrip_data(s)))[ls.KIND_OFF_LINE] == \
+        "left the line the other laps drive: not counted"
+    ls.render_lapstrip(ls.lapstrip_data(s))             # paints (hatched) without raising
+    print("test_a_lap_that_left_the_line_is_not_a_clean_lap_and_says_why OK")
+
+
 # --------------------------------------------------------------- render + export
 def test_renders_every_shape_at_the_lap_cards_size():
     for s in (long_session(), FakeSession({0: 60.0, 1: 60.4, 2: 61.0}),

@@ -1097,6 +1097,27 @@ def test_the_gap_adds_up_to_the_printed_times():
     print("test_the_gap_adds_up_to_the_printed_times OK")
 
 
+def test_a_lap_that_left_the_line_wears_the_flag_and_says_why():
+    """A lap that left the line the other laps drive (Session.lap_warnings: a cut) is out of
+    the bests like a ⚠ dropout lap, so it wears the same ⚠, its hover says how far it went and why
+    it is not the best, and it sets no bar scale — the +1.5 s lap 8 here, which would stretch the
+    scale to 1.5 s if it counted."""
+    from studio import lap_table as LT
+    sess = _TowerSession()
+    sess.dropout_lap_ids = lambda: set()
+    why = "Lap 9 left the line your other laps drive by 14 m, so it is kept out of the bests."
+    sess.lap_warnings = lambda: {8: why}
+    table = LapTable(sess)
+    tb = table.table
+    r = table._row_for_lap(8)
+    assert tb.item(r, 0).text().endswith(LT.DROPOUT_SUFFIX), tb.item(r, 0).text()
+    assert tb.item(r, 1).toolTip() == why, tb.item(r, 1).toolTip()
+    assert abs(table.delta_scale() - 1.0) < 1e-9, table.delta_scale()
+    clean = table._row_for_lap(3)
+    assert not tb.item(clean, 0).text().endswith(LT.DROPOUT_SUFFIX)
+    print("test_a_lap_that_left_the_line_wears_the_flag_and_says_why OK")
+
+
 def test_an_all_dropout_session_still_scales_its_bars():
     """When EVERY lap is ⚠, the ★ falls back to a flagged lap (best_candidate_ids) and the purple
     split mark is lifted for that case; the bar scale falls back the same way, so the bars do not

@@ -3111,17 +3111,18 @@ class StatsView(QWidget):
         # a fastest lap in the very column it just muted.
         if not verified:
             best = None
-        # C7: the page's DATA TRUST card says dropout laps are "flagged ⚠" — flag them HERE
-        # too (the Laps tab already does), or the promise reads as broken.
-        dropouts = session.dropout_lap_ids() if hasattr(session, "dropout_lap_ids") else set()
+        # C7: the page's DATA TRUST card says ⚠ laps are "flagged ⚠" — flag them HERE too (the
+        # Laps tab already does), or the promise reads as broken. The ONE ⚠ set: a GPS dropout
+        # (its own words) or a lap that left the line the other laps drive (its sentence).
+        warned = data_quality.lap_warnings(session)
         self.lap_table.setRowCount(len(rows))
         best_colour = QColor(theme.best_lap_colour())
         for r, s in enumerate(rows):
             mark = BEST_LAP_MARK if s.idx == best else ""
-            warn = DROPOUT_SUFFIX if s.idx in dropouts else ""
+            warn = DROPOUT_SUFFIX if s.idx in warned else ""
             lap_item = QTableWidgetItem(f"{mark}{s.idx + 1}{warn}")  # 1-based, the app-wide rule
             if warn:
-                lap_item.setToolTip(DROPOUT_TOOLTIP)
+                lap_item.setToolTip(warned[s.idx] or DROPOUT_TOOLTIP)
             if s.idx == best:
                 lap_item.setForeground(best_colour)
             self.lap_table.setItem(r, 0, lap_item)

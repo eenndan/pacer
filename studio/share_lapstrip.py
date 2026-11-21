@@ -81,7 +81,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QImage, QPainter, QPen
 
-from . import share_card, theme, units
+from . import data_quality, share_card, theme, units
 from ._signal import exclusion_summary, fmt_signed, lap_label, plural, too_brief_note
 from .lap_table import (
     TONE_BEHIND,
@@ -100,6 +100,7 @@ CARD_W, CARD_H = share_card.CARD_W, share_card.CARD_H
 
 KIND_LAP = "lap"            # a clean, timed lap: solid bar
 KIND_DROPOUT = "dropout"    # a timed lap with a GPS dropout (the table's ⚠): hatched bar
+KIND_OFF_LINE = "off_line"  # a timed lap that left the line the other laps drive (⚠): hatched
 KIND_EXCLUDED = "excluded"  # left out of the times (the table's ⊘ strip): a marked slot, no height
 TONE_BEST = "best"
 
@@ -156,10 +157,11 @@ class LapStripData:
 
 
 def clean_lap_count(session) -> int:
-    """Table rows without a GPS dropout — the laps a comparison stands on (the menu gate)."""
+    """Table rows without a ⚠ (a GPS dropout, or a lap that left the line) — the laps a
+    comparison stands on (the menu gate)."""
     try:
         rows = session.lap_rows()
-        drop = session.dropout_lap_ids()
+        drop = data_quality.lap_warnings(session)
     except Exception:  # noqa: BLE001 — a menu sync must never raise
         return 0
     return sum(1 for r in rows if r["idx"] not in drop)
@@ -186,7 +188,8 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
     unit = units.normalize_unit(unit)
     card = share_card.card_data(session, unit=unit)
     rows = list(session.lap_rows())
-    dropouts = set(session.dropout_lap_ids())
+    warned = data_quality.lap_warnings(session)   # the ⚠ set: dropout (None) or off the line
+    dropouts = set(warned)
     excluded = list(session.excluded_lap_ids() or [])
     times = {int(r["idx"]): float(r["time"]) for r in rows}
 
@@ -206,7 +209,7 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
         if lid not in times:
             bars.append(StripBar(lid, lap_label(lid), KIND_EXCLUDED, None, "", 0.0, False))
             continue
-        kind = KIND_DROPOUT if lid in dropouts else KIND_LAP
+        kind = KIND_LAP if lid not in warned else KIND_OFF_LINE if warned[lid] else KIND_DROPOUT
         gap = gaps.get(lid)
         if gap is None:
             bars.append(StripBar(lid, lap_label(lid), kind, None, TONE_BEHIND, 0.0, False))
@@ -254,7 +257,8 @@ _SW, _SW_GAP, _ENTRY_GAP = 18.0, 10.0, 28.0
 # (the ★ call-out already names the best lap), then the per-lap facts. The too-brief sentence —
 # the one line that accounts for crossings the picture cannot show at all — is not in the table:
 # `legend_plan` drops it only once every entry here has gone.
-LEGEND_PRIORITY = {TONE_BEHIND: 0, TONE_LEVEL: 1, TONE_BEST: 2, KIND_DROPOUT: 3, TONE_QUICKER: 4,
+LEGEND_PRIORITY = {TONE_BEHIND: 0, TONE_LEVEL: 1, TONE_BEST: 2, KIND_DROPOUT: 3, KIND_OFF_LINE: 3,
+                   TONE_QUICKER: 4,
                    "clipped": 5, KIND_EXCLUDED: 6}
 
 
@@ -288,11 +292,16 @@ def legend_entries(data: LapStripData, *, short: bool = False) -> list[tuple[str
         out.append((TONE_BEHIND, "height = time off the best"))
     if any(b.kind == KIND_DROPOUT and b.tone != TONE_QUICKER for b in timed):
         out.append((KIND_DROPOUT, "GPS dropout: time less reliable"))
+    if any(b.kind == KIND_OFF_LINE and b.tone != TONE_QUICKER for b in timed):
+        out.append((KIND_OFF_LINE, "left the line the other laps drive: not counted"))
     quick = [b for b in timed if b.tone == TONE_QUICKER]
     if quick:
         who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in quick)
                if len(quick) <= 3 else plural(len(quick), "lap"))
-        out.append((TONE_QUICKER, f"{who}: quicker, GPS dropout (not counted)"))
+        why = " or ".join(w for k, w in ((KIND_DROPOUT, "GPS dropout"),
+                                         (KIND_OFF_LINE, "left the line"))
+                          if any(b.kind == k for b in quick))
+        out.append((TONE_QUICKER, f"{who}: quicker, {why} (not counted)"))
     cut = [b for b in timed if b.clipped]
     if cut and data.scale_s:
         # The cut laps BY NAME with their real gap, up to three: the bar no longer says it.
@@ -524,7 +533,7 @@ def _paint(data: LapStripData) -> QImage:
             continue
         top = min(y_of(b.height), base - MIN_DRAW_PX)
         rect = QRectF(cx - bar_w / 2, top, bar_w, base - top)
-        if b.kind == KIND_DROPOUT:
+        if b.kind in (KIND_DROPOUT, KIND_OFF_LINE):
             _paint_hatched(p, rect, fill)
         else:
             p.setPen(Qt.NoPen)
@@ -657,7 +666,7 @@ def _paint_legend(p: QPainter, plan: LegendPlan, tone_fill: dict, best_hue: str)
         box = QRectF(it.x, it.y - _SW + 2, _SW, _SW)
         if it.style == KIND_EXCLUDED:
             _paint_excluded(p, box.center().x(), box.center().y(), _SW * 0.9)
-        elif it.style in (KIND_DROPOUT, TONE_QUICKER):
+        elif it.style in (KIND_DROPOUT, KIND_OFF_LINE, TONE_QUICKER):
             _paint_hatched(p, box, tone_fill[TONE_BEHIND])
         elif it.style == "clipped":
             p.setPen(Qt.NoPen)

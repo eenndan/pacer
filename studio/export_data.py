@@ -59,6 +59,9 @@ from ._signal import (
 # laps.csv `flag` column value mirroring the lap table's ⚠ low-confidence marker (a GPS
 # dropout inside the lap — its time/distance are less reliable). Clean laps carry "".
 DROPOUT_FLAG = "gps-dropout"
+# ...and a lap that left the line the other laps drive (a cut: `Session.off_line_metres`), the
+# other half of the ⚠ set — kept out of the bests, so it is no clean row either.
+OFF_LINE_FLAG = "off-line"
 
 # laps.csv's per-lap distance column. It is the lap odometer, which reads short of the distance
 # driven (`stats.ODOMETER_NOTE`), so the file's trailer carries that note under this label, the
@@ -219,7 +222,7 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
     columns:
 
       lap, time_s, dist_m, entry_kmh, flag      the table's base columns; `flag` is the ⚠
-                                                GPS-dropout marker (DROPOUT_FLAG / "")
+                                                marker (DROPOUT_FLAG / OFF_LINE_FLAG / "")
       S1_s … SN_s                               per-sub-sector splits — present only when
                                                 sector lines exist (like the app's table);
                                                 a partial lap's missing splits stay blank
@@ -274,6 +277,7 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
     n_splits = n_sect + 1 if n_sect else 0  # N lines -> N+1 sub-sectors; 0 lines -> none
     corner_list = session.corners.corner_list()
     dropout_ids = session.dropout_lap_ids()
+    warned = data_quality.lap_warnings(session)   # the ⚠ set: dropouts (None), off-line laps
 
     sfx, speed = _speed_column(unit)
 
@@ -292,7 +296,8 @@ def laps_table(session, unit: str | None = None, *, display: bool = False
         # `lap` column is the 1-based lap NUMBER (lap_label), matching the app's Lap column;
         # the 0-based lap_id stays the internal key (row tuple / best-lap green class below).
         cells = [lap_label(lap_id), fmt.time(r["time"]), fmt.dist(r["dist"]),
-                 fmt.speed(speed(r["entry"])), DROPOUT_FLAG if lap_id in dropout_ids else ""]
+                 fmt.speed(speed(r["entry"])),
+                 "" if lap_id not in warned else OFF_LINE_FLAG if warned[lap_id] else DROPOUT_FLAG]
         splits = session.lap_sector_splits(lap_id) if n_splits else []
         for i in range(n_splits):
             cells.append(fmt.split(splits[i]) if i < len(splits) else fmt.missing)
@@ -647,6 +652,9 @@ def stats_summary(session, unit: str | None = None) -> list[SummarySection]:
         lap_bits.append(f"{len(excluded)} excluded ({why})" if why else f"{len(excluded)} excluded")
     if dropouts:
         lap_bits.append(f"{len(dropouts)} with a GPS dropout")
+    off_line = [i for i, why in data_quality.lap_warnings(session).items() if why]
+    if off_line:
+        lap_bits.append(f"{len(off_line)} off the line")
     rows = [("laps", " · ".join(lap_bits) if valid else "")]
     tot = st.totals() if st is not None else None
     note = ""

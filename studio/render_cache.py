@@ -47,7 +47,7 @@ LapXYT = Callable[[int], tuple[np.ndarray, np.ndarray, np.ndarray]]
 class LapRenderCache:
     """Per-lap draw-segment + reference-centerline cache over Session-provided arrays.
 
-    `lap_xyt` / `valid_lap_ids` / `lap_has_dropout` / `lap_time` are Session-bound
+    `lap_xyt` / `valid_lap_ids` / `lap_out_of_bests` / `lap_time` are Session-bound
     callables (Session owns the pacer side and its own per-lap caches); `trace_times`
     is the full-trace TELEMETRY (GPS9 true-clock) time array (Session.tt), used only to
     size gaps — a duration, so the clock it is stated on does not reach the drawing.
@@ -55,7 +55,7 @@ class LapRenderCache:
 
     def __init__(self, *, lap_xyt: LapXYT,
                  valid_lap_ids: Callable[[], list[int]],
-                 lap_has_dropout: Callable[[int], bool],
+                 lap_out_of_bests: Callable[[int], bool],
                  lap_time: Callable[[int], float],
                  trace_times: np.ndarray,
                  all_lap_ids: Callable[[], Iterable[int]] | None = None):
@@ -64,7 +64,7 @@ class LapRenderCache:
         # Every lap the map can draw (out- and in-laps too) — scanned once for a gap that needs a
         # donor, see _warm_reference. Defaults to the valid laps for a caller that has no others.
         self._all_lap_ids = all_lap_ids or valid_lap_ids
-        self._lap_has_dropout = lap_has_dropout
+        self._lap_out_of_bests = lap_out_of_bests
         self._lap_time = lap_time
         self._trace_times = trace_times
         # Per-lap gap-filled draw segments (measured + inferred runs) — computed once per
@@ -163,14 +163,16 @@ class LapRenderCache:
         return self._reference_xy if len(self._reference_xy) else None
 
     def reference_fit_loop(self):
-        """The lap loop the reference centerline is fit against: the fastest valid lap
-        WITHOUT a GPS dropout (an ordered, closed, complete track footprint), else the
-        fastest valid lap. None if there are no valid laps."""
+        """The lap loop the reference centerline is fit against: the fastest valid lap that is
+        not out of the bests (`Session.lap_out_of_bests`: no GPS dropout, and it did not leave the
+        line the other laps drive — a cut lap's footprint skips part of the track), so an
+        ordered, closed, complete track footprint; else the fastest valid lap. None if there are
+        no valid laps."""
         valid = self._valid_lap_ids()
         if not valid:
             return None
         by_time = sorted(valid, key=self._lap_time)
-        pick = next((lap for lap in by_time if not self._lap_has_dropout(lap)), by_time[0])
+        pick = next((lap for lap in by_time if not self._lap_out_of_bests(lap)), by_time[0])
         xs, ys, _ = self._lap_xyt(pick)
         if len(xs) < 10:
             return None

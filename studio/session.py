@@ -67,6 +67,7 @@ from ._signal import (
     _lap_closure,
     exclusion_detail,
     fmt_time,  # noqa: F401  (re-export for call sites; lives in _signal now)
+    lap_label,
     nearest_on_polyline,
     polyline_line_crossing,
 )
@@ -326,7 +327,7 @@ class Session:
         self._render_cache = render_cache.LapRenderCache(
             lap_xyt=self._lap_trace_xyt,
             valid_lap_ids=self.valid_lap_ids,
-            lap_has_dropout=self.lap_has_dropout,
+            lap_out_of_bests=self.lap_out_of_bests,
             lap_time=self.lap_time,
             trace_times=self.tt,
             all_lap_ids=lambda: range(self.lap_count()),
@@ -992,7 +993,7 @@ class Session:
             reference_id=REFERENCE_ID,
             best_lap_id=self.best_lap_id,
             valid_lap_ids=self.valid_lap_ids,
-            lap_has_dropout=self.lap_has_dropout,
+            lap_out_of_bests=self.lap_out_of_bests,
             lap_columns=self._lap_columns,
             lap_arrays=self._lap_arrays,
             lap_time_dist=self._lap_time_dist,
@@ -1025,7 +1026,7 @@ class Session:
         # pure-Python tests), reached via these get/set accessors + the shared _UNSET sentinel.
         return bests_service.Bests(
             valid_lap_ids=self.valid_lap_ids,
-            lap_has_dropout=self.lap_has_dropout,
+            lap_out_of_bests=self.lap_out_of_bests,
             lap_time=lambda i: self.laps.lap_time(i),
             lap_sector_splits=self.lap_sector_splits,
             # The EFFECTIVE count (placed lines minus the session-wide collapsed ones), because it
@@ -2122,6 +2123,69 @@ class Session:
         the views stay pacer-free, so they consume this flag via the app."""
         return {lap_id for lap_id in self.valid_lap_ids() if self.lap_has_dropout(lap_id)}
 
+    def off_line_metres(self) -> dict[int, float]:
+        """``{lap_id: metres}`` of every VALID, dropout-free lap that left the line the other laps
+        drive — its trace held more than `corners.CORRIDOR_MAX_M` from the session's consensus line
+        for `corners.CORRIDOR_SUSTAIN_M` (a cut across the infield, or an off) — with how far it
+        went. Such a lap stays counted and listed; `lap_out_of_bests` keeps it from winning.
+
+        The consensus is fitted over those laps, against the one whose length is the median (never
+        the best lap: which lap is best is what this decides). A dropout lap neither votes nor is
+        measured: its gap is a straight line drawn across the hole, and it is out of the bests
+        already. Fewer than `corners.CORRIDOR_MIN_LAPS` such laps: none. Memoized against the
+        `valid_lap_ids` list it was computed from (held by identity), so a re-segment, which
+        replaces that list, recomputes without an invalidation of its own."""
+        valid = self.valid_lap_ids()
+        memo = getattr(self, "_off_line_memo", None)
+        if memo is not None and memo[0] is valid:
+            return memo[1]
+        out: dict[int, float] = {}
+        traces = {}
+        for i in valid:
+            if self.lap_has_dropout(i):
+                continue
+            _t, xs, ys, _v, cum = self._lap_columns(i)
+            if len(cum) >= 2 and float(cum[-1]) > 0:
+                traces[int(i)] = (xs, ys, cum)
+        if len(traces) >= corners_alg.CORRIDOR_MIN_LAPS:
+            ref = sorted(traces, key=lambda i: float(traces[i][2][-1]))[len(traces) // 2]
+            got = corners_alg.corridor_residuals(traces[ref], traces)
+            if got is not None:
+                step, resid = got
+                k = math.ceil(corners_alg.CORRIDOR_SUSTAIN_M / step)
+                held = {i: corners_alg.sustained_max(r, k) for i, r in resid.items()}
+                out = {i: m for i, m in held.items() if m > corners_alg.CORRIDOR_MAX_M}
+                # No clear majority on one line, no line to leave (CORRIDOR_MAX_SHARE).
+                if len(out) >= corners_alg.CORRIDOR_MAX_SHARE * len(traces):
+                    out = {}
+        self._off_line_memo = (valid, out)
+        return out
+
+    def off_line_notes(self) -> dict[int, str]:
+        """``{lap_id: why}`` for each lap off the line — the sentence the lap table's ⚠ hover says.
+        True of a cut and of an off alike: it says where the lap went, not why."""
+        return {i: f"Lap {lap_label(i)} left the line your other laps drive by {m:.0f} m, so it is "
+                   "kept out of the bests." for i, m in self.off_line_metres().items()}
+
+    def lap_warnings(self) -> dict[int, str | None]:
+        """THE ⚠ SET, with why: ``{lap_id: reason}`` for every valid lap kept out of the bests —
+        None for a GPS dropout (each surface keeps its own dropout words) and the `off_line_notes`
+        sentence for a lap that left the line. The two are disjoint: a dropout lap is never
+        measured for the line. Every surface that marks a ⚠ lap reads this (through
+        `data_quality.lap_warnings`), so none can call a cut lap clean."""
+        out: dict[int, str | None] = {i: None for i in self.dropout_lap_ids()}
+        out.update(self.off_line_notes())
+        return out
+
+    def lap_out_of_bests(self, lap_id: int) -> bool:
+        """May this valid lap NOT be the best lap, the Δ reference, a purple split, an ideal-lap
+        segment or the map's reference loop? True for a GPS dropout (`lap_has_dropout`: its
+        distance is reconstructed) and for a lap that left the line the other laps drive
+        (`off_line_metres`: a cut is not the same circuit). Both are still listed and timed,
+        flagged ⚠. The one predicate the bests service, the corner model and the map's reference
+        fit are built on, so they all exclude the same laps."""
+        return self.lap_has_dropout(lap_id) or lap_id in self.off_line_metres()
+
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
         line, and the one anything outside Session should call. Consumers: the default sector
@@ -2798,10 +2862,11 @@ class Session:
 
     def consistency_lap_ids(self) -> list[int]:
         """The lap set every consistency statistic runs over: VALID laps with no GPS
-        dropout, in session order — the ⚠ rule (a dropout lap's time/splits are
-        low-confidence, so it is excluded from σ/medians exactly as it is excluded from
-        the corner-detection profile in _corner_basis)."""
-        return [i for i in self.valid_lap_ids() if not self.lap_has_dropout(i)]
+        dropout that did not cut the track, in session order — the ⚠ rule
+        (`lap_out_of_bests`: a dropout lap's time/splits are low-confidence, and a cut lap did
+        not drive the same circuit, so each is excluded from σ/medians exactly as it is excluded
+        from the corner-detection profile in _corner_basis)."""
+        return [i for i in self.valid_lap_ids() if not self.lap_out_of_bests(i)]
 
     def lap_time_trend(self) -> list[tuple[int, float]]:
         """(lap_id, lap_time s) per consistency lap, in session order — the panel's trend

@@ -178,7 +178,7 @@ def test_the_donor_list_drops_the_reference_on_a_foreign_track():
         xyt = {i: (loop[:, 0], loop[:, 1], np.arange(len(loop)) * 0.1) for i in range(laps)}
         return render_cache.LapRenderCache(
             lap_xyt=lambda i: xyt[i], valid_lap_ids=lambda: sorted(xyt),
-            lap_has_dropout=lambda i: False, lap_time=lambda i: 60.0 + i,
+            lap_out_of_bests=lambda i: False, lap_time=lambda i: 60.0 + i,
             trace_times=np.arange(len(loop) * laps) * 0.1)
 
     names = [d["name"] for d in cache_over(_mk_lap(), laps=2).donors_for(0)]
@@ -209,7 +209,7 @@ def _counting_cache(loop, laps, gap=None, all_laps=None):
     extra = {"all_lap_ids": lambda: sorted(xyt)} if all_laps else {}
     cache = render_cache.LapRenderCache(
         lap_xyt=lambda i: xyt[i], valid_lap_ids=lambda: list(range(laps)),
-        lap_has_dropout=lambda i: bool(gapfill.find_gaps(xyt[i][2])),
+        lap_out_of_bests=lambda i: bool(gapfill.find_gaps(xyt[i][2])),
         lap_time=lambda i: 60.0 + i, trace_times=np.arange(len(loop) * laps) * 0.1, **extra)
     return cache, sorted(xyt)
 

@@ -345,6 +345,16 @@ class TrustSection:
             rows.append(("GPS dropout",
                          f"inside {len(dropouts)} of {plural(len(valid), 'lap')} — "
                          f"flagged {DROPOUT_MARK} and left out of bests, σ and pace", True))
+        # A lap that left the line the other laps drive (a cut): the other half of the ⚠ set, out
+        # of the same numbers the dropout row names. Its own words — it had no dropout.
+        off_line = sorted(i for i, why in data_quality.lap_warnings(session).items() if why)
+        if off_line:
+            nums = [str(i + 1) for i in off_line]
+            laps = nums[0] if len(nums) == 1 else f"{', '.join(nums[:-1])} and {nums[-1]}"
+            rows.append(("Off the line",
+                         f"{'lap' if len(nums) == 1 else 'laps'} {laps} left the line the other "
+                         f"laps drive — flagged {DROPOUT_MARK} and left out of bests, σ and pace",
+                         True))
         # BREAK IN SERIES — the fourth trust-breaking fact, and the one the card had no name for.
         # A skipped chapter or a chapter whose telemetry stops covering its video means the times
         # either side are not on the same footing; both were already detected and both were only
