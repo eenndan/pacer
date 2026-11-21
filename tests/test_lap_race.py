@@ -368,6 +368,14 @@ def test_an_unmatched_lap_is_left_out_by_name():
     assert len(s._warp_to_best(2)[0]) <= 2, "fixture: lap 2 was meant to be unmatched"
     rt = s.race_tracks()
     assert rt.excluded == {2: lap_race.EXCLUDED_UNMATCHED} and 2 not in rt.ids, rt.excluded
+    # A ⚠ lap is left out for ITS reason, checked first: a GPS-dropout lap whose warp also failed
+    # read "no on-track match (L2)" on the card (DECISIONS §27). The field is the same either way.
+    field = rt.ids
+    s.lap_has_dropout = lambda i: i == 2
+    s._race_memo = None
+    rt = s.race_tracks()
+    assert rt.excluded == {2: lap_race.EXCLUDED_DROPOUT}, rt.excluded
+    assert rt.ids == field, (rt.ids, field)
     print("test_an_unmatched_lap_is_left_out_by_name OK")
 
 

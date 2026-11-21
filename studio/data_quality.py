@@ -939,6 +939,18 @@ def lap_warning_kinds(session) -> dict[int, str]:
             for i, why in lap_warnings(session).items()}
 
 
+def laps_by_kind(session) -> dict[str, list[int]]:
+    """``{kind: [lap_id, …]}`` (sorted, every kind present, maybe empty) — the ⚠ set PARTITIONED by
+    each lap's ONE reported kind (`lap_warning_kinds`). Every count of ⚠ laps by reason reads this,
+    never `dropout_lap_ids`, so the parts add up to the ⚠ total: a lap timed across a missing
+    chapter whose join also reads as a GPS gap is in `dropout_lap_ids` as well, and was counted
+    twice ("2 with a GPS dropout · … · 1 across a missing chapter" over 3 ⚠ laps, DECISIONS §27)."""
+    out: dict[str, list[int]] = {kind: [] for kind in WARN_REASON}
+    for i, kind in sorted(lap_warning_kinds(session).items()):
+        out[kind].append(i)
+    return out
+
+
 def lap_marks(session, lap_id, dropout_ids=None) -> list[str]:
     """Every quality code that applies to ONE lap row — the session-wide ones plus this lap's own.
 

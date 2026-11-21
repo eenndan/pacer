@@ -4859,14 +4859,17 @@ class Session:
         warned = data_quality.lap_warning_kinds(self)
         laps = []
         for i, td, warp in inputs:
-            if td is None or btd is None or warp is None or (i != best and _real_warp(warp) is None):
-                excluded[i] = lap_race.EXCLUDED_UNMATCHED
-                continue
             kind = warned.get(i)
+            # The ⚠ kind is checked FIRST, so a ⚠ lap is left out for ITS reason: a GPS-dropout
+            # lap whose warp also failed read "no on-track match" (DECISIONS §27). Either test
+            # leaves the lap out, so the order changes only the reason, never the field.
             # (The best lap is ⚠ only when every lap is, bests.py: a dropout best still sits out,
             # as it always has; any other ⚠ best is the reference the race needs.)
             if kind is not None and (i != best or kind == lap_race.EXCLUDED_DROPOUT):
                 excluded[i] = kind
+                continue
+            if td is None or btd is None or warp is None or (i != best and _real_warp(warp) is None):
+                excluded[i] = lap_race.EXCLUDED_UNMATCHED
                 continue
             laps.append(self._race_lap(i, td, warp))
         bw = self._warp_to_best(best)
