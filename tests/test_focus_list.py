@@ -45,6 +45,7 @@ What is asserted here, on inputs whose answer is known by construction:
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_focus_list.py
 """
 import contextlib
+import datetime
 import json
 import os
 import sys
@@ -1170,6 +1171,55 @@ def test_a_stored_date_that_is_not_a_calendar_day_is_not_printed_as_one():
     assert o.blocker == F.BLOCK_NO_RECORD, o
     assert o.detail == "last time and today", o.detail
     print("ok dates: a stored date that is not a calendar day reads 'last time', never '15 Dec'")
+
+
+def test_a_refusal_between_two_sessions_of_one_day_names_the_sessions_not_the_day_twice():
+    """cool/focus-same-day-words: on a race day the baseline and the session in front of the driver
+    share a date, and the no-record refusal read "no session record for 13 Sep and today, so nothing
+    says the two days were comparable" — one day named twice, and "two days" that were one. It now
+    names the sessions ("either session on 13 Sep" / "the earlier session today" / "this session")
+    and says "the two sessions". The RULE is unchanged: a record is still required on a same day,
+    so it is still a refusal, and different days still read exactly as before."""
+    today = datetime.date.today()
+    past = "2026-09-13"
+    dry = session_record.blank_record() | {"conditions": "dry"}
+
+    def lines(then_date, now_date, records, n=1):
+        now = {**_now(), "date": now_date}
+        items = [_item(cid=c, date=then_date) for c in (4, 7)[:n]]
+        rep = F.verdict(items, now, [_sample(4.4)] * n, records)
+        assert {o.blocker for o in rep.outcomes} == {F.BLOCK_NO_RECORD}, rep.outcomes
+        assert all(o.delta is None and not o.has_verdict for o in rep.outcomes)
+        return F.report_lines(rep)
+
+    tail = "comparable; a coach will put up to 4 s a lap on conditions alone."
+    iso = today.isoformat()
+    assert lines(iso, iso, _records()) == [
+        "C4 — can't say. There's no session record for either session today, so nothing says "
+        f"the two sessions were {tail}"]
+    assert lines(past, past, _records()) == [
+        "C4 — can't say. There's no session record for either session on 13 Sep, so nothing says "
+        f"the two sessions were {tail}"]
+    assert lines(past, past, _records(("GX0062", dry))) == [
+        "C4 — can't say. There's no session record for the earlier session on 13 Sep, so nothing "
+        f"says the two sessions were {tail}"]
+    assert lines(iso, iso, _records(("GX0060", dry))) == [
+        "C4 — can't say. There's no session record for this session, so nothing says the two "
+        f"sessions were {tail}"]
+    assert lines(iso, iso, _records(), n=2) == [
+        "C4 and C7 — can't say. There's no session record for either session today, so nothing "
+        f"says the two sessions were {tail} File ▸ Session record… writes one."]
+    # Different days: the words this PR leaves alone.
+    assert lines(past, "2026-09-20", _records()) == [
+        "C4 — can't say. There's no session record for 13 Sep and today, so nothing says the two "
+        f"days were {tail}"]
+    assert lines(past, iso, _records(("GX0062", dry)), n=2) == [
+        "C4 and C7 — can't say. There's no session record for 13 Sep, so nothing says the two "
+        f"days were {tail} File ▸ Session record… writes one."]
+    # An unreadable date is never "one day" with another.
+    assert lines("2026-00-13", "2026-00-13", _records())[0].startswith(
+        "C4 — can't say. There's no session record for last time and today,")
+    print("ok same day: the refusal names the sessions, the rule still refuses")
 
 
 def test_a_stored_window_that_runs_backwards_or_off_the_lap_is_dropped():
