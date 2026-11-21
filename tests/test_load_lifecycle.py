@@ -617,6 +617,42 @@ def test_a_reference_load_failure_surfaces_the_reason_and_keeps_the_local_best_l
     print("test_a_reference_load_failure_surfaces_the_reason_and_keeps_the_local_best_lap OK")
 
 
+def test_a_reference_load_failure_is_said_in_the_main_opens_words():
+    """Discovery: a bad reference printed its exception — "could not load the reference recording
+    (TelemetryUnreadable: Failed to open file: /…/GX019201.MP4)", "(ValueError: none of these files
+    is a readable video…)". The main open already maps the same failures to plain sentences
+    (`_load_failure_message`); the reference door now says the same, ends with what stays the
+    baseline as every guard refusal does, and keeps the class and the path for the log."""
+    win, _view = _window()
+    folder = tempfile.mkdtemp(prefix="pacer-ref-fail-")
+    empty = os.path.join(folder, "GX019202.MP4")
+    open(empty, "wb").close()
+    cut = os.path.join(folder, "GX019201.MP4")
+    with open(cut, "wb") as f:
+        f.write(b"\x00\x00\x00\x18ftypmp41" + b"\x00" * 64)   # an MP4 header, no telemetry
+    cases = (
+        ([empty], ValueError(f"none of these files is a readable video: {os.path.basename(empty)}"),
+         "That file is empty (0 bytes)"),
+        ([cut], ingest.TelemetryUnreadable(f"Failed to open file: {cut}"),
+         "This is a GoPro file, but its telemetry track couldn't be read"),
+        (["/tmp/pacer-ref-gone/GX019203.MP4"], RuntimeError("Failed to open file: /tmp/x"),
+         "Couldn't find that file"),
+    )
+    try:
+        for paths, exc, lead in cases:
+            DIALOGS.clear()
+            win._on_reference_load_failed(win._ref_load_token, paths, exc)
+            assert len(DIALOGS) == 1 and "reference not loaded" in DIALOGS[0][0], DIALOGS
+            text = DIALOGS[0][1]
+            assert text.startswith(lead), text
+            assert text == f"{win._load_failure_message(paths, exc)} Keeping the local best lap.", text
+            for leak in (type(exc).__name__, "Failed to open", folder, "/tmp/"):
+                assert leak not in text, f"{leak!r} reached the user: {text!r}"
+    finally:
+        _teardown(win)
+    print("test_a_reference_load_failure_is_said_in_the_main_opens_words OK")
+
+
 # ==================================================== §3.7.1 · closeEvent mid-load and mid-export
 def test_closing_the_window_mid_load_joins_the_worker_instead_of_destroying_it():
     """`closeEvent` drains so no QThread is destroyed while it runs. Zero assertions existed on it."""
