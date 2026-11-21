@@ -872,7 +872,7 @@ def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
             if printed == 0.0:
                 assert col is None, (unit, d)
         assert all(len(v) == 1 for v in by_print.values()), (unit, by_print)
-        assert f"Coloured from {first[unit]:.1f} {units.speed_label(unit)}," in \
+        assert f"So the first coloured figure is {first[unit]:.1f} {units.speed_label(unit)}." in \
             _corner_col_tips(unit)[4], unit
     assert apex_delta_colour(1.6, "mph") is None and apex_delta_colour(1.86, "mph") is not None
     assert apex_delta_colour(1.72, "mph") is None                    # printed 1.1, under the gate
@@ -896,7 +896,7 @@ def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
     tip = table.table.horizontalHeaderItem(4).toolTip()
     note = ("A gap under 1.75 km/h is not coloured: two speed readings differ by up to that from "
             "the GPS alone (measured on a real recording), the same threshold the speed chart "
-            "shades from. Coloured from 1.8 km/h, the first figure that only gaps past it round to.")
+            "shades from. So the first coloured figure is 1.8 km/h.")
     assert tip.endswith(note) and tip.count("under") == 1, tip          # the step, said once
     ref_tip = _corner_col_tips("mph", "Other day")[4]
     assert "under 1.09 mph is not coloured" in ref_tip and "lap's's" not in ref_tip, ref_tip

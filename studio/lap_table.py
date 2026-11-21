@@ -2734,9 +2734,9 @@ def _apex_prints_past_gate(printed: float, unit: str | None) -> bool:
     A printed figure stands for every gap within half its last digit. In km/h the gate, 1.75, is
     where 1.7 meets 1.8, so the figure and the gate agree exactly. In mph it is 1.087, inside the
     figure 1.1, which covers 1.05–1.15 mph (1.69–1.85 km/h): colouring every printed 1.1 coloured
-    gaps the speed chart leaves unshaded. A figure is coloured only when ALL the gaps it stands for
-    are past the gate, so a coloured cell is always a gap the chart shades, and one printed string
-    always wears one colour."""
+    a Δapex of +1.1 that may be under the speed chart's 1.09 mph threshold. A figure is coloured
+    only when ALL the gaps it stands for are past the gate, so a coloured cell's gap is always past
+    the threshold, and one printed string always wears one colour."""
     half = 0.5 * 10.0 ** -SPEED_DECIMALS
     return abs(printed) - half >= units.convert_speed(chart_stats.GAIN_GATE_KMH, unit) - 1e-9
 
@@ -2758,8 +2758,8 @@ def apex_level_note(unit: str | None) -> str:
     u = units.speed_label(unit)
     return (f"A gap under {_apex_gate(unit):.2f} {u} is not coloured: two speed readings differ "
             "by up to that from the GPS alone (measured on a real recording), the same threshold "
-            f"the speed chart shades from. Coloured from {_apex_first_coloured(unit):.1f} {u}, the "
-            "first figure that only gaps past it round to.")
+            f"the speed chart shades from. So the first coloured figure is "
+            f"{_apex_first_coloured(unit):.1f} {u}.")
 
 
 def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
