@@ -23,7 +23,10 @@ THE RULES (`card_rows`, the one function the render and the tests read):
     this same recording is the baseline) every Δ is a self-zero: the card carries the minimum
     speed only — the table dashes the same cells;
   * with a cross-recording REFERENCE loaded, the table's column is "Δref" against that lap, so the
-    card says "vs ref" (and "≈ ref") — never "vs best", which would then be false;
+    card says "vs ref" (and "≈ ref") — never "vs best", which would then be false — and its level
+    step is the table's Δref step, `stats.corner_delta_step` (one lap's corner time against one
+    lap of another recording reads up to that far apart with nothing changed,
+    cool/reference-lap-corner-floor), not timing precision;
   * under PROVISIONAL timing the cards keep their Δ, as the Corners table does there: a corner time
     is measured between two corner edges, not from the start line, and the lap strip burning its
     Δ on the same frame is qualified by the honesty stamp the frame always carries.
@@ -59,6 +62,7 @@ from studio import library, theme, units
 from studio._signal import fmt_signed
 from studio.export_palette import EXPORT
 from studio.overlay import LAYER_TOP, STAMP, ElementContext
+from studio.stats import corner_delta_step
 
 PRECISION_S = library.PB_PRECISION_S   # inside it, "≈ best" (the dialog's tooltip prints it)
 HOLD_S = 2.0      # how long a card stays up after its corner's exit
@@ -101,6 +105,15 @@ def baseline_word(session) -> str:
     return "ref" if callable(has_reference) and has_reference() else "best"
 
 
+def level_step(session) -> float:
+    """The step under which a card reads "≈ best" / "≈ ref": the Corners table's own
+    (`stats.corner_delta_step`) — the timing step against a lap of this recording, the wider
+    reference-lap corner step with a reference from ANOTHER recording loaded."""
+    own = getattr(session, "reference_is_own_recording", None)
+    other = baseline_word(session) == "ref" and not (callable(own) and own())
+    return corner_delta_step(other)
+
+
 def is_baseline_lap(session, lap_id: int, stats) -> bool:
     """True when `lap_id` IS the Δ baseline, so every Δ is a self-zero — the Corners table's own
     test (`CornerTable._shows_the_baseline`): all deltas exactly zero AND the lap is the reference
@@ -123,6 +136,7 @@ def card_rows(session, lap_id: int, unit: str | None, palette: str | None) -> li
         return []
     word = baseline_word(session)
     baseline = is_baseline_lap(session, lap_id, stats)
+    step = level_step(session)
     # Deferred, like every export_video read here: export_video imports this package.
     from studio import export_video as ev
     out = []
@@ -134,7 +148,7 @@ def card_rows(session, lap_id: int, unit: str | None, palette: str | None) -> li
             continue
         if baseline:
             delta, colour = None, None
-        elif library.within_timing_precision(_printed(st.delta)):
+        elif abs(_printed(st.delta)) < step:
             delta, colour = f"≈ {word}", EXPORT.neutral
         else:
             delta = f"{fmt_signed(st.delta, 2)} s vs {word}"

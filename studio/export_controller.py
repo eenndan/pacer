@@ -51,7 +51,7 @@ from . import APP_NAME, export_compare, export_data, export_video, prefs, share_
 from ._signal import fmt_hms, lap_label, plural
 from .overlay import LAYOUT_PREFIX, broadcast, corner_cards, ghost
 from .session import fmt_time
-from .stats import sector_col
+from .stats import corner_delta_step, sector_col
 from .workers import VideoExportWorker
 
 _log = logging.getLogger(__name__)
@@ -658,7 +658,10 @@ class ExportController:
                   "against the same corner on your best lap — the Corners table's numbers (its "
                   "Δbest column, not the session-best corner time). Inside timing precision "
                   f"({corner_cards.PRECISION_S:.2f} s) it reads \"≈ best\"; a corner not matched "
-                  "on track gets no card.")
+                  "on track gets no card. With another recording loaded as the reference, the "
+                  "time is against that recording's lap and reads \"≈ ref\" under "
+                  f"{corner_delta_step(True):.2f} s, what one lap of each reads apart with "
+                  "nothing changed.")
     # Added to the tooltip while the start/finish line is unconfirmed: the cards keep their Δ (a
     # corner time does not depend on the line), but WHICH lap is the best is a lap-time verdict.
     _CARDS_PROVISIONAL = (" Lap times are provisional until the start/finish line is confirmed, "

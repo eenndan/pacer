@@ -180,6 +180,15 @@ corner times closer than 0.10 s (2√2σ) read "no change you can act on". At re
 the same rule gives 0.16 s, and the 0.10 s step still calls 262 of 1260 unchanged corners faster
 or slower. No official timing has checked a corner either.
 
+**One lap's corner time against one lap of another recording** is what the Corners table's Δref
+column and the export's corner cards show with a reference recording loaded. On 40 synthetic race
+days of one driver with nothing changed, every clean lap against every other day's quickest
+([`studio/dev/probes/reference_lap_corner.py`](../studio/dev/probes/reference_lap_corner.py)), at
+GPS noise 4.0, recording B's, one lap's corner time carries σ 0.0435 s (0.0388–0.0481 s over four
+seed sets), so a Δref under 0.12 s (2√2σ) is shown uncoloured. At recording A's noise the same
+rule gives 0.21 s, and 0.12 s still colours 4268 of 35280 cells whose true gap is under 0.03 s. The same
+lap's corner time against a lap of its own recording carries the same σ.
+
 ## Why this matters
 
 Lap-timer makers publish a resolution, such as 0.01 s; this page publishes the **residuals**
