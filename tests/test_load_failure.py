@@ -217,6 +217,12 @@ def test_bindings_that_did_not_import_are_reported_as_pacers_own_error():
     Pacer's error and say how to open the log. The session log, a real one in this process's jail,
     must hold the traceback at ERROR."""
     from studio import load as _load
+    # A committed submodule sample, which CI checks out with `submodules: recursive`: missing is a
+    # LOUD failure naming the file (test_ingest_equivalence.py's rule), not a skip — and not the
+    # loader's own "no such file" error read as the wrong message below.
+    assert os.path.isfile(_HERO6), (
+        f"hero6.mp4: required gpmf-parser submodule sample missing at {_HERO6} — run "
+        "`git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
     log = logsetup.configure()
     assert log is not None, "no session log could be opened in the jail"
     offset = os.path.getsize(log)

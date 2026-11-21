@@ -1431,7 +1431,8 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
     """Every step-like constant in `defs` that does not derive from the one reference. A value may
     only be: a bare alias of an accepted step (PB_PRECISION_S included); a σ read as
     `REFERENCE_SIGMAS.<field>`; `house_step(<accepted σ name>)`; or `max(<accepted step>,
-    PB_PRECISION_S)`. Anchors and exempt names are accepted only in their home file, and a step name
+    PB_PRECISION_S)`. A σ (a `SIGMA` name, or a `REFERENCE_SIGMAS` read) stands only under a σ
+    name: never as a step's alias or value, never inside the max. Anchors and exempt names are accepted only in their home file, and a step name
     defined twice fails unless every definition is a bare alias of PB_PRECISION_S."""
     steps = [(rel, n, v) for rel, n, v in defs if _STEP_NAME.match(n)
              and not (isinstance(v, ast.Constant) and isinstance(v.value, str))]
@@ -1461,12 +1462,17 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
 
     def _one_ok(name: str, rel: str, value: ast.expr, seen) -> bool:
         home = (_ANCHORS.get(name) or _NOT_A_GPS_STEP.get(name) or (None,))[0]
+        # A σ is a noise scale, not a step: only a σ name may be one, and where a step is required
+        # (any other name, either side of the max) a σ name is refused — `max(REFERENCE_LAP_SIGMA_S,
+        # PB_PRECISION_S)` read a 0.0178 s σ as if it were a step, and passed.
+        wants_step = "SIGMA" not in name
         if home is not None:
             good = os.path.basename(rel) == home and len(every[name]) == 1
         elif _is_reference_sigma(value):
-            good = True
+            good = not wants_step
         elif _name_of(value) is not None:
-            good = ok(_name_of(value), (*seen, name))
+            good = not (wants_step and "SIGMA" in _name_of(value)) \
+                and ok(_name_of(value), (*seen, name))
         elif isinstance(value, ast.Call) and _name_of(value.func) == "house_step" \
                 and len(value.args) == 1 and not value.keywords:
             arg = value.args[0]
@@ -1477,6 +1483,7 @@ def _step_problems(defs: list[tuple[str, str, ast.expr]]) -> list[str]:
                 and len(value.args) == 2 and not value.keywords:
             names = [_name_of(a) for a in value.args]
             good = (None not in names and "PB_PRECISION_S" in names
+                    and not any("SIGMA" in a for a in names)
                     and all(ok(a, (*seen, name)) for a in names))
         else:
             good = False
@@ -1584,6 +1591,11 @@ _GUARD_PLANTS = (
     ("studio/lap_table.py", "SPLIT_SAMPLING_HEADROOM_S = 0.10"),
     ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + SPLIT_SAMPLING_HEADROOM_S, 1)"),
     ("studio/stats.py", "SECTOR_LEVEL_S = round(SECTOR_HOUSE_STEP_S + 0.10, 2)"),
+    # a σ standing where a step is required (cool/test-hygiene-guards)
+    ("studio/stats.py", "X_LEVEL_S = max(REFERENCE_LAP_SIGMA_S, PB_PRECISION_S)"),
+    ("studio/focus.py", "CORNER_X_LEVEL_S = max(PB_PRECISION_S, CORNER_DAY_SIGMA_S)"),
+    ("studio/stats.py", "X_LEVEL_S = REFERENCE_LAP_SIGMA_S"),
+    ("studio/stats.py", "X_LEVEL_S = REFERENCE_SIGMAS.split"),
 )
 
 
