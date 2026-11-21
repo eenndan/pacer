@@ -223,6 +223,30 @@ def _once_per_spec(test):
 
 
 @_once_per_spec
+def test_a_vertical_frame_keeps_the_classic_plates_out_of_the_apps_bands():
+    """Portrait (owner ruling, wave 22) holds the Classic style too: the strip and its stamp, the
+    g-meter, the minimap, the speed readout and the corner card stay out of the top 8 % and the
+    bottom 18 % of the height, which the apps that play a vertical video cover. (The Broadcast
+    elements are held by the matrix below.)"""
+    f = _fixture()
+    s, lap = f["s"], f["lap"]
+    spec = _spec(s, lap, style="classic")
+    frames = [(w, h) for w, h in _dialog_frames() if h > w]
+    assert (608, 1080) in frames and (1080, 1920) in frames, frames
+    for w, h in frames:
+        with _Stamped():
+            p = _painter(s, spec, w, h)
+        boxes = {"strip": p._strip_rect, "stamp": p._stamp_rect, "g-meter": p._g_rect,
+                 "minimap": p._map._box, "speed": p._readout_rect}
+        card = next((e for e in p.elements if e.name == "corner_cards"), None)
+        if card is not None:
+            boxes["corner card"] = card.rect
+        for name, r in boxes.items():
+            assert r.y() >= 0.08 * h - 1e-6 and r.bottom() <= 0.82 * h + 1e-6, (
+                f"{w}x{h}: the {name} {r} is in a band the apps cover")
+
+
+@_once_per_spec
 def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
     """The whole matrix: every dialog frame × honesty stamp off / three lines × a lap export with
     ghost + cards off / on, and a WHOLE-RECORDING export (its tower carries the reserved LAST
@@ -278,6 +302,14 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                     skipped += 1
                 m = layout.MARGIN * min(w, h)
                 safe = layout.Box(m, m, w - 2 * m, h - 2 * m)
+                edge = layout.Box(0, 0, w, h)      # the stamp's last resort: the frame across
+                if h > w:
+                    # PORTRAIT (owner ruling, wave 22): nothing in the top 8 % or the bottom 18 %
+                    # of the height, which the apps that play a vertical video cover; at the
+                    # margin alone the big speed sat 13 px off the bottom of 608x1080.
+                    top, bottom = max(m, 0.08 * h), max(m, 0.18 * h)
+                    safe = layout.Box(m, top, w - 2 * m, h - top - bottom)
+                    edge = layout.Box(0, top, w, h - top - bottom)
                 names = sorted(boxes)
                 for i, a in enumerate(names):
                     room = safe
@@ -291,7 +323,7 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                         assert not safe.contains(c), what
                         st = boxes[a]
                         assert st.x >= 0 and st.right - w <= max(0.0, c.right - w) + 1e-6, what
-                        room = layout.Box(0, 0, max(w, st.right), h)
+                        room = layout.Box(0, edge.y, max(w, st.right), edge.h)
                         wide += 1
                     assert room.contains(boxes[a]), f"{what}: {a} leaves the safe area"
                     for c in names[i + 1:]:
@@ -312,7 +344,7 @@ def test_every_frame_the_dialog_offers_lays_out_clear_and_safe():
                 for u, pl in under.items():
                     host = boxes[u]
                     if u == "stamp":
-                        area = safe if safe.contains(host) else layout.Box(0, 0, w, h)
+                        area = safe if safe.contains(host) else edge
                         held = layout.Box(host.x, host.y, min(host.right, w) - host.x, host.h)
                         assert pl.contains(held), f"{what}: the stamp's plate does not hold it"
                         assert area.contains(pl), f"{what}: the stamp's plate leaves its room"
@@ -1237,7 +1269,8 @@ def test_a_real_broadcast_export_through_the_dialog_plays_with_sound_to_the_end(
 
 
 def _run_all():
-    for fn in (test_every_frame_the_dialog_offers_lays_out_clear_and_safe,
+    for fn in (test_a_vertical_frame_keeps_the_classic_plates_out_of_the_apps_bands,
+               test_every_frame_the_dialog_offers_lays_out_clear_and_safe,
                test_a_layout_that_would_overlap_fails_by_name,
                test_a_layout_that_cannot_fit_says_so_not_that_the_encoder_stopped,
                test_corner_cards_that_cannot_fit_sit_the_export_out_and_say_so,
