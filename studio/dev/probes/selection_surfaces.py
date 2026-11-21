@@ -480,7 +480,8 @@ def summarize(days: list[dict]) -> dict:
     out = _summarize(days)
     fit = out["ideal"]["fit"]
     if {d["noise"] for d in days} == {REFERENCE_NOISE} and len(days) >= 40:
-        out["ideal"]["app_fit_is_this_fit"] = stats._IDEAL_LUCK_FIT == (fit["a"], fit["b"])
+        shipped = getattr(stats, "_IDEAL_LUCK_FIT", None)   # None on a tree before the fit
+        out["ideal"]["app_fit_is_this_fit"] = shipped == (fit["a"], fit["b"])
     return out
 
 
