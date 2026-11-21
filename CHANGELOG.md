@@ -8,25 +8,25 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [0.24.0] — 2026-11-21
 
-A minor release: 9 pull requests, #689 to #696 and #698. Its theme: recordings that went wrong. A
-lap that cut the track, a missing chapter, a recording with no GPS, a lap with a stop and a refused
-reference each say what happened, and none of them decides a best lap it should not.
+A minor release: 13 pull requests, #689 to #696, #698 and #700 to #703. Its theme: recordings that
+went wrong. A cut lap, a missing chapter, no GPS, a stop and a refused reference each say what
+happened, and none of them decides a best lap it should not.
 
 ### Highlights
 
-- **A lap that cut the track is kept out of the bests.** A lap held 10 m off the line the other
-  laps drive stays listed with its time and a ⚠ that says why, but is never best lap, PB or
-  ideal (#698)
+- **A lap that cut the track or crossed a missing chapter is kept out.** It stays listed with its
+  time and a ⚠ giving its own reason, but is never best lap, PB or ideal, does not race in the Lap
+  Race and counts in no Stats figure (#698, #700, #703)
 - **A recording missing a chapter says so.** A missing first chapter is named and keeps its PB and
   Library row; a missing middle chapter decides no PB until that chapter is in the folder (#691)
 - **A recording with no GPS says so.** The lap, chart and map panels say no lap can be timed, and
   the map's line tools are off instead of reporting edits that do nothing (#694)
 - **A lap with a stop is explained by the stop.** A lap left out for a red flag or a pit visit says
   "the kart stopped during it", not "off the session median" (#695)
-- **A refused reference says why in plain words.** No error names or file paths, and a reference
-  with no GPS says so instead of "different location" (#696)
+- **A refused reference says why in plain words.** No error names or file paths, a reference with
+  no GPS says so, and a recording with no GPS offers no reference at all (#696, #701)
 - **A wet session is drawn hollow** on the Library's "Best lap by session", and its hover says
-  "Wet" (#690)
+  "Wet" with the session's start time (#690, #702)
 - **Wording fixes.** The open session is "today" only on the day it was recorded, and in mph a
   Δapex is coloured only from 1.2 mph (#692, #693)
 
@@ -37,6 +37,18 @@ reference each say what happened, and none of them decides a best lap it should 
 
 ### Fixed
 
+- A lap kept out of the bests (a cut across the infield, a lap across a missing chapter) no longer
+  races in the Lap Race; the card and the export ghost say which reason left it out. (#703)
+- The Stats page counts it in the LAPS tile's ⚠ and CORNERS BY LAP's "Not in the grid", and the
+  Quickest passes "not counted" hover names each lap's own reason. (#703)
+- Library ▸ Best lap by session: a wet point's hover names its start time as the Library row does
+  ("2026-10-04 14:10 · best 0:47.600 · Wet"), so two wet heats on one day no longer read the same.
+  (#702)
+- On a recording with no GPS, Load reference recording…, Compare with your previous PB and the
+  Library's Use as reference are off, saying there is nothing to compare a reference with. (#701)
+- A lap timed across a missing middle chapter now wears ⚠ "timed across a missing chapter" and is
+  kept out of the bests, instead of "left the line … by 59 m"; laps.csv flags it `chapter-gap`.
+  (#700)
 - A lap that cut across the infield is no longer the best lap, PB, Δbest reference, ideal-lap
   segment or the map's reference loop: it stays listed with its time, flagged ⚠ with why. (#698)
 - A reference recording that fails to load is now refused in the same plain words as opening it,
