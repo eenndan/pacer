@@ -2400,6 +2400,18 @@ def test_stats_view_flags_a_lap_that_left_the_line():
     assert "left the line" in v.t_laps.toolTip(), v.t_laps.toolTip()
     assert "no GPS dropout and not off the line" in v._pace_section.toolTip(), \
         v._pace_section.toolTip()
+    # A lap timed across a missing chapter wears a ⚠ sentence too, but the card names it on its
+    # own row: it did not leave the line.
+    gap = "Lap 1 was timed across a missing chapter (chapter 2, GX020001.MP4), so …"
+    sess.lap_warnings = lambda: {0: gap, 1: None}
+    sess.chapter_gap_notes = lambda: {0: gap}
+    v = StatsView(sess)
+    assert v.lap_table.item(0, 0).toolTip() == gap
+    rows = {t: (val, c) for t, val, c in v.trust.card.rows()}
+    assert "Off the line" not in rows, rows
+    assert rows.get("Missing chapter") == (
+        "lap 1 was timed across a missing chapter — flagged ⚠ and left out of bests, σ and pace",
+        True), rows
     print("test_stats_view_flags_a_lap_that_left_the_line OK")
 
 

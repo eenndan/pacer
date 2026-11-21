@@ -1978,6 +1978,45 @@ def test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap():
     print("test_the_line_rule_needs_four_laps_and_skips_a_dropout_lap OK")
 
 
+def test_a_lap_timed_across_a_missing_chapter_says_so_and_is_never_the_best():
+    """THE DEFECT (wave 21): with chapter 2 of three not in the folder, the chapters are laid end to
+    end on one clock and the lap holding the join read 0:31.8 of a ~45 s circuit, a valid lap. It
+    wore the ⚠ for the WRONG cause — "left the line your other laps drive by 59 m" — since its trace
+    jumps across the gap. The GPS dropout rule cannot see it (the kept-point times step by one fix
+    across the join). The lap holding a join with chapters missing from the chain is out of the
+    bests with its own sentence, which wins over off-line, and it is not measured for the line, so
+    it neither bends the consensus nor wears the off-line words. Consecutive chapters, and a
+    recording missing only its FIRST chapters (nothing chained across), flag no lap."""
+    from studio import chapters
+    from studio.dev import synth_gopro as sg
+    c4 = next(k for k in sg.build_circuit().corners if k.cid == 4).apex_s
+    specs = [{}, {}, {}, {}, {}, {}, {"chord_about": c4}, {}]   # lap 7: the jump, a chord
+    times = {0: 45.3, 1: 45.2, 2: 45.4, 3: 44.9, 4: 45.3, 5: 45.25, 6: 31.8, 7: 45.35}
+
+    def at(names, first_s):
+        s, _c = _corridor_session(specs, times)
+        s.chapters = chapters.ChapterMap([f"/rec/{n}" for n in names], [first_s, 500.0])
+        return s
+
+    s = at(["GX010042.MP4", "GX030042.MP4"], 620.0)     # lap 7 runs 600..~645 s: holds the join
+    want = ("Lap 7 was timed across a missing chapter (chapter 2, GX020042.MP4), so its time is "
+            "wrong and it is kept out of the bests.")
+    assert s.lap_warnings() == {6: want}, "the off-line words, or another lap, wore the ⚠"
+    assert s.chapter_gap_notes() == {6: want}
+    assert s.off_line_metres() == {}, "the gap lap was measured for the line"
+    assert s.lap_out_of_bests(6) and 6 in s.valid_lap_ids() and s.best_lap_id() == 3
+    assert 6 not in s.consistency_lap_ids()
+    assert 6 not in s.dropout_lap_ids(), "the dropout rule is not what caught it"
+    # A join inside lap 2 flags lap 2 alone.
+    assert set(at(["GX010042.MP4", "GX030042.MP4"], 120.0).chapter_gap_notes()) == {1}
+    for names in (["GX010042.MP4", "GX020042.MP4"], ["GX020042.MP4", "GX030042.MP4"]):
+        s = at(names, 620.0)
+        assert s.chapter_gap_notes() == {}, names
+        assert list(s.lap_warnings()) == [6], "the chord lap is off the line on a whole chain"
+        assert "left the line" in s.lap_warnings()[6]
+    print("test_a_lap_timed_across_a_missing_chapter_says_so_and_is_never_the_best OK")
+
+
 def test_no_majority_no_line_rule():
     """When the laps cutting one corner are not a clear minority (`corners.CORRIDOR_MAX_SHARE`),
     the session has no single line to measure against: with half the laps cutting, the median

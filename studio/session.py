@@ -2141,8 +2141,11 @@ class Session:
             return memo[1]
         out: dict[int, float] = {}
         traces = {}
+        gap = self.chapter_gap_notes()
         for i in valid:
-            if self.lap_has_dropout(i):
+            # A lap timed across a missing chapter is not measured either: its trace jumps from
+            # one chapter's end to a later one's start, a chord no driver drove.
+            if self.lap_has_dropout(i) or i in gap:
                 continue
             _t, xs, ys, _v, cum = self._lap_columns(i)
             if len(cum) >= 2 and float(cum[-1]) > 0:
@@ -2167,24 +2170,65 @@ class Session:
         return {i: f"Lap {lap_label(i)} left the line your other laps drive by {m:.0f} m, so it is "
                    "kept out of the bests." for i, m in self.off_line_metres().items()}
 
+    def chapter_gap_notes(self) -> dict[int, str]:
+        """``{lap_id: why}`` for every VALID lap timed across a missing chapter — the chained
+        chapters jump from one to a later one (`chapters.gap_joins`: GX01 + GX03 with GX02 not
+        there), and a lap holding that join is short by the chapter that is not in it.
+
+        THE GPS DROPOUT RULE CANNOT SEE THIS, and that is why it has its own: each chapter's
+        telemetry is laid on one clock straight after the previous chapter's video
+        (`load.load_recording`, the ChapterMap offsets) and `_gps9_times` re-anchors the run that
+        starts at the join to that media start, so the kept-point times step by one fix across it,
+        never by the missing chapter's minutes. The join is placed on the telemetry axis from its
+        offset through the recording's two-clock map (the GPS lag is a latency of the picture,
+        not of the data, so it is left out). A lap holds a join when its first point is before it
+        and its last after it. Memoized against the `valid_lap_ids` list, like `off_line_metres`."""
+        valid = self.valid_lap_ids()
+        memo = getattr(self, "_gap_notes_memo", None)
+        if memo is not None and memo[0] is valid:
+            return memo[1]
+        out: dict[int, str] = {}
+        cmap = getattr(self, "chapters", None)
+        parts = getattr(cmap, "chapters", None) or []
+        joins = chapters.gap_joins([c.path for c in parts]) if len(parts) > 1 else []
+        if joins:
+            clock = media_clock.clock_of(cmap).without_gps_lag()
+            at = [(float(clock.to_telemetry(parts[k].offset)), missing) for k, missing in joins]
+            for i in valid:
+                t = self._lap_point_times(i)
+                if len(t) < 2:
+                    continue
+                hit = next((m for tj, m in at if float(t[0]) < tj < float(t[-1])), None)
+                if hit is not None:
+                    out[int(i)] = (f"Lap {lap_label(i)} was timed across a missing chapter "
+                                   f"({chapters.missing_names(hit)}), so its time is wrong and "
+                                   "it is kept out of the bests.")
+        self._gap_notes_memo = (valid, out)
+        return out
+
     def lap_warnings(self) -> dict[int, str | None]:
         """THE ⚠ SET, with why: ``{lap_id: reason}`` for every valid lap kept out of the bests —
-        None for a GPS dropout (each surface keeps its own dropout words) and the `off_line_notes`
-        sentence for a lap that left the line. The two are disjoint: a dropout lap is never
-        measured for the line. Every surface that marks a ⚠ lap reads this (through
-        `data_quality.lap_warnings`), so none can call a cut lap clean."""
+        None for a GPS dropout (each surface keeps its own dropout words), the `off_line_notes`
+        sentence for a lap that left the line, and the `chapter_gap_notes` sentence for a lap
+        timed across a missing chapter, which wins over both (it says why the time is wrong; a gap
+        lap is never measured for the line). Every surface that marks a ⚠ lap reads this (through
+        `data_quality.lap_warnings`), so none can call a cut lap clean; `data_quality.gap_lap_ids`
+        tells the gap sentences from the off-line ones."""
         out: dict[int, str | None] = {i: None for i in self.dropout_lap_ids()}
         out.update(self.off_line_notes())
+        out.update(self.chapter_gap_notes())
         return out
 
     def lap_out_of_bests(self, lap_id: int) -> bool:
         """May this valid lap NOT be the best lap, the Δ reference, a purple split, an ideal-lap
         segment or the map's reference loop? True for a GPS dropout (`lap_has_dropout`: its
         distance is reconstructed) and for a lap that left the line the other laps drive
-        (`off_line_metres`: a cut is not the same circuit). Both are still listed and timed,
-        flagged ⚠. The one predicate the bests service, the corner model and the map's reference
-        fit are built on, so they all exclude the same laps."""
-        return self.lap_has_dropout(lap_id) or lap_id in self.off_line_metres()
+        (`off_line_metres`: a cut is not the same circuit), and for a lap timed across a missing
+        chapter (`chapter_gap_notes`: its time is short by the chapter). All are still listed and
+        timed, flagged ⚠. The one predicate the bests service, the corner model and the map's
+        reference fit are built on, so they all exclude the same laps."""
+        return (self.lap_has_dropout(lap_id) or lap_id in self.chapter_gap_notes()
+                or lap_id in self.off_line_metres())
 
     def lap_trace_xy(self, lap_id: int):
         """Local-meter (xs, ys) of a single lap's trace — the PUBLIC accessor for a lap's racing
