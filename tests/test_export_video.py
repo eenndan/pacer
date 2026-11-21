@@ -2166,6 +2166,21 @@ def test_the_export_failure_dialog_speaks_english_not_ffmpeg():
     assert "isn't there any more" in gone, gone
     generic = ExportController._export_failure_message("Error encoding frame: -12905", "/x/y.mp4")
     assert "encoder stopped partway" in generic and "-12905" not in generic, generic
+    # A destination folder gone by render time: every renderer failure begins "ffmpeg encode
+    # failed", which the "no such file" branch skipped (ffmpeg says it of a missing INPUT too),
+    # so this got "the encoder stopped partway" for a render that never opened its output. The
+    # folder's absence at failure time is what tells the two apart; with the folder there, a
+    # "No such file" from ffmpeg is still the generic.
+    with tempfile.TemporaryDirectory() as td:
+        tail = ("ffmpeg encode failed (libx264, rc=254): [out#0/mp4 @ 0x1] Error opening output "
+                "{p}: No such file or directory\nError opening output files: No such file or "
+                "directory\n")
+        lost = os.path.join(td, "nodir", "sub", "x.mp4")
+        gone_now = ExportController._export_failure_message(tail.format(p=lost), lost)
+        assert "isn't there any more" in gone_now, gone_now
+        here = os.path.join(td, "x.mp4")
+        still = ExportController._export_failure_message(tail.format(p=here), here)
+        assert "encoder stopped partway" in still, still
     # The up-front refusal is NOT the mid-render "no room left": it kept its numbers, and says
     # nothing was written rather than that the disk ran out while writing.
     from studio import export_video as EV

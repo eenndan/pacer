@@ -418,7 +418,12 @@ class ExportController:
         if "permission denied" in low or "operation not permitted" in low:
             return ("Pacer isn't allowed to write there. Choose a different folder — your Movies "
                     "or Desktop folder will work.")
-        if "no such file or directory" in low and "ffmpeg" not in low:
+        # ffmpeg says "No such file or directory" of a missing INPUT too, so its words alone are
+        # not this case; every renderer failure begins "ffmpeg encode failed", though, so a
+        # destination folder gone by render time is told apart by asking for the folder NOW.
+        folder = os.path.dirname(os.path.abspath(out_path)) if out_path else ""
+        if "no such file or directory" in low and (
+                "ffmpeg" not in low or (folder and not os.path.isdir(folder))):
             return ("The folder you chose isn't there any more — it may have been moved, renamed "
                     "or unmounted. Choose another one and export again.")
         if export_video.is_truncated_footage(message or ""):
