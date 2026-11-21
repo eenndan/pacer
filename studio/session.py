@@ -1460,8 +1460,10 @@ class Session:
         decided from the persisted flag in `apply_timing_lines_latlon`)."""
         if user_confirm:
             self._timing_user_confirmed = True
-        # the same start line segments the same laps: only the sector lines moved
-        same_laps = start == self.start_line
+        # the same start line segments the same laps: only the sector lines moved. No start line
+        # known yet (a Laps without sectors, or a stub of one) → not the same: refit as before.
+        old = getattr(getattr(self.laps, "sectors", None), "start_line", None)
+        same_laps = old is not None and start == Seg.from_pacer(old)
         self.laps.sectors = pacer.Sectors(
             start_line=start.to_pacer(),
             sector_lines=[s.to_pacer() for s in sectors],

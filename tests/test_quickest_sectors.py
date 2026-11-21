@@ -176,6 +176,57 @@ def test_a_lap_s_rigid_receiver_shift_does_not_move_its_splits_and_its_time_neve
           f"(as timed before: {moved_before * 1000:.1f} ms)")
 
 
+def test_a_sector_drag_keeps_the_session_geometry_and_a_start_line_move_rebuilds_it():
+    """cool/sector-dedrift-followup: `set_timing_lines` keeps the session geometry and the sector
+    timing's robust shifts when only SECTOR lines change (the same start line segments the same
+    laps), and rebuilds them when the START line moves. Either way every lap's splits equal a fresh
+    load's with the same lines — the cache must never be visible."""
+    import shutil
+
+    from studio import chapters
+    from studio.dev import make_demo
+    from studio.dev import synth_gopro as sg
+    from studio.dev.probes.focus_cross_session import _generate
+    from studio.session import Session
+    work = tempfile.mkdtemp(prefix="split_cache_test_")
+    try:
+        path = _generate(work, stats.REFERENCE_SIGMAS.noise, 401, 1, None)
+        s = Session.load(chapters.discover_siblings(path))
+        truth = sg.simulate(401, 14, origin=make_demo.DEMO_ORIGIN)
+        mid = [sum(st) / 2.0 for st in truth.circuit.straights]
+        apex = {k.cid: k.apex_s for k in truth.circuit.corners}
+        start, _ = s.timing_lines_latlon()
+
+        def fresh(start_ll, lines):
+            f = Session.load(chapters.discover_siblings(path))
+            assert f.apply_timing_lines_latlon(start_ll, lines, confirmed=True)
+            return {i: f.lap_sector_splits(i) for i in f.consistency_lap_ids()}
+
+        def splits():
+            return {i: s.lap_sector_splits(i) for i in s.consistency_lap_ids()}
+
+        a_lines = [truth.line_at(apex[1]), truth.line_at(apex[5])]
+        assert s.apply_timing_lines_latlon(start, a_lines, confirmed=True)
+        assert splits() == fresh(start, a_lines)
+        geom = s.corners.geometry()
+        shift = s._sector_drift(s.consistency_lap_ids()[0])
+        # only the sector lines move: the same geometry object, the same robust shifts, and splits
+        # equal to a fresh load's with the new lines
+        b_lines = [truth.line_at(mid[2]), truth.line_at(mid[5])]
+        assert s.apply_timing_lines_latlon(start, b_lines, confirmed=True)
+        assert s.corners.geometry() is geom
+        assert s._sector_drift(s.consistency_lap_ids()[0]) == shift
+        assert splits() == fresh(start, b_lines)
+        # the START line moves (to another straight): the laps are new, the geometry is rebuilt,
+        # and the splits again equal a fresh load's
+        moved = truth.line_at(mid[1])
+        assert s.apply_timing_lines_latlon(moved, b_lines, confirmed=True)
+        assert s.corners.geometry() is not geom
+        assert splits() == fresh(moved, b_lines)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def test_a_lap_that_runs_wide_for_a_stretch_does_not_tilt_its_sector_shift():
     """The independent review of cool/sector-dedrift: PLANT an 8 m lateral excursion over 150 m of
     one counted lap (lap metres 250-400, a raised-cosine bump to the left of its trace), well
