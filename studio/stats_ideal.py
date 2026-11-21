@@ -46,7 +46,10 @@ from .widgets import DASH, Tile, WrapLabel
 # The noise sentence (TRUTH-6, MOAT-3): against synthetic truth the ideal reads fast from GPS
 # noise 1 up, and TRUTH-3 found the size NOT ESTIMABLE from a real recording (both
 # studio/docs/falsification-2026-09.md §1; tests/test_truth_matrix.py row 3 holds it `stated` at
-# noise 2 and 4.5): words, no figure.
+# noise 2 and 4.5): words, no figure — about THIS recording. What a minimum over this many laps
+# and pieces reads at the one reference recording's noise is a different fact, measured on
+# synthetic days (`stats.ideal_luck_s`, cool/luck-ideal-gap), and the sample line under the tiles
+# states it (`IdealSample.noise_clause`), where the gap is read, not on hover.
 # Once, here, so both tiles say it. laps.csv and the HTML report print `IdealSample.sentence()`,
 # not this mechanism paragraph, and the frozen debrief `vs ideal` chip prints neither.
 IDEAL_NOISE_SENTENCE = (

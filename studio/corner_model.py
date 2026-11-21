@@ -365,12 +365,33 @@ class IdealSample(NamedTuple):
 
         Deliberately says nothing this class's own docstring cannot back: the measured per-doubling
         table and the partition-sensitivity numbers are there, not baked into shipping copy (§5.5
-        is the standing lesson about empirical constants in honesty text)."""
+        is the standing lesson about empirical constants in honesty text). Its one figure is not
+        a per-recording constant: `noise_clause`, the statistic's bias at the one reference noise
+        for these counts, computed by `stats.ideal_luck_s` and pinned by its probe's test."""
         return (f"Stitched from {self.donors} of your {self.laps} clean laps, across the "
                 f"{plural(self.corners, 'corner')} and {plural(self.straights, 'straight')} Pacer "
                 "found here. Both counts set it: the ideal is the minimum over those laps of those "
                 "pieces, so more laps find a lower one and a different set of corners cuts it "
-                "differently.")
+                "differently. " + self.noise_clause())
+
+    def noise_clause(self) -> str:
+        """What GPS noise alone adds to the gap at the one reference recording's noise
+        (`stats.ideal_luck_s`, measured by studio/dev/probes/selection_surfaces.py), said beside
+        the gap, never subtracted from it, and saying where it is scaled rather than measured.
+        Not an estimate of THIS recording's bias, which no single recording can measure (TRUTH-3):
+        the statistic's, at the reference, for this many laps and pieces."""
+        # Imported here: stats reads library, and this module stays importable without either.
+        from . import stats
+
+        luck = stats.ideal_luck_s(self.laps, self.segments)
+        lo, hi = stats.IDEAL_LUCK_LAPS
+        source = ("measured on synthetic days" if stats.ideal_luck_measured(self.laps, self.segments)
+                  else f"measured on synthetic days of {lo} to {plural(hi, 'lap')} over "
+                       f"{plural(stats.IDEAL_LUCK_PIECES, 'piece')}, scaled to these")
+        return (f"GPS noise lowers it too: at recording {stats.REFERENCE_RECORDING}'s GPS noise, the "
+                f"cleanest measured, the gap over this many laps and pieces reads about {luck:.2f} s "
+                "too large on average even with nothing to find, because a minimum keeps each "
+                f"piece's luckiest timing ({source}).")
 
 
 @dataclass(frozen=True)

@@ -436,7 +436,10 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
       (1) the sentence is the one TRUTH-3's recorded verdict calls for, pinned verbatim;
       (2) it carries no figure, and no tooltip, caption or line of the block prints a bias figure
           or a value from the truth matrix's table (a synthetic's seconds are not a recording's,
-          review §7); the tiles print the raw ideal, no correction;
+          review §7); the tiles print the raw ideal, no correction. The ONE seconds figure the
+          sample line carries past its counts is not this recording's bias but the statistic's
+          at the one reference noise (`IdealSample.noise_clause`, `stats.ideal_luck_s`,
+          cool/luck-ideal-gap), and it says so: "at recording C's GPS noise", "synthetic";
       (3) every "time you have already demonstrated" is followed by it.
     Each check carries a plant it must catch."""
     _app()
@@ -490,6 +493,17 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
                 "the sample line": v.ideal.sample.text()}
     for name, text in surfaces.items():
         assert not bias_figures(text), f"{name} prints a bias figure: {bias_figures(text)}"
+    # The sample line's one seconds figure is the reference allowance for its own counts, worded
+    # as the reference's and the synthetic's; the tooltips carry none.
+    from studio import library, stats
+    smp = sb.sample
+    secs = re.findall(r"\d+\.\d+ s\b", surfaces["the sample line"])
+    assert secs == [f"{stats.ideal_luck_s(smp.laps, smp.segments):.2f} s"], secs
+    assert f"at recording {library.REFERENCE_RECORDING}'s GPS noise" in surfaces["the sample line"]
+    assert "synthetic" in surfaces["the sample line"], surfaces["the sample line"]
+    for name in ("IDEAL_SAMPLE_TOOLTIP", "the ideal tile", "the gap tile"):
+        assert not re.findall(r"\d+\.\d+ s\b(?! per doubling)", surfaces[name].replace(
+            "0.16–0.74 s per doubling", "")), name
     # The tiles print the RAW minimum and its raw gap, no correction subtracted.
     best = float(sb.times[sb.lap_ids.index(1)].sum())
     assert v.ideal.t_theoretical.value.text() == fmt_time(sb.total), (
@@ -517,6 +531,81 @@ def test_the_ideal_says_what_gps_noise_does_to_it_in_words():
     assert unqualified(IDEAL_GAP_TOOLTIP.replace(IDEAL_NOISE_SENTENCE, "")), "plant not caught"
     v.deleteLater()
     print("test_the_ideal_says_what_gps_noise_does_to_it_in_words OK")
+
+
+def test_the_gap_says_what_a_minimum_reads_at_the_reference_noise():
+    """cool/luck-ideal-gap. The ideal is a SUM OF MINIMA of noisy pieces, so its gap to the best lap
+    reads too large even when there is nothing to find: on 40 habit-free synthetic days at the one
+    reference recording's noise (studio/dev/probes/selection_surfaces.py), 0.47 s shown over a true
+    0.29 s at 14 laps. `stats.ideal_luck_s` is that bias, by lap count, scaled by piece count; the
+    sample line (`IdealSample.sentence`, also laps.csv's and the report's) states it beside the gap,
+    and says when the figure is scaled rather than measured. Pinned at the measured values."""
+    from studio import stats
+    from studio.corner_model import IdealSample
+    luck = stats.ideal_luck_s
+    assert (luck(5, 15), luck(9, 15), luck(14, 15)) == (0.11, 0.15, 0.17)
+    # under the measured range it holds its smallest measured value; none without a minimum
+    assert luck(2, 15) == luck(4, 15) == luck(5, 15) and luck(1, 15) == 0.0 == luck(14, 0)
+    seq = [luck(n, 15) for n in range(1, 121)]
+    assert all(b >= a for a, b in zip(seq, seq[1:], strict=False)), seq
+    assert luck(14, 25) == 0.29, luck(14, 25)    # a 12-corner track: the per-piece share × 25
+    assert stats.ideal_luck_measured(14, 15) and stats.ideal_luck_measured(5, 15)
+    assert not stats.ideal_luck_measured(4, 15) and not stats.ideal_luck_measured(15, 15)
+    assert not stats.ideal_luck_measured(14, 25)
+    measured = IdealSample(donors=9, laps=14, corners=7, segments=15).sentence()
+    assert measured.endswith(
+        "GPS noise lowers it too: at recording C's GPS noise, the cleanest measured, the gap over "
+        "this many laps and pieces reads about 0.17 s too large on average even with nothing to "
+        "find, because a minimum keeps each piece's luckiest timing (measured on synthetic days)."
+    ), measured
+    scaled = IdealSample(donors=9, laps=36, corners=7, segments=15).noise_clause()
+    assert "about 0.22 s" in scaled and "scaled to these" in scaled, scaled
+    print("test_the_gap_says_what_a_minimum_reads_at_the_reference_noise OK")
+
+
+def test_the_ideal_luck_is_what_the_probe_re_measures_on_a_small_seed_set():
+    """`selection_surfaces.measure_ideal_bias` on its four habit-free check days at the reference
+    noise (CHECK_SEEDS, about 10 s): at n = 5, 9 and 13 the measured gap bias lands within 0.03 s of
+    the shipped `stats.ideal_luck_s` at the circuit's 15 pieces (the four days read 0.112 / 0.157 /
+    0.180 s against 0.11 / 0.15 / 0.17; one day's own bias spreads 0.11-0.27 s). A hand-typed
+    constant, or a probe whose statistic drifted, fails here."""
+    import shutil
+    import tempfile
+
+    from studio import (
+        app_support,
+        demo,
+        focus,
+        library,
+        logsetup,
+        marks,
+        prefs,
+        session_record,
+        sidecar,
+        stats,
+        track_db,
+    )
+    seams = (demo, focus, library, logsetup, marks, prefs, session_record, track_db)
+    keep = (sidecar.save, [m._app_support_dir for m in seams],
+            os.environ.get(app_support.DIR_ENV))
+    from studio.dev.probes import selection_surfaces as probe
+    work = tempfile.mkdtemp(prefix="ideal_luck_check_")
+    try:
+        got = probe.measure_ideal_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, (5, 9, 13))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        sidecar.save = keep[0]
+        for m, seam in zip(seams, keep[1], strict=True):
+            m._app_support_dir = seam
+        if keep[2] is None:
+            os.environ.pop(app_support.DIR_ENV, None)
+        else:
+            os.environ[app_support.DIR_ENV] = keep[2]
+    assert sorted(got) == [5, 9, 13], got
+    for n, measured in got.items():
+        shipped = stats.ideal_luck_s(n, stats.IDEAL_LUCK_PIECES)
+        assert abs(measured - shipped) <= 0.03, (n, measured, shipped)
+    print(f"ok ideal luck re-measured: {got}")
 
 
 def _give_back_fixture():

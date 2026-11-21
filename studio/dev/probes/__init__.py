@@ -264,4 +264,11 @@ the same grid with planted-habit days for power: the fit `stats.quickest_luck_s`
 typical offer on a Quickest row and the ★ must clear on top of the level step.
 
     pixi run python -m studio.dev.probes.quickest_bias
+
+`selection_surfaces` measures the same selection effect on the five surfaces that read a figure off
+a minimum or maximum of noisy figures (Coaching's time lost, the biggest-loss moment, the share
+card, the sector-best hover, the ideal lap's gap), on the same grid at the reference noise: the fit
+`stats.ideal_luck_s` ships for the ideal's gap, and the other four surfaces' selection share.
+
+    pixi run python -m studio.dev.probes.selection_surfaces
 """

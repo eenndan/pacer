@@ -698,6 +698,58 @@ def with_luck(level_s: float, luck_s: float) -> float:
     return level_s if luck_s <= 0 else round(level_s + luck_s, 3)
 
 
+# THE IDEAL LAP IS A SUM OF MINIMA, SO ITS GAP IS PARTLY LUCK (cool/luck-ideal-gap). The ideal lap
+# keeps, piece by piece, the quickest time any clean lap was TIMED through it, and each timing
+# carries GPS noise: the minimum keeps the lucky side of every piece, so the ideal reads fast and
+# its gap to the best lap ("on the table") reads too large, even for a driver with nothing to find.
+# MEASURED (studio/dev/probes/selection_surfaces.py: the demo circuit, 7 corners and 15 pieces, at
+# the one reference recording's GPS noise, `library.REFERENCE_RECORDING`; 40 habit-free days of 14
+# laps in four seed sets; for n under 14, 24 seeded draws of n laps a day, the best lap the quickest
+# of them as timed; the bias is the app's gap minus the same laps' gap on the truth, both
+# composites over the same admitted and resolved cells):
+#
+#   n laps            5      7      9      11     13     14
+#   app gap           0.315  0.363  0.406  0.435  0.458  0.467 s
+#   true gap          0.203  0.232  0.259  0.276  0.289  0.294 s
+#   bias (± se)       0.112  0.131  0.147  0.159  0.169  0.173 s  (± 0.002; 0.008 at 14, one a day)
+#   fit −0.0270 + 0.1168·blom(n), every n within 1.5 ms
+#
+# At 14 laps it is 37 % of the gap shown, 0.11-0.27 s over the days (5-95 %), past the timing step
+# on all 40 days and past half the true gap on 23. On days with one lap's C4 planted quicker by a
+# true 0.10 / 0.15 / 0.20 s (8 each) it is +0.165 / +0.160 / +0.158 s: the selection does not go
+# away when there IS something to find, so it is stated beside the gap, never subtracted from it.
+# Nothing is hidden or re-ranked: the tiles print the raw minimum and the decomposition still sums
+# to it. TRUTH-3 (studio/docs/falsification-2026-09.md §1) stands: no single recording can measure
+# ITS OWN bias, and nothing here estimates it. This is the statistic's bias at the reference noise,
+# a fact about a minimum over that many laps and pieces, as `quickest_luck_s` is about the quickest
+# of n. INFERRED, NOT MEASURED: the scale by piece count (the circuit's 15 pieces carried 3-36 ms
+# each, the start and finish pieces the most), so a 12-corner track's figure is the 7-corner one
+# scaled; and beyond 14 laps the form extrapolates slowly, as blom does (62 laps: 0.24 s).
+_IDEAL_LUCK_FIT = (-0.0270, 0.1168)
+IDEAL_LUCK_PIECES = 15                     # the pieces the fit was measured over (7 corners)
+IDEAL_LUCK_LAPS = (MATRIX_MIN_LAPS, 14)    # the lap counts it was measured at
+
+
+def ideal_luck_s(laps: int, pieces: int) -> float:
+    """How much an ideal lap over `laps` clean laps and `pieces` corners and straights reads its gap
+    to the best lap too large by GPS noise alone, at the one reference recording's noise, to the
+    hundredth the gap is printed at. 0 under two laps (no minimum) or with no piece.
+
+    Under the measured range it holds its smallest measured value (as `quickest_luck_s`): n is
+    clamped up to MATRIX_MIN_LAPS. The piece scale is the fit's per-piece share times `pieces`."""
+    if laps < 2 or pieces < 1:
+        return 0.0
+    a, b = _IDEAL_LUCK_FIT
+    per_piece = (a + b * _blom(max(laps, IDEAL_LUCK_LAPS[0]))) / IDEAL_LUCK_PIECES
+    return max(0.0, round(per_piece * pieces, 2))
+
+
+def ideal_luck_measured(laps: int, pieces: int) -> bool:
+    """Whether `ideal_luck_s(laps, pieces)` is a measured figure (the fit's own piece count, a lap
+    count it was measured at) rather than one scaled or extrapolated from it."""
+    return pieces == IDEAL_LUCK_PIECES and IDEAL_LUCK_LAPS[0] <= laps <= IDEAL_LUCK_LAPS[1]
+
+
 
 def fmt_pass_vs_typical(gap: float) -> str:
     """`pass_vs_typical_s`'s printed form, "+0.82 s" — the one formatter every surface that prints
