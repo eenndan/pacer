@@ -4281,6 +4281,17 @@ def test_corner_and_split_grids_mark_by_one_rule():
     print("test_corner_and_split_grids_mark_by_one_rule OK")
 
 
+def test_the_grids_hovers_print_the_mark_floor_alike_and_say_it_is_not_the_level_step():
+    """The SPLITS hover printed the ▼ floor as "0.3 s" (`:g`) where CORNERS BY LAP printed "0.30",
+    and beside the 0.15 s sector step it read as a second, contradicting level step."""
+    from studio.stats_panel import CORNER_GRID_TOOLTIP, SPLITS_TOOLTIP
+    floor = f"floored at {MATRIX_SCALE_MIN_S:.2f} s"
+    assert floor in SPLITS_TOOLTIP and floor in CORNER_GRID_TOOLTIP, SPLITS_TOOLTIP
+    assert "only where a ▼ starts to be drawn, not the step two splits read level within" \
+        in SPLITS_TOOLTIP, SPLITS_TOOLTIP
+    print("test_the_grids_hovers_print_the_mark_floor_alike_and_say_it_is_not_the_level_step OK")
+
+
 def _corner_heat_fixture():
     """Thirteen laps through one corner, each planted cell's shade chosen on purpose. The twelve
     resolved cells have median 5.09 s and a ▼ step of 0.30 s (their p90 deviation is 0.237, so the
