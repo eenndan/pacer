@@ -802,10 +802,10 @@ def _blocker(item: FocusItem, now_ctx: dict, rec_then: dict | None,
                                      else "this session")
         missing = []
         if then_blank:
-            missing.append(_when(item.date))
+            missing.append((_when(item.date), item.date))
         if now_blank:
-            missing.append(open_day(now_ctx.get("date"), today))
-        return BLOCK_NO_RECORD, " and ".join(missing)
+            missing.append((open_day(now_ctx.get("date"), today), now_ctx.get("date")))
+        return BLOCK_NO_RECORD, " and ".join(_year_apart(missing))
     differences = session_record.comparable(rec_then, rec_now)
     if differences:
         return BLOCK_CONDITIONS, ", ".join(differences)
@@ -839,6 +839,19 @@ def open_day(date: str | None, today: datetime.date | None = None) -> str:
     today's driving: "no session record for 13 Sep and today" on a 20 Oct recording, "the layout
     looks different today" and "Replace with today's top 3" all named a day it was not."""
     return _day_label(date, today, THIS_SESSION)
+
+
+def _year_apart(named: list[tuple[str, str | None]]) -> list[str]:
+    """The labels of (label, date) pairs, each with its year where another of a DIFFERENT date
+    shares its label: "20 Sep" names both 20 Sep 2025 and 20 Sep 2026, and "20 Sep and 20 Sep" /
+    "both sessions on 20 Sep" said one day of two a year apart. Sessions are one day only when
+    their dates are equal, never their labels; every label is unchanged where none collide."""
+    out = []
+    for label, date in named:
+        day = _day(date)
+        clash = day is not None and any(other == label and _day(d) != day for other, d in named)
+        out.append(f"{label} {day.year}" if clash and day is not None else label)
+    return out
 
 
 def _on_day(label: str) -> str:
@@ -941,6 +954,7 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
     rec_now = session_record.get(store, now_fp)
     outcomes: list[Outcome] = []
     unrecorded: dict[str, str] = {}
+    dates: dict[str, str | None] = {now_fp: now_ctx.get("date")}    # each unrecorded one's date
     for i, item in enumerate(items):
         now = samples[i] if i < len(samples) else None
         if item.fingerprint and item.fingerprint == now_fp:
@@ -952,6 +966,7 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         if block:
             if block == BLOCK_NO_RECORD and item.fingerprint and session_record.is_empty(rec_then):
                 unrecorded.setdefault(item.fingerprint, _day_label(item.date, today))
+                dates.setdefault(item.fingerprint, item.date)
             outcomes.append(Outcome(item=item, kind=OUTCOME_NO_VERDICT, now=now, delta=None,
                                     blocker=block, detail=detail,
                                     same_day=block == BLOCK_NO_RECORD
@@ -997,6 +1012,10 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         # Named as every line names it (`open_day`): "Mark today dry" on a 13 Sep session named a
         # day it was not (w19 QA), beside sessions of its own date and beside earlier days alike.
         unrecorded.setdefault(now_fp, day)
+    # One label for two dates (a year apart) is never one day in `sessions_named`.
+    unrecorded = dict(zip(unrecorded, _year_apart([(label, dates.get(fp))
+                                                   for fp, label in unrecorded.items()]),
+                          strict=True))
     return Report(track=now_ctx.get("list_track") or now_ctx.get("track"), outcomes=outcomes,
                   unrecorded=tuple(unrecorded.items()),
                   baseline_refusal=baseline_refusal(now_ctx, items), now_fingerprint=now_fp,

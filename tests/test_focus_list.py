@@ -1280,6 +1280,29 @@ def test_the_open_session_is_today_only_on_the_day_it_was_recorded():
     print("ok open day: 'today' only on the day the recording was made")
 
 
+def test_two_sessions_a_year_apart_on_one_day_of_the_year_are_never_one_day():
+    """cool/open-session-day review: a baseline of 20 Sep 2025 beside a recording of 20 Sep 2026
+    read "no session record for 20 Sep and 20 Sep", and the offer's hover "both sessions on 20
+    Sep" — a year apart. Sessions are one day only when their DATES are equal; two named in one
+    line with different dates but the same day label both carry their year. Clock injected."""
+    now = {**_now(), "date": "2026-09-20"}
+    rep = F.verdict([_item(date="2025-09-20")], now, [_sample(4.4)], _records(),
+                    today=datetime.date(2026, 11, 21))
+    o = rep.outcomes[0]
+    assert o.detail == "20 Sep 2025 and 20 Sep 2026" and not o.same_day, o
+    assert F.report_lines(rep)[0].startswith(
+        "C4 — can't say. There's no session record for 20 Sep 2025 and 20 Sep 2026, so nothing "
+        "says the two days were"), F.report_lines(rep)
+    assert [label for _fp, label in rep.unrecorded] == ["20 Sep 2025", "20 Sep 2026"]
+    assert "for 20 Sep 2025 and 20 Sep 2026 saying" in F.mark_dry_prompt(rep)[2], \
+        F.mark_dry_prompt(rep)
+    # A different day of the year needs no year: the label alone tells them apart.
+    rep = F.verdict([_item(date="2025-09-13")], now, [_sample(4.4)], _records(),
+                    today=datetime.date(2026, 11, 21))
+    assert rep.outcomes[0].detail == "13 Sep and 20 Sep", rep.outcomes[0]
+    print("ok a year apart: each session carries its year")
+
+
 def test_three_sessions_of_one_day_are_counted_and_the_offer_names_each_day_once():
     """cool/reference-reasons-and-wording (w19 QA on #683): the session in front of the driver and
     two focus baselines, all on 13 Sep. The collapsed line read "either session on 13 Sep" (three

@@ -124,7 +124,8 @@ def test_the_replace_offer_waits_for_the_check_and_a_difference():
     assert checked.n_verdicts == 3, [o.blocker for o in checked.outcomes]
     assert focus.replace_offer(checked, [1, 5, 7]) == [1, 5, 7]
     # A session with no date is never "today" (cool/open-session-day: `focus.open_day`).
-    assert focus.replace_label([1, 5, 7], checked.now_day) ==         "Replace with this session's top 3 (C1, C5, C7)"
+    assert focus.replace_label([1, 5, 7], checked.now_day) == \
+        "Replace with this session's top 3 (C1, C5, C7)"
     assert focus.replace_offer(checked, [3, 5, 7]) is None, "offered today's own list"
     here = focus.verdict([_item(1, fp="GX0068")], ctx, [sample], dry)
     assert focus.replace_offer(here, [1, 5, 7]) is None, "offered over a list set today"
