@@ -1406,6 +1406,71 @@ def when_text(entry: dict) -> str | None:
     return f"{date} {clock}" if clock else str(date)
 
 
+# A LOADED REFERENCE IS NAMED BY ITS DAY AND ITS LAP, not by its file. "recording 7111 · 2
+# chapters" on the chip and the chart legends asked the driver to remember which GoPro number was
+# which day; "2026-11-15 16:00 · best lap 0:46.808" is the row the Library lists it under, and the
+# lap the reference adopts IS its best. `Session.reference_name` builds it from the reference
+# session's OWN data, so a file-picker reference and a Library-row reference read the same.
+BEST_LAP_WORDS = "best lap"
+
+
+def reference_name(entry: dict, fmt_time) -> str | None:
+    """``"2026-11-15 16:00 · best lap 0:46.808"`` for a recording's ``date`` / ``start_ms`` /
+    ``best`` (``when_text``'s words, then its best lap), the date alone when it has no best lap, or
+    None when the date is unknown — the caller then keeps the file's name."""
+    when = when_text(entry)
+    if not when:
+        return None
+    best = entry.get("best")
+    if isinstance(best, bool) or not isinstance(best, (int, float)) or not math.isfinite(best):
+        return when
+    return f"{when} · {BEST_LAP_WORDS} {fmt_time(float(best))}"
+
+
+# WHY A LIBRARY ROW CANNOT BE THE OPEN SESSION'S REFERENCE, in the Library's one-line words. Each
+# shared reason is a phrase out of the reference loader's own refusal (`Session.set_reference_session`;
+# tests/test_cross_reference.py holds the two to the same words), so the row's greyed entry and the
+# notice a picked file gets never disagree. The loader still decides — lap length, a direction
+# measured on load, a geometry match for an unnamed track are its alone — and a row it refuses shows
+# its notice as any pick does.
+REFERENCE_NO_SESSION = "open a session first"
+REFERENCE_SAME = "this is the recording you already have open"
+REFERENCE_MISSING = "footage not found"
+REFERENCE_OTHER_TRACK = "a different track"
+REFERENCE_OTHER_WAY = "driven the other way round"
+REFERENCE_NO_LAPS = "no valid laps"
+
+
+def reference_refusal(entry: dict, open_entry: dict | None) -> str | None:
+    """Why the Library row `entry` can't be the reference of the session whose own entry is
+    `open_entry` (None: no session open), or None when it may be offered. Only what a ROW can know:
+    the same outing (by fingerprint, or by a shared chapter file), its footage gone, a different
+    NAMED track, a way round KNOWN to differ (``other_way``), no laps. An unnamed track on either
+    side is offered — the loader matches it by location."""
+    if open_entry is None:
+        return REFERENCE_NO_SESSION
+    fp = entry.get("fingerprint")
+    mine = {os.path.realpath(p) for p in open_entry.get("paths") or [] if p}
+    theirs = {os.path.realpath(p) for p in entry.get("paths") or [] if p}
+    if (fp and fp == open_entry.get("fingerprint")) or (mine & theirs):
+        return REFERENCE_SAME
+    # ANY chapter gone, not all of them (`entry_missing`): the row's own paths load as one
+    # recording, and one missing file fails that load as surely as all of them.
+    paths = [p for p in entry.get("paths") or [] if p]
+    if not paths or not all(os.path.exists(p) for p in paths):
+        return REFERENCE_MISSING
+    track, open_track = entry.get("track"), open_entry.get("track")
+    if track and open_track and track != open_track:
+        return f"{REFERENCE_OTHER_TRACK} ({track})"
+    rotation = rotation_of(open_entry)
+    if other_way(entry, rotation):
+        return (f"{REFERENCE_OTHER_WAY} ({ROTATION_WORDS[rotation_of(entry)]}; the open session "
+                f"runs {ROTATION_WORDS[rotation]})")
+    if not entry.get("lap_count"):
+        return REFERENCE_NO_LAPS
+    return None
+
+
 def recency_key(entry: dict) -> tuple:
     """The sort key that puts a row where a newest-first list (``reverse=True``) wants it: by
     date, then by start within the date; a row without a start sorts after the timed rows of its

@@ -631,7 +631,9 @@ class Session:
         self._reference = cross_reference.build(
             dist=dist, speed_kmh=speed_kmh, elapsed=elapsed,
             loop_xy=ref_loop, primary_loop_xy=primary_loop,
-            source_label=source_label or "reference", lap_id=ref_best,
+            # Its day and its lap wherever it is named (`reference_name`); the file's own label
+            # only when the recording carries no date.
+            source_label=ref.reference_name() or source_label or "reference", lap_id=ref_best,
             is_geometric=is_geometric,
         )
         # F7 Phase B: keep the live reference Session so pane B can play its footage with its own
@@ -647,6 +649,24 @@ class Session:
         # invalidate_stats() drops only those (detection windows unchanged), recomputed lazily.
         self.corners.invalidate_stats()
         return None
+
+    def reference_name(self) -> str | None:
+        """What this recording is called once it is ANOTHER session's reference:
+        ``"2026-11-15 16:00 · best lap 0:46.808"`` (``library.reference_name`` over its own date,
+        first-fix clock and best lap — the Library row's words), or None when it has no date.
+        Never raises: a bare test double, with no fixes to read, is simply undated."""
+        try:
+            date = self.session_date()
+            start_ms = int(self._wall_clock_ms()[0])
+        except Exception:  # noqa: BLE001 — an unreadable clock is an unknown date
+            return None
+        try:
+            best_id = self.best_lap_id()
+            best = self.lap_time(best_id) if best_id is not None else None
+        except Exception:  # noqa: BLE001 — no readable lap: named by its day alone
+            best = None
+        return library.reference_name(
+            {"date": date, "start_ms": start_ms, "best": best}, fmt_time)
 
     def _source_paths(self) -> set[str]:
         """The chapter files on disk this session was loaded from, as resolved real paths.

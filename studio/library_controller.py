@@ -730,7 +730,11 @@ class LibraryController:
         guarded `_load` path; the dialog reads the index defensively (empty when missing). The
         privacy controls (forget one recording / clear the library) are injected here — the dialog
         stays pacer-free + file-op-free, the app owns the index write + sidecar delete."""
-        dlg = LibraryDialog(library.load(), open_recording=self.win._load, parent=self.win,
+        index = library.load()
+        # The open session as a library row sees it, read ONCE per open: every row's "Use as
+        # reference" asks the same question of it (`library.reference_refusal`).
+        open_entry = self._reference_target(index)
+        dlg = LibraryDialog(index, open_recording=self.win._load, parent=self.win,
                             forget_recording=self._forget_recording,
                             clear_library=self._clear_library,
                             reveal_library=self.reveal_library,
@@ -755,7 +759,11 @@ class LibraryController:
                             # driving?") and this dialog is already where the app answers it.
                             manage_tracks=self._open_track_manager,
                             # The whole privacy account, one click from the note's one line.
-                            show_privacy=self.win._show_privacy)
+                            show_privacy=self.win._show_privacy,
+                            # A row as the open session's reference, through the window's one
+                            # reference loader (its own refusals still apply, with their notice).
+                            use_as_reference=self.use_row_as_reference,
+                            reference_refusal=lambda e: library.reference_refusal(e, open_entry))
         dlg.exec()
         # Nothing below reads the dialog. Parented to the window and held alive by its own
         # lambdas, it was never freed: every open left ~113 widgets (7 menus among them) behind.
@@ -769,6 +777,35 @@ class LibraryController:
         # welcome's own "Library…", the PB card).
         if self.on_library_closed is not None:
             self.on_library_closed()
+
+    def _reference_target(self, index: dict) -> dict | None:
+        """The open session's own library entry — keyed as the index files it, so the row of the
+        same outing is recognised — for ``library.reference_refusal``; None when no session is
+        open (or one is still loading). Built even for a recording the library leaves out (the
+        demo, part of a recording): it can still take a reference. Guarded: never raises."""
+        paths = getattr(self.win, "_paths", None)
+        if (not hasattr(self.win, "session") or not paths
+                or getattr(self.win, "_loading_token", None) is not None):
+            return None
+        try:
+            return library.keyed(self.win.session.library_entry(paths), index)
+        except Exception:  # noqa: BLE001 — a row check must never break the Library
+            _log.warning("use as reference: the open session's entry could not be built",
+                         exc_info=True)
+            return None
+
+    def use_row_as_reference(self, entry: dict) -> None:
+        """Library ▸ "Use as reference for the open session": load the row's recording as the
+        reference through the window's one off-thread, single-flight loader — the path Coaching ▸
+        Load reference recording… and "Compare with your previous PB" take. The row's own paths,
+        not their siblings: the recording as the Library knows it. The loader's refusals (lap
+        length, a direction measured on load, no valid laps) arrive in the notice every pick gets."""
+        if not hasattr(self.win, "session"):
+            return
+        paths = [p for p in entry.get("paths") or [] if p]
+        _log.info("use as reference: %s", loop_subject(entry.get("fingerprint"), entry.get("track")))
+        if paths:
+            self.win._start_reference_load(paths)
 
     # -------------------------------------------------------- privacy: restore / forget / clear
     def _restore_library(self) -> dict:

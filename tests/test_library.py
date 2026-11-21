@@ -3808,6 +3808,198 @@ def test_a_rotation_must_be_an_int():
     print("ok rotation: an int, never a float or a bool")
 
 
+# ------------------------------------------------------- a row as the open session's reference
+# cool/library-reference: "my best lap of the season next to today's" was Coaching ▸ Load
+# reference recording… and an OS picker that names files by GoPro number. The Library already
+# knows every row's day, track, way round and best lap, so the row menu's first entry — and a
+# button for whoever never right-clicks — loads it through the window's one reference loader.
+def test_a_row_is_offered_as_the_reference_only_when_it_can_be_one():
+    """The enablement matrix, in the Library's one-line words (`library.reference_refusal`)."""
+    with tempfile.TemporaryDirectory() as d:
+        def clip(name):
+            p = os.path.join(d, name)
+            open(p, "wb").close()
+            return p
+        today = _entry("GX017115", track="Demo", paths=[clip("GX017115.MP4")])
+        today["rotation"] = -1
+        open_entry = dict(today)
+        ok = _entry("GX017103", track="Demo", paths=[clip("GX017103.MP4")])
+        ok["rotation"] = -1
+        unknown_way = _entry("GX017100", track="Demo", paths=[clip("GX017100.MP4")])
+        unnamed = _entry("GX017090", track=None, paths=[clip("GX017090.MP4")])
+        rev = _entry("GX017111", track="Demo", paths=[clip("GX017111.MP4")])
+        rev["rotation"] = 1
+        other = _entry("GX017116", track="Track B", paths=[clip("GX017116.MP4")])
+        gone = _entry("GX017104", track="Demo", paths=["/definitely/missing/GX017104.MP4"])
+        half = _entry("GX017105", track="Demo", paths=[clip("GX017105.MP4"),
+                                                       "/definitely/missing/GX027105.MP4"])
+        copy = _entry("GX017199", track="Demo", paths=list(today["paths"]))
+        junk = _entry("GX017120", track="Demo", laps=0, best=None,
+                      paths=[clip("GX017120.MP4")])
+        why = library.reference_refusal
+        assert why(ok, None) == library.REFERENCE_NO_SESSION == "open a session first"
+        assert why(ok, open_entry) is None
+        assert why(unknown_way, open_entry) is None, "a row that doesn't know its way is offered"
+        assert why(unnamed, open_entry) is None, "an unnamed track is the loader's to match"
+        assert why(today, open_entry) == library.REFERENCE_SAME
+        assert why(copy, open_entry) == library.REFERENCE_SAME, "a shared chapter file is the same"
+        assert why(gone, open_entry) == library.REFERENCE_MISSING == "footage not found"
+        assert why(half, open_entry) == library.REFERENCE_MISSING, "one missing chapter fails it"
+        assert why(other, open_entry) == "a different track (Track B)"
+        assert why(rev, open_entry) == (
+            "driven the other way round (anticlockwise; the open session runs clockwise)")
+        assert why(junk, open_entry) == library.REFERENCE_NO_LAPS
+        # A session that does not know its own way round refuses nothing for direction.
+        assert why(rev, {**open_entry, "rotation": 0}) is None
+    print("ok use as reference: the enablement matrix")
+
+
+def test_a_reference_is_named_by_the_rows_own_words():
+    """`library.reference_name` — the Library's `when_text`, then the best lap; undated: None."""
+    e = {"date": "2026-11-15", "start_ms": _utc_at(2026, 11, 15, 15, 0), "best": 44.933}
+    with _local_tz("UTC"):
+        assert library.reference_name(e, fmt_time) == "2026-11-15 15:00 · best lap 0:44.933"
+        assert library.reference_name({**e, "best": None}, fmt_time) == "2026-11-15 15:00"
+    assert library.reference_name({"date": "2026-11-15", "best": 44.9}, fmt_time) == (
+        "2026-11-15 · best lap 0:44.900")
+    assert library.reference_name({"date": None, "best": 44.9}, fmt_time) is None
+
+
+def _reference_dialog(index, open_entry, used):
+    """The dialog as `open_library` wires the reference half: the rule over `open_entry` and a spy
+    for the act."""
+    return LibraryDialog(index, _OpenSpy(), forget_recording=lambda e: index,
+                         edit_record=lambda e: None,
+                         use_as_reference=used.append,
+                         reference_refusal=lambda e: library.reference_refusal(e, open_entry))
+
+
+def _select_stem(dlg, stem):
+    for r in range(dlg.table.rowCount()):
+        dlg.table.selectRow(r)
+        if (dlg._selected_entry() or {}).get("stem") == stem:
+            return r
+    raise AssertionError(stem)
+
+
+def test_the_reference_button_repeats_the_row_menu_and_closes_the_library():
+    """The button: shown only with a session open, greyed with the reason on its hover, and a click
+    on an offered row closes the Library through its real exec() and hands the row over."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialog
+
+    from studio.library_dialog import (
+        USE_AS_REFERENCE_BUTTON,
+        USE_AS_REFERENCE_REFUSED,
+        USE_AS_REFERENCE_TIP,
+    )
+    with tempfile.TemporaryDirectory() as d:
+        paths = {}
+        for stem in ("GX017115", "GX017103", "GX017116"):
+            paths[stem] = os.path.join(d, f"{stem}.MP4")
+            open(paths[stem], "wb").close()
+        today = _entry("GX017115", track="Demo", date="2026-11-15", paths=[paths["GX017115"]])
+        ok = _entry("GX017103", track="Demo", date="2026-09-13", paths=[paths["GX017103"]])
+        other = _entry("GX017116", track="Track B", date="2026-10-11",
+                       paths=[paths["GX017116"]])
+        idx = _index(today, ok, other)
+
+        # No session open (the welcome screen's Library): no button at all.
+        used: list = []
+        bare = _reference_dialog(idx, None, used)
+        assert bare.reference_btn.text() == USE_AS_REFERENCE_BUTTON
+        assert bare.reference_btn.isHidden()
+        bare.deleteLater()
+
+        dlg = _reference_dialog(idx, today, used)
+        _select_stem(dlg, "GX017115")
+        assert not dlg.reference_btn.isHidden() and not dlg.reference_btn.isEnabled()
+        assert dlg.reference_btn.toolTip() == USE_AS_REFERENCE_REFUSED.format(
+            reason=library.REFERENCE_SAME)
+        _select_stem(dlg, "GX017116")
+        assert dlg.reference_btn.toolTip() == "Not available: a different track (Track B)"
+        dlg.reference_btn.click()
+        assert used == [], "a greyed button handed the row over"
+        _select_stem(dlg, "GX017103")
+        assert dlg.reference_btn.isEnabled() and dlg.reference_btn.toolTip() == USE_AS_REFERENCE_TIP
+        # Button order: the everyday acts on the row, then Open, then Close last.
+        row = [w.text() for w in dlg.findChildren(type(dlg.open_btn)) if w.isVisibleTo(dlg)]
+        assert row.index("Session record…") < row.index(USE_AS_REFERENCE_BUTTON) \
+            < row.index("Open") < row.index("Close"), row
+        QTimer.singleShot(50, dlg.reference_btn.click)
+        result = dlg.exec()
+        assert result == QDialog.Accepted and not dlg.isVisible()
+        assert [e["stem"] for e in used] == ["GX017103"], used
+        dlg.deleteLater()
+    print("ok use as reference: the button")
+
+
+def test_the_row_menu_leads_with_use_as_reference():
+    """Right-click: the first entry, greyed with its reason on a row that can't be one; triggered
+    on one that can, it closes the Library (real exec()) and hands that row over — even when the
+    selection is elsewhere."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QDialog, QMenu
+
+    from studio.library_dialog import USE_AS_REFERENCE_ACTION
+    with tempfile.TemporaryDirectory() as d:
+        paths = {}
+        for stem in ("GX017115", "GX017103", "GX017111"):
+            paths[stem] = os.path.join(d, f"{stem}.MP4")
+            open(paths[stem], "wb").close()
+        today = _entry("GX017115", track="Demo", date="2026-11-15", paths=[paths["GX017115"]])
+        today["rotation"] = -1
+        ok = _entry("GX017103", track="Demo", date="2026-09-13", paths=[paths["GX017103"]])
+        rev = _entry("GX017111", track="Demo", date="2026-10-25", paths=[paths["GX017111"]])
+        rev["rotation"] = 1
+        used: list = []
+        dlg = _reference_dialog(_index(today, ok, rev), today, used)
+        dlg.show()
+        seen = {}
+
+        def at(stem):
+            r = next(r for r in range(dlg.table.rowCount())
+                     if dlg.table.item(r, _COL_DATE).data(FP_ROLE) == library.fingerprint(stem))
+            return dlg.table.visualItemRect(dlg.table.item(r, _COL_TRACK)).center()
+
+        def read_menu(trigger: bool):
+            menu = next((m for m in dlg.findChildren(QMenu) if m.isVisible()), None)
+            if menu is None:
+                QTimer.singleShot(20, lambda: read_menu(trigger))
+                return
+            first = menu.actions()[0]
+            seen.setdefault("menus", []).append(
+                (first.text(), first.isEnabled(), first.toolTip(), menu.toolTipsVisible()))
+            if not trigger:
+                menu.close()
+                return
+            # Chosen the way a user chooses it: the entry highlighted, then Return.
+            menu.setActiveAction(first)
+            QTest.keyClick(menu, Qt.Key_Return)
+
+        QTimer.singleShot(20, lambda: read_menu(False))
+        dlg._on_context_menu(at("GX017111"))
+        text, enabled, tip, tips_shown = seen["menus"][0]
+        assert text == USE_AS_REFERENCE_ACTION and not enabled and tips_shown
+        assert tip == ("Not available: driven the other way round (anticlockwise; the open "
+                       "session runs clockwise)"), tip
+        assert used == [] and dlg.isVisible()
+        dlg.hide()
+
+        _select_stem(dlg, "GX017115")             # the selection is NOT the row right-clicked
+
+        def drive():
+            QTimer.singleShot(20, lambda: read_menu(True))
+            dlg._on_context_menu(at("GX017103"))
+        QTimer.singleShot(50, drive)
+        assert dlg.exec() == QDialog.Accepted
+        assert seen["menus"][1][1], seen
+        assert [e["stem"] for e in used] == ["GX017103"], used
+        dlg.deleteLater()
+    print("ok use as reference: the row menu")
+
+
 # ------------------------------------------------------------------ runner
 def _run_all():
     import inspect

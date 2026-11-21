@@ -326,6 +326,59 @@ def test_the_library_row_menu_gives_back_its_menu():
             _dispose(dlg)
 
 
+def test_the_library_with_use_as_reference_gives_back_everything_after_twenty_opens():
+    """cool/library-reference: with a session open the Library builds one more button and its row
+    menu one more entry (with its hover). Twenty real exec() opens of each leave the census flat."""
+    from studio.library_dialog import LibraryDialog
+
+    with tempfile.TemporaryDirectory() as d:
+        rows = []
+        for stem in ("GX010001", "GX010002"):
+            clip = os.path.join(d, f"{stem}.MP4")
+            open(clip, "wb").close()
+            rows.append({"fingerprint": library.fingerprint(stem), "stem": stem,
+                         "track": "Synthetic demo circuit", "date": "2026-11-01", "lap_count": 8,
+                         "best": 45.1, "theoretical": 44.8, "verified": True, "degraded": False,
+                         "dropout": False, "paths": [clip]})
+        index = {"version": library.VERSION, "entries": rows}
+
+        def build():
+            return LibraryDialog(index, lambda _p: None, forget_recording=lambda e: index,
+                                 edit_record=lambda e: None, use_as_reference=lambda e: None,
+                                 reference_refusal=lambda e: library.reference_refusal(e, rows[0]))
+
+        def open_library():
+            dlg = build()
+            assert not dlg.reference_btn.isHidden()
+            dlg.exec()
+            dlg.deleteLater()
+
+        with _Closer() as closer:
+            open_library()
+            before = _census()
+            for _ in range(20):
+                open_library()
+            after = _census()
+        assert closer.closed == 21, closer.closed
+        assert after == before, (before, after)
+
+        dlg = build()
+        dlg.show()
+        try:
+            at = _centre(dlg.table, 0, 1)
+            with _Closer() as closer:
+                dlg._on_context_menu(at)
+                before = _census()
+                for _ in range(20):
+                    dlg._on_context_menu(at)
+                after = _census()
+            assert closer.closed == 21, closer.closed
+            assert after == before, (before, after)
+        finally:
+            _dispose(dlg)
+    print("ok Library with Use as reference: 20 opens and 20 row menus, census unchanged")
+
+
 class _Render(QThread):
     """VideoExportWorker's signal surface with no thread and no ffmpeg: started, it finishes from
     the progress modal's own loop (where a real worker's queued signal lands); cancelled, it

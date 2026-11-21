@@ -24,8 +24,8 @@ Layout::
     │  Not like-for-like vs your best here: Dry vs Wet│  ← …and whether it and the row holding the
     │  Best lap by session — <track>  [best vs date]  │     track's best lap were the same kind of day
     ├───────────────────────────────────────────────┤
-    │                [Session record…] [Open] [Close] │
-    └───────────────────────────────────────────────┘
+    │   [Session record…] [Use as reference] [Open] [Close] │  ← "Use as reference" only while a
+    └───────────────────────────────────────────────┘     session is open (the row menu's 1st entry)
 
 SIZE: the TABLE is the reason this dialog exists, so it takes the pixels — the PB chart is held to a
 150–200 px band (it yields first when space is tight and stops growing once it has enough), and the
@@ -319,6 +319,15 @@ def _pb_ring_pen():
 # rule the summary line above counts "N PBs" by) are ringed, so the summary's count and the rings
 # are one number.
 PB_CHART_TITLE = "Best lap by session"
+
+# The row menu's first entry and the button that repeats it (see `_use_as_reference`). The hover
+# says what the click does, or — greyed — why this row can't: "Not available: <reason>".
+USE_AS_REFERENCE_ACTION = "Use as reference for the open session"
+USE_AS_REFERENCE_BUTTON = "Use as reference"
+USE_AS_REFERENCE_TIP = ("Compare the open session against this recording's best lap: the Δ charts, "
+                        "the lap table and the map measure against it (Coaching ▸ Clear reference "
+                        "undoes it)")
+USE_AS_REFERENCE_REFUSED = "Not available: {reason}"
 
 
 # The progress-summary trend word per library.track_summary["trend"]. "single"/"none" add nothing
@@ -740,7 +749,9 @@ class LibraryDialog(QDialog):
                  edit_record: Callable[[dict], dict] | None = None,
                  reload_records: Callable[[], dict] | None = None,
                  manage_tracks: Callable[..., None] | None = None,
-                 show_privacy: Callable[[], None] | None = None):
+                 show_privacy: Callable[[], None] | None = None,
+                 use_as_reference: Callable[[dict], None] | None = None,
+                 reference_refusal: Callable[[dict], str | None] | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — session library")
         self._index = index
@@ -783,6 +794,13 @@ class LibraryDialog(QDialog):
         # Help ▸ Your data & privacy, opened from beside the one-line note (injected: the card
         # belongs to the window's Help menu, not to this dialog).
         self._show_privacy = show_privacy
+        # USE A ROW AS THE OPEN SESSION'S REFERENCE — "my best of the season beside today's" in
+        # one gesture, where it took Coaching ▸ Load reference recording… and an OS picker that
+        # names files by GoPro number. Data + action like `open_recording`: `reference_refusal`
+        # says why a row can't be offered (``library.reference_refusal``'s words, None when it
+        # can), `use_as_reference` starts the app's one reference loader. Both or neither.
+        self._use_as_reference = use_as_reference if reference_refusal is not None else None
+        self._reference_refusal = reference_refusal
         self._backup = self._read_backup_info()
         self._entries = list(index.get("entries", []))
 
@@ -858,9 +876,9 @@ class LibraryDialog(QDialog):
         self.table.sortItems(_COL_DATE, Qt.DescendingOrder)
         self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.itemDoubleClicked.connect(lambda _it: self._open_selected())
-        # Right-click a row → "Forget this recording" (removes it from the index + deletes its
-        # sidecar). Only wired when the forget callback is injected.
-        if self._forget_recording is not None:
+        # Right-click a row → "Use as reference…" and "Forget this recording" (removes it from the
+        # index + deletes its sidecar). Wired when either callback is injected.
+        if self._forget_recording is not None or self._use_as_reference is not None:
             self.table.setContextMenuPolicy(Qt.CustomContextMenu)
             self.table.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self.table, 3)
@@ -1083,6 +1101,16 @@ class LibraryDialog(QDialog):
             self.record_btn.setEnabled(False)
             self.record_btn.clicked.connect(self._edit_selected_record)
             buttons.addWidget(self.record_btn)
+        # The row menu's first entry, for whoever never right-clicks: another everyday act on the
+        # SELECTED row, so it sits with Session record… and Open. Shown only while a session is
+        # open (from the welcome screen there is nothing to compare against); greyed, with the
+        # reason on its hover, for a row that can't be one (`_sync_reference_btn`).
+        if self._use_as_reference is not None:
+            self.reference_btn = QPushButton(USE_AS_REFERENCE_BUTTON)
+            self.reference_btn.setEnabled(False)
+            self.reference_btn.setVisible(False)
+            self.reference_btn.clicked.connect(self._use_selected_as_reference)
+            buttons.addWidget(self.reference_btn)
         self.open_btn = QPushButton("Open")
         self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self._open_selected)
@@ -1125,6 +1153,11 @@ class LibraryDialog(QDialog):
             remembered = None
         width, height = remembered or _DEFAULT_SIZE
         height = max(height, _MIN_BROWSABLE_H)
+        # …and the width floored at what the button row needs: with a session open it carries
+        # "Use as reference" too (983 px against the default's 880). Left to the first show to
+        # widen, `_opened_size` would record 880, and `done` would store 983 as a size the user
+        # chose.
+        width = max(width, self.minimumSizeHint().width())
         screen = self.screen() or QGuiApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
@@ -1458,6 +1491,7 @@ class LibraryDialog(QDialog):
             self.open_btn.setEnabled(False)
             self._show_missing(None)
             self._sync_record_btn(None)
+            self._sync_reference_btn(None)
             self._show_pb(None)
             self._show_summary(None)
             self._show_record(None)
@@ -1467,6 +1501,7 @@ class LibraryDialog(QDialog):
         entry = self._selected_entry()
         self._show_missing(entry if missing else None)
         self._sync_record_btn(entry)
+        self._sync_reference_btn(entry)
         track = item.data(TRACK_ROLE)
         rotation = _library.rotation_of(entry or {})
         self._show_pb(track, rotation)
@@ -1531,6 +1566,47 @@ class LibraryDialog(QDialog):
             btn.setToolTip(
                 "Write up this session: conditions, tyres and kart setup. It is what makes two "
                 "sessions comparable — and it is typed by you, never fetched.")
+
+    # ------------------------------------------------------------------ use as reference
+    def _reference_reason(self, entry: dict | None) -> str | None:
+        """Why `entry` can't be the open session's reference (the injected rule's words), or None
+        when it can. Guarded: a rule that raises refuses the row rather than breaking the menu."""
+        if entry is None or self._reference_refusal is None:
+            return _library.REFERENCE_NO_SESSION
+        try:
+            return self._reference_refusal(entry)
+        except Exception:  # noqa: BLE001 — an unreadable session refuses, it never raises here
+            _log.warning("use as reference: row not checked", exc_info=True)
+            return _library.REFERENCE_NO_SESSION
+
+    def _sync_reference_btn(self, entry: dict | None) -> None:
+        """The button repeats the row menu's entry exactly: enabled when the menu's would be,
+        greyed with the same reason on its hover otherwise, and not shown at all while no session
+        is open (nothing to compare against)."""
+        btn = getattr(self, "reference_btn", None)
+        if btn is None:
+            return
+        if entry is None:
+            btn.setEnabled(False)
+            btn.setToolTip("")
+            return
+        reason = self._reference_reason(entry)
+        btn.setVisible(reason != _library.REFERENCE_NO_SESSION)
+        btn.setEnabled(reason is None)
+        btn.setToolTip(USE_AS_REFERENCE_TIP if reason is None
+                       else USE_AS_REFERENCE_REFUSED.format(reason=reason))
+
+    def _use_as_reference_row(self, entry: dict | None) -> None:
+        """Close the Library, then hand the row to the app's reference loader — the order Open
+        uses, so the load (and any refusal notice it raises) lands on the main window, not behind
+        this modal. A row the rule refuses is never handed over."""
+        if entry is None or self._use_as_reference is None or self._reference_reason(entry):
+            return
+        self.accept()
+        self._use_as_reference(entry)
+
+    def _use_selected_as_reference(self) -> None:
+        self._use_as_reference_row(self._selected_entry())
 
     def _show_record(self, entry: dict | None) -> None:
         """Set the selected row's two record lines (see where they are built for what each is for).
@@ -1738,9 +1814,10 @@ class LibraryDialog(QDialog):
 
     # ------------------------------------------------------------------ privacy: forget / clear
     def _on_context_menu(self, pos):
-        """Right-click on a row → a small menu with "Forget this recording". No menu on empty space
-        or when the forget callback isn't wired."""
-        if self._forget_recording is None:
+        """Right-click on a row → a small menu: "Use as reference for the open session" first (greyed,
+        its hover saying why, when the row can't be), then "Session record…" and "Forget this
+        recording". No menu on empty space or when none of their callbacks is wired."""
+        if self._forget_recording is None and self._use_as_reference is None:
             return
         item = self.table.itemAt(pos)
         if item is None:
@@ -1748,7 +1825,20 @@ class LibraryDialog(QDialog):
         date_item = self.table.item(item.row(), _COL_DATE)
         if date_item is None:
             return
+        fp = date_item.data(FP_ROLE)
+        entry = next((e for e in self._entries if fp and e.get("fingerprint") == fp), None)
         menu = QMenu(self)
+        # A greyed entry's reason lives on its hover, and a QMenu shows none unless asked.
+        menu.setToolTipsVisible(True)
+        ref_act = None
+        if self._use_as_reference is not None:
+            ref_act = menu.addAction(USE_AS_REFERENCE_ACTION)
+            reason = self._reference_reason(entry)
+            ref_act.setEnabled(reason is None)
+            ref_act.setToolTip(USE_AS_REFERENCE_TIP if reason is None
+                               else USE_AS_REFERENCE_REFUSED.format(reason=reason))
+            if self._forget_recording is not None or self._edit_record is not None:
+                menu.addSeparator()
         record_act = None
         if self._edit_record is not None:
             # "Do something to THIS recording" already lives on this menu, and writing up its
@@ -1756,14 +1846,21 @@ class LibraryDialog(QDialog):
             record_act = menu.addAction("Session record…")
             record_act.setToolTip(
                 "Write up (or edit) this session's conditions, tyres and kart setup")
-            menu.addSeparator()
-        act = menu.addAction("Forget this recording…")
-        act.setToolTip(
-            "Remove this recording from the library index and delete its .pacer.json timing-line "
-            "sidecar and its session record. Your video file is not touched.")
+            if self._forget_recording is not None:
+                menu.addSeparator()
+        act = None
+        if self._forget_recording is not None:
+            act = menu.addAction("Forget this recording…")
+            act.setToolTip(
+                "Remove this recording from the library index and delete its .pacer.json "
+                "timing-line sidecar and its session record. Your video file is not touched.")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         menu.deleteLater()    # parented to the dialog: left alone, one QMenu per right-click stays
-        if chosen is act:
+        if chosen is None:
+            return
+        if chosen is ref_act:
+            self._use_as_reference_row(entry)
+        elif chosen is act:
             self._forget_row(date_item)
         elif record_act is not None and chosen is record_act:
             self.table.selectRow(date_item.row())
