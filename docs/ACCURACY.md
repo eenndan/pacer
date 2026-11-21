@@ -78,6 +78,18 @@ are under four milliseconds, as point estimates.
   video clock and every duration derived from it is muted and labelled estimated. The detection is
   per recording, off the stream itself (`studio/load.py::_used_gps9_trueclock`), not off a model
   name.
+- **The GPS-quality verdict is judged over your laps.** A fix with no 3D lock, or a DOP above 10,
+  is rejected and never reaches a lap. The app calls a recording's GPS quality low, keeps it out of
+  PBs and focus lists and mutes its times, when 8% or more of the fixes taken while moving, from the
+  first start/finish crossing to the last, were rejected. The stationary lead-in, the out-lap and
+  the in-lap time no lap, so they are left out: a receiver still acquiring on the grid does not
+  downgrade the laps it then timed. A recording with fewer than two crossings is judged over all
+  its driving, and so is one with a rejected fix within 14 fixes (1.4 s at 10 Hz) of its first or
+  last crossing, twice the 7 fixes through which the 13-fix position smoother can still move that
+  crossing (measured: up to +282 ms at 0.4 s, exact from 0.65 s). On a synthetic recording with a
+  2D fix for its first 164 s (20% of its moving fixes) all 11 timed laps equal a clean control's to
+  the millisecond; the three laps with no fix at their start are lost, and the status bar names the
+  driving that was left out.
 - **Default pipeline, nothing special.** These numbers come from the shipping configuration —
   GPS9 true-clock, clock rate = 1.0, boxcar smoothing w=13 — not a tuned-for-the-benchmark variant.
   Row C was timed on the built-in Daytona Milton Keynes start/finish line, exactly as a first open

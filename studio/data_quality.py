@@ -22,12 +22,12 @@ same surface.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
 
-from ._signal import MAX_DOP, fmt_hms
+from ._signal import MAX_DOP, SMOOTH_WINDOW, fmt_hms
 
 # Timing-clock provenance — which per-sample time axis the load path actually built.
 GPS9_TRUECLOCK = "gps9_trueclock"        # GPS9 per-sample fix spacing (the validated headline path)
@@ -75,6 +75,36 @@ MEDIA_CLOCK_LAP_ERROR = "up to ~0.15 s"
 # on an otherwise clean trace is normal and not worth a banner). 8% ≈ a fix every ~12 s on a 10 Hz
 # stream rejected — conservative, so the badge only fires on a genuinely degraded recording.
 DROPPED_FIX_CONCERN_FRAC = 0.08
+
+
+# The guard band, in fixes, beyond either edge of the timed laps inside which a rejected fix keeps
+# the WHOLE-DRIVE verdict (`TimingQuality.over_laps`). Load-time smoothing (`_signal._smooth`, a
+# SMOOTH_WINDOW-fix boxcar) averages one-sidedly at the edge of a run, so a rejected stretch that
+# ends just before the first crossing, or starts just after the last, still moves that crossing:
+# measured on the demo circuit (review of #709), the first timed lap read +282 ms at 0.35-0.40 s
+# of margin, +180 ms at 0.45-0.50 s and +80 ms at 0.55-0.60 s, and was exact from 0.65 s; the
+# last read +216 ms at 0.40-0.45 s and +12 ms at 0.60 s. The smoother reaches SMOOTH_WINDOW // 2
+# + 1 fixes (0.7 s at 10 Hz, past every measured error); the band is twice that, 1.4 s at 10 Hz,
+# and moves with the window.
+EDGE_GUARD_FIXES = 2 * (SMOOTH_WINDOW // 2 + 1)
+
+
+@dataclass(frozen=True)
+class FixCensus:
+    """Every MOVING raw fix of a recording, on the telemetry axis, and whether the gate rejected it.
+
+    What `TimingQuality.over_laps` re-judges the share over, kept so a start-line drag (which moves
+    the first and last crossing) re-judges it too. `t` and `rejected` are parallel arrays;
+    `spacing_s` is the receiver's median fix interval, what turns a fix count into seconds."""
+
+    t: Any
+    rejected: Any
+    spacing_s: float = 0.1
+
+    def counts(self, lo: float = -np.inf, hi: float = np.inf) -> tuple[int, int]:
+        """(moving fixes, rejected moving fixes) with `lo <= t <= hi`."""
+        m = (self.t >= lo) & (self.t <= hi)
+        return int(m.sum()), int((m & self.rejected).sum())
 
 # --- SHARED no-complete-laps copy (one source, same reason as the degraded-timing copy below).
 # A 0-valid-lap recording is stated by EVERY panel at once, and each call site authored its own
@@ -172,13 +202,77 @@ class TimingQuality:
 
       * `clock` — GPS9_TRUECLOCK, MEDIA_CLOCK_FALLBACK or NO_GPS_TRACE (which per-sample time axis
         was built, or that none was);
-      * `dropped_fraction` — fraction of raw GPS fixes the DOP/fix quality gate rejected, in [0, 1].
+      * `dropped_fraction` — the share of MOVING fixes the DOP/fix quality gate rejected, in
+        [0, 1]: over the timed laps once `over_laps` has judged it (`in_laps`), else over the
+        whole recording's driving.
 
     `degraded` is True when ANY concern fires; the views show the banner/badge + de-emphasize
-    the lap times only then, so a normal GPS9 recording is visually identical to today."""
+    the lap times only then, so a normal GPS9 recording is visually identical to today.
+
+    THE SHARE IS JUDGED OVER THE TIMED LAPS — the moving fixes from the first start/finish crossing
+    to the last (`over_laps`), not over every metre driven. Fixes rejected on the out-lap or the
+    in-lap touch no lap time, and judging them used to downgrade a whole session: a synthetic
+    recording with a 2D fix for its first 164 s rejected 20% of its moving fixes, said "GPS quality
+    low" and decided no PB, focus list or debrief, while every one of its 11 timed laps equalled
+    the clean control's to the millisecond. Rejections INSIDE the laps still count, at a slightly
+    higher share (the out- and in-lap leave the denominator). A recording with fewer than two
+    crossings has no timed laps, and one with a rejected fix within EDGE_GUARD_FIXES of either end
+    of them is not clear of it: both keep the whole-driving share. The private fields are what
+    the re-judging needs; golden dumps skip them, and equality ignores the census."""
 
     clock: str = GPS9_TRUECLOCK
     dropped_fraction: float = 0.0
+    _census: FixCensus | None = field(default=None, compare=False, repr=False)
+    _in_laps: bool = False
+    _moving_fraction: float = 0.0
+    _outside_s: float = 0.0
+
+    def over_laps(self, window: tuple[float, float] | None) -> TimingQuality:
+        """This verdict re-judged over `window`, the (first, last) start/finish crossing on the
+        telemetry axis (`load.timed_window`); None, or no census, keeps the whole-driving share."""
+        census = self._census
+        if census is None:
+            return self
+        n_all, rej_all = census.counts()
+        whole = rej_all / n_all if n_all else 0.0
+        if window is None:
+            return replace(self, dropped_fraction=whole, _in_laps=False, _moving_fraction=whole,
+                           _outside_s=0.0)
+        lo, hi = window
+        band = EDGE_GUARD_FIXES * census.spacing_s
+        if (census.rejected & (((census.t >= lo - band) & (census.t < lo))
+                               | ((census.t > hi) & (census.t <= hi + band)))).any():
+            # Rejected fixes this close to an edge reach its crossing through the smoother: the
+            # laps are not clear of them, so the whole drive decides (EDGE_GUARD_FIXES).
+            return replace(self, dropped_fraction=whole, _in_laps=False, _moving_fraction=whole,
+                           _outside_s=0.0)
+        n_in, rej_in = census.counts(lo, hi)
+        return replace(self, dropped_fraction=rej_in / n_in if n_in else 0.0, _in_laps=True,
+                       _moving_fraction=whole, _outside_s=(rej_all - rej_in) * census.spacing_s)
+
+    @property
+    def in_laps(self) -> bool:
+        """True when `dropped_fraction` is the share inside the timed laps."""
+        return self._in_laps
+
+    def _share(self, were: bool = False) -> str:
+        """"10% of fixes inside your laps rejected" ("…were rejected"), or "10% of fixes
+        rejected" for the whole drive: the one place the measure is worded."""
+        verb = "were rejected" if were else "rejected"
+        if self._in_laps:
+            return f"{self.dropped_pct()}% of fixes inside your laps {verb}"
+        return f"{self.dropped_pct()}% of fixes {verb}"
+
+    def outside_laps(self) -> str:
+        """The session notice's clause for the driving the verdict left out, when leaving it out
+        is what kept the verdict clean: the whole drive's share would have read "GPS quality low".
+        A lap there may have gone untimed (no fix, no crossing), and before this verdict was judged
+        over the laps that was the only sign of it; "" otherwise."""
+        if not self._in_laps or self.low_gps_quality or (
+                self._moving_fraction < DROPPED_FIX_CONCERN_FRAC):
+            return ""
+        return (f"GPS fixes rejected for {round(self._outside_s)} s of driving outside your laps, "
+                "so a lap there may be missing")
 
     @property
     def media_clock(self) -> bool:
@@ -219,7 +313,7 @@ class TimingQuality:
         if self.media_clock:
             parts.append("timing estimated from the video clock")
         if self.low_gps_quality:
-            parts.append(f"GPS quality low ({self.dropped_pct()}% of fixes rejected)")
+            parts.append(f"GPS quality low ({self._share()})")
         return " and ".join(parts)
 
     def concerns(self) -> list[str]:
@@ -235,8 +329,7 @@ class TimingQuality:
                 f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off.")
         if self.low_gps_quality:
             out.append(
-                f"GPS quality low — {self.dropped_pct()}% of fixes were rejected; "
-                "times may be less accurate.")
+                f"GPS quality low — {self._share(were=True)}; times may be less accurate.")
         return out
 
     # --- SHARED degraded-timing copy (one source, so the map banner, the lap-table Time tooltip,
@@ -255,14 +348,13 @@ class TimingQuality:
             return "No usable GPS in this recording — no lap can be timed."
         if media and low:
             return (f"Timing estimated (video clock) and GPS quality low — "
-                    f"{self.dropped_pct()}% of fixes rejected; times may be less accurate.")
+                    f"{self._share()}; times may be less accurate.")
         if media:
             # 63 characters: the banner is setWordWrap(False), and this may not outgrow the 66 it
             # had ("Timing estimated from …" + the bound would be 73).
             return f"Timing from the video clock — a lap may read {MEDIA_CLOCK_LAP_ERROR} off."
         if low:
-            return (f"GPS quality low — {self.dropped_pct()}% of fixes rejected; "
-                    "times may be less accurate.")
+            return f"GPS quality low — {self._share()}; times may be less accurate."
         return ""
 
     def detail(self) -> str:
@@ -284,12 +376,12 @@ class TimingQuality:
                     f"read {MEDIA_CLOCK_LAP_ERROR} off. Not yet checked against official timing on "
                     "such a camera — treat the absolute times as approximate.")
             if low:
-                base += (f" GPS quality is also low: {self.dropped_pct()}% of fixes were rejected, "
+                base += (f" GPS quality is also low: {self._share(were=True)}, "
                          "so the positions are less accurate too.")
             return base + " See the note over the map."
         if low:
-            return (f"GPS quality low for this recording — {self.dropped_pct()}% of fixes were "
-                    "rejected, so the positions (and the times derived from them) may be less "
+            return (f"GPS quality low for this recording — {self._share(were=True)}, "
+                    "so the positions (and the times derived from them) may be less "
                     "accurate. See the note over the map.")
         return ""
 
