@@ -2686,13 +2686,15 @@ CORNER_COLUMNS = ["Corner", "Time", "Δbest", "Apex", "Δapex", "Entry", "Exit",
 # 8 px NARROWER than "Δbest", so it cannot squeeze the seven columns beside it.
 CORNER_DELTA_COL = 2
 CORNER_DELTA_REF_HEADER = "Δref"
-# What the Δ column's colour means, on its header tooltip (both baselines).
+# What the Δ column's colour means, on its header tooltip (both baselines), and what the step covers.
 CORNER_DELTA_LEVEL_NOTE = (f"A gap under {PB_PRECISION_S:.2f} s is inside timing precision, so it "
-                           "is not coloured as a difference.")
-# ...and against another recording's lap, whose step is the reference-lap corner step.
+                           f"is not coloured as a difference. {stats_service.STEP_COVERS_PASS}")
+# ...and against another recording's lap, whose step is `stats.corner_delta_step(True)` (the same
+# step at the one reference: one lap's corner time against another recording's reads less apart).
 CORNER_DELTA_REF_LEVEL_NOTE = (
     f"A gap under {stats_service.corner_delta_step(True):.2f} s is not coloured: one lap's corner "
-    "time against one lap of another recording reads that far apart with nothing changed.")
+    "time against one lap of another recording reads up to that far apart with nothing changed. "
+    f"{stats_service.STEP_COVERS_REFERENCE}")
 
 
 def corner_delta_colour(delta: float, step: float = PB_PRECISION_S) -> str | None:
@@ -3322,13 +3324,14 @@ QUICKEST_SECTOR_COL_TIPS = {
     0: " Then your own sectors, S1, S2…, between the sector lines you drew.",
     1: " For a sector: its quickest split, the same figure as the Stats page's SPLITS best.",
 }
-LEVEL_NOTE_TIP = "Two passes closer than this are level: the timing cannot tell them apart."
+LEVEL_NOTE_TIP = ("Two passes closer than this are level: the timing cannot tell them apart. "
+                  f"{stats_service.STEP_COVERS_PASS}")
 # A split is timed at two sector lines and carries more GPS noise than a lap time (docs/ACCURACY.md):
 # its step is wider (stats.SECTOR_LEVEL_S), and on the sessions it was measured on nearly every
 # sector is a tie, which the legend says rather than leaving a row of "N more laps" unexplained.
 SECTOR_LEVEL_NOTE_TIP = ("A sector split carries more GPS noise than a corner time (σ "
-                         "{sigma:.2f} s at a typical GoPro's noise, docs/ACCURACY.md), so two "
-                         "splits are level within {step:.2f} s, twice the noise of their "
+                         "{sigma:.2f} s at the cleanest recording's noise, docs/ACCURACY.md), so "
+                         "two splits are level within {step:.2f} s, twice the noise of their "
                          "difference, the rule the lap step follows. Most sectors are then a tie: "
                          "the row names the quickest lap and plays each level lap in turn.")
 

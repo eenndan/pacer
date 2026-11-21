@@ -44,10 +44,12 @@ circuit's arc length, S*, and the TRUE time over S* on lap L (X's truth) and on 
     gain with this exact error population; a planted habit moves the driving, not the receiver).
 
 MEASURED (defaults, 4 sets × 10 days = 40 days per noise, ordered pairs within a set, about 16
-minutes as two processes of two `--set-index` each): at REFERENCE_NOISE (per-lap σ 0.053 s)
-sigma_one 0.0435 s (sets 0.0388-0.0481) → 2√2σ = 0.123 → 0.12 s, and Δbest's own error 0.0429 s.
-The table across the noises, the model and the power are in `stats.REFERENCE_CORNER_SIGMA_S`'s
-comment.
+minutes as two processes of two `--set-index` each): at REFERENCE_NOISE (per-lap σ 0.025 s, the
+one reference recording's, `library.REFERENCE_RECORDING`) sigma_one 0.0205 s (sets
+0.0183-0.0222) → 2√2σ = 0.058 → 0.06 s, under the timing step, which `stats.corner_delta_step`
+then reads; Δbest's own error 0.0203 s. The table across the noises, the model and the power are
+in `stats.REFERENCE_CORNER_SIGMA_S`'s comment, and every published recording's row in
+`stats.PUBLISHED_NOISE_SIGMAS`, which the summary checks at each noise it holds.
 
 ARGV CONTRACT: named flags only. `--noises 1.9,4.0` (default NOISES), `--sets N` (default 4),
 `--set-index J` (run only set J), `--days N` (default 10). Every recording is generated into ONE
@@ -326,8 +328,8 @@ def summarize(recs: list[dict]) -> dict:
         edges = np.abs(np.array([[x[8], x[9]] for x in rows])).ravel()
         e_l = np.array([x[4] + x[5] for x in rows])
         e_r = np.array([x[6] + x[7] for x in rows])
-        shipped = stats.REFERENCE_CORNER_LEVEL_S if hasattr(stats, "REFERENCE_CORNER_LEVEL_S") \
-            else None
+        # The step the Δref colour actually applies: the rule's, or the timing step where wider.
+        shipped = stats.corner_delta_step(True) if hasattr(stats, "corner_delta_step") else None
         rec = {
             "days": sum(r["days"] for r in mine), "sets": len(mine), "cells": len(rows),
             "lap_sigma": round(float(np.std(lap, ddof=1)), 4),
@@ -337,6 +339,7 @@ def summarize(recs: list[dict]) -> dict:
             "err_p95": round(float(np.percentile(np.abs(err), 95)), 4),
             "sigma_one_by_cid": by_cid,
             "within_sigma_diff": round(_rms(w_err), 4),
+            "within_sigma_one": round(_rms(w_err) / math.sqrt(2.0), 4),
             "within_step_rule": round(2 * _rms(w_err), 3),
             # the model: err = e_L − e_ref, each = timing + window (vs S*), corner offsets removed
             "e_L_sd": round(_sd_about_corner_mean([[x[0], v] for x, v in zip(rows, e_l, strict=True)], 1), 4),
@@ -360,6 +363,12 @@ def summarize(recs: list[dict]) -> dict:
         if shipped is not None:
             rec[f"rates_shipped_{shipped:.2f}"] = _rates(app, true, shipped)
             rec[f"power_shipped_{shipped:.2f}"] = _power(err, shipped)
+        for rec_name, row in stats.PUBLISHED_NOISE_SIGMAS.items():
+            if row.noise == noise:
+                # The published table's cells must be this probe's pooled σs at that noise.
+                rec[f"table_{rec_name}_is_this_sigma"] = (
+                    round(sigma_one, 4) == row.reference_corner
+                    and round(_rms(w_err) / math.sqrt(2.0), 4) == row.corner_pass)
         if noise == REFERENCE_NOISE and hasattr(stats, "REFERENCE_CORNER_SIGMA_S"):
             rec["app_sigma_is_this_sigma"] = round(sigma_one, 4) == stats.REFERENCE_CORNER_SIGMA_S
             rec["app_step_is_this_step"] = rule == stats.REFERENCE_CORNER_LEVEL_S

@@ -455,8 +455,12 @@ class FocusBlock(QWidget):
         # the Add button sits at its right edge.
         self._buttons.layout().setStretch(self._row_stretch, 0 if self._empty else 1)
         self.headline.setText(self._headline)
-        for label, text in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS, strict=False):
+        # A line level by the step alone says on hover what that step covers.
+        tips = focus.report_line_tips(report) if report is not None and self._lines else []
+        for label, text, tip in zip(self.lines, self._lines + [""] * focus.MAX_ITEMS,
+                                    tips + [""] * focus.MAX_ITEMS, strict=False):
             label.setText(text)
+            label.setToolTip(tip)
         for button, cid in zip(self.drop_buttons, self._cids + [None] * focus.MAX_ITEMS,
                                strict=False):
             button.setText(f"Remove C{cid}" if cid is not None else "")

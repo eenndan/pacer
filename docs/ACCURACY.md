@@ -168,26 +168,52 @@ with every technique evaluated and rejected on evidence, is in
 at the nearest fix. On a synthetic recording (row 2 of
 [`tests/test_truth_matrix.py`](../tests/test_truth_matrix.py)) the interior split's σ is under 1 ms
 noise-free, but up to 0.11 s at recording C's GPS noise and 0.24 s at B's: several times a lap's.
-No official timing has checked a split.
+No official timing has checked a split. (The truth matrix names its noise levels by its own
+three-seed calibration, which reads C's per-lap σ as noise 2.1 and B's as 4.4; the 40-day grid
+below reproduces C's at noise 1.9 and B's at 4.0. Same recordings, two calibrations.)
+
+**What the 0.07 s step covers.** The app reads two of its timings as level when they are closer
+than one step, 0.07 s: twice the noise of a difference of two lap times (2√2σ) at recording C's
+per-lap σ — the cleanest recording measured, and the GPS9 camera the app is built around. Every
+other kind of difference is measured at the synthetic GPS noise whose per-lap σ matches C's. On 40
+synthetic race days per noise of one driver with nothing changed
+([`studio/dev/probes/focus_cross_session.py`](../studio/dev/probes/focus_cross_session.py) and
+[`studio/dev/probes/reference_lap_corner.py`](../studio/dev/probes/reference_lap_corner.py)), the
+same rule, 2√2σ, gives each recording's noise these steps. The lap column uses each recording's
+published per-lap σ (the table at the top); the corner columns, which no official timing has
+checked, use the σ measured on the synthetic grid at the matching noise:
+
+| Published recording (per-lap σ) | Synthetic GPS noise (per-lap σ) | Lap | Corner pass | Corner typical, two days | Corner, against another recording's lap |
+|---|---|---|---|---|---|
+| C (0.0247 s) | 1.9 (0.0253 s) | 0.07 s | 0.06 s | 0.05 s | 0.06 s |
+| B (0.0527 s) | 4.0 (0.0532 s) | 0.15 s | 0.12 s | 0.10 s | 0.12 s |
+| A (0.0871 s) | 6.5 (0.0863 s) | 0.25 s | 0.20 s | 0.16 s | 0.21 s |
+
+**The app uses C's row**, so every one of these differences is level under 0.07 s, the widest of
+C's cells. A noisier recording can differ by more than that from the GPS alone, up to B's and A's
+rows, and the app says so where it reads "level". A corner pass is one pass against another of
+the same recording (the Corners table's Δbest, Quickest passes); the corner typical is the focus
+list's two days; the last column is the Corners table's Δref and the export's corner cards with a
+reference recording loaded. A corner pass carries about 0.8 × a lap's σ at every noise, so it
+never needs a wider step than a lap.
 
 **A corner's typical time on two different days** is what the focus list compares, and each
 recording brings its own bias that more laps of it do not remove. On 40 synthetic race days of one
-driver with nothing changed
-([`studio/dev/probes/focus_cross_session.py`](../studio/dev/probes/focus_cross_session.py)), at
-GPS noise 4.0, whose per-lap σ is 0.053 s, recording B's, one session's corner typical carries a
-bias of σ 0.0351 s against truth (0.0342–0.0361 s over four seed sets of ten days), so two days'
-corner times closer than 0.10 s (2√2σ) read "no change you can act on". At recording A's noise
-the same rule gives 0.16 s, and the 0.10 s step still calls 262 of 1260 unchanged corners faster
-or slower. No official timing has checked a corner either.
+driver with nothing changed, at GPS noise 1.9, whose per-lap σ is 0.025 s, recording C's, one
+session's corner typical carries a bias of σ 0.0178 s against truth (0.0142–0.0206 s over four
+seed sets of ten days), so the rule gives 0.05 s (2√2σ), under the timing step, and two days'
+corner times closer than 0.07 s read "no change you can act on". At recording A's noise the same
+rule gives 0.16 s, and 0.07 s calls 445 of 1260 unchanged corners faster or slower (31 at C's).
+No official timing has checked a corner either.
 
 **One lap's corner time against one lap of another recording** is what the Corners table's Δref
 column and the export's corner cards show with a reference recording loaded. On 40 synthetic race
-days of one driver with nothing changed, every clean lap against every other day's quickest
-([`studio/dev/probes/reference_lap_corner.py`](../studio/dev/probes/reference_lap_corner.py)), at
-GPS noise 4.0, recording B's, one lap's corner time carries σ 0.0435 s (0.0388–0.0481 s over four
-seed sets), so a Δref under 0.12 s (2√2σ) is shown uncoloured. At recording A's noise the same
-rule gives 0.21 s, and 0.12 s still colours 4268 of 35280 cells whose true gap is under 0.03 s. The same
-lap's corner time against a lap of its own recording carries the same σ.
+days of one driver with nothing changed, every clean lap against every other day's quickest, at
+GPS noise 1.9, recording C's, one lap's corner time carries σ 0.0205 s (0.0183–0.0222 s over four
+seed sets), so the rule gives 0.06 s (2√2σ), under the timing step, and a Δref under 0.07 s is
+shown uncoloured. At recording A's noise the same rule gives 0.21 s, and 0.07 s colours 8750 of
+35280 cells whose true gap is under 0.03 s (875 at C's). The same lap's corner time against a lap
+of its own recording carries the same σ.
 
 ## Why this matters
 

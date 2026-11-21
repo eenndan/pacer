@@ -47,7 +47,7 @@ import numpy as np
 from ._signal import PRINT_DECIMALS, fmt_signed, is_best_at_print, lap_label
 from .consistency import sigma
 from .lap_race import ESTIMATED_CLOCK_TIE_S
-from .library import PB_PRECISION_S, within_timing_precision
+from .library import PB_PRECISION_S, REFERENCE_RECORDING, within_timing_precision
 
 if TYPE_CHECKING:  # the injected meter — typed for the checker, not imported at runtime
     from .gmeter import GMeter
@@ -119,8 +119,9 @@ MIN_MIDDLE_HALF_N = 5
 # Below this a LAP-time width is inside the timing precision of a gap between two laps, and it is
 # worded with the FLOOR, never the value — library's rule for a sub-floor gap ("< 0.07 s").
 MIDDLE_HALF_FLOOR_S = PB_PRECISION_S
-# A CORNER width carries no precision claim (matched corner cells are timed far finer than a lap):
-# it only stops printing "0.00 s" for a width the 2-dp print cannot show.
+# A CORNER width carries no precision claim here: it only stops printing "0.00 s" for a width the
+# 2-dp print cannot show. (A corner pass is NOT timed far finer than a lap: measured, it carries
+# about 0.8 × a lap's σ at every GPS noise, PUBLISHED_NOISE_SIGMAS.)
 CORNER_MIDDLE_HALF_FLOOR_S = 0.01
 # THE CORNERS RANKING ("erratic AND slow") is middle half × median loss, not σ × median loss:
 # σ is carried by single passes. On the shipped demo one lap (L6, the 51 s lap) holds 91 % of C6's
@@ -2132,7 +2133,8 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 #
 # WHY A WIDER LEVEL STEP FOR A SPLIT. A split is timed where the lap crosses two sector lines, and
 # `docs/ACCURACY.md` publishes its σ: "0.11 s at recording C's GPS noise", truth matrix row 2
-# (`sector.interior_sd` at noise 2, SPLIT_SIGMA_S unrounded), several times a lap time's. The
+# (`sector.interior_sd` at noise 2, SPLIT_SIGMA_S unrounded: the matrix's own calibration reads
+# the one reference, `library.REFERENCE_RECORDING`, as noise 2.1), several times a lap time's. The
 # HOUSE RULE for "level" is 2σ of the difference of two figures that each carry σ, DIFF_2SIGMA_K ×
 # σ: the lap step `library.PB_PRECISION_S` is 2√2 × 0.0247 s, and refused-2026-09 §26 gated sector
 # chips at 2√2 × this same split σ ("The gate is then 0.30 s", `clip_refusals.GATE_K` is this
@@ -2142,11 +2144,78 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 # 0.055 s), yet at 0.07 s four sectors at noise 2 and ten at noise 4.5 would wear a lone ★, six of
 # those ten on the wrong lap; at SECTOR_LEVEL_S none does, at any noise. On such sessions every
 # sector is a tie: the view names the quickest lap, plays each level lap in turn, and says why.
+# ON THE EARLIER CALIBRATION: SPLIT_SIGMA_S is the truth matrix's max-over-three-seeds sd at its
+# noise 2, not a σ measured on the 40-day grid PUBLISHED_NOISE_SIGMAS uses (whose split σ at C's
+# noise reads 0.035 s pooled, 0.050 s at the worst sector, at another sector placement). That
+# re-measurement at the golden placement is deferred to its own package, with refused-2026-09 §26
+# (whose new-evidence clause it is); until then this anchor is exempt from the one-table rule
+# (tests/test_measured_figures.py `_ANCHORS`).
 DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
-SPLIT_SIGMA_S = 0.106567
-SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
 
-# THE REFERENCE-LAP CORNER STEP (cool/reference-lap-corner-floor). With a reference RECORDING
+
+def house_step(sigma: float) -> float:
+    """The house rule for "level": 2σ of the difference of two figures that each carry `sigma`
+    (DIFF_2SIGMA_K × σ), to the hundredth — the lap step's, the sector step's and every other's."""
+    return round(DIFF_2SIGMA_K * sigma, 2)
+
+
+SPLIT_SIGMA_S = 0.106567
+SECTOR_LEVEL_S = house_step(SPLIT_SIGMA_S)
+
+
+# WHAT EACH PUBLISHED RECORDING'S NOISE WOULD NEED (cool/one-reference-level). The σ of ONE figure,
+# per statistic, measured on synthetic race days at the GPS noise whose per-lap σ matches each of
+# the three recordings docs/ACCURACY.md times against official timing (0.0247 / 0.0527 / 0.0871 s).
+# Two probes, one grid (the demo circuit, 40 habit-free days per noise in four seed sets of ten):
+# `studio/dev/probes/focus_cross_session.py` (lap: sd of a lap time against truth; cross_session:
+# one session's corner-typical bias) and `studio/dev/probes/reference_lap_corner.py` (corner_pass:
+# a corner pass against another of the same recording, Δbest's error RMS / √2; reference_corner:
+# one lap's corner time against one lap of another recording, its error RMS / √2). Each probe
+# checks its pooled σ against this table at every noise in it, and docs/ACCURACY.md prints the
+# house step (`house_step`) of every cell — the lap column from the recording's PUBLISHED per-lap
+# σ (`published_lap`, its docs/ACCURACY.md row), which is what that row measured against official
+# timing; the corner columns, which no official timing has checked, from the synthetic grid. The
+# app uses ONE row, the reference's (`library.REFERENCE_RECORDING`): REFERENCE_SIGMAS. The other
+# two rows are what a noisier recording would need, said where the driver reads "level"
+# (`step_covers_note`), never applied.
+@dataclass(frozen=True)
+class NoiseSigmas:
+    published_lap: float     # the recording's per-lap σ against official timing (ACCURACY.md)
+    noise: float             # the synthetic GPS noise whose per-lap σ matches the recording's
+    lap: float               # one lap time, synthetic, at that noise (the match)
+    corner_pass: float       # one corner pass, against another pass of the same recording
+    cross_session: float     # one session's corner typical (the focus verdict's two days)
+    reference_corner: float  # one lap's corner time, against one lap of another recording
+
+
+PUBLISHED_NOISE_SIGMAS = {
+    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205),
+    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435),
+    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730),
+}
+REFERENCE_SIGMAS = PUBLISHED_NOISE_SIGMAS[REFERENCE_RECORDING]
+
+
+def step_covers_note(column: str, what: str) -> str:
+    """What the timing step covers for ONE statistic (`column` of PUBLISHED_NOISE_SIGMAS, `what` in
+    words), said where the driver reads "level" for it: the reference row's house step — an upper
+    bound (2σ of a difference), so "up to" — inside the step, and what the noisier rows would need.
+    Every figure is read off the table above."""
+    c, b, a = (house_step(getattr(PUBLISHED_NOISE_SIGMAS[r], column)) for r in ("C", "B", "A"))
+    return (f"From the GPS alone, on the cleanest recording measured, {what} can differ by up to "
+            f"{c:.2f} s, inside this {PB_PRECISION_S:.2f} s step; on a noisier recording by more: "
+            f"up to {b:.2f} s at the middle published recording's noise, {a:.2f} s at the "
+            "noisiest.")
+
+
+# One note per surface, each from its own statistic's column.
+STEP_COVERS_PASS = step_covers_note("corner_pass", "two passes through a corner")
+STEP_COVERS_REFERENCE = step_covers_note("reference_corner",
+                                         "a lap's corner time and another recording's")
+STEP_COVERS_FOCUS = step_covers_note("cross_session", "two days' typical times through a corner")
+
+# THE REFERENCE-LAP CORNER STEP (cool/reference-lap-corner-floor; re-referenced by
+# cool/one-reference-level). With a reference RECORDING
 # loaded, the Corners table's Δref and the export's corner cards ("vs ref") difference ONE lap's
 # corner time against ONE lap of another recording. Each is a duration between two corner edges
 # placed through its own recording's noisy fixes. MEASURED
@@ -2169,25 +2238,25 @@ SECTOR_LEVEL_S = round(DIFF_2SIGMA_K * SPLIT_SIGMA_S, 2)
 # corner edges land a median 1.2 m from where this session's frame puts them (95th percentile
 # 3.2 m, at B's noise), and the same difference against a lap of the SAME recording carries the
 # same error within a millisecond of σ. So Δref is not a noisier cross-session statistic: it is
-# one lap's corner time, whose noise the 0.07 s step (`library.PB_PRECISION_S`, two LAP times on
-# the best instrument) was never measured on. The error's mean is +0.008 s at B's noise (the
-# reference is its recording's QUICKEST lap, partly a lucky one); RMS keeps it in.
-# THE REFERENCE IS RECORDING B, as `focus.CORNER_DAY_SIGMA_S`'s is: the step holds for the typical
-# real recording; at C's noise the rule would give 0.06 s, and at A's 0.21 s, where 0.12 s
-# under-covers. The driver's own scatter (a best lap against another day's best differs truly by
-# 0.041 s sd) is a fact about two laps, NOT in σ: the colour must beat the measurement alone.
-# Power at B's noise, a true corner gain coloured "faster": 0.10 s on 35 %, 0.15 s on 70 %,
-# 0.20 s on 90 % (0.07 s: 70 / 90 / 97 %, but it coloured 14007 of 35280 unchanged cells, 4896 of
-# them under 0.03 s on truth; 0.12 s colours 5931, 1295). Δbest keeps the timing step: this
-# package changes no single-recording surface, though the table shows it carries the same σ.
-REFERENCE_CORNER_SIGMA_S = 0.0435
-REFERENCE_CORNER_LEVEL_S = round(DIFF_2SIGMA_K * REFERENCE_CORNER_SIGMA_S, 2)
+# one lap's corner time, and a corner pass carries about 0.8 × a lap's σ at every noise (the
+# table). The error's mean is +0.008 s at B's noise (the reference is its recording's QUICKEST
+# lap, partly a lucky one); RMS keeps it in.
+# AT THE ONE REFERENCE (`library.REFERENCE_RECORDING`, REFERENCE_SIGMAS): σ 0.0205 s (four sets
+# 0.0183-0.0222) → 2√2σ = 0.058 → 0.06 s, under the timing step, so `corner_delta_step` reads the
+# timing step for Δref as for Δbest: one rule for one figure. At that noise 0.07 s colours a true
+# corner gain of 0.10 s on 89 % of cells, 0.15 s on 99.5 % (power over every measured error);
+# the 0.12 s #668 shipped coloured 28 % / 89 %. Should a noisier reference ever be chosen, the
+# rule's step rises past 0.07 s and `corner_delta_step` follows it by itself. The driver's own
+# scatter (a best lap against another day's best differs truly by 0.040 s sd) is a fact about two
+# laps, NOT in σ: the colour must beat the measurement alone.
+REFERENCE_CORNER_SIGMA_S = REFERENCE_SIGMAS.reference_corner
+REFERENCE_CORNER_LEVEL_S = house_step(REFERENCE_CORNER_SIGMA_S)
 
 
 def corner_delta_step(cross_recording: bool) -> float:
     """The step under which a corner's Δ column (and a corner card) reads level: the timing step
-    against a lap of this recording, the reference-lap corner step against another recording's
-    (never the narrower of the two)."""
+    against a lap of this recording; against another recording's, the reference-lap corner step
+    or the timing step, whichever is wider (today the timing step: 0.06 s at the one reference)."""
     if not cross_recording:
         return PB_PRECISION_S
     return max(REFERENCE_CORNER_LEVEL_S, PB_PRECISION_S)

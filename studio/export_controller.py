@@ -660,7 +660,7 @@ class ExportController:
                   f"({corner_cards.PRECISION_S:.2f} s) it reads \"≈ best\"; a corner not matched "
                   "on track gets no card. With another recording loaded as the reference, the "
                   "time is against that recording's lap and reads \"≈ ref\" under "
-                  f"{corner_delta_step(True):.2f} s, what one lap of each reads apart with "
+                  f"{corner_delta_step(True):.2f} s, within what one lap of each reads apart with "
                   "nothing changed.")
     # Added to the tooltip while the start/finish line is unconfirmed: the cards keep their Δ (a
     # corner time does not depend on the line), but WHICH lap is the best is a lap-time verdict.
