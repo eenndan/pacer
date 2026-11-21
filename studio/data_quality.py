@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 
-from ._signal import MAX_DOP, fmt_hms
+from ._signal import MAX_DOP, SMOOTH_WINDOW, fmt_hms
 
 # Timing-clock provenance — which per-sample time axis the load path actually built.
 GPS9_TRUECLOCK = "gps9_trueclock"        # GPS9 per-sample fix spacing (the validated headline path)
@@ -75,6 +75,18 @@ MEDIA_CLOCK_LAP_ERROR = "up to ~0.15 s"
 # on an otherwise clean trace is normal and not worth a banner). 8% ≈ a fix every ~12 s on a 10 Hz
 # stream rejected — conservative, so the badge only fires on a genuinely degraded recording.
 DROPPED_FIX_CONCERN_FRAC = 0.08
+
+
+# The guard band, in fixes, beyond either edge of the timed laps inside which a rejected fix keeps
+# the WHOLE-DRIVE verdict (`TimingQuality.over_laps`). Load-time smoothing (`_signal._smooth`, a
+# SMOOTH_WINDOW-fix boxcar) averages one-sidedly at the edge of a run, so a rejected stretch that
+# ends just before the first crossing, or starts just after the last, still moves that crossing:
+# measured on the demo circuit (review of #709), the first timed lap read +282 ms at 0.35-0.40 s
+# of margin, +180 ms at 0.45-0.50 s and +80 ms at 0.55-0.60 s, and was exact from 0.65 s; the
+# last read +216 ms at 0.40-0.45 s and +12 ms at 0.60 s. The smoother reaches SMOOTH_WINDOW // 2
+# + 1 fixes (0.7 s at 10 Hz, past every measured error); the band is twice that, 1.4 s at 10 Hz,
+# and moves with the window.
+EDGE_GUARD_FIXES = 2 * (SMOOTH_WINDOW // 2 + 1)
 
 
 @dataclass(frozen=True)
@@ -200,11 +212,12 @@ class TimingQuality:
     THE SHARE IS JUDGED OVER THE TIMED LAPS — the moving fixes from the first start/finish crossing
     to the last (`over_laps`), not over every metre driven. Fixes rejected on the out-lap or the
     in-lap touch no lap time, and judging them used to downgrade a whole session: a synthetic
-    recording with a 2D fix for its first 95 s rejected 10% of its moving fixes, said "GPS quality
-    low" and decided no PB, focus list or debrief, while every one of its 13 timed laps equalled
+    recording with a 2D fix for its first 164 s rejected 20% of its moving fixes, said "GPS quality
+    low" and decided no PB, focus list or debrief, while every one of its 11 timed laps equalled
     the clean control's to the millisecond. Rejections INSIDE the laps still count, at a slightly
     higher share (the out- and in-lap leave the denominator). A recording with fewer than two
-    crossings has no timed laps and keeps the whole-driving share. The private fields are what
+    crossings has no timed laps, and one with a rejected fix within EDGE_GUARD_FIXES of either end
+    of them is not clear of it: both keep the whole-driving share. The private fields are what
     the re-judging needs; golden dumps skip them, and equality ignores the census."""
 
     clock: str = GPS9_TRUECLOCK
@@ -225,7 +238,15 @@ class TimingQuality:
         if window is None:
             return replace(self, dropped_fraction=whole, _in_laps=False, _moving_fraction=whole,
                            _outside_s=0.0)
-        n_in, rej_in = census.counts(*window)
+        lo, hi = window
+        band = EDGE_GUARD_FIXES * census.spacing_s
+        if (census.rejected & (((census.t >= lo - band) & (census.t < lo))
+                               | ((census.t > hi) & (census.t <= hi + band)))).any():
+            # Rejected fixes this close to an edge reach its crossing through the smoother: the
+            # laps are not clear of them, so the whole drive decides (EDGE_GUARD_FIXES).
+            return replace(self, dropped_fraction=whole, _in_laps=False, _moving_fraction=whole,
+                           _outside_s=0.0)
+        n_in, rej_in = census.counts(lo, hi)
         return replace(self, dropped_fraction=rej_in / n_in if n_in else 0.0, _in_laps=True,
                        _moving_fraction=whole, _outside_s=(rej_all - rej_in) * census.spacing_s)
 

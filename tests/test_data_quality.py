@@ -179,6 +179,23 @@ def test_the_share_is_judged_over_the_timed_laps():
     print("test_the_share_is_judged_over_the_timed_laps OK")
 
 
+def test_rejections_at_the_edge_of_the_laps_keep_the_whole_drive_verdict():
+    """A rejected fix within the guard band beyond either edge reaches that crossing through the
+    smoother, so the laps are not clear of it and the whole drive decides; just past the band the
+    laps decide. The band is the smoother's own reach, doubled, so a change of window moves it."""
+    from studio._signal import SMOOTH_WINDOW
+    assert dq.EDGE_GUARD_FIXES == 2 * (SMOOTH_WINDOW // 2 + 1)
+    band = dq.EDGE_GUARD_FIXES * 0.1
+    for rejected in (lambda t: t < 30.0 - 0.5, lambda t: t > 90.0 + 0.4,
+                     lambda t: t < 30.0 - band + 0.05):
+        q = TimingQuality(_census=_census(rejected)).over_laps((30.0, 90.0))
+        assert not q.in_laps and q.low_gps_quality, (q.dropped_pct(), q)
+        assert q.untrusted().endswith("% of fixes rejected)"), q.untrusted()
+    clear = TimingQuality(_census=_census(lambda t: t < 30.0 - band - 0.15)).over_laps((30.0, 90.0))
+    assert clear.in_laps and not clear.degraded, clear
+    print("test_rejections_at_the_edge_of_the_laps_keep_the_whole_drive_verdict OK")
+
+
 def test_rejections_inside_the_laps_still_downgrade_in_plain_words():
     """6 s rejected inside a 60 s span of laps is 10% of the laps' fixes (6% of the whole drive):
     low, and every sentence says the share is of the fixes inside the laps."""
