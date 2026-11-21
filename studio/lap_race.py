@@ -64,9 +64,10 @@ THE FIELD (`Session.race_tracks`): every clean lap (`valid_lap_ids`) by default,
 five alone are one blob. Every lap NOT raced is listed in `RaceTracks.excluded` with its reason, for
 the UI to count: not a clean lap (`EXCLUDED_NOT_CLEAN`: the band left it out, or a caller asked for
 it), an interior GPS dropout (`EXCLUDED_DROPOUT`; the dot would cross the infield and the interval
-would read an interpolated odometer), or no on-track match (`EXCLUDED_UNMATCHED`: no corner warp
-could be built, so its place would be an equal-fraction guess). Fewer than `MIN_FIELD` laps left →
-no race (None).
+would read an interpolated odometer), a lap that left the line the other laps drive
+(`EXCLUDED_OFF_LINE`: a cut is not the same circuit, so it is out of the bests and out of the race
+alike), or no on-track match (`EXCLUDED_UNMATCHED`: no corner warp could be built, so its place
+would be an equal-fraction guess). Fewer than `MIN_FIELD` laps left → no race (None).
 """
 from __future__ import annotations
 
@@ -95,6 +96,7 @@ LADDER_TOP = 8
 
 EXCLUDED_NOT_CLEAN = "not a clean lap"
 EXCLUDED_DROPOUT = "dropout"
+EXCLUDED_OFF_LINE = "off line"
 EXCLUDED_UNMATCHED = "unmatched"
 
 UNRANKED_PROVISIONAL = ("The start/finish line is not confirmed, so lap times are provisional: "

@@ -717,9 +717,10 @@ def corner_best(*, cid: int, label: str, value: float, fmt, donor_lap: int,
     inside = fixes.window(d0, d1)
     ranked = sorted(per_lap, key=lambda lt: lt[1])
     matched = " matched on track" if left_out else ""
-    note = ("Clean laps only: the valid laps with no GPS dropout. A dropout lap's distance is "
-            "reconstructed from its speed trace, so its corner boundaries — and the time "
-            "between them — are exactly what must not be allowed to win a corner.")
+    note = ("Clean laps only: the valid laps with no GPS dropout that kept to the line the other "
+            "laps drive. A dropout lap's distance is reconstructed from its speed trace, so its "
+            "corner boundaries — and the time between them — are exactly what must not be "
+            "allowed to win a corner; nor may a lap that cut across the infield.")
     if left_out:
         note += (f" {plural(left_out, 'more clean lap')} left out: {label}'s entry or exit could "
                  f"not be matched to the best lap's line on track there, so its window was "

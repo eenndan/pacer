@@ -37,6 +37,7 @@ MAX_STEP_S = 0.25
 #: The excluded reasons as the card's muted line says them.
 _EXCLUDED_WORDS = {
     lap_race.EXCLUDED_DROPOUT: ("GPS dropout", "GPS dropouts"),
+    lap_race.EXCLUDED_OFF_LINE: ("off the line", "off the line"),
     lap_race.EXCLUDED_NOT_CLEAN: ("not a clean lap", "not clean"),
     lap_race.EXCLUDED_UNMATCHED: ("no on-track match", "with no on-track match"),
 }

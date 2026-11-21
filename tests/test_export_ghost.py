@@ -365,6 +365,12 @@ def test_no_ghost_where_the_rules_forbid_one():
         why = ghost.unavailable_reason(s, lap)
         assert why is not None and "GPS dropout" in why, why
     s._race_memo = None
+    with _Patched(s, off_line_metres=lambda: {lap: 30.0}):
+        cases["a lap the Lap Race leaves out (off the line)"] = _ghost_pixels(
+            s, lap, elements=("ghost",))
+        why = ghost.unavailable_reason(s, lap)
+        assert why is not None and "left the line" in why, why
+    s._race_memo = None
     cases["the full-session scope"] = _ghost_pixels(s, None, follow=True, elements=("ghost",))
     for what, (count, painter) in cases.items():
         assert count == 0, f"{what}: {count} ghost pixels"

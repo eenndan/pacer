@@ -4765,7 +4765,9 @@ class Session:
         rung's interval is the compare badge's Δ. Every lap NOT raced is in `.excluded` with its
         reason: not a clean lap (with the default field, every lap of the recording outside
         `valid_lap_ids`; with `lap_ids`, any it names that is not clean — a caller cannot race the
-        band's left-out laps), an interior GPS dropout (`lap_has_dropout`), or no on-track match
+        band's left-out laps), an interior GPS dropout (`lap_has_dropout`), a lap that left the
+        line the other laps drive (`off_line_metres` — with the dropout, the `lap_out_of_bests`
+        set, so the race's "clean lap" is the bests' clean lap), or no on-track match
         (`_real_warp` is None — the normalized fraction — on any lap but the best, whose warp is the
         identity). The timing trust rides along: a provisional start line (`timing_verified`
         False) makes the race unranked, an estimated clock (`timing_quality.media_clock`) widens its
@@ -4798,6 +4800,7 @@ class Session:
         if memo is not None and _same_inputs(memo[0], key):
             return memo[1]
         excluded = {i: lap_race.EXCLUDED_NOT_CLEAN for i in ids if i not in clean_set}
+        off_line = self.off_line_metres()
         laps = []
         for i, td, warp in inputs:
             if td is None or btd is None or warp is None or (i != best and _real_warp(warp) is None):
@@ -4805,6 +4808,9 @@ class Session:
                 continue
             if self.lap_has_dropout(i):
                 excluded[i] = lap_race.EXCLUDED_DROPOUT
+                continue
+            if i in off_line and i != best:   # (the best: only when every lap is ⚠, bests.py)
+                excluded[i] = lap_race.EXCLUDED_OFF_LINE
                 continue
             laps.append(self._race_lap(i, td, warp))
         bw = self._warp_to_best(best)

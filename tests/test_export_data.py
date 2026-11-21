@@ -1007,6 +1007,11 @@ def test_a_degraded_recording_stamps_the_slow_lap_notes_like_the_laps_table():
     start = body.index("SLOW LAPS")
     slow = body[start:body.index("Laps (", start)]
     assert stamp in slow, slow
+    # A ⚠ lap gets no slow note, held as the Laps table holds it — the whole ⚠ set, a lap that
+    # left the line included (Session.lap_warnings), not the dropout half alone.
+    assert export_data._slow_laps_section(s)
+    s.lap_warnings = lambda: {n.lap_id: "left the line" for n in notes}
+    assert export_data._slow_laps_section(s) == []
     print("ok report-story: a degraded recording stamps SLOW LAPS as the Laps table does")
 
 

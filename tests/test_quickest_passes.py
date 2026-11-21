@@ -1071,6 +1071,8 @@ def test_a_corners_by_lap_cell_plays_its_pass_and_a_cell_it_cannot_play_says_why
         _patched_matrix(win, drop_lap=2)
         assert not view.play_lap_pass(2, 1) and len(plays) == n
         assert "not counted in the corner times" in win.statusBar().currentMessage()
+        # ...and a lap that left the line (the ⚠ set's other half) is among the reasons it names
+        assert "⚠ left the line" in win.statusBar().currentMessage()
     finally:
         _close(win)
 
@@ -3262,6 +3264,37 @@ def test_no_printed_gap_reaches_the_bound_it_is_said_to_be_within():
                         gap_p, (bound_p, luck_p) = float(f"{g:.2f}"), map(float, m.groups())
                     assert gap_p < bound_p and luck_p > 0, (key, n, gap_name, g, tip)
     print("ok no printed gap reaches its printed bound (n = 2…20, corners and sectors)")
+
+
+def test_the_not_counted_hover_names_each_laps_own_reason():
+    """Release QA, wave 21: a lap that cut across the infield is out of the corner grid (it left
+    the line: `Session.lap_warnings`), and the "1 lap not counted" hover listed it under "⊘
+    excluded, ⚠ GPS dropout, or a corner edge not matched on track" — every reason but its own.
+    Each lap now stands under its own: the ⊘ strip's, the ⚠ set's two (dropout, left the line), or
+    the unmatched edge the grid itself knows."""
+    from dataclasses import replace
+
+    from studio.lap_table import QuickestPassTable
+    s = _demo_session()
+    real = s.quickest_passes()
+    patched = dict(
+        quickest_passes=lambda: replace(real, not_counted=(1, 3, 6, 9)),
+        quickest_sectors=lambda: None, excluded_lap_ids=lambda: [3],
+        lap_warnings=lambda: {9: "Lap 10 left the line your other laps drive by 34 m, so it is "
+                                 "kept out of the bests.", 6: None})
+    for k, v in patched.items():
+        setattr(s, k, v)
+    try:
+        q = QuickestPassTable(s)
+        q.refresh()
+        tip = q.not_counted.toolTip()
+    finally:
+        for k in patched:
+            delattr(s, k)
+    assert tip == ("Not counted at one corner or more: lap 2 (a corner edge not matched on track); "
+                   "lap 4 (⊘ excluded); lap 7 (⚠ GPS dropout); lap 10 (⚠ left the line the other "
+                   "laps drive) — as in the Stats page's CORNERS BY LAP."), tip
+    print("ok the not-counted hover names each lap's own reason")
 
 
 if __name__ == "__main__":

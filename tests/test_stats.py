@@ -2394,6 +2394,12 @@ def test_stats_view_flags_a_lap_that_left_the_line():
         "lap 1 left the line the other laps drive — flagged ⚠ and left out of bests, σ and pace",
         True), rows
     assert rows["GPS dropout"][0].startswith("inside 1 of 2 laps"), rows
+    # The LAPS tile counts the same ⚠ set (it read "2 · 1 ⚠": the dropout alone), and the PACE
+    # hover says what a clean lap is: kept in the bests, not merely dropout-free.
+    assert v.t_laps.value.text() == "2 · 2 ⚠", v.t_laps.value.text()
+    assert "left the line" in v.t_laps.toolTip(), v.t_laps.toolTip()
+    assert "no GPS dropout and not off the line" in v._pace_section.toolTip(), \
+        v._pace_section.toolTip()
     print("test_stats_view_flags_a_lap_that_left_the_line OK")
 
 
@@ -4440,6 +4446,16 @@ def test_stats_view_corner_grid_marks_mutes_and_states_what_it_left_out():
     assert "3 of 16 cells are muted" in note, note
     assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded and 1 {DROPOUT_MARK} GPS-dropout laps "
             "(see the Laps tab).") in note, note
+    # The ONE ⚠ set: a lap that left the line is out of the grid too, and said as such (release
+    # QA, wave 21: the cut lap was missing from the grid with no word for it).
+    sess.lap_warnings = lambda: {1: None, 6: "Lap 7 left the line your other laps drive by 30 m, "
+                                             "so it is kept out of the bests."}
+    cut = StatsView(sess)
+    assert (f"Not in the grid: 1 {EXCLUDED_MARK} excluded, 1 {DROPOUT_MARK} GPS-dropout and 1 "
+            f"{DROPOUT_MARK} off-the-line laps (see the Laps tab).") in cut.corner_grid_note.text(), \
+        cut.corner_grid_note.text()
+    cut.hide()
+    del sess.lap_warnings
     # No per-corner ★ in it: "quickest" is the CORNERS table's question (stats.CornerMatrix).
     assert not any(BEST_SECTOR_MARK in t.item(r, c).text()
                    for r in range(t.rowCount()) for c in range(t.columnCount()))

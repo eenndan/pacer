@@ -2083,7 +2083,7 @@ class CentralView(QWidget):
     def lap_pass_refusal(self, lap_id: int, cid: int) -> str | None:
         """Why lap `lap_id`'s pass through corner `cid` cannot be played as a measured pass, or
         None when it can. The rule is the CORNERS BY LAP grid's: a lap that is a row of it (⊘
-        excluded and ⚠ dropout laps are not), with a time through the corner, matched on track at
+        excluded and ⚠ laps — a dropout, or off the line — are not), with a time through the corner, matched on track at
         both edges — the cells the Quickest view counts. A pass is never played on a time the
         grid itself declines to compare. A sector's (`cid` a stats.sector_key) is the SPLITS
         grid's: a row of it with that split."""
@@ -2092,7 +2092,8 @@ class CentralView(QWidget):
             if self.session.split_matrix() is None:
                 return f"No sector splits to play here: {label} needs a few clean laps first"
             if self.session.stretch_time(lap_id, cid) is None:
-                return f"Lap {lap} has no counted {label} split (⊘ excluded, ⚠ GPS dropout or blank)"
+                return (f"Lap {lap} has no counted {label} split (⊘ excluded, ⚠ GPS dropout, ⚠ left "
+                        "the line or blank)")
             if self.session.stretch_clip(lap_id, cid) is None:
                 return f"Lap {lap}'s {label} has no clip"
             return None
@@ -2100,8 +2101,8 @@ class CentralView(QWidget):
         if matrix is None or cid not in matrix.cids:
             return f"No corner times to play here: {label} needs a few clean laps first"
         if lap_id not in matrix.lap_ids:
-            return (f"Lap {lap} is not counted in the corner times (⊘ excluded or ⚠ GPS dropout), "
-                    "so its passes are not played")
+            return (f"Lap {lap} is not counted in the corner times (⊘ excluded, ⚠ GPS dropout or "
+                    "⚠ left the line the other laps drive), so its passes are not played")
         r, c = matrix.lap_ids.index(lap_id), matrix.cids.index(cid)
         if matrix.cells[r][c] is None:
             return f"Lap {lap} has no time through {label}"
