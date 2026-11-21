@@ -299,8 +299,11 @@ def summarize(days: list[dict]) -> dict:
                     gains.setdefault(d["plant"], []).append(float(np.median(t)) - t[0])
             rec["true_gain@"] = {f"{g:.2f}": round(float(np.median(v)), 3)
                                  for g, v in sorted(gains.items())}
-            if noise == REFERENCE_NOISE and hasattr(stats, "_QUICKEST_LUCK_FIT"):
-                # The fit the app ships must be this probe's at the reference noise.
+            if noise == REFERENCE_NOISE and kind == "corners" \
+                    and hasattr(stats, "_QUICKEST_LUCK_FIT"):
+                # The corner fit the app ships must be this probe's at the reference noise. The
+                # sector fit is sector_split_sigma's, at the split step's own placement (these
+                # mid-straight sectors read about half its luck: cool/sector-step-one-reference).
                 name = kind[:-1]
                 rec[f"{kind}_app_fit_is_this_fit"] = all(
                     stats._QUICKEST_LUCK_FIT[(name, g)] == (rec[f"{kind}_fit"][g]["a"],

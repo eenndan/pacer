@@ -2,8 +2,9 @@
 passes' sector rows, `stats.SECTOR_LEVEL_S`), measured against synthetic truth.
 
 WHY. A corner's quickest pass is named with every pass level with it under the 0.07 s timing step
-(refused-2026-09 §32). A split is timed at two sector lines and `docs/ACCURACY.md` publishes its σ,
-0.11 s at recording C's GPS noise: larger than that step. This asks what each candidate step does:
+(refused-2026-09 §32). A split is timed at two sector lines and carries more noise than that step
+covers: truth matrix row 2 read 0.11 s at its noise 2 when this ran (its worst recording; the
+40-day grid's split σ is `stats.PUBLISHED_NOISE_SIGMAS`' split column, sector_split_sigma). This asks what each candidate step does:
 per sector, the quickest split, its lap, how many laps are level with it, whether it stands alone
 (a ★), and whether a lone quickest is the TRUE quickest lap and by how much.
 

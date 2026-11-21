@@ -3,10 +3,11 @@ Corners ▸ Quickest passes, measured on the demo and synthetic truth sessions.
 
 WHY. A corner row offers the compare (#626) only where the printed typical pass minus the printed
 quickest pass beats the timing step (`stats.is_level`): a level pair has no difference to look
-for. A sector's step is `stats.SECTOR_LEVEL_S` (0.30 s, 2·√2·σ_split: a split is timed at two
-sector lines). This asks, per sector: the quickest split, the sector's typical pass (Coaching's
-rule, `stats.typical_pass_lap` with the quickest lap excluded), their printed gap, and whether it
-reaches the step — i.e. whether the item would ever be enabled. It also counts, over EVERY counted
+for. A sector's step is `stats.SECTOR_LEVEL_S` (0.30 s when this ran, 0.25 s since
+cool/sector-step-one-reference; 2·√2·σ_split: a split is timed at two sector lines). This asks,
+per sector: the quickest split, the sector's typical pass (Coaching's rule,
+`stats.typical_pass_lap` with the quickest lap excluded), their printed gap, and whether it reaches
+the step — i.e. whether the item would ever be enabled. It also counts, over EVERY counted
 lap × sector cell, how many passes are not level with their typical one (the SPLITS grid's own
 menu), and the TRUE typical − quickest gap from the synthetic truth, to see whether a gap the app
 measures past the step is real.

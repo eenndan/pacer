@@ -234,9 +234,17 @@ offered on a sector row: per sector, the printed typical split minus the quickes
 
     pixi run python -m studio.dev.probes.sector_typical_compare
 
-`corner_typical_compare` is its corner twin (first written by the #641 review): on each corner
-row, whether the compare is offered and the TRUE typical − quickest gap behind it. Its numbers are
-why the held gap of that compare is shown as timed, never coloured (`PassAnchor.held_neutral`).
+`sector_split_sigma` measures the split's σ on the 40-day grid at 13 line placements, and the
+false calls and power of every sector decision under candidate steps: the split column of
+`stats.PUBLISHED_NOISE_SIGMAS` that `stats.SECTOR_LEVEL_S` is the house rule on, the sector luck
+`stats.quickest_luck_s` ships (fitted at the same placement), and what de-drifting the splits at
+the source would buy.
+
+    pixi run python -m studio.dev.probes.sector_split_sigma
+
+`corner_typical_compare` is `sector_typical_compare`'s corner twin (first written by the #641
+review): on each corner row, whether the compare is offered and the TRUE typical − quickest gap
+behind it. Its numbers are why the held gap of that compare is shown as timed, never coloured (`PassAnchor.held_neutral`).
 
     pixi run python -m studio.dev.probes.corner_typical_compare
 

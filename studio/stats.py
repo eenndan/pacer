@@ -274,6 +274,8 @@ VMIN_STEADY_BAND = 0.15
 # levels, tests/test_truth_matrix.py row 2). It once rested on interior splits stepping in whole
 # 10 Hz samples; since a boundary is where the lap crosses the line, they do not. The corner grid
 # shares it, and there it was checked against the marks it makes (CornerMatrix).
+# It is a DISPLAY design floor, not the level step (`SECTOR_LEVEL_S`), and its row-2 reason above
+# predates the split σ's re-measure on the 40-day grid (cool/sector-step-one-reference).
 MATRIX_SCALE_MIN_S = 0.30
 # TWO ANCHORS, AND THEY ARE DIFFERENT ON PURPOSE. The ★ marks each column's BEST — a fact, the
 # quickest anyone went through that sector, and the target. The behind mark is measured against
@@ -647,12 +649,21 @@ def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: f
 #   n                     5      7      9      11     13          fit a + b·blom(n)
 #   corner, typical       0.0127 0.0155 0.0174 0.0184 0.0199 s    −0.0049 + 0.0147·blom
 #   corner, next          0.0144 0.0158 0.0170 0.0176 0.0188 s    +0.0034 + 0.0091·blom
-#   sector, typical       0.0219 0.0259 0.0272 0.0295 0.0294 s    +0.0040 + 0.0154·blom
-#   sector, next          0.0213 0.0233 0.0238 0.0243 0.0259 s    +0.0109 + 0.0088·blom
+#
+# A SECTOR'S LUCK is fitted where the split step is (cool/sector-step-one-reference): at the worst
+# line placement measured (`SECTOR_LEVEL_S`'s comment; studio/dev/probes/sector_split_sigma.py,
+# the same 40 days, lines at the apexes of C1 and C5), so step and luck share one basis. A noisier
+# split makes a luckier quickest: these mid-straight lines (quickest_bias's 1/3/5) read about half.
+#
+#   n                     5      9      14                          fit a + b·blom(n)
+#   sector, typical       0.0483 0.0621 0.0622 s                    +0.0019 + 0.0385·blom
+#   sector, next          0.0462 0.0485 0.0498 s                    +0.0327 + 0.0103·blom
+#   (mid-straight 1/3/5:  typical 0.0219 / 0.0272 / 0.0279, next 0.0213 / 0.0238 / 0.0265)
 #
 # blom(n) is the expected largest of n standard normals (Blom's approximation): the selection of
 # one extreme among n is what the bias is made of, so it carries the shape, and two parameters per
-# row fit every measured n within 1.4 standard errors (the probe prints the residuals). Beyond the
+# row fit every measured n within 1.4 standard errors (1.9 for a sector's; the probes print the
+# residuals). Beyond the
 # measured n (14 laps a day) the form extrapolates slowly, as blom does (n = 30: blom 2.04). The
 # bias is a FACT about the statistic, not about the session: it is added to the step only where the
 # app reads one of these two gaps off the quickest pass (`pass_vs_typical_of`, `QuickestPass.alone`)
@@ -665,8 +676,8 @@ def pass_vs_typical_of(key: int, lap: int, counted: dict[int, float], typical: f
 _QUICKEST_LUCK_FIT = {
     ("corner", "typical"): (-0.0049, 0.0147),
     ("corner", "next"): (0.0034, 0.0091),
-    ("sector", "typical"): (0.0040, 0.0154),
-    ("sector", "next"): (0.0109, 0.0088),
+    ("sector", "typical"): (0.0019, 0.0385),
+    ("sector", "next"): (0.0327, 0.0103),
 }
 
 
@@ -2215,25 +2226,70 @@ def _quickest_column(matrix, rows, col: int, key: int, level_s: float, resolved=
 # sector, keyed by `sector_key` (< 0) — ONE int key, so every pass path (play, zoom, the subject,
 # the walk, ⌘K) carries a sector exactly as it carries a corner.
 #
-# WHY A WIDER LEVEL STEP FOR A SPLIT. A split is timed where the lap crosses two sector lines, and
-# `docs/ACCURACY.md` publishes its σ: "0.11 s at recording C's GPS noise", truth matrix row 2
-# (`sector.interior_sd` at noise 2, SPLIT_SIGMA_S unrounded: the matrix's own calibration reads
-# the one reference, `library.REFERENCE_RECORDING`, as noise 2.1), several times a lap time's. The
-# HOUSE RULE for "level" is 2σ of the difference of two figures that each carry σ, DIFF_2SIGMA_K ×
-# σ: the lap step `library.PB_PRECISION_S` is 2√2 × 0.0247 s, and refused-2026-09 §26 gated sector
-# chips at 2√2 × this same split σ ("The gate is then 0.30 s", `clip_refusals.GATE_K` is this
-# constant). So two splits closer than SECTOR_LEVEL_S (0.30 s) are LEVEL. Measured
-# (studio/dev/probes/sector_quickest.py, the demo and seeds 1 and 2, 2/3/4 sector lines, 84
-# sectors): no sector's TRUE quickest is 0.07 s clear of its next (the largest true margin is
-# 0.055 s), yet at 0.07 s four sectors at noise 2 and ten at noise 4.5 would wear a lone ★, six of
-# those ten on the wrong lap; at SECTOR_LEVEL_S none does, at any noise. On such sessions every
-# sector is a tie: the view names the quickest lap, plays each level lap in turn, and says why.
-# ON THE EARLIER CALIBRATION: SPLIT_SIGMA_S is the truth matrix's max-over-three-seeds sd at its
-# noise 2, not a σ measured on the 40-day grid PUBLISHED_NOISE_SIGMAS uses (whose split σ at C's
-# noise reads 0.035 s pooled, 0.050 s at the worst sector, at another sector placement). That
-# re-measurement at the golden placement is deferred to its own package, with refused-2026-09 §26
-# (whose new-evidence clause it is); until then this anchor is exempt from the one-table rule
-# (tests/test_measured_figures.py `_ANCHORS`).
+# WHY A WIDER LEVEL STEP FOR A SPLIT. A split is timed where the lap crosses two sector lines
+# (`Session.lap_sector_splits`: each crossing between two fixes, interpolated on the lap's
+# odometer-time chord, as the lap is; not snapped to a 10 Hz fix). The HOUSE RULE for "level" is
+# 2σ of the difference of two figures that each carry σ, DIFF_2SIGMA_K × σ (`house_step`), and the
+# split's σ is the split column of PUBLISHED_NOISE_SIGMAS below, read at the one reference
+# (`library.REFERENCE_RECORDING`) like every other step (cool/sector-step-one-reference).
+#
+# MEASURED (studio/dev/probes/sector_split_sigma.py: the 40-day grid, 13 line placements, six of
+# them the PR #675 review's; σ of one split against another of the same recording, pooled over days
+# and sets; at the reference's noise 1.9):
+#
+#   placement                        line speed   pooled σ   worst sector σ   2√2σ pooled / worst
+#   golden (mid-straights 2 and 5)   25, 20 m/s   0.0408     0.0498           0.12 / 0.14
+#   mid3 / mid4 (mid-straights)      20-25 m/s    0.035      0.050            0.10 / 0.14
+#   a 10 m sector mid-straight                    0.0354     0.0447           0.10 / 0.13
+#   entry (5 m before the brakes)    24, 23 m/s   0.0404     0.0490           0.11 / 0.14
+#   apex (C3, C6)                    19, 20 m/s   0.0470     0.0574           0.13 / 0.16
+#   exit (5 m out of C2, C5)         21, 16 m/s   0.0497     0.0632           0.14 / 0.18
+#   C1 apex to 5 m out of C5                      0.0429     0.0574           0.12 / 0.16
+#   a 26 m sector across C5                       0.0586     0.0725           0.17 / 0.21
+#   three slow lines (244, 578, 730 m)            0.0595     0.0762           0.17 / 0.22
+#   C4 apex to just past C5's                     0.0601     0.0801           0.17 / 0.23
+#   244 m and 726 m (the review's worst pair)     0.0670     0.0872           0.19 / 0.25
+#   hairpin (apexes of C1 and C5)    15, 13 m/s   0.0660     0.0881           0.19 / 0.25
+#
+# Out of sample (seed sets 4-7, seeds 801-1110) the worst sector of any placement reads 0.0835 s
+# (2√2σ 0.24), the hairpin's 0.0817.
+#
+# Two to four times a corner pass's σ (0.020 s), and it DEPENDS ON WHERE THE LINES ARE: what
+# dominates is the receiver's slowly drifting position error, nearly one vector over a lap. A lap
+# crosses the same line twice and cancels it; a split crosses two lines of different heading and
+# speed and keeps (that vector · heading) / speed at each, so a slow or turning line costs most.
+# Taking each lap's rigid receiver shift out first (`CornerModel.lap_shift`, which the corner cells
+# already remove) leaves 0.023-0.033 s pooled, 0.038 s at the worst sector of any placement: a
+# source-level change (it moves the golden gate's splits) proposed with its numbers, not made here.
+#
+# ONE STEP serves every sector a driver can draw, and the app does not know which kind of line he
+# drew, so it is the house rule on the WORST sector of the worst placement measured: 2√2 × 0.0881 →
+# 0.25 s, which no measured placement's worst sector exceeds at the reference noise. A
+# mid-straight sector is over-covered by about 2× (its own rule gives 0.14 s); a per-line step was
+# not built, because the term it would model is the synthetic receiver's drift, which no real
+# recording has validated. (Until this the anchor was truth matrix row 2's 0.1066 s → 0.30 s: one
+# of its three recordings, seed 2; the other two read 0.022 and 0.059 s.)
+# THE LIMIT: the synthetic circuit's slowest point is 13.5 m/s (C5's apex), and a split's error
+# grows as the speed at its lines falls. A line at a slower hairpin than that is not covered by
+# this measurement; how much more it would carry is unmeasured.
+#
+# THE LUCK MOVES WITH THE STEP. A gap read off the quickest pass (the ★, the quickest row's typical
+# offer) clears the step plus `quickest_luck_s`, and a sector's luck is fitted at this same basis
+# placement (its block: 0.047 / 0.059 / 0.068 s at n = 5 / 9 / 14 on the typical gap). Fitted on
+# the mid-straight lines it was half that, and 0.25 s with it offered the typical compare on 2
+# quickest rows truly under 0.03 s at the review's worst pair, one of the wrong sign.
+#
+# What 0.25 s with that luck does at the reference noise, on habit-free days at all 13 placements,
+# in sample (sets 0-3) and out (sets 4-7): no ★, and no quickest row offers "Compare with my
+# typical pass" on a pair truly under 0.03 s or of the other sign (48 offers out of sample, 22 in).
+# The pass menu's offer on a pass that is NOT the quickest carries no luck: out of sample 4 of
+# 24,080 menu cells are offered truly under 0.03 s, 2 of the wrong sign (3 and 2 at 0.30 s with the
+# old luck, as shipped before); in sample 1 of 24,080 (0 before). Each is on a runner-up pass (2nd,
+# 12th or 13th of 14), partly selected too; the house rule's 2σ leaves such a tail by design. On days
+# with one lap's C4 planted 0.20 s quicker, the golden quickest row offers it on 4 of 8 days, as
+# before. The demo with 2, 3 or 4 mid-straight lines offers it on S1 alone and wears no ★, as at
+# 0.30 s; only its level sets change (2 lines: S2 level with 9 laps, not 11). On such sessions most
+# sectors are a tie: the view names the quickest lap, plays each level lap in turn, and says why.
 DIFF_2SIGMA_K = 2.0 * math.sqrt(2.0)
 
 
@@ -2243,8 +2299,6 @@ def house_step(sigma: float) -> float:
     return round(DIFF_2SIGMA_K * sigma, 2)
 
 
-SPLIT_SIGMA_S = 0.106567
-SECTOR_LEVEL_S = house_step(SPLIT_SIGMA_S)
 
 
 # WHAT EACH PUBLISHED RECORDING'S NOISE WOULD NEED (cool/one-reference-level). The σ of ONE figure,
@@ -2254,13 +2308,15 @@ SECTOR_LEVEL_S = house_step(SPLIT_SIGMA_S)
 # `studio/dev/probes/focus_cross_session.py` (lap: sd of a lap time against truth; cross_session:
 # one session's corner-typical bias) and `studio/dev/probes/reference_lap_corner.py` (corner_pass:
 # a corner pass against another of the same recording, Δbest's error RMS / √2; reference_corner:
-# one lap's corner time against one lap of another recording, its error RMS / √2). Each probe
-# checks its pooled σ against this table at every noise in it, and docs/ACCURACY.md prints the
+# one lap's corner time against one lap of another recording, its error RMS / √2); and
+# `studio/dev/probes/sector_split_sigma.py` (split: one sector split against another, the worst
+# sector of the worst line placement, the split step's block above). Each probe
+# checks its σ against this table at every noise in it, and docs/ACCURACY.md prints the
 # house step (`house_step`) of every cell — the lap column from the recording's PUBLISHED per-lap
 # σ (`published_lap`, its docs/ACCURACY.md row), which is what that row measured against official
-# timing; the corner columns, which no official timing has checked, from the synthetic grid. The
-# app uses ONE row, the reference's (`library.REFERENCE_RECORDING`): REFERENCE_SIGMAS. The other
-# two rows are what a noisier recording would need, said where the driver reads "level"
+# timing; the corner and split columns, which no official timing has checked, from the synthetic
+# grid. The app uses ONE row, the reference's (`library.REFERENCE_RECORDING`): REFERENCE_SIGMAS.
+# The other two rows are what a noisier recording would need, said where the driver reads "level"
 # (`step_covers_note`), never applied.
 @dataclass(frozen=True)
 class NoiseSigmas:
@@ -2270,14 +2326,32 @@ class NoiseSigmas:
     corner_pass: float       # one corner pass, against another pass of the same recording
     cross_session: float     # one session's corner typical (the focus verdict's two days)
     reference_corner: float  # one lap's corner time, against one lap of another recording
+    split: float             # one sector split against another of the same recording: the worst
+                             # sector of the worst line placement measured (sector_split_sigma)
 
 
 PUBLISHED_NOISE_SIGMAS = {
-    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205),
-    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435),
-    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730),
+    "C": NoiseSigmas(0.0247, 1.9, 0.0253, 0.0203, 0.0178, 0.0205, 0.0881),
+    "B": NoiseSigmas(0.0527, 4.0, 0.0532, 0.0428, 0.0351, 0.0435, 0.1873),
+    "A": NoiseSigmas(0.0871, 6.5, 0.0863, 0.0699, 0.0583, 0.0730, 0.3062),
 }
 REFERENCE_SIGMAS = PUBLISHED_NOISE_SIGMAS[REFERENCE_RECORDING]
+
+# The split step (the block above `house_step`): the reference row's split column.
+SPLIT_SIGMA_S = REFERENCE_SIGMAS.split
+SECTOR_LEVEL_S = house_step(SPLIT_SIGMA_S)
+# The golden (mid-straight) placement's pooled split σ at the reference noise (sector_split_sigma),
+# said in the sector hover beside the worst placement's: what a split usually carries.
+SPLIT_MID_STRAIGHT_S = 0.0408
+
+
+def split_covers_note() -> str:
+    """What the split step covers on a noisier recording, said where the driver reads a sector
+    "level": the split column's B and A house steps. The reference row's own bound IS the step,
+    which the hover has already said, so it is not said twice (#672)."""
+    b, a = (house_step(PUBLISHED_NOISE_SIGMAS[r].split) for r in ("B", "A"))
+    return (f"On a noisier recording two splits can differ by more from the GPS alone: up to "
+            f"{b:.2f} s at the middle published recording's noise, {a:.2f} s at the noisiest.")
 
 
 def step_covers_note(column: str, what: str) -> str:

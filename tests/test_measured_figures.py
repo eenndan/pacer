@@ -1381,9 +1381,6 @@ _NOT_A_GPS_STEP = {
 _ANCHORS = {
     "REFERENCE_LAP_SIGMA_S": ("library.py", "docs/ACCURACY.md row C's σ (test_the_pb_floor_…)"),
     "PB_PRECISION_S": ("library.py", "house rule on REFERENCE_LAP_SIGMA_S (test_the_pb_floor_…)"),
-    "SPLIT_SIGMA_S": ("stats.py", "truth matrix row 2 at noise 2, the matrix's C, on the earlier "
-                                  "calibration; its re-measure is deferred with refused §26 "
-                                  "(test_quickest_sectors)"),
 }
 
 
@@ -1588,20 +1585,25 @@ def test_the_accuracy_step_table_is_the_published_noise_table():
     validated = dict(re.findall(r"(?m)^\| \*\*([ABC])\*\*.*\| \*\*[+−-]?[0-9.]+ s\*\* \| "
                                 r"\*\*([0-9.]+) s\*\* \|\s*$", acc))
     rows = re.findall(r"(?m)^\| ([ABC]) \(([0-9.]+) s\) \| ([0-9.]+) \(([0-9.]+) s\) \| "
-                      r"([0-9.]+) s \| ([0-9.]+) s \| ([0-9.]+) s \| ([0-9.]+) s \|\s*$", acc)
+                      r"([0-9.]+) s \| ([0-9.]+) s \| ([0-9.]+) s \| ([0-9.]+) s \| "
+                      r"([0-9.]+) s \|\s*$", acc)
     assert [r[0] for r in rows] == ["C", "B", "A"], rows
     for rec, rec_sigma, noise, lap_sigma, *cells in rows:
         row = stats.PUBLISHED_NOISE_SIGMAS[rec]
         assert rec_sigma == validated[rec] and float(rec_sigma) == row.published_lap, (rec, row)
         assert float(noise) == row.noise and float(lap_sigma) == row.lap, (rec, noise, lap_sigma)
-        # the lap column from the published per-lap σ, the corner columns from the grid's
+        # the lap column from the published per-lap σ, the corner and split columns from the grid's
         want = [stats.house_step(s) for s in (row.published_lap, row.corner_pass,
-                                              row.cross_session, row.reference_corner)]
+                                              row.cross_session, row.reference_corner, row.split)]
         assert [float(c) for c in cells] == want, (rec, cells, want)
         # the synthetic noise reproduces the recording's per-lap σ within 10 %
         assert abs(row.lap / float(rec_sigma) - 1) <= 0.10, (rec, row.lap, rec_sigma)
     ref = stats.PUBLISHED_NOISE_SIGMAS[library.REFERENCE_RECORDING]
-    assert max(stats.house_step(s) for s in vars(ref).values() if s < 1) <= library.PB_PRECISION_S
+    # every lap and corner cell of the reference row is within the timing step; the split is the
+    # one statistic with its own, wider step (cool/sector-step-one-reference), its own cell
+    assert max(stats.house_step(s) for k, s in vars(ref).items()
+               if s < 1 and k != "split") <= library.PB_PRECISION_S
+    assert stats.SECTOR_LEVEL_S == stats.house_step(ref.split) > library.PB_PRECISION_S
     assert f"**The app uses {library.REFERENCE_RECORDING}'s row**" in acc
     assert "The lap column uses each recording's published per-lap σ" in " ".join(acc.split())
     # what the app says where it reads "level" is this table's arithmetic, each surface its own

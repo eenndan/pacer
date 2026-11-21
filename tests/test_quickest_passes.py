@@ -3068,7 +3068,9 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
             assert seq[0] == 0.0 and all(b >= a for a, b in zip(seq, seq[1:], strict=False)), seq
     assert (luck(1, 5, "typical"), luck(1, 14, "typical")) == (0.012, 0.020)
     assert (luck(1, 5, "next"), luck(1, 14, "next")) == (0.014, 0.019)
-    assert (luck(-1, 5, "typical"), luck(-1, 14, "next")) == (0.022, 0.026)
+    # a sector's, fitted at the split step's own placement (studio/dev/probes/sector_split_sigma)
+    assert (luck(-1, 5, "typical"), luck(-1, 14, "typical")) == (0.047, 0.068)
+    assert (luck(-1, 5, "next"), luck(-1, 14, "next")) == (0.045, 0.050)
     assert luck(1, 1, "next") == 0.0 and luck(1, 0, "typical") == 0.0
     base = [3.30, 3.31, 3.32, 3.33, 3.34, 3.35, 3.36, 3.37, 3.38, 3.39, 3.40, 3.41, 3.42]
     for next_gap, alone in ((0.075, False), (0.088, False), (0.089, True), (0.30, True)):
@@ -3096,9 +3098,10 @@ def test_the_quickest_of_n_must_clear_the_step_plus_its_luck_for_a_star_or_an_of
 def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     """`quickest_bias.measure_bias` on six habit-free days at the reference noise (CHECK_SEEDS,
     about 40 s): at n = 5, 9 and 13 each measured bias lands within 0.006 s of the shipped
-    `quickest_luck_s` — the corners' typical and next gaps, and the sectors' (six days scatter:
-    the four ten-day seed sets ran within ±0.005 s of the pooled fit at these n). A hand-typed
-    constant, or a probe whose statistic drifted, fails here."""
+    `quickest_luck_s` — the corners' typical and next gaps (six days scatter: the four ten-day seed
+    sets ran within ±0.005 s of the pooled fit at these n); and the sectors', re-measured by
+    `sector_split_sigma.measure_luck` on the same six days at the split step's own placement, within
+    0.010 s. A hand-typed constant, or a probe whose statistic drifted, fails here."""
     import shutil
 
     from studio import (
@@ -3116,9 +3119,14 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
     keep = (sidecar.save, [m._app_support_dir for m in seams],
             os.environ.get(app_support.DIR_ENV))
     from studio.dev.probes import quickest_bias as probe
+    from studio.dev.probes import sector_split_sigma as split_probe
     work = tempfile.mkdtemp(prefix="quickest_bias_check_")
     try:
         got = probe.measure_bias(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS, probe.CHECK_N)
+        # a sector's luck is fitted at the split step's own placement, the worst measured: the
+        # apexes of C1 and C5 ("hairpin"), whose worst sector is the σ SECTOR_LEVEL_S is built on
+        got["sectors"] = split_probe.measure_luck(work, probe.REFERENCE_NOISE, probe.CHECK_SEEDS,
+                                                  "hairpin", probe.CHECK_N)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         sidecar.save = keep[0]
@@ -3128,12 +3136,14 @@ def test_the_luck_term_is_what_the_probe_re_measures_on_a_small_seed_set():
             os.environ.pop(app_support.DIR_ENV, None)
         else:
             os.environ[app_support.DIR_ENV] = keep[2]
-    for kind, key in (("corners", 1), ("sectors", -1)):
+    # A sector's luck at the worst placement scatters more over six days (about ±0.02 s between
+    # groups of six on the 40-day grid; these six land within 0.006 s), so it is held to 0.010.
+    for kind, key, tol in (("corners", 1, 0.006), ("sectors", -1, 0.010)):
         for n in probe.CHECK_N:
             typ, nxt = got[kind][n]
             for gap, measured in (("typical", typ), ("next", nxt)):
                 shipped = stats.quickest_luck_s(key, n, gap)
-                assert abs(measured - shipped) <= 0.006, (kind, n, gap, measured, shipped)
+                assert abs(measured - shipped) <= tol, (kind, n, gap, measured, shipped)
     print(f"ok luck re-measured: {got}")
 
 
