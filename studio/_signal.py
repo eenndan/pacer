@@ -598,8 +598,9 @@ def _classify_laps(laps) -> tuple[list[int], dict[int, str]]:
     so it passes the ±10 % distance band by construction). The closure test catches what the
     bands cannot see when the pieces outnumber the laps: then the median IS a piece.
 
-    `reasons` maps every substantial lap that is NOT valid to the first test it failed, so its
-    keys are exactly `_banded_out_lap_ids`.
+    `reasons` maps every substantial lap that is NOT valid to the first test it failed — except
+    that a closed lap with a stop in it is `EXCLUDED_STOPPED` whichever band put it out, the stop
+    being the cause the reader needs — so its keys are exactly `_banded_out_lap_ids`.
 
     `laps` is the bound `pacer.Laps` object, but this function only calls its read accessors
     (laps_count / lap_time / sample_count / get_lap_distance / lap_columns) — it imports no pacer
@@ -656,10 +657,19 @@ def _classify_laps(laps) -> tuple[list[int], dict[int, str]]:
             lo_d, hi_d = LAP_DIST_BAND_LO * med_d, LAP_DIST_BAND_HI * med_d
             banded = [i for i in timed
                       if math.isfinite(dists[i]) and dists[i] > 0 and lo_d <= dists[i] <= hi_d]
+    def stopped(i: int) -> bool:
+        c = cols[i]
+        return _longest_stopped_s(c.times, c.full_speed) >= MAX_STOPPED_S
+
+    # A lap the band put out is still EXPLAINED by its stop when it has one. A red-flag halt or a
+    # pit visit adds tens of seconds, so the time band catches it before the stop test below ever
+    # sees it, and the strip said "off the session median" while a 3 s spin got "the kart stopped
+    # during it" (discovery: a 30 s stop on track, a mid-session pit visit). Only the WORD changes:
+    # which laps are out, and the median, are decided above and stay exactly as they were.
     kept_band = set(banded)
     for i, _ in basic:
         if i not in kept_band:
-            reasons[i] = EXCLUDED_BAND
+            reasons[i] = EXCLUDED_STOPPED if i in cols and stopped(i) else EXCLUDED_BAND
 
     # Stop test: a lap that STOOD STILL is not a slow lap (see MAX_STOPPED_S). Runs last, over the
     # already-banded laps only, reusing the columns the closure test fetched.
@@ -667,8 +677,7 @@ def _classify_laps(laps) -> tuple[list[int], dict[int, str]]:
         return banded, reasons
     kept = []
     for i in banded:
-        c = cols[i]
-        if _longest_stopped_s(c.times, c.full_speed) < MAX_STOPPED_S:
+        if not stopped(i):
             kept.append(i)
         else:
             reasons[i] = EXCLUDED_STOPPED

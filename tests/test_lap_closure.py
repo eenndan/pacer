@@ -228,6 +228,33 @@ def test_every_excluded_lap_carries_the_first_test_it_failed():
     print("test_every_excluded_lap_carries_the_first_test_it_failed OK")
 
 
+def test_a_lap_with_a_long_stop_is_explained_by_the_stop_not_the_median():
+    """Discovery (a synthetic 30 s red-flag halt on track, and a mid-session pit visit): the stop
+    adds so much time that the time band puts the lap out before the stop test sees it, and the
+    strip said "Lap 7 — 1:21.725 · 978 m · off the session median" while a 3 s spin's lap said
+    "the kart stopped during it". The stop is the reason; WHICH laps are out must not move."""
+    rows = [
+        (60.0, 1000.0, 0.5, 2.0, 0.0),     # 0 real
+        (61.0, 1002.0, 1.0, 3.0, 0.0),     # 1 real
+        (110.0, 1000.0, 0.4, 2.0, 50.0),   # 2 a 50 s red-flag halt: past 1.6 x the median
+        (60.5, 998.0, 0.2, 1.0, 0.0),      # 3 real
+        (120.0, 980.0, 0.3, 1.0, 58.0),    # 4 a pit visit
+        (40.0, 700.0, 21.0, 180.0, 8.0),   # 5 a piece with a stop: still open (a line fix)
+        (30.0, 500.0, 0.4, 2.0, 0.0),      # 6 short, no stop: still off the median
+        (62.0, 999.0, 0.6, 2.0, 0.0),      # 7 real
+    ]
+    laps = _Laps(rows)
+    valid, reasons = _signal._classify_laps(laps)
+    assert reasons == {2: _signal.EXCLUDED_STOPPED, 4: _signal.EXCLUDED_STOPPED,
+                       5: _signal.EXCLUDED_OPEN, 6: _signal.EXCLUDED_BAND}, reasons
+    # The same set, decided by the bands alone: with the stops taken out of laps 2 and 4 they are
+    # still the laps out, so only the word changed.
+    no_stops = _Laps([r[:4] + (0.0,) if i in (2, 4) else r for i, r in enumerate(rows)])
+    assert valid == _signal._classify_laps(no_stops)[0] == [0, 1, 3, 7], valid
+    assert sorted(reasons) == _signal._banded_out_lap_ids(laps)
+    print("test_a_lap_with_a_long_stop_is_explained_by_the_stop_not_the_median OK")
+
+
 def test_every_surface_names_the_same_reason():
     """The ⊘ strip, the DATA TRUST card, the exported summary and the auto marks all said an
     excluded lap's "distance is off the session median" (or said nothing), which was false for a
@@ -271,5 +298,6 @@ if __name__ == "__main__":
     test_a_recording_holding_only_a_piece_has_no_laps()
     test_the_thresholds_sit_between_the_populations_measured_on_the_owners_footage()
     test_every_excluded_lap_carries_the_first_test_it_failed()
+    test_a_lap_with_a_long_stop_is_explained_by_the_stop_not_the_median()
     test_every_surface_names_the_same_reason()
-    print("\n5 lap-closure tests passed")
+    print("\n6 lap-closure tests passed")
