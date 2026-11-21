@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Thirty-nine features were built far enough to **measure**, and the measurement said not to ship
+Forty features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -2971,6 +2971,104 @@ ideal lap keeps its figures; its sample sentence gains the figure-free clause ab
 - for the ideal lap: a way to read a recording's own noise level and its piece count's effect, so
   that a figure is true of the session it is printed on (falsification-2026-09.md §1's
   per-recording estimator failed that check).
+
+---
+
+## 40. A step under which Coaching may not name apex speed as a corner's cause — refused (cool/coaching-apex-step)
+
+**The idea.** Coaching's reason "carry more apex speed (−X km/h)", which the share card and the
+report repeat, reads the median over a corner's counted laps of (best lap's apex speed − that
+lap's). It is named from any positive value (`coaching._pick_reason`). The #684 review measured
+that statistic's own error at sd 0.37–0.61 km/h on habit-free synthetic days, and DECISIONS §26
+asked for a step of its own: below it the corner would keep its time lost and get the next reason,
+or none. The candidate in the house's own form is `chart_stats.GAIN_GATE_KMH`, 1.75 km/h: the
+statistic is the best lap's one reading minus a median of n readings, so its σ is at most the
+per-fix 0.62 km/h × √(1 + π/2n), under 0.62 × √2 for every lap count Coaching ranks at. 1.0 km/h
+(`LINE_APEX_DELTA_KMH`) was tried first and reverted, because it changed a theme a test pins.
+
+**How it was measured.** `studio/dev/probes/coaching_apex_step.py`, on `apex_speed_sigma`'s grid:
+the demo circuit at the one reference recording's GPS noise, 40 habit-free days per apex shape
+(flat; curved 3 and 10 km/h; straight-sided V 4 and 10 km/h) at 5, 9, 14 and 20 laps, 800 sessions
+in all. Per corner, over exactly the laps Coaching counts, the statistic is rebuilt on the truth's
+minimum speeds over the best lap's corner window. Its error splits into the best lap's own reading
+error and the median of the other laps'. A named apex reason is false where the true deficit is
+under 0.5 km/h (`apex_speed_sigma.TRUE_LEVEL_KMH`). The theme's apex cause is false where under
+60 % of its time is in such corners. A step S can only un-name an apex row whose statistic is under
+S, so its counts are read off today's run; a re-run at 1.0 km/h matched them on every row.
+
+| apex shape | error sd, 5 / 9 / 14 / 20 laps (km/h) | best lap's reading, sd | other laps' median, sd (5 → 20 laps) |
+|---|---|---|---|
+| flat | 0.38 / 0.37 / 0.33 / 0.35 | 0.32–0.34 | 0.21 → 0.13 |
+| curved 3 | 0.40 / 0.42 / 0.38 / 0.41 | 0.37–0.39 | 0.21 → 0.11 |
+| curved 10 | 0.46 / 0.48 / 0.42 / 0.42 | 0.40–0.46 | 0.23 → 0.12 |
+| V 4 | 0.49 / 0.48 / 0.45 / 0.44 | 0.43–0.44 | 0.24 → 0.13 |
+| V 10 | 0.58 / 0.57 / 0.56 / 0.51 | 0.52–0.54 | 0.29 → 0.18 |
+
+- **The noise is the best lap's, and it does not average down.** The other laps' half shrinks with
+  their number; the best lap's reading, shared by every difference, holds at 0.32–0.54 km/h. That
+  is the one-apex σ #684 measured, under the per-fix 0.62 km/h.
+- **There is no selection effect.** The error's mean is within ±0.05 km/h in every cell, and the best
+  lap's reading sits within 0.04 km/h of the other laps' on every shape. The best lap is picked on
+  its lap time, which its apex speed reading does not decide.
+
+| step S (km/h) | 0 (today) | 0.5 | 0.75 | 1.0 | 1.25 | 1.5 | 1.75 |
+|---|---|---|---|---|---|---|---|
+| apex reasons named, of 800 sessions | 583 | 568 | 503 | 403 | 280 | 183 | 104 |
+| …false (true deficit under 0.5 km/h) | 70 (12 %) | 61 | 37 | 18 | 7 | 3 | 1 |
+| **true reasons withheld / false ones removed** | — | 6 / 9 | 47 / 33 | 128 / 52 | 240 / 63 | 333 / 67 | 410 / 69 |
+| sessions whose theme names apex | 208 | 203 | 177 | 141 | 96 | 62 | 34 |
+| …false | 24 | 21 | 10 | 6 | 1 | 1 | 0 |
+
+By lap count today, 9 of 62 named apex reasons are false at 5 laps, 17 of 113 at 9, 21 of 196 at 14
+and 23 of 212 at 20. The named reasons' true deficits have a median of 1.07 km/h (quartiles 0.73
+and 1.43). Of the 410 true reasons a 1.75 km/h step withholds, 216 have a true deficit of 1.0 km/h
+or more.
+
+Planted apex habits test whether the step keeps a real cause. The habit is at C4 on every lap but
+the three truly fastest, curved 3 and V 10, 20 days each at 9 and at 20 laps. Each cell counts the
+days the planted corner names apex, of the days it ranks:
+
+| planted (true median) | ranked | named today | at 1.0 km/h | at 1.75 km/h |
+|---|---|---|---|---|
+| 0.5 km/h (0.60–0.77) | 34 | 22 | 15 | 1 |
+| 1 km/h (1.01–1.23) | 45 | 37 | 28 | 7 |
+| 2 km/h (1.92–2.25) | 58 | 57 | 57 | 37 |
+| 3 km/h (2.89–3.24) | 60 | 60 | 60 | 58 |
+
+**What stops it.**
+1. **Every step withholds more true reasons than it removes false ones,** except 0.5 km/h (6 / 9),
+   which no measured figure gives and which leaves 61 false of 568. At the house rule's 1.75 km/h,
+   410 true reasons go for 69 false ones, and a planted 2 km/h habit loses its name on 20 of 57
+   days. At 1.0 km/h it is 128 for 52.
+2. **What takes a withheld reason's place is mostly no cause.** At 1.0 km/h, 180 apex reasons go.
+   Of the 128 with a true deficit, 120 become "no one habit explains it: your passes here are
+   level" and 8 name braking. Of the 52 that were false, 47 become level and 5 name braking.
+   The synthetic days plant no braking habit to check those against.
+3. **The statistic's noise is real but the reason is filtered before it is named.** Of the 2,855
+   corners whose true deficit is under 0.5 km/h, 491 read 0.5 km/h or more; only 70 are named as
+   apex, since a corner must lose time, pass the evidence gate and outscore the other levers first.
+   On these days the time a corner loses comes from its grip, which also sets its apex speed.
+4. **The theme a test pins is true.** `tests/test_coaching.py`'s theme sweep holds seed 9 at 20
+   laps (the test's own recipe, GPS noise 1.0): its apex cause over every ranked row covers C1, C3
+   and C7. Their statistics read 0.88, 0.79 and 1.33 km/h against true deficits of 0.91, 0.80 and
+   1.26. The 1.0 km/h floor that broke that pin was withholding two true causes.
+
+**What this does not cover.** The generator varies only grip and braking per lap and corner. A real
+driver can lose a corner's time on a line or a lift that leaves the apex speed alone, which would
+weaken point 3's coupling. Coaching's false share on real footage is unmeasured: no official timing
+records an apex speed.
+
+**What moves because of this refusal: nothing in the app.** Coaching names apex speed from any
+positive deficit, as before. Its time lost and its luck question are §39's, untouched. The line
+signature keeps `LINE_APEX_DELTA_KMH`, and the level rule keeps its own floors.
+
+**Re-run it:** `pixi run python -m studio.dev.probes.coaching_apex_step --laps N` (one process per
+lap count, `--plant D` for a planted habit), then `--summarize` over their logs.
+
+**What would be new evidence:**
+- a real or synthetic set where the named apex reasons' false share passes one in five;
+- a generator with line or lift habits that leave the apex speed alone and still cost time;
+- or a step that removes more false reasons than true ones and comes from a measured figure.
 
 ---
 
