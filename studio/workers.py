@@ -19,8 +19,9 @@ _log = logging.getLogger(__name__)
 
 def start_load(worker: QThread) -> None:
     """Start a recording-loading worker from the GUI thread, after one `gc.collect()` there — the
-    one door every Session-loading worker goes through (`StudioWindow._start_load_worker`, Library ▸
-    Update's `IdealUpdater`), so the guard below cannot be forgotten by the next one.
+    one door every Session-loading worker goes through (`StudioWindow._start_load_worker`, the
+    reference load's `_start_reference_worker`, Library ▸ Update's `IdealUpdater`), so the guard
+    below cannot be forgotten by the next one.
 
     A MITIGATION, not a cure. Python's cyclic GC runs on whichever thread trips its threshold, and
     Qt widgets held only by reference cycles (LapTable's own closures hold it in some) crash or
@@ -29,7 +30,7 @@ def start_load(worker: QThread) -> None:
     the same hazard under a forced worker collect. Collecting HERE frees what is pending when a load
     starts, on the GUI thread. Garbage made while a load runs, and the other worker threads (export,
     which collects for itself, demo resolve), stay exposed: the cure is fewer cycles.
-    tests/test_load_worker_gc.py pins this collect for both callers."""
+    tests/test_load_worker_gc.py pins this collect for all three callers."""
     gc.collect()
     worker.start()
 

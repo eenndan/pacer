@@ -92,6 +92,39 @@ def test_garbage_pending_at_a_load_dies_on_the_gui_thread():
     print("test_garbage_pending_at_a_load_dies_on_the_gui_thread OK")
 
 
+def test_garbage_pending_at_a_reference_load_dies_on_the_gui_thread():
+    """The reference recording's load (Use as reference, Compare with your previous PB) is a whole
+    `Session.load` on its own worker, so it goes through the same door (`workers.start_load`)."""
+    saved_worker = studio_app.SessionLoadWorker
+    studio_app.SessionLoadWorker = _CollectingWorker
+    win = studio_app.StudioWindow([])
+    was_enabled = gc.isenabled()
+    gc.collect()
+    gc.disable()
+    try:
+        _Cyclic.died_on.clear()
+        _Cyclic()
+        win._start_reference_worker(1, [])
+        worker = win._ref_load_worker
+        deadline = time.time() + 10
+        while not worker.isFinished() and time.time() < deadline:
+            _APP.processEvents()
+            time.sleep(0.005)
+        assert worker.isFinished(), "the stand-in reference worker never finished"
+        assert _Cyclic.died_on == [True], (
+            "a cycle pending when the reference load started was freed on its worker's thread "
+            f"(died_on={_Cyclic.died_on}): _start_reference_worker no longer starts through "
+            "start_load")
+    finally:
+        if was_enabled:
+            gc.enable()
+        studio_app.SessionLoadWorker = saved_worker
+        _APP.processEvents()
+        win.deleteLater()
+        _APP.processEvents()
+    print("test_garbage_pending_at_a_reference_load_dies_on_the_gui_thread OK")
+
+
 class _CollectingRemeasure(QThread):
     """Stands in for RemeasureWorker (Library ▸ Update): its signal, and a run() that is ONLY a
     full collection."""
