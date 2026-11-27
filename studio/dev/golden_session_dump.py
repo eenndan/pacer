@@ -613,8 +613,8 @@ def preflight(path: str, *, opener_factory=gpmf_opener) -> str | None:
     except BindingsUnavailable as exc:
         return (f"FATAL: the pacer bindings are not usable in this run ({exc}). That is a problem "
                 f"with the ENVIRONMENT, and says nothing at all about {path}. Build them with "
-                f"`pixi run build`; from a layout this module cannot work out for itself, run it "
-                f"with PYTHONPATH=bindings/pacer.")
+                f"`pixi run build`, which deploys them into the env this runs in; a PYTHONPATH "
+                f"set by hand to an unbuilt tree shadows that copy, so unset it.")
     try:  # an MP4 that the GPMF parser still refuses → say so here, not from deep in the loader
         open_gpmf(path)
     except Exception as exc:  # noqa: BLE001 — report the parser's own words, whatever they are
