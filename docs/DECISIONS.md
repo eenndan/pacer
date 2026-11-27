@@ -2319,3 +2319,128 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   export warns of provisional timing on a verified line; the lap strip's legend truncates when
   quicker ⚠ laps of two kinds share a line; and section 28's carried lists stand as written
   there.
+
+## 30. Recorded at the 0.27.0 release, 2026-11-27
+
+- **v0.27.0 is a minor release**: 9 pull requests, #717 to #725, Wave 24 of the campaign section 8
+  records, its theme "your Library catches up by itself — when you ask".
+  - #720: File ▸ Library… shows "N ideal laps were measured by an older Pacer." with **Update**
+    when rows carry an older `IDEAL_VERSION` and all their files are on this Mac. Update
+    re-measures those rows one at a time on a worker (`workers.RemeasureWorker`): chapter order,
+    `Session.load`, the sidecar's saved lines READ only, `Session.library_entry`, then
+    `library.remeasure_and_save` (one lock round the read and the write, and only while the row is
+    still there and the measurement keys to it). The finish line counts what moved beyond the
+    ideal and names it in its hover. `workers.start_load` is now the one door for the GUI-thread
+    `gc.collect()` before a loading worker starts.
+  - #717: the lap vote's sentence says where the laps lost their fixes — at the line, inside the
+    laps, or both ("GPS dropped out in 14 of 14 laps, at the line on 9 of them") — and the PB
+    refusal, the banner, DATA TRUST, the report and the burned stamp read the same words; DATA
+    TRUST's Timing row joins a clean share and the vote's cost with ", but"; a dropout mark's
+    hover is no longer doubled; the ghost's refusal names the lap's own kind of hole.
+  - #718: a stale ideal stays muted on the selected Library row (`C.text_dim`, 4.80:1 on the
+    selection); the lap card marks a ⚠ best lap (every lap flagged) with "⚠ GPS dropout — not
+    counted in your bests".
+  - #721: the report's flag cell does not wrap (`td.flag { white-space: nowrap; }`); the lap
+    strip's legend gives each kind of quicker ⚠ lap its own line.
+  - #719: refusal section 42, re-timing or flagging sector splits near a missing fix, with its
+    probe. #722: a docs truth pass. #723: an unbuilt agent worktree gets clear reds (the bindings
+    fallback, `tests/_samples.py`, a narrowed ghost-test mock, the env's `bin/` on PATH, a named
+    free-space skip in a sandbox). #724: the modal watchdog in every Qt test. #725:
+    `studio/dev/tests_for.py`.
+- **The coordinator's rulings for this wave**, each open to the owner's overrule and each
+  reversible:
+  - **The Library Update is button-only and one recording at a time**, never automatic, and it
+    mirrors a manual re-open: it writes each row exactly as re-opening that recording would, and
+    nothing else. It raises no PB card; it names every change instead (a best lap, a lap count or
+    a trust tag that moved, a row it could not measure, and "your <track> best is now …" when a
+    track's best moved).
+  - **Sector splits near a missing fix: refused** (refusal section 42). A split is already timed at
+    the geometric crossing, exactly as a lap's own crossings are; what still moves it near a hole
+    is the smoothed trace at the line, a symmetric noise redraw (148 splits quicker by over 10 ms
+    and 134 slower in the matrix), and the de-drift frame, which is common to the column. The
+    worst added σ keeps the published 0.15 s step.
+  - **A silent skip-that-passes for a missing sample clip is a false green**: a test that needs
+    the gpmf-parser samples fails fast, by name, when the submodule is empty (CI always has it).
+  - **A dialog left open in a test fails in 20 s by name** (`PACER_MODAL_WATCHDOG_S`), instead of
+    sitting to the CTest timeout.
+  - **The docs say what is true at the release**: footage, VideoToolbox in CI, timings and
+    `PYTHONPATH` (#722).
+- **Process.** The release QA drove the merged tree offscreen and jailed, at 1440×900 with the
+  theme applied, on synthetic recordings only. The Library Update ran end to end on a jailed
+  Library whose rows v0.25.0's own `studio/` wrote (its `Session.library_entry`, `keyed` and
+  `upsert`, `IDEAL_VERSION` 1), covering a clean recording, one with 2 % of fixes rejected in the
+  file, a three-chapter one, a chapter subset, a recording missing its first chapter, a recording
+  whose files left the Mac, a path now holding another outing, a wet session record, a 1 s gap in
+  laps that 0.25.0 marked estimated, and the track renamed in every store; a second jail was
+  re-opened row by row through the window's own load as the control. The line read "8 ideal laps
+  were measured by an older Pacer." (the gone recording in its hover) and finished "7 updated · 1
+  best lap changed · 1 could not be measured" (the other outing, "the file at that path is now a
+  different recording"); every updated row equalled the control's byte for byte, the renamed track
+  and the wet record held, the open session, its view, Open Recent and the PB card were untouched,
+  and the only file written was `library.json`. Cancel mid-run, closing the Library, closing the
+  window, Update then Cancel then Update again, Open and Use as reference during a run each left
+  the store valid, every row either untouched or equal to the full run's, and nothing written
+  beside the recordings. With the gone row forgotten the finish line added "your Synth Ring GP
+  best is now 0:44.903". On rejected-fix cases (a 1 s gap inside every lap, two fixes before every
+  crossing, both, 10 % scattered, a 0.33 s hole inside every lap) the banner, the chip, DATA TRUST,
+  the report, the burned stamp and the Library row agreed, and nothing said "missing at the line"
+  of a gap inside the laps. The demo read 14 laps, best lap 13 at 0:44.950, IDEAL LAP 0:44.650,
+  0.30 s, nothing flagged, and a clean verdict. The 14 modal-driving test files ran twice each, two
+  at a time, as registrations: none tripped the watchdog.
+- **The media.** Every demo still was re-captured at 0.27.0 and came out byte-identical to the
+  committed file: `hero.png`, `og.png`, `map.png`, `debrief.png`, `quickest.png`, `report.png`,
+  `moments.png`, `accuracy.png` and `lapstrip.png` (one `lapstrip.png` capture differed in its
+  "median" and "best" labels, 442 pixels, the known flicker, and a second reproduced the committed
+  file). The waivers of `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and
+  `best-lap.mp4` are renewed: demo renders of the data-trust and ideal-lap shots, and a best-lap
+  Classic export of the demo, are byte-identical from v0.26.0's `studio/` and from 0.27.0.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name. The full gate, the soak and the smoke run on the release branch, not in the
+  QA pass.
+- **Found in this release's QA, not fixed** (nothing that would hold the release).
+  - **A row whose path now holds a different recording is offered again on every Library open**:
+    Update fails it ("the file at that path is now a different recording") and leaves it as it was,
+    so the line reads "1 ideal lap was measured by an older Pacer." for good.
+  - **The Library's muted ideal cells un-mute all at once when the run ends**, not row by row, and
+    the table shows the stored best laps until then.
+  - **With every lap flagged, the export ghost's reason for each lap is "cannot be raced against
+    your best lap"**, not the lap's own kind of hole.
+  - **`tests/test_export_video.py`, `tests/test_session_log.py` and
+    `studio/dev/golden_session_dump.py` still advise `PYTHONPATH=bindings/pacer`**, which
+    tests/README now names as the cause of `No module named 'pacer._pacer'` in an unbuilt worktree.
+- **Resolved from section 29**: a selected row's muted ideal lap; the code comments defining
+  `DROPOUT_AT_LINE` as one missing fix; the lap card's "BEST LAP" with no ⚠ for a fallback best;
+  the ghost's "place on track is a guess" for a hole at the line; the report's "Not counted" cell
+  wrapping; DATA TRUST's Timing row "0% … rejected — GPS fixes missing at the line"; the lap-vote
+  sentence saying "at the line" of gaps inside the laps; the doubled dropout-mark hover; the lap
+  strip's legend truncating with quicker ⚠ laps of two kinds; and sector splits moving near a
+  hole, refused with its reasons (section 42).
+- **Open for the owner** (new, most important first).
+  - **On an 18 Hz camera a 5-fix hole (0.33 s) sits under the 0.35 s dropout threshold**, so it
+    wears neither the in-lap nor the line ⚠, and moved a hairpin split by up to 56 ms in the probe;
+    at 10 Hz the same hole is flagged.
+  - **The lap strip's headline has no ⚠ for an all-⚠ best** ("★ lap 10" over a fallback lap);
+    File ▸ Export does not offer the strip for such a session (fewer than two clean laps), so it is
+    drawn only when called directly.
+  - **The reference-recording load still starts its worker without `workers.start_load`'s
+    GUI-thread GC guard** (`StudioWindow._start_reference_worker`).
+  - **Update waits while the main window's own load runs**, so a run started beside a long load
+    sits on "Updating 1 of N…" until that load ends.
+  - **`tests/_stale.py` still says the working recordings are all here**; one of its four folders
+    was on the dev Mac on 2026-11-27.
+  - **`tests_for.py`'s timings come from a stale CTest record** (the owner's checkout's was last
+    written 2026-11-16), printed as a floor.
+- **Open for the owner** (carried from section 29, re-checked against 0.27.0's changes): a hole
+  longer than 0.40 s re-anchors the GPS9 clock; one hole flags the lap finishing at a line but not
+  the one starting there when it ends 0.3 s before the line; holes move the auto-fitted start line
+  by metres; the median fix period is one figure for the whole trace; the smoother costs about
+  0.5 s on a 70-minute recording with 5 % rejected; the bests fallback still crowns a dropout-only
+  ⚠ lap when every lap is flagged (the lap card now says so); a dropout shorter than 0.35 s in the
+  last 0.7 s before the line counts as a whole trace for the off-line rule; a ⚠ lap whose only
+  hole sits just past its finish has its mark under the neighbouring lap; the lap card and the lap
+  strip stamp "estimated timing (est)" on a true-clock session that is low by the lap vote;
+  laps.csv has no key row for `flag`; a ⚠ lap's corner-pass clip is untagged; an off-line lap has
+  no Quality code; the burned stamp says "% of fixes rejected" for the share inside the laps; the
+  export box's header says "couldn't finish" when the render never started; a cut lap is still the
+  best when fewer than four laps have a whole trace; with no best lap the overlay export warns of
+  provisional timing on a verified line; and section 28's carried lists stand as written there.
