@@ -89,6 +89,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -249,6 +250,7 @@ FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the sear
 COND_ROLE = Qt.UserRole + 6     # the row's session-record conditions tag, "" if untagged (on Date)
 HAS_RECORD_ROLE = Qt.UserRole + 7  # True when the row HAS a session record at all (on Date)
 KEEP_ROLE = Qt.UserRole + 8     # (", <way>", trust tag): what survives eliding (on Track)
+STALE_ROLE = Qt.UserRole + 9    # True on an Ideal-lap cell another ideal version measured (muted)
 
 # The track-filter combo's two sentinels (a real track name never equals either): "all tracks" at
 # index 0, and an UNKNOWN-TRACK bucket appended when some recording's circuit isn't in the track
@@ -478,6 +480,34 @@ class _KeepTailDelegate(QStyledItemDelegate):
         shown = fm.elidedText(name, Qt.ElideRight, least)
         option.text = shown + fm.elidedText(way + suffix, Qt.ElideRight,
                                             max(0, avail - fm.horizontalAdvance(shown)))
+
+
+class _MutedWhenSelectedDelegate(QStyledItemDelegate):
+    """The Ideal-lap column's delegate: a cell carrying ``STALE_ROLE`` (measured by another version
+    of the ideal-lap maths) stays muted on a SELECTED row. Qt paints a selected item's text in the
+    selection's own ink and ignores its foreground, so the one row the user was looking at drew
+    its stale ideal in full colour and lost the cue (DECISIONS §28). There it is drawn in
+    `C.text_dim`, the dimmest enabled ink, 4.80:1 on `C.sel_bg` (`C.text_muted` is 2.58:1 there);
+    every other cell is drawn exactly as Qt draws it."""
+
+    def paint(self, painter, option, index):
+        if not (index.data(STALE_ROLE) and option.state & QStyle.State_Selected):
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)  # the selection band
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        # The style's own text margin on each side (QCommonStyle's item-view text layout).
+        margin = style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, opt.widget) + 1
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(QColor(C.text_dim))
+        painter.drawText(rect.adjusted(margin, 0, -margin, 0), int(opt.displayAlignment),
+                         opt.fontMetrics.elidedText(text, Qt.ElideRight, rect.width() - 2 * margin))
+        painter.restore()
 
 
 class _LapTimeAxis(pg.AxisItem):
@@ -882,6 +912,8 @@ class LibraryDialog(QDialog):
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
         self._track_delegate = _KeepTailDelegate(self.table)
         self.table.setItemDelegateForColumn(_COL_TRACK, self._track_delegate)
+        self._theo_delegate = _MutedWhenSelectedDelegate(self.table)
+        self.table.setItemDelegateForColumn(_COL_THEO, self._theo_delegate)
         for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO, _COL_COND, _COL_TYRES):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The sample's mechanism, on the columns it is about (see the header-tip constants).
@@ -1490,8 +1522,10 @@ class LibraryDialog(QDialog):
                         it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
                 elif col == _COL_THEO and theo_stale and theo is not None:
                     # Another version of the ideal-lap maths measured this number: kept, muted, and
-                    # the hover leads with why (see _IDEAL_OTHER_BUILD_TIP).
+                    # the hover leads with why (see _IDEAL_OTHER_BUILD_TIP). Selected, it is
+                    # drawn by _MutedWhenSelectedDelegate: Qt ignores the foreground there.
                     it.setForeground(dim)
+                    it.setData(STALE_ROLE, True)
                 elif col == _COL_TRACK and trust:
                     # Muted + italic across the row's Track cell so the tag reads as demoted, not an
                     # error. The row stays fully selectable/openable — it's just marked, not blocked.
