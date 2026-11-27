@@ -1815,6 +1815,10 @@ class OpportunitiesPanel(QWidget):
 
         # --- body: a stack of {top-3 table, friendly "need more laps" label}, swapped in refresh().
         self.table = QTableWidget(0, len(self._COLUMNS))
+        # Tab must be able to LEAVE the grid: Qt's cell-wise Tab navigation kept every Tab press
+        # inside it (60 presses, 49 on this table), so its Jump / Compare cells and everything after
+        # them were unreachable by keyboard. Read-only rows; ↑ / ↓ still walk them (as LapTable).
+        self.table.setTabKeyNavigation(False)
         self.table.setHorizontalHeaderLabels(self._COLUMNS)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)

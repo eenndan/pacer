@@ -362,9 +362,16 @@ def test_activating_the_chip_opens_data_trust_at_the_row_it_is_about():
                 if how == "click":
                     QTest.mouseClick(chip, Qt.LeftButton)
                 else:
-                    chip.setFocus(Qt.TabFocusReason)
-                    _settle(2)
-                    assert _APP.focusWidget() is chip, f"{name}: the chip cannot take focus"
+                    # REAL Tab presses: in the main window a button takes Space / Return only when
+                    # the keyboard put the focus on it (widgets.KeyboardPress) — a setFocus would
+                    # leave Space to play/pause, as Qt moving the focus there does.
+                    win.activateWindow()
+                    view.table.table.setFocus(Qt.MouseFocusReason)
+                    for _ in range(80):
+                        if _APP.focusWidget() is chip:
+                            break
+                        QTest.keyClick(_APP.focusWidget() or win, Qt.Key_Tab)
+                    assert _APP.focusWidget() is chip, f"{name}: Tab never reaches the chip"
                     QTest.keyClick(chip, Qt.Key_Space if how == "Space" else Qt.Key_Return)
                 _settle()
                 _assert_landed(f"{name} via {how}", view, word, was, hidden)

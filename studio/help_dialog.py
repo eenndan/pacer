@@ -234,10 +234,10 @@ COMMANDS: list[Command] = [
     Command("Layout", "Drag", "Drag any splitter: resize the panels (the layout is remembered)"),
     # CONTROLS: the toolbar buttons that had no way in but the pointer (StudioWindow's "toolbar
     # controls, as named commands"). The first row is the rule a Tab-focused button now follows
-    # (widgets.pressable_focus); the rest have no key — ⌘K is their door, by the name each button's
+    # (widgets.KeyboardPress); the rest have no key — ⌘K is their door, by the name each button's
     # tooltip uses, greyed with the button's own reason when it is off (StudioWindow.command_gate).
     Command("Controls", "Return",
-            "Press the button the focus ring is on (Space too; Tab moves the ring)"),
+            "Press the button you reached with Tab or ⇧Tab (Space too)"),
     Command("Controls", "", "Ideal lap: overlay the ideal lap's Δ on the charts",
             run="toggle_ideal_overlay"),
     Command("Controls", "", "Brake/Throttle band on the charts (estimated)",

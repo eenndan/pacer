@@ -6,6 +6,7 @@ safe to reuse from any dialog or panel without dragging that surface's dependenc
 
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import QEvent, QObject, QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -161,7 +162,6 @@ def icon_button(glyph: str, *, tooltip: str = "", size: QSize | None = None,
     btn.setFixedSize(box)
     btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     btn.setIcon(theme.icon(glyph))
-    btn.setFocusPolicy(Qt.TabFocus)   # keyboard-pressable, never focused by a click (pressable_focus)
     if checkable:
         btn.setCheckable(True)
     if tooltip:
@@ -208,9 +208,6 @@ class ToggleButton(QPushButton):
         self.setCheckable(True)
         if tooltip:
             self.setToolTip(tooltip)
-        # Keyboard-only focus: Tab reaches it and Space / Return press it; a click never parks the
-        # keyboard on it, so Space stays play/pause for the mouse (pressable_focus).
-        self.setFocusPolicy(Qt.TabFocus)
         if icon_only:
             self.setProperty("role", "IconButton")
             self.setFixedSize(theme.ICON_BTN)
@@ -281,7 +278,12 @@ class ActionChip(QPushButton):
     chip was built to avoid being. So a focused ActionChip accepts the ShortcutOverride for those
     three keys, which hands them to the button; unfocused, it takes nothing and Space is play/pause
     as it always was. Return and Enter click as well as Space, because nothing else in the window
-    binds them and a chip reads as a link as much as a button."""
+    binds them and a chip reads as a link as much as a button.
+
+    INSIDE A WINDOW WITH A `KeyboardPress` (the main window) the window's rule decides instead:
+    the chip takes the keys only while the keyboard put the focus on it (Tab / ⇧Tab). Claiming them
+    on any focus let Space press the chip after Qt moved a mouse user's focus there — clicking the
+    Coaching tab left it on the focus-list chip (#739 review, F1). A held Return clicks once."""
 
     _ACTIVATE = (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)
 
@@ -292,7 +294,6 @@ class ActionChip(QPushButton):
             self.setProperty("tone", tone)
         self.setAutoDefault(False)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.TabFocus)   # as every app button: see pressable_focus
 
     @classmethod
     def _is_activation(cls, event) -> bool:
@@ -300,15 +301,21 @@ class ActionChip(QPushButton):
         plain = (event.modifiers() & ~Qt.KeypadModifier) == Qt.NoModifier
         return plain and event.key() in cls._ACTIVATE
 
+    def _owns_keys(self) -> bool:
+        press = getattr(self.window(), "_keyboard_press", None)
+        return press is None or press.owns(self)
+
     def event(self, event):
-        if event.type() == QEvent.ShortcutOverride and self._is_activation(event):
+        if (event.type() == QEvent.ShortcutOverride and self._is_activation(event)
+                and self._owns_keys()):
             event.accept()
             return True
         return super().event(event)
 
     def keyPressEvent(self, event):
-        if self._is_activation(event) and event.key() != Qt.Key_Space:
-            self.click()          # Space goes through QAbstractButton's own press/release
+        if self._is_activation(event) and event.key() != Qt.Key_Space and self._owns_keys():
+            if not event.isAutoRepeat():
+                self.click()      # Space goes through QAbstractButton's own press/release
             event.accept()
             return
         super().keyPressEvent(event)
@@ -361,36 +368,90 @@ def pass_step_arrows(table: QAbstractScrollArea) -> None:
     press from a Stats table died there. It passes them while it has no sideways range, and keeps
     them for scrolling while it has one (its rare narrow-pane fallback)."""
     table.installEventFilter(_StepArrowsUp(table))
+
+
 #: The keys that press a keyboard-focused button: the platform's (Space), plus Return / Enter,
-#: which nothing in the main window binds. See `pressable_focus`.
+#: which nothing in the main window binds. See `KeyboardPress`.
 PRESS_KEYS = (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)
 
 
-def pressable_focus(event) -> QAbstractButton | None:
-    """The button a plain Space / Return / Enter should PRESS instead of reaching the window's own
-    shortcuts, or None.
+def _plain_press(event) -> bool:
+    # KeypadModifier is how the numeric keypad's Enter arrives; it is still Enter.
+    return ((event.modifiers() & ~Qt.KeypadModifier) == Qt.NoModifier
+            and event.key() in PRESS_KEYS)
+
+
+class KeyboardPress(QObject):
+    """Which button the KEYBOARD put the focus on — the one button Space / Return / Enter press.
 
     Space is play/pause as a window QShortcut, and a QShortcut outranks a focused button, so on all
     fifteen tab stops of the main window a Tab-focused button could not be pressed at all (Return
-    did nothing either). The ruling: Space stays play/pause EXCEPT while the keyboard focus — the
-    ring — is visibly on a pressable control; then Space, Return and Enter press THAT control.
-    `StudioWindow` asks this from its ShortcutOverride and its keyPressEvent, once, for every button
-    in the window — `ActionChip` was the one class that had solved it for itself.
+    did nothing either). The ruling: Space stays play/pause EXCEPT while the user has moved the
+    focus onto a button with Tab or ⇧Tab; then Space, Return and Enter press THAT button.
 
-    ONLY A KEYBOARD-ONLY (`Qt.TabFocus`) BUTTON QUALIFIES, and that is what keeps mouse users' Space
-    exactly as it was. A TabFocus button never takes the focus from a click, so the ring can only be
-    on it because the keyboard put it there. It is what the macOS style gives every QPushButton
-    already (measured: SH_Button_FocusPolicy = TabFocus under `macos`, StrongFocus under Fusion,
-    the offscreen style), and the app's own button classes now ask for it explicitly — ToggleButton,
-    ActionChip, `icon_button` — so the behaviour is the same on every platform the app is tested on.
-    A StrongFocus button anywhere (Fusion's default) keeps Space = play/pause, as today."""
-    if (event.modifiers() & ~Qt.KeypadModifier) != Qt.NoModifier or event.key() not in PRESS_KEYS:
+    HOW THE FOCUS ARRIVED is the whole rule, so it is tracked here, once, for every button in the
+    window (including ones built after this, a table cell's "Jump" among them). It cannot be read
+    off the focus-in REASON: Qt also hands out `TabFocusReason` when it moves the focus off a
+    widget it is hiding or disabling (clicking the "Corners" tab moved a mouse user's focus from the
+    Laps grid onto "Lap 13 corners", and Space pressed it). Nor off the focus POLICY: a click on a
+    StrongFocus button (Fusion's default; macOS gives TabFocus) leaves the focus there. So the
+    window routes its Tab navigation through `tab()`, and a button counts only when the focus
+    landed on it inside a Tab move that started from a widget still visible and enabled — a real
+    key press, not Qt clearing up. Any other arrival (a click, a window activation, a popup or
+    dialog closing, a programmatic setFocus) forgets the button again, and Space plays.
+
+    Return / Enter are taken by an event filter on the button itself (installed the first time the
+    keyboard lands on it), so the key stops THERE: a "Jump" button in a table cell fires once, never
+    also the table's own `activated`; and a held key presses once, its auto-repeats are swallowed.
+    Space goes through QAbstractButton's own press / release, which already ignores repeats."""
+
+    def __init__(self, parent: QObject):
+        super().__init__(parent)
+        self._tabbing = False
+        self._button: QAbstractButton | None = None
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
+
+    def tab(self, move, focus: QWidget | None) -> bool:
+        """Run the window's Tab move `move()`; `focus` is the focus widget it starts from."""
+        self._tabbing = focus is not None and focus.isVisible() and focus.isEnabled()
+        try:
+            return move()
+        finally:
+            self._tabbing = False
+
+    def _on_focus_changed(self, _old, new) -> None:
+        if self._tabbing and isinstance(new, QAbstractButton):
+            self._button = new
+            if not new.property("_keyboardPress"):
+                new.setProperty("_keyboardPress", True)
+                new.installEventFilter(self)
+        else:
+            self._button = None
+
+    def _current(self) -> QAbstractButton | None:
+        b = self._button
+        if b is None or not shiboken6.isValid(b):
+            return None
+        if QApplication.focusWidget() is b and b.isEnabled() and b.isVisible():
+            return b
         return None
-    w = QApplication.focusWidget()
-    if (isinstance(w, QAbstractButton) and w.focusPolicy() == Qt.TabFocus
-            and w.isEnabled() and w.isVisible()):
-        return w
-    return None
+
+    def owns(self, button: QAbstractButton) -> bool:
+        """True while the keyboard has put the focus on `button` (see the class note)."""
+        return self._current() is button
+
+    def target(self, event) -> QAbstractButton | None:
+        """The button a plain Space / Return / Enter should press instead of reaching the window's
+        shortcuts, or None (then Space is play/pause, as ever)."""
+        return self._current() if _plain_press(event) else None
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.KeyPress and event.key() != Qt.Key_Space
+                and _plain_press(event) and obj is self._current()):
+            if not event.isAutoRepeat():
+                obj.click()
+            return True          # handled here: never the table's activated, never a repeat
+        return False
 
 
 def set_tone(widget: QWidget, tone: str | None) -> None:

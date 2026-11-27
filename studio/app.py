@@ -99,7 +99,7 @@ from .overlays import (
 from .race_controller import NO_RACE_REASON
 from .stats import is_level, with_luck
 from .video_view import PLAYBACK_RATES
-from .widgets import chip, pressable_focus, set_tone
+from .widgets import KeyboardPress, chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker, start_worker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
@@ -2973,6 +2973,9 @@ class StudioWindow(QMainWindow):
             sc.setContext(Qt.WindowShortcut)
             sc.activated.connect(handler)
 
+        # ...except while the keyboard has put the focus on a button: then Space presses it
+        # (`KeyboardPress`, asked by `event` and `focusNextPrevChild`).
+        self._keyboard_press = KeyboardPress(self)
         shortcut(Qt.Key_Space, self.toggle_playback)
         shortcut(Qt.Key_M, self.toggle_mute)
         shortcut(Qt.Key_G, self.toggle_gmeter)
@@ -3448,29 +3451,35 @@ class StudioWindow(QMainWindow):
         return False
 
     def event(self, event):
-        """A keyboard-focused button owns Space / Return / Enter (`widgets.pressable_focus`).
+        """A button the KEYBOARD focused owns Space / Return / Enter (`widgets.KeyboardPress`).
 
         The window's Space is a QShortcut, matched BEFORE the key reaches the focused widget — so a
         Tab-focused button showing its ring was pressed by nothing, on every tab stop of the window.
         A ShortcutOverride the focused button leaves alone climbs the parent chain to here; claiming
-        it hands the key to the button (Space then presses it through Qt's own press / release,
-        Return / Enter reach keyPressEvent below). A button that took the focus from a CLICK never
-        qualifies, so a mouse user's Space is play/pause exactly as before."""
-        if event.type() == QEvent.ShortcutOverride and pressable_focus(event) is not None:
+        it hands the key to the button (Space presses it through Qt's own press / release; Return /
+        Enter are taken by KeyboardPress's filter on the button). A button that got the focus any
+        other way — a click, Qt moving the focus off a widget it hid — never qualifies, so a mouse
+        user's Space is play/pause exactly as before."""
+        press = getattr(self, "_keyboard_press", None)
+        if (event.type() == QEvent.ShortcutOverride and press is not None
+                and press.target(event) is not None):
             event.accept()
             return True
         return super().event(event)
+
+    def focusNextPrevChild(self, next):
+        """Every Tab / ⇧Tab move in the window ends here (QWidget forwards it up the parents), and
+        so do the moves Qt makes off a widget it hides or disables — `KeyboardPress.tab` tells the
+        two apart, which is how a button learns the keyboard put the focus on it."""
+        press = getattr(self, "_keyboard_press", None)
+        move = lambda: super(StudioWindow, self).focusNextPrevChild(next)  # noqa: E731
+        return press.tab(move, QApplication.focusWidget()) if press is not None else move()
 
     def keyPressEvent(self, event):
         """←/→ step the video ±1 s (Shift ±5 s). Esc backs out of every "one thing fills the frame"
         state — a Lap race, video focus, a maximized panel, a played pass's zoom, window fullscreen. Handled here, not as a QShortcut,
         so the lap table keeps arrow nav; keyPressEvent only fires when the focus widget didn't use
-        the key. Return / Enter with the keyboard on a button press it (see `event`)."""
-        button = pressable_focus(event)
-        if button is not None and event.key() != Qt.Key_Space:
-            button.click()      # Space goes through QAbstractButton's own press / release
-            event.accept()
-            return
+        the key."""
         if event.key() == Qt.Key_Escape and self._escape_out():
             event.accept()
             return
