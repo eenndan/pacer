@@ -49,6 +49,7 @@ THREAD_NAME = "pacer-modal-watchdog"
 # Bound at import, before any test runs: a test that stubs `time.monotonic` with a scripted clock
 # must not have its values consumed by the watchdog.
 _clock = time.monotonic
+_real_exit = os._exit  # kept: `_force_failing_exit` replaces os._exit once a dialog is rejected
 
 _state: dict = {"timer": None, "seen": None, "since": 0.0, "longest": (0.0, ""), "tripped": [],
                 "exit_hook": False, "started": False}
@@ -125,6 +126,8 @@ def _poll() -> None:
                    "first; the dialog is then rejected and this process exits 1\n")
             faulthandler.dump_traceback(file=2, all_threads=True)
             _write(f"{BANNER}: end\n")
+        if not _state["tripped"]:
+            _force_failing_exit()
         _state["tripped"].append(key)
         _state["seen"] = None
         w.reject()
@@ -146,7 +149,17 @@ def _at_exit() -> None:
                     stream.flush()
             except Exception:  # noqa: BLE001
                 pass
-        os._exit(1)
+        _real_exit(1)
+
+
+def _force_failing_exit() -> None:
+    """A test file that ends in its own `os._exit(0)` (tests/test_export_menu_entry.py does, to
+    skip a teardown) never reaches atexit: once a dialog has been rejected, that exit fails too."""
+    def _exit(code: int = 0) -> None:
+        _at_exit()           # prints the summary and exits 1
+        _real_exit(code)
+
+    os._exit = _exit
 
 
 def _hook_exit() -> None:
