@@ -189,6 +189,48 @@ def _other_picture(path, truth, first_payload, n_payloads, ffmpeg):
                     "-an", "-n", path], check=True, capture_output=True)
 
 
+# THE PLANTED-HABIT PHASE (cool/coaching-ranks-past-the-step). Since Coaching ranks only a corner
+# whose loss clears the 0.07 s timing step, the `gopro` recording ranks nothing: its corners lose
+# +0.044 / +0.031 / +0.023 s to the best lap, all level. So the gate would guard no RANKED theme
+# through the real loader. This phase is the same seed driven with one planted habit: C4 over-slows
+# (grip × 0.837, a true ~0.20 s a lap; quickest_bias's plant) on every lap but the three truly
+# fastest, which reach the target. Additive and small: one chapter, a 16x16 placeholder picture
+# (no fingerprinted value reads the picture: the determinism test), and only the coaching leaves.
+HABIT_ARGS = {"seed": 20260924, "laps": 14, "chapters": 1}
+HABIT_CID, HABIT_GRIP = 4, 0.837
+
+
+def _habit_picture(path, truth, first_payload, n_payloads, ffmpeg):
+    """The placeholder's frame count, rate and timescale at 16x16 (the loader reads no more)."""
+    subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "color=c=0x1d2330:s=16x16:r=30000/1001",
+                    "-frames:v", str(n_payloads * sg.FRAMES_PER_PAYLOAD), "-c:v", "libx264",
+                    "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
+                    "-an", "-n", path], check=True, capture_output=True)
+
+
+def _habit_session():
+    """The planted-habit recording through the real loader, written ONCE per process."""
+    if "habit" not in _RECORDINGS:
+        t = sg.simulate(HABIT_ARGS["seed"], HABIT_ARGS["laps"])
+        d = np.arange(1, HABIT_ARGS["laps"] + 2) * t.circuit.length - t.s_start
+        fastest = np.argsort(np.diff(np.interp(d, t.d_nodes, t.t_nodes)))[:3]
+        habit = sg.Habit(cid=HABIT_CID, grip=HABIT_GRIP, brake=1.0,
+                         clean_laps=tuple(int(k) + 1 for k in fastest))
+        tmp = tempfile.TemporaryDirectory(prefix="golden_habit_")
+        rec = sg.generate(os.path.join(tmp.name, "rec"), video=_habit_picture, habit=habit,
+                          **HABIT_ARGS)
+        _RECORDINGS["habit"] = (tmp, _gopro_session(chapters.discover_siblings(rec.paths[0])))
+    return _RECORDINGS["habit"][1]
+
+
+def habit_fingerprint() -> dict:
+    """The planted-habit phase: the coaching leaves alone (the timing leaves of this generator and
+    loader are the `gopro` phases')."""
+    return {"coaching_opportunities": golden_session_dump._round(
+        _habit_session().coaching_opportunities())}
+
+
 def _gopro_session(paths):
     """The recording through the REAL loader. Jailed first: the load reads the track DB, and this
     must never be the owner's (a test file is jailed already; this also covers an importer)."""
@@ -295,6 +337,8 @@ def synthetic_fingerprint(recording=None, *, gopro: bool = True) -> dict:
     # The real loader, on a recording that laps (see the module docstring).
     result["gopro_telemetry_sha256"] = _gopro_telemetry_sha256()
     result.update(gopro_fingerprint(recording))
+    # ...and a RANKED coaching theme through it (the planted-habit phase, above HABIT_ARGS).
+    result["gopro_habit"] = habit_fingerprint()
     return result
 
 
@@ -499,8 +543,10 @@ def test_gopro_phases_reach_what_the_seeded_phases_cannot():
       2. every lap-count gate is crossed, and the value it gates exists: the corners-by-lap grid
          (`MATRIX_MIN_LAPS`), the pace trend (`TREND_MIN_LAPS`), the fast/slow band split
          (`MIN_SPLIT_LAPS`) and the consensus-line anchor (`corners.ANCHOR_MIN_LAPS`);
-      3. coaching RANKS corners (the seeded phases' two rows both abstain), the ideal lap is
-         stitched from more than one lap and beats the best one;
+      3. coaching LISTS corners and holds the level ones back (every one loses under the timing
+         step or fails another test), while the planted-habit phase RANKS its corner past the step
+         (the seeded phases' two rows both abstain); the ideal lap is stitched from more than one
+         lap and beats the best one;
       4. `gopro_sectors` has three sectors on every valid lap, each split finite and summing to
          its lap time, and a SPLITS grid;
       5. neither phase holds a placeholder — while the seeded phases hold them at exactly the
@@ -530,10 +576,19 @@ def test_gopro_phases_reach_what_the_seeded_phases_cannot():
     geometry = s.corners.geometry()
     assert geometry is not None and geometry.n_laps >= corners.ANCHOR_MIN_LAPS, geometry
 
+    # Coaching LISTS this recording's corners and holds the level ones back: every corner here
+    # loses under the timing step or fails another test, so nothing ranks (the theme is none).
     ops = s.coaching_opportunities()
-    ranked = ops.ranked_rows()
-    assert ops.enough and ranked and ranked[0].time_lost > 0, (
-        f"coaching ranked {len(ranked)} of {len(ops.rows)} rows")
+    assert ops.enough and len(ops.rows) >= 3 and not ops.ranked_rows(), ops.rows
+    assert [r.cid for r in ops.rows if r.evidence.abstain == coaching.ABSTAIN_LEVEL] == [7, 2, 4]
+    assert ops.theme.kind == coaching.THEME_NONE, ops.theme
+    # The RANKED path is the planted-habit phase's: its C4 (a true ~0.20 s a lap) ranks first,
+    # past the step, and carries the theme.
+    hab = _habit_session().coaching_opportunities()
+    ranked = hab.ranked_rows()
+    assert hab.enough and ranked and ranked[0].cid == HABIT_CID, hab.rows
+    assert not coaching.loss_is_level(ranked[0].time_lost) and ranked[0].time_lost > 0.15, ranked
+    assert hab.theme.kind != coaching.THEME_NONE and hab.theme.lead_cid == HABIT_CID, hab.theme
     best = s.best_lap_id()
     assert s.ideal_donor_lap_id() is None and s.ideal_total() < s.lap_time(best), (
         s.ideal_sample(), s.ideal_total(), s.lap_time(best))

@@ -86570,6 +86570,169 @@
    0.0033439367068613273
   ]
  },
+ "gopro_habit": {
+  "coaching_opportunities": {
+   "enough": true,
+   "median_lap_id": 10,
+   "n_laps": 14,
+   "rows": [
+    {
+     "cid": 4,
+     "direction": -1,
+     "entry_dist": 355.00171683240916,
+     "evidence": {
+      "abstain": "",
+      "iqr": 0.08351637552967084,
+      "n_laps": 14,
+      "reach": "repeat",
+      "reach_laps": 3
+     },
+     "phases": {
+      "apex": 0.11422338164322454,
+      "entry": 0.060649798137493605,
+      "exit": 0.07495673721195928
+     },
+     "reason": {
+      "apex_speed_deficit": 5.561999999999994,
+      "apex_speed_gain": 5.561999999999994,
+      "brake_extra_s": 0.10000000000013642,
+      "coast_extra_s": 0.0,
+      "contribution": 0.15218075375906506,
+      "exit_speed_gain": 4.159292152166223,
+      "kind": "apex",
+      "sigma": 0.11618285915403102
+     },
+     "time_lost": 0.23426314521487157
+    },
+    {
+     "cid": 3,
+     "direction": 1,
+     "entry_dist": 276.1958388886397,
+     "evidence": {
+      "abstain": "one_off",
+      "iqr": 0.033383496809799684,
+      "n_laps": 14,
+      "reach": "rare",
+      "reach_laps": 1
+     },
+     "phases": {
+      "apex": 0.031206803443172504,
+      "entry": 0.00850720350212164,
+      "exit": 0.033802782981910084
+     },
+     "reason": {
+      "apex_speed_deficit": 3.078000000000003,
+      "apex_speed_gain": 3.078000000000003,
+      "brake_extra_s": 0.0,
+      "coast_extra_s": 0.0,
+      "contribution": 0.03813496901391714,
+      "exit_speed_gain": 2.1187689961737064,
+      "kind": "apex",
+      "sigma": 0.03665173907043312
+     },
+     "time_lost": 0.07530355479746209
+    },
+    {
+     "cid": 7,
+     "direction": -1,
+     "entry_dist": 705.5002406394599,
+     "evidence": {
+      "abstain": "level",
+      "iqr": 0.05463056681230505,
+      "n_laps": 14,
+      "reach": "repeat",
+      "reach_laps": 3
+     },
+     "phases": {
+      "apex": 0.012959458232337795,
+      "entry": 0.004991652010915004,
+      "exit": 0.0007519046548267738
+     },
+     "reason": {
+      "apex_speed_deficit": 0.4860000000000042,
+      "apex_speed_gain": 0.4860000000000042,
+      "brake_extra_s": 0.0,
+      "coast_extra_s": 0.0,
+      "contribution": 0.0,
+      "exit_speed_gain": 0.49901563791402737,
+      "kind": "level",
+      "sigma": 0.04018163952386734
+     },
+     "time_lost": 0.0292912833858594
+    },
+    {
+     "cid": 6,
+     "direction": 1,
+     "entry_dist": 606.4299940815785,
+     "evidence": {
+      "abstain": "level",
+      "iqr": 0.03366095485641285,
+      "n_laps": 14,
+      "reach": "repeat",
+      "reach_laps": 3
+     },
+     "phases": {
+      "apex": 0.02161871370637769,
+      "entry": -0.0004313560153050844,
+      "exit": 0.007440261680251581
+     },
+     "reason": {
+      "apex_speed_deficit": 1.1159999999999997,
+      "apex_speed_gain": 1.1159999999999997,
+      "brake_extra_s": 5.684341886080802e-14,
+      "coast_extra_s": 0.0,
+      "contribution": 0.007180523399200597,
+      "exit_speed_gain": 0.39050619423277766,
+      "kind": "apex",
+      "sigma": 0.2230667473858407
+     },
+     "time_lost": 0.026483005655116187
+    },
+    {
+     "cid": 2,
+     "direction": -1,
+     "entry_dist": 102.07237524145378,
+     "evidence": {
+      "abstain": "level",
+      "iqr": 0.03256481870010486,
+      "n_laps": 14,
+      "reach": "repeat",
+      "reach_laps": 4
+     },
+     "phases": {
+      "apex": 0.005243990117326014,
+      "entry": -0.00012278853116232114,
+      "exit": 0.01326118171392654
+     },
+     "reason": {
+      "apex_speed_deficit": 0.6119999999999806,
+      "apex_speed_gain": 0.6119999999999806,
+      "brake_extra_s": 0.0,
+      "coast_extra_s": 0.0,
+      "contribution": 0.002891341530764984,
+      "exit_speed_gain": 0.3605413396887087,
+      "kind": "apex",
+      "sigma": 0.02104908266079686
+     },
+     "time_lost": 0.017064584328633003
+    }
+   ],
+   "theme": {
+    "cause": "apex",
+    "cause_cids": [
+     4
+    ],
+    "cause_share": 1.0,
+    "execution_s": 0.23426314521487157,
+    "kind": "execution",
+    "lead_cid": 4,
+    "n_abstained": 4,
+    "n_ranked": 1,
+    "pace_s": 0,
+    "share": 1.0
+   }
+  }
+ },
  "gopro_sectors": {
   "active_baseline_total_distance": 959.7194161155687,
   "auto_marks": [
