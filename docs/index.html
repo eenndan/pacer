@@ -18,7 +18,7 @@
 <meta property="og:image" content="https://eenndan.github.io/pacer/media/og.png">
 <meta property="og:image:width" content="2560">
 <meta property="og:image:height" content="1280">
-<meta property="og:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
+<meta property="og:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window on the synthetic demo, its video pane showing the demo's generated picture, the lap table and the speed and delta-to-ideal chart.">
 <!-- The two image URLs are ABSOLUTE on purpose: link previews (Open Graph, X cards) need an
      absolute URL, and a relative one left shares of this page without the image. -->
 
@@ -27,7 +27,7 @@
 <meta name="twitter:title" content="Pacer Studio — a race-telemetry workstation validated against official timing">
 <meta name="twitter:description" content="One GoPro file in; lap timing, racing line, deltas and synced video out. Lap times match official timing to σ 0.025 s over 14 laps at one circuit. An engineering case study.">
 <meta name="twitter:image" content="https://eenndan.github.io/pacer/media/og.png">
-<meta name="twitter:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window, with onboard kart video, the lap table and the speed and delta-to-ideal chart.">
+<meta name="twitter:image:alt" content="Pacer Studio, race telemetry from your GoPro: the title card beside the app's own window on the synthetic demo, its video pane showing the demo's generated picture, the lap table and the speed and delta-to-ideal chart.">
 
 <style>
   /* ------------------------------------------------------------------ tokens
@@ -349,7 +349,7 @@
       <div>
         <p class="eyebrow">Case study · race telemetry · macOS</p>
         <h1>One GoPro file in. Lap timing, a racing line, deltas and synced video out — <span class="accent">checked against official timing.</span></h1>
-        <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware. Its lap times match official timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check.</p>
+        <p class="lead">Pacer Studio is a working macOS desktop app that turns a single GoPro recording into a telemetry workstation, using only the GPS and motion streams the camera already writes. No transponder, no data logger, no cloud, no extra hardware. Its lap times match official timing to σ 0.025 s over 14 laps at one circuit, re-measured by a real-footage check. An idea is built far enough to measure before it ships, and <a href="https://github.com/eenndan/pacer/blob/main/studio/docs/refused-2026-09.md">40+ features were built far enough to measure</a>, then refused with the number that said no.</p>
       </div>
 
       <!-- THE CLIP. Twenty seconds of the app's own overlay export of Sandown 3h's best lap, cut by
@@ -365,7 +365,7 @@
           <source src="media/best-lap.mp4" type="video/mp4" media="(prefers-reduced-motion: no-preference)">
           <a href="media/best-lap.mp4">The best lap as the app exports it (MP4, 20 s, no sound)</a>
         </video>
-        <figcaption><strong>The best lap, as the app exports it</strong> — the first twenty seconds of lap 31 (0:47.076) through <strong>File ▸ Export overlay video</strong>, with no sound, and a still frame if your system asks for reduced motion.</figcaption>
+        <figcaption><strong>The best lap, as the app exports it</strong> — the first twenty seconds of lap 31 (0:47.076) through <strong>File ▸ Export overlay video</strong>, with no sound, and a still frame if your system asks for reduced motion. Sandown 3h, three hours at Sandown Park in July 2026, captured at v0.2.0.</figcaption>
       </figure>
     </div>
 
@@ -376,7 +376,7 @@
     <figure class="figure">
       <img src="media/hero.png" width="2880" height="1800"
            alt="The Pacer Studio window on the synthetic demo: the demo's generated picture in the video pane with its own transport, a speed-coloured track map with violet brake points, seven named corners, a key and a Lap race button, the SPEED · Δ TO IDEAL charts reading Δideal +0.04 s at 93 km/h, and the tabbed lap panel with lap 13 starred as the session best at 0:44.950.">
-      <figcaption>One window on one recording — the synthetic demo, the session anyone can open, as are the map, the lap-strip card, the Stats moments and the report below. The ideal-lap, data-trust and overlay pictures are a real one: Sandown 3h, three hours at Sandown Park in July 2026.</figcaption>
+      <figcaption>One window on one recording — the synthetic demo, the session anyone can open, as are the map, the lap-strip card, the Stats moments and the report below. The pictures that are not say so in their own captions.</figcaption>
     </figure>
   </div>
 </section>
@@ -433,12 +433,12 @@
       <figure class="figure">
         <img src="media/ideal-lap.png" width="976" height="892" loading="lazy" decoding="async"
              alt="Stats ▸ IDEAL LAP on Sandown 3h: an ideal lap of 0:45.809 over 62 laps, 1.27 s on the table vs your best, stitched from 13 of 62 clean laps across 7 corners and 8 straights, with a table of every segment's gain, how many laps were already that fast there, and which lap set the mark.">
-        <figcaption>The ideal lap is a <strong>sum of per-segment minima</strong> — an order statistic, so it falls the longer you stay out: on this session it sits 0.61 s under your best at 5 laps and 1.27 s under at 62, for the same driving. So the tile states its sample, names the donor laps, and the gain column <strong>sums to the headline</strong>.</figcaption>
+        <figcaption>The ideal lap is a <strong>sum of per-segment minima</strong> — an order statistic, so it falls the longer you stay out: on this session it sits 0.61 s under your best at 5 laps and 1.27 s under at 62, for the same driving. So the tile states its sample, names the donor laps, and the gain column <strong>sums to the headline</strong>. Sandown 3h, captured at v0.6.0: today's tile adds that GPS noise lowers the ideal too, so part of the gap is timing luck.</figcaption>
       </figure>
       <figure class="figure">
         <img src="media/data-trust.png" width="1468" height="1112" loading="lazy" decoding="async"
              alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of the 69 laps found used; timing on the GPS9 true clock with 0% of moving fixes rejected; video sync corrected for a measured 0.46 s GPS lag and 26.2 ppm of clock drift; g-meter using IMU lateral and GPS-derived longitudinal; an IMU↔GPS cross-check that agrees, the g-meter's cornering force matching the GPS path's within 9 %; a gyroscope rotation cross-check that agrees within 2.7 % over 62 closed laps. Below it, the friction circle with a 1.50 g grip envelope.">
-        <figcaption>The IMU cross-check is judged on a <strong>gain</strong> as well as an r, because r is scale-blind: in this session the lateral channel correlates at 0.96 and is still 9% out.</figcaption>
+        <figcaption>The IMU cross-check is judged on a <strong>gain</strong> as well as an r, because r is scale-blind: in this session the lateral channel correlates at 0.96 and is still 9% out. Sandown 3h, captured at v0.5.0: today's app says “0% of fixes inside your laps rejected” where this still says “0% of moving fixes rejected”.</figcaption>
       </figure>
     </div>
 
@@ -466,13 +466,13 @@
       </figure>
       <figure class="figure">
         <img src="media/quickest.png" width="2880" height="1800" loading="lazy" decoding="async"
-             alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, no ★ on any row (C5's 3.52 is 0.071 s clear of the next pass, inside the step plus what the quickest of 14 passes reads quick by luck), the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass.">
-        <figcaption><strong>Your quickest pass through each corner, one click from the video.</strong> Corners ▸ Quickest passes lists each corner's quickest time and its lap; a click plays that pass from just before the corner and pauses just after it. Where other laps are level within the 0.07 s timing step it says how many, with no ★, and the next click plays the next of them. The charts and the map zoom onto the corner while it plays; L loops it, Slow plays it at 0.25×, and a right-click sets it beside your typical pass. The synthetic demo's, so anyone can open it.</figcaption>
+             alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, no ★ on any row (C5's 3.52 is 0.071 s clear of the next pass, still within timing noise: the step, plus the margin the quickest of 14 passes gains by luck alone), the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass.">
+        <figcaption><strong>Your quickest pass through each corner, one click from the video.</strong> Corners ▸ Quickest passes lists each corner's quickest time and its lap; a click plays that pass from just before the corner and pauses just after it. Where other laps are level within the <a href="https://github.com/eenndan/pacer/blob/main/docs/ACCURACY.md#the-timing-step">0.07 s timing step</a> it says how many, with no ★, and the next click plays the next of them. The charts and the map zoom onto the corner while it plays; L loops it, Slow plays it at 0.25×, and a right-click sets it beside your typical pass. The synthetic demo's, so anyone can open it.</figcaption>
       </figure>
       <figure class="figure">
         <img src="media/overlay.jpg" width="1440" height="810" loading="lazy" decoding="async"
              alt="A frame of a real exported overlay video on Sandown 3h: onboard kart footage with a lap-and-delta pill reading LAP 23, 0:19.799, Δ +0.05, a g-meter dial at 0.3 g, a mini track map, and a 57 km/h speed readout burned in.">
-        <figcaption><strong>The analysis leaves the app.</strong> A real frame from an exported overlay video in its default Classic style; a Broadcast style, a ghost of your best lap and corner cards are options in the same dialog. There is also a shareable lap-card image, and a data export of laps CSV + per-lap channels CSV + a one-page HTML session report that opens on the lap card and the Coaching page's answer, then tells the Stats page's story: pace, moments, corners, slow laps and the lap strip.</figcaption>
+        <figcaption><strong>The analysis leaves the app.</strong> A real frame from an exported overlay video in its default Classic style; a Broadcast style, a ghost of your best lap and corner cards are options in the same dialog. Sandown 3h, captured at v0.6.0: today's export draws this Δ +0.05 white, as level, since it is inside the 0.07 s step. There is also a shareable lap-card image, and a data export of laps CSV + per-lap channels CSV + a one-page HTML session report that opens on the lap card and the Coaching page's answer, then tells the Stats page's story: pace, moments, corners, slow laps and the lap strip.</figcaption>
       </figure>
       <figure class="figure">
         <img src="media/report.png" width="2200" height="1600" loading="lazy" decoding="async"
@@ -496,7 +496,7 @@
       <li><strong>Δ-to-ideal and Δ-to-best</strong> — the charts are distance-aligned so corners line up.</li>
       <li><strong>Synced GoPro video</strong> — scrub the lap and the footage follows, frame-accurate.</li>
       <li><strong>Dual-lap and cross-recording compare</strong> — play two laps side by side, including the best lap of another recording of the same track.</li>
-      <li><strong>Lap race</strong> — every clean lap leaves the start line together on the map, each on its own lap clock, grouped in packs the timing cannot split. Follow (⇧R) zooms the map onto the pack.</li>
+      <li><strong>Lap race</strong> — every clean lap leaves the start line together on the map, each on its own lap clock, grouped in packs of laps too close for GPS timing to tell apart. Follow (⇧R) zooms the map onto the pack.</li>
       <li><strong>Coaching</strong> — a ranked shortlist of the corners where you lose the most to your own best lap, each with its measured reason where one clears the noise.</li>
     </ul>
 
@@ -632,7 +632,7 @@ pixi run studio -- /path/to/YOUR_RECORDING.MP4</code></pre>
       <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">License</a>
     </div>
     <p>Pacer © 2025–2026 eenndan, licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. NonCommercial use only; derivatives must be shared alike.</p>
-    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page, and the clip, is produced by one command, <a href="https://github.com/eenndan/pacer/blob/main/studio/dev/media_capture.py"><code>studio/dev/media_capture.py</code></a>: the app shots are the real window rendered offscreen on a real recording. One caveat, stated because this page is about stating them: the hero's video pane is a real frame from the same recording composited into the window's own render, because an offscreen Qt render cannot capture a macOS video surface.</p>
+    <p class="muted">GPS and IMU parsing uses GoPro's <a href="https://github.com/gopro/gpmf-parser">gpmf-parser</a>. Every image on this page, and the clip, is produced by one command, <a href="https://github.com/eenndan/pacer/blob/main/studio/dev/media_capture.py"><code>studio/dev/media_capture.py</code></a>: the app shots are the real window rendered offscreen, the hero and most stills on the synthetic demo and the ideal-lap and data-trust ones on Sandown 3h; the overlay frame and the clip are the app's own exports of Sandown 3h. The four from Sandown 3h are older than this release, and each caption says which version it shows. One caveat, stated because this page is about stating them: the hero's video pane is a frame of the demo's own generated picture, composited into the window's render, because an offscreen Qt render cannot capture a macOS video surface.</p>
   </div>
 </footer>
 
