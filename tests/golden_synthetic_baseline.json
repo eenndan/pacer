@@ -52366,11 +52366,39 @@
    "n_laps": 14,
    "rows": [
     {
+     "cid": 3,
+     "direction": 1,
+     "entry_dist": 276.88542966874667,
+     "evidence": {
+      "abstain": "one_off",
+      "iqr": 0.06166022780337821,
+      "n_laps": 14,
+      "reach": "rare",
+      "reach_laps": 1
+     },
+     "phases": {
+      "apex": 0.03561119373484267,
+      "entry": 0.012350079429001681,
+      "exit": 0.028012119977310235
+     },
+     "reason": {
+      "apex_speed_deficit": 3.617999999999995,
+      "apex_speed_gain": 3.617999999999995,
+      "brake_extra_s": 0.025000000000034106,
+      "coast_extra_s": 0.0,
+      "contribution": 0.04249766713859303,
+      "exit_speed_gain": 2.379850426608357,
+      "kind": "apex",
+      "sigma": 0.04117701139798874
+     },
+     "time_lost": 0.07773619710425894
+    },
+    {
      "cid": 7,
      "direction": -1,
      "entry_dist": 709.0968320784975,
      "evidence": {
-      "abstain": "",
+      "abstain": "level",
       "iqr": 0.03605259889148549,
       "n_laps": 14,
       "reach": "repeat",
@@ -52398,7 +52426,7 @@
      "direction": -1,
      "entry_dist": 105.80174954822027,
      "evidence": {
-      "abstain": "",
+      "abstain": "level",
       "iqr": 0.027526973771268892,
       "n_laps": 14,
       "reach": "repeat",
@@ -52426,7 +52454,7 @@
      "direction": -1,
      "entry_dist": 355.6739665663575,
      "evidence": {
-      "abstain": "",
+      "abstain": "level",
       "iqr": 0.04035700479607485,
       "n_laps": 14,
       "reach": "repeat",
@@ -52448,34 +52476,6 @@
       "sigma": 0.03699601858307381
      },
      "time_lost": 0.023004707366046873
-    },
-    {
-     "cid": 3,
-     "direction": 1,
-     "entry_dist": 276.88542966874667,
-     "evidence": {
-      "abstain": "one_off",
-      "iqr": 0.06166022780337821,
-      "n_laps": 14,
-      "reach": "rare",
-      "reach_laps": 1
-     },
-     "phases": {
-      "apex": 0.03561119373484267,
-      "entry": 0.012350079429001681,
-      "exit": 0.028012119977310235
-     },
-     "reason": {
-      "apex_speed_deficit": 3.617999999999995,
-      "apex_speed_gain": 3.617999999999995,
-      "brake_extra_s": 0.025000000000034106,
-      "coast_extra_s": 0.0,
-      "contribution": 0.04249766713859303,
-      "exit_speed_gain": 2.379850426608357,
-      "kind": "apex",
-      "sigma": 0.04117701139798874
-     },
-     "time_lost": 0.07773619710425894
     },
     {
      "cid": 1,
@@ -52566,13 +52566,13 @@
     "cause": "none",
     "cause_cids": [],
     "cause_share": 0.0,
-    "execution_s": 0.09859227702776296,
-    "kind": "execution",
-    "lead_cid": 7,
-    "n_abstained": 4,
-    "n_ranked": 3,
-    "pace_s": 0,
-    "share": 1.0
+    "execution_s": 0.0,
+    "kind": "none",
+    "lead_cid": null,
+    "n_abstained": 7,
+    "n_ranked": 0,
+    "pace_s": 0.0,
+    "share": 0.0
    }
   },
   "coast_report": {
@@ -86885,11 +86885,39 @@
    "n_laps": 14,
    "rows": [
     {
+     "cid": 3,
+     "direction": 1,
+     "entry_dist": 276.8854296689952,
+     "evidence": {
+      "abstain": "one_off",
+      "iqr": 0.061660227439021664,
+      "n_laps": 14,
+      "reach": "rare",
+      "reach_laps": 1
+     },
+     "phases": {
+      "apex": 0.035611193235425276,
+      "entry": 0.012350079092048105,
+      "exit": 0.02801212018071908
+     },
+     "reason": {
+      "apex_speed_deficit": 3.617999999999995,
+      "apex_speed_gain": 3.617999999999995,
+      "brake_extra_s": 0.025000000000034106,
+      "coast_extra_s": 0.0,
+      "contribution": 0.04249766673111773,
+      "exit_speed_gain": 2.379850382375203,
+      "kind": "apex",
+      "sigma": 0.04117701116909483
+     },
+     "time_lost": 0.07773619635891027
+    },
+    {
      "cid": 7,
      "direction": -1,
      "entry_dist": 709.0968320791341,
      "evidence": {
-      "abstain": "",
+      "abstain": "level",
       "iqr": 0.03605259783748238,
       "n_laps": 14,
       "reach": "repeat",
@@ -86917,7 +86945,7 @@
      "direction": -1,
      "entry_dist": 105.80174954831524,
      "evidence": {
-      "abstain": "",
+      "abstain": "level",
       "iqr": 0.027526973038204616,
       "n_laps": 14,
       "reach": "repeat",
@@ -86945,7 +86973,7 @@
      "direction": -1,
      "entry_dist": 355.67396656667677,
      "evidence": {
-      "abstain": "",
+      "abstain": "level",
       "iqr": 0.04035700509678719,
       "n_laps": 14,
       "reach": "repeat",
@@ -86967,34 +86995,6 @@
       "sigma": 0.03699601838988747
      },
      "time_lost": 0.023004708889260428
-    },
-    {
-     "cid": 3,
-     "direction": 1,
-     "entry_dist": 276.8854296689952,
-     "evidence": {
-      "abstain": "one_off",
-      "iqr": 0.061660227439021664,
-      "n_laps": 14,
-      "reach": "rare",
-      "reach_laps": 1
-     },
-     "phases": {
-      "apex": 0.035611193235425276,
-      "entry": 0.012350079092048105,
-      "exit": 0.02801212018071908
-     },
-     "reason": {
-      "apex_speed_deficit": 3.617999999999995,
-      "apex_speed_gain": 3.617999999999995,
-      "brake_extra_s": 0.025000000000034106,
-      "coast_extra_s": 0.0,
-      "contribution": 0.04249766673111773,
-      "exit_speed_gain": 2.379850382375203,
-      "kind": "apex",
-      "sigma": 0.04117701116909483
-     },
-     "time_lost": 0.07773619635891027
     },
     {
      "cid": 1,
@@ -87085,13 +87085,13 @@
     "cause": "none",
     "cause_cids": [],
     "cause_share": 0.0,
-    "execution_s": 0.09859227835295936,
-    "kind": "execution",
-    "lead_cid": 7,
-    "n_abstained": 4,
-    "n_ranked": 3,
-    "pace_s": 0,
-    "share": 1.0
+    "execution_s": 0.0,
+    "kind": "none",
+    "lead_cid": null,
+    "n_abstained": 7,
+    "n_ranked": 0,
+    "pace_s": 0.0,
+    "share": 0.0
    }
   },
   "coast_report": {
