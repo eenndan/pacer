@@ -37,7 +37,11 @@ sys.path.insert(0, _REPO)
 # The bundled GoPro sample as an ABSOLUTE path. ctest runs this file from build/Release/tests, so
 # the repo-RELATIVE studio.session.DEFAULT_SAMPLE would not resolve there — the load would fail
 # and (pre-fix) hang the headless suite on the modal error dialog. Tests that load it use this.
-_BUNDLED_SAMPLE = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
+# Required HERE, before any window exists: with an empty submodule the load failed, the window's
+# modal error box waited forever offscreen, and CTest sat out its whole timeout (tests/_samples.py).
+import _samples  # noqa: E402
+
+_BUNDLED_SAMPLE = _samples.require("hero6.mp4")
 
 # QTableWidgetItem needs a QApplication for _NumItem; create one offscreen.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

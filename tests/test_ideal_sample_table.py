@@ -801,7 +801,9 @@ def test_the_stand_in_masks_as_the_app_does():
     import numpy as np
 
     sys.path.insert(0, _REPO)
-    sys.path.insert(0, os.path.join(_REPO, "bindings", "pacer"))
+    from studio.dev._bindings import tree_bindings
+    if (built := tree_bindings(_REPO)) is not None:   # None: an unbuilt tree, deployed pacer
+        sys.path.insert(0, built)
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     import _synthetic
 
@@ -910,7 +912,9 @@ def _re_measure_row(paths: list[str]) -> str:
     # shadows the binding package as a namespace portion when nothing else on the path is a real
     # `pacer`. CTest injects this; a bare `python tests/…` run would otherwise die inside the
     # loader with "module 'pacer' has no attribute 'Laps'".
-    sys.path.insert(0, os.path.join(_REPO, "bindings", "pacer"))
+    from studio.dev._bindings import tree_bindings
+    if (built := tree_bindings(_REPO)) is not None:   # None: an unbuilt tree, deployed pacer
+        sys.path.insert(0, built)
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     import tempfile
 

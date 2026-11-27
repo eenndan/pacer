@@ -70,6 +70,10 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
   `PYTHONPATH=bindings/pacer`, which no run needs: the build deploys the whole bindings package
   into the env, `tests/test_bindings_import.py`). **One test function:** `pixi run python -m pytest
   tests/test_x.py -k <part>` (jailed by `tests/conftest.py`; for iterating, not the gate).
+  **In a worktree with no build** (no `.pixi`, nothing compiled): `QT_QPA_PLATFORM=offscreen
+  PACER_APP_SUPPORT_JAIL=1 "$(git rev-parse --path-format=absolute --git-common-dir)/../.pixi/envs/default/bin/python"
+  -m pytest tests/test_x.py` — the main checkout's env, its deployed `pacer` and ffmpeg; first
+  `git submodule update --init --recursive` (what each symptom means: [tests/README.md](tests/README.md)).
 - **Real-footage checks** (`footage.<check>`) re-measure published figures on the owner's Desktop
   recordings. Without its recording a check is reported *Skipped* by name — a skip is not a pass,
   so **name every skipped `footage.*` when you report gates.** Variables, defaults and how to add

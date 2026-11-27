@@ -49,6 +49,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QMainWindow
 
 _APP = QApplication.instance() or QApplication([])
 
+import _samples  # noqa: E402
 from test_central_view_realqt import (  # noqa: E402
     _jail_every_live_app_support_seam,
     _real_central_view,
@@ -60,8 +61,9 @@ theme.register_fonts()
 theme.apply_theme(_APP)
 _jail_every_live_app_support_seam()   # before any window reads prefs
 
-_SAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "3rdparty", "gpmf-parser", "samples")
+# The committed clips the real loads open. Missing fails the file here, by name, before any window
+# is built (tests/_samples.py).
+_CLIPS = {name: _samples.require(name) for name in ("hero6.mp4", "karma.mp4")}
 _STATS_TAB = 2
 _LOW = data_quality.TimingQuality(dropped_fraction=0.12)   # true clock, 12 % of fixes rejected
 
@@ -95,7 +97,7 @@ def _host(view):
 def _loaded(sample):
     from studio.central_view import CentralView
     from studio.session import Session
-    path = os.path.join(_SAMPLES, sample)
+    path = _CLIPS[sample]
     session = Session.load([path])
     view = CentralView(session, [path], sidecar_path=None)
     return _host(view), view, session

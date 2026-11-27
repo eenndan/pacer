@@ -41,11 +41,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import _samples  # noqa: E402
+
 from studio import chapters as chmod  # noqa: E402
 from studio import ingest  # noqa: E402
 
-_SAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "3rdparty", "gpmf-parser", "samples")
+# Every committed clip is walked below: an empty submodule fails here, before any test runs.
+_SAMPLES = _samples.require_dir()
 
 # The pair the seam is measured on: hero7's GPMF track is 0.700700 s SHORTER than its video and
 # karma's is 0.934266 s LONGER, so a chain built on either quantity is unambiguously distinguishable
@@ -59,12 +61,8 @@ def _in_pixi_env() -> bool:
 
 def _require_sample(name: str) -> str:
     """A committed gpmf-parser sample, which CI checks out with `submodules: recursive`. Missing
-    is a LOUD failure, not a skip — the same rule test_ingest_equivalence.py applies."""
-    path = os.path.join(_SAMPLES, name)
-    assert os.path.exists(path), (
-        f"{name}: required gpmf-parser submodule sample missing at {path} — "
-        "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
-    return path
+    is a LOUD failure, not a skip (tests/_samples.py)."""
+    return _samples.require(name)
 
 
 def _ffprobe_video_duration(path: str) -> float | None:

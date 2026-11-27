@@ -30,7 +30,12 @@ os.environ.setdefault("PACER_NO_MEDIA", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import _samples  # noqa: E402
 from _qtapp import themed_app  # noqa: E402
+
+# Required before any window exists: with an empty submodule the karma load failed, the window's
+# modal error box waited forever offscreen, and CTest sat out its whole timeout (tests/_samples.py).
+_KARMA = _samples.require("karma.mp4")
 
 _APP = themed_app()
 
@@ -209,8 +214,7 @@ def test_a_recording_with_no_gps_offers_no_reference():
     from studio.session import Session
 
     want = data_quality.NO_GPS_NO_REFERENCE
-    karma = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "3rdparty", "gpmf-parser", "samples", "karma.mp4")
+    karma = _KARMA
     with tempfile.TemporaryDirectory(prefix="reach_") as folder, _fresh_app_support():
         a, b = _two_recordings(folder)
         win = _window(karma)

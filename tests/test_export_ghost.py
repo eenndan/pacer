@@ -465,9 +465,15 @@ def _render(spec, s):
     """Render `spec` for real (decode included) into the keeping encoder: (frames, renderer, err)."""
     real_popen = ev.subprocess.Popen
     encoders = []
+    # The render's own encoder, and nothing else: it writes `spec`'s output. `subprocess.Popen` is
+    # the module's, so this also sees every other child the process starts meanwhile — the ProRes
+    # alpha probe an earlier export-dialog test left warming on another thread pipes into ffmpeg
+    # too, and `subprocess.run` needs a context manager this stand-in is not (a TypeError that
+    # failed this file in pytest's order alone).
+    outputs = {spec.out_path, ev.png_sequence_pattern(spec.out_path)}
 
     def popen(cmd, *a, **k):
-        if "pipe:0" in cmd:
+        if "pipe:0" in cmd and cmd[-1] in outputs:
             encoders.append(_KeepingEncoder(cmd))
             return encoders[-1]
         return real_popen(cmd, *a, **k)

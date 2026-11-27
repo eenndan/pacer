@@ -29,11 +29,15 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _samples  # noqa: E402
+
 import pacer  # noqa: E402
 from studio import ingest  # noqa: E402
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SAMPLES = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples")
+# These two clips are COMMITTED in the gpmf-parser submodule, which CI checks out with
+# `submodules: recursive`: a broken/uninitialised checkout fails here, by name, rather than
+# hiding this equivalence pin (tests/_samples.py).
+_CLIPS = {name: _samples.require(name) for name in ("hero6.mp4", "hero8.mp4")}
 
 # Every field of the bound GPSSample — the equivalence must hold for all of them, including the
 # GPS9 quality fields (dop/fix keep their -1 sentinels on these GPS5-era sample clips).
@@ -86,14 +90,7 @@ def test_read_recording_equals_two_fresh_chains_on_real_media():
     of ACCL/GRAV/CORI) together cover every stream the readers handle."""
     ran = []
     for name, has_grav_cori in (("hero6.mp4", False), ("hero8.mp4", True)):
-        path = os.path.join(_SAMPLES, name)
-        # These two clips are COMMITTED in the gpmf-parser submodule, which CI checks out with
-        # `submodules: recursive` — so they are GUARANTEED present in CI. Fail LOUDLY (don't
-        # silently skip) when they're missing: a broken/uninitialised checkout must not hide this
-        # equivalence pin. Locally, run `git submodule update --init 3rdparty/gpmf-parser`.
-        assert os.path.exists(path), (
-            f"{name}: required gpmf-parser submodule sample missing at {path} — "
-            "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
+        path = _CLIPS[name]
         (got_samples, got_spans, got_naive, got_durations, got_meta,
          got_a, got_g, got_c, got_gyro, got_device) = ingest.read_recording([path])
         (ref_samples, ref_spans, ref_naive, ref_durations, ref_meta,
