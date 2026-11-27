@@ -903,6 +903,65 @@ def test_apex_delta_inside_the_speed_gap_step_is_not_coloured():
     print(f"ok Δapex: neutral under {gate:.2f} km/h, coloured from {at:.1f}, '0.0' never coloured")
 
 
+def test_corner_gap_past_the_step_is_bold_not_only_a_hue():
+    """cool/corners-gap-beyond-hue. Both Δ columns print signed numbers either side of their step,
+    so "measurable" vs "level" was carried by HUE ALONE: simulated (Machado 2009, severity 1) the
+    ahead green sits 1.46:1 (deuteranopia) / 1.28:1 (protanopia) from the neutral ink, the behind
+    red 2.00 / 2.73. A cell past its step is now also BOLD and a level cell regular: "bold" = "past
+    the step" in any colour vision. Read off the WEIGHT, never the colour — the cue that has to
+    survive without one — and its width: the weight must not move this grid's digit budget
+    (tests/test_corner_grid_budget.py), so a bold figure takes no more room than a regular one. A
+    cell read off an unmatched edge drops the hue and the weight together; the baseline lap's
+    dashes carry neither."""
+    _qapp()
+    import dataclasses
+
+    from PySide6.QtGui import QFontMetricsF
+
+    from studio.lap_table import CornerTable, apex_delta_colour, corner_delta_colour
+    cs, cum_a, sp_a, el_a, cum_b, sp_b, el_b = _two_laps()
+    ref = C.lap_corner_stats(cs, float(cum_a[-1]), cum_a, sp_a * 3.6, el_a)
+    st = C.lap_corner_stats(cs, float(cum_a[-1]), cum_b, sp_b * 3.6, el_b, ref=ref)
+    # (Δtime s, Δapex km/h): level both, past both, each sign, and the printed-edge cases
+    cases = [(0.0, 0.0), (0.05, 1.7), (-0.06, -1.7), (0.0649, 1.74), (0.08, 1.8), (-0.10, -1.8),
+             (0.42, -8.1), (-0.30, 26.7)]
+    cs_n = [cs[i % len(cs)] for i in range(len(cases))]
+    st_n = [dataclasses.replace(st[i % len(st)], delta=d, apex_speed_delta=a)
+            for i, (d, a) in enumerate(cases)]
+    stub = _StubSession(cs_n, {0: [dataclasses.replace(s, delta=0.0, apex_speed_delta=0.0)
+                                   for s in st_n], 1: st_n}, [s.time - 1.0 for s in st_n])
+    table = CornerTable(stub)
+    table.set_lap(1)
+    for r, (d, a) in enumerate(cases):
+        for col, value, printed, past in (
+                (2, d, fmt_signed(d, 2), corner_delta_colour(d) is not None),
+                (4, a, fmt_signed(a, 1), apex_delta_colour(a, None) is not None)):
+            item = table.table.item(r, col)
+            assert item.text() == printed, (col, value, item.text())    # the figure is untouched
+            assert item.font().bold() is past, (col, value, item.font().bold())
+            regular = type(item.font())(item.font())
+            regular.setBold(False)
+            assert QFontMetricsF(item.font()).horizontalAdvance(printed) <= \
+                QFontMetricsF(regular).horizontalAdvance(printed) + 0.5, (col, printed)
+    assert any(table.table.item(r, c).font().bold() for r in range(len(cases)) for c in (2, 4))
+    # unmatched corner: muted italic, no hue -> regular weight too (the cue never outlives the hue)
+    stub.corners.lap_corner_resolved = lambda lap_id: [False] * len(cases)
+    table.refresh()
+    for r in range(len(cases)):
+        for col in (2, 4):
+            assert not table.table.item(r, col).font().bold(), (r, col)
+    # the baseline lap: self-dashes, regular
+    table.set_lap(0)
+    for r in range(len(cases)):
+        for col in (2, 4):
+            assert not table.table.item(r, col).font().bold(), (r, col)
+    # the header says what the weight means, beside the step it is drawn from
+    for col in (2, 4):
+        tip = table.table.horizontalHeaderItem(col).toolTip()
+        assert "A bold figure is a gap past the step" in tip, (col, tip)
+    print("ok corner Δ: a gap past its step is bold (no wider), a level one regular")
+
+
 def test_the_apex_speed_noise_is_capped_by_one_fix_on_the_worst_shape():
     """Why Δapex reads the speed chart's gate and no step of its own: an apex speed is the lowest
     fix in the corner, so its σ depends on the apex's shape (`studio/dev/probes/apex_speed_sigma.py`:
