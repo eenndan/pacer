@@ -16,7 +16,7 @@ It is a real, working app — and it is a **portfolio piece**, so this page is w
 study: what it claims, how each claim was measured, and the gates that keep it true. **Source is
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
 
-<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on the synthetic demo: the demo's generated picture in the video pane, the speed-coloured track map with violet brake points, seven named corners and a Lap race button, the speed and Δ-to-ideal charts reading Δideal +0.05 s at 93 km/h, and the Laps · Corners · Stats · Coaching · Marks panel with lap 13 starred as the best at 0:44.950">
+<img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on the synthetic demo: the demo's generated picture in the video pane, the speed-coloured track map with violet brake points, seven named corners and a Lap race button, the speed and Δ-to-ideal charts reading Δideal +0.04 s at 93 km/h, and the Laps · Corners · Stats · Coaching · Marks panel with lap 13 starred as the best at 0:44.950">
 
 *The window, the map, the debrief, the Stats moments, the lap-strip card and the report are the
 synthetic demo's, the session anyone can open; the ideal-lap, data-trust and overlay pictures
