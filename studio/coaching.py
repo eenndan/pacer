@@ -257,6 +257,29 @@ ABSTAIN_NONE = ""
 ABSTAIN_FEW_LAPS = "few_laps"   # too few clean instances of this corner to say anything
 ABSTAIN_ONE_OFF = "one_off"     # nothing but the baseline itself ever reached the target
 ABSTAIN_SPREAD = "spread"       # the claim is inside the corner's own lap-to-lap scatter
+ABSTAIN_LEVEL = "level"         # the loss itself is inside the timing step (`loss_is_level`)
+
+# A LOSS INSIDE THE TIMING STEP IS NOT SOMETHING TO WORK ON (owner's ruling, cool/coaching-ranks-
+# past-the-step). The demo's debrief put C2 (+0.04 s) and C7 (+0.03 s) on the focus list in the loss
+# colour while each row said its passes were "level … under 0.07 s": the app's rule is that a claim
+# must beat the step, and the time lost is a difference of two corner passes of ONE recording, so
+# its step is `stats.corner_delta_step(False)`, the Corners table's Δbest step (0.07 s). No luck
+# allowance: the best lap's selection bias on this figure is +0.008 s (refused-2026-09.md §39).
+# Decided on the PRINTED loss, as `lap_table.corner_delta_colour` decides, so "+0.07 s" never reads
+# level. Checked LAST, so a row another test already gates keeps that test's words.
+#
+# MEASURED (habit-free synthetic days at the reference noise, the corners' TRUE loss timed on the
+# truth over the same laps; 6 grids, 188 days at 9 / 14 / 20 laps and with C4 planted 0.05 /
+# 0.10 / 0.20 s): of 375 corners on the focus list before, 156 (42 %) truly lost under 0.03 s and
+# 127 more under 0.07 s; after, 1 and 19. Of the 92 that truly lost 0.07 s or more, 10 leave the
+# list. A planted 0.10 or 0.20 s corner never leaves it (40 of 40 kept); a planted 0.05 s one
+# leaves on 7 of 10 days. 103 of the 188 days rank no corner after (habit-free 14 laps: 28 of 40).
+LOSS_STEP_S = stats_service.corner_delta_step(False)
+
+
+def loss_is_level(time_lost: float) -> bool:
+    """Whether a corner's time lost, as its cell prints it ("+0.04 s"), is inside `LOSS_STEP_S`."""
+    return float(f"{float(time_lost):.2f}") < LOSS_STEP_S
 
 
 @dataclass(frozen=True)
@@ -300,9 +323,9 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
     `target` is the BEST LAP's time through the same corner — the baseline `time_lost` is measured
     from, so "reached" means literally "drove this corner at least as fast as your best lap did".
 
-    The three abstain tests are applied in a FIXED priority so the reported reason is deterministic
-    and the most fundamental objection wins: not enough instances beats no-second-witness beats
-    inside-the-scatter."""
+    The abstain tests are applied in a FIXED priority so the reported reason is deterministic and
+    the most fundamental objection wins: not enough instances beats no-second-witness beats
+    inside-the-scatter beats inside-the-timing-step (`ABSTAIN_LEVEL`)."""
     t = np.asarray(list(times), float)
     t = t[np.isfinite(t)]
     n = int(len(t))
@@ -326,6 +349,8 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
         abstain = ABSTAIN_ONE_OFF
     elif float(time_lost) < SPREAD_MARGIN * iqr:
         abstain = ABSTAIN_SPREAD
+    elif loss_is_level(time_lost):
+        abstain = ABSTAIN_LEVEL
     else:
         abstain = ABSTAIN_NONE
     return Evidence(n_laps=n, reach_laps=reach_laps, reach=reach, iqr=iqr, abstain=abstain)
@@ -1555,7 +1580,37 @@ def abstain_sentence(opp: Opportunity) -> str:
     if ev.abstain == ABSTAIN_SPREAD:
         return (f"Not ranked: the {opp.time_lost:.2f} s on offer is inside your own lap-to-lap "
                 f"spread here — the middle half of your laps spans {ev.iqr:.2f} s.")
+    if ev.abstain == ABSTAIN_LEVEL:
+        return (f"Not ranked: level with your best lap here — the {opp.time_lost:.2f} s is "
+                f"within timing precision (under {LOSS_STEP_S:.2f} s).")
     return ""
+
+
+def no_focus_sentence(opps: Opportunities) -> str:
+    """What the page says where it would state a theme when NO corner is ranked and at least one
+    shown corner was held back only because its loss is inside the timing step — "" otherwise
+    (nothing level, or something ranked). A real answer, not an empty panel: nothing here separates
+    the corners from the best lap, and it points at what this session can still measure."""
+    state = _level_state(opps)
+    if not state:
+        return ""
+    if state == "all":
+        lead = (f"Every corner is level with your best lap, within timing precision (under "
+                f"{LOSS_STEP_S:.2f} s): nothing here separates them.")
+    else:
+        lead = (f"No corner is ranked: each is level with your best lap within timing precision "
+                f"(under {LOSS_STEP_S:.2f} s) or fails another test its row names.")
+    return lead + " Look at your consistency and your ideal lap instead."
+
+
+def _level_state(opps: Opportunities) -> str:
+    """"all" when nothing shown is ranked and every shown row is `ABSTAIN_LEVEL`, "some" when
+    nothing is ranked and at least one is, else ""."""
+    shown = shown_rows(opps) if opps.enough else []
+    kinds = {r.evidence.abstain for r in shown}
+    if not shown or ABSTAIN_NONE in kinds or ABSTAIN_LEVEL not in kinds:
+        return ""
+    return "all" if kinds == {ABSTAIN_LEVEL} else "some"
 
 
 def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = True) -> str:
@@ -2098,7 +2153,12 @@ def headline(opps: Opportunities) -> str:
     # 3.93 s on the Stats CORNERS table, and corner by corner run 1.3x to 2450x apart — not a
     # rounding question the reader can resolve by looking harder. The scope, measured: on D24 lap 6
     # a headline that named neither understated the lap's own +2.08 s as "0.21 s".
-    if not rows:
+    level = _level_state(opps) if not rows else ""
+    if level == "all":
+        gains = f"every corner within timing precision ({LOSS_STEP_S:.2f} s) of your best lap"
+    elif level:
+        gains = f"no corner clears both timing precision ({LOSS_STEP_S:.2f} s) and its row's tests"
+    elif not rows:
         gains = "no corner clears its own lap-to-lap spread"
     else:
         total = shown_total(rows)
@@ -2115,6 +2175,8 @@ def theme_lines(opps: Opportunities) -> tuple[str, list[str]]:
     (COACHING-4, `theme_tipping_row`)."""
     theme_obj = getattr(opps, "theme", None) or _NO_THEME
     rows = list(opps.rows)
+    if theme_obj.kind == THEME_NONE:
+        return no_focus_sentence(opps), []
     return theme_sentence(theme_obj, rows), theme_actions(theme_obj, rows)
 
 
