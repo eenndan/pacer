@@ -6,6 +6,32 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-11-27
+
+### Highlights
+
+- **A missing GPS fix no longer moves your lap.** Beside a hole the trace is smoothed in time, so
+  a lap timed across scattered missing fixes stays within 4.5 ms of its clean time (#715)
+- **Recordings with no missing fix are timed exactly as before**, to the bit: only fixes beside a
+  hole are smoothed differently (#715)
+- **The dropout ⚠ at the line is kept for what the fit cannot close**: two or more fixes missing
+  in a row within 3 fixes of a crossing, or the recording starting or stopping there (#715)
+- **Scattered rejected fixes no longer make a session read low.** At 1, 2, 5 and 10 % rejected,
+  0, 0, 1 and 27 % of laps wear the ⚠, where 37, 50, 78 and 99 % did (#715)
+- **The GPS-quality guard band narrows from 1.4 s to 0.8 s** beyond the first and last crossing,
+  measured where rejected fixes still move a lap (#715)
+- **Library ideal laps measured by an older Pacer show muted** until the recording is re-opened;
+  nothing is deleted, and best laps and PBs are unaffected (#715)
+- **The demo's quickest C2 pass is lap 7 and its ideal lap 0.30 s under the best** (lap 11 and
+  0.32 s before): lap 11's pass read quick only because a missing fix sat inside it (#715)
+
+### Fixed
+
+- A missing GPS fix near the start/finish line no longer moves the lap time: the trace is smoothed
+  in time there, and the lap stays in the bests instead of wearing the dropout ⚠. (#715)
+- Only a hole right at the line (two or more fixes in a row) or a recording that starts or stops
+  there still flags the lap, so scattered rejected fixes no longer make a session read low. (#715)
+
 ## [0.25.0] — 2026-11-21
 
 ### Highlights
@@ -2896,7 +2922,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/eenndan/pacer/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/eenndan/pacer/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/eenndan/pacer/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/eenndan/pacer/compare/v0.22.0...v0.23.0
