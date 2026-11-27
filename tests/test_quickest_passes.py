@@ -237,7 +237,7 @@ def test_the_switch_the_rows_and_the_tab_title():
         got = [[t.item(r, c).text() for c in range(4)] for r in range(t.rowCount())]
         assert got == [
             ["C1", "3.00", "7", "5 more laps"],
-            ["C2", "2.62", "11", "10 more laps"],
+            ["C2", "2.62", "7", "11 more laps"],    # lap 11 read 50 ms quick by a hole before #715
             ["C3", "2.32", "13", "5 more laps"],
             ["C4", "3.02", "8", "7 more laps"],
             ["C5", "3.52", "10", "none · next +0.071"],   # clear of 0.07, not of its luck
@@ -314,7 +314,7 @@ def test_a_row_plays_its_pass_then_the_next_level_lap_and_wraps():
         assert plays[-1] == s.corners.pass_clip(7, 4)
         # C2's previous corner ends inside the 2 s lead-in: the clip starts at C1's exit
         q.activate(1)
-        c1_exit = s.corners.corner_edge_media_time(10, 1, "exit")
+        c1_exit = s.corners.corner_edge_media_time(6, 1, "exit")      # C2 quickest: lap 7
         assert plays[-1][0] == c1_exit, (plays[-1], c1_exit)
         # the ▶ button is the same path
         q.table.cellWidget(4, 4).click()
@@ -443,7 +443,7 @@ def test_showing_the_quickest_view_hands_it_the_keys():
         assert plays == [], "showing the view plays nothing"
         QTest.keyClick(t, Qt.Key_Down)
         QTest.keyClick(t, Qt.Key_Return)
-        assert plays == [win.session.corners.pass_clip(10, 2)], plays
+        assert plays == [win.session.corners.pass_clip(6, 2)], plays
         # key 2 onto the remembered Quickest view, from another tab
         view.select_lap_tab(0)
         view.table.table.setFocus()
@@ -580,7 +580,7 @@ def test_cmd_k_lists_one_quickest_row_per_corner_and_runs_it():
         plays = _record_plays(win.view)
         rows = [e for e in command_palette.entries(win) if e.title.startswith("Quickest ")]
         assert [e.title for e in rows] == [
-            "Quickest C1 — lap 7", "Quickest C2 — lap 11", "Quickest C3 — lap 13",
+            "Quickest C1 — lap 7", "Quickest C2 — lap 7", "Quickest C3 — lap 13",
             "Quickest C4 — lap 8", "Quickest C5 — lap 10", "Quickest C6 — lap 13",
             "Quickest C7 — lap 2"]
         rows[2].run()
@@ -1614,7 +1614,7 @@ def _strip_room_everywhere():
                 assert t.verticalScrollBar().maximum() == 0, size    # every row in view...
                 assert not q.rows_bar.isVisible(), size              # ...so no bar says otherwise
                 assert not t.horizontalScrollBar().isVisible(), size
-            assert longest.endswith("· 11 of 11 · looping"), longest
+            assert longest.endswith("· 11 of 12 · looping"), longest   # C2: 12 laps level
             q.set_looping(False)
             q._cycle, q._running = None, False
             q._paint_playing()
@@ -1847,7 +1847,7 @@ def test_the_strip_says_its_dots_in_words():
                                          "0.071 s slower; typical 3.61; 1 lap ▼ far slower, off "
                                          "the scale at the right."), words
         assert t.item(1, QUICKEST_STRIP_COL).toolTip().startswith(
-            "14 counted laps through C2: 11 level with the quickest (within 0.07 s)")
+            "14 counted laps through C2: 12 level with the quickest (within 0.07 s)")
         assert "fastest" not in " ".join(t.item(r, QUICKEST_STRIP_COL).toolTip().lower()
                                          for r in range(7))
         assert t.item(4, 3).text() == "none · next +0.071", "the row's words are unchanged"
@@ -2296,10 +2296,10 @@ def test_a_click_on_the_strip_plays_the_row_and_a_tie_is_never_called_the_quicke
         plays = _record_plays(win.view)
         _click(t, 2, QUICKEST_STRIP_COL)                 # a REAL click on C3's strip
         assert plays and plays[-1] == win.session.corners.pass_clip(12, 3), plays
-        # hover C2's quickest (lap 11): a tie of 11, so "level", never "the quickest"
+        # hover C2's quickest (lap 7): a tie of 12, so "level", never "the quickest"
         rect = t.visualRect(t.model().index(1, QUICKEST_STRIP_COL))
         lay = strip_geometry(t.item(1, QUICKEST_STRIP_COL).data(STRIP_ROLE)[0], QRectF(rect))
-        c = next(c for m, c in lay.marks if m.lap_id == 10)
+        c = next(c for m, c in lay.marks if m.lap_id == 6)
         shown = []
         saved = lap_table.QToolTip.showText
         lap_table.QToolTip.showText = staticmethod(lambda _p, text, *_a: shown.append(text))
@@ -2310,7 +2310,7 @@ def test_a_click_on_the_strip_plays_the_row_and_a_tie_is_never_called_the_quicke
         finally:
             lap_table.QToolTip.showText = saved
         assert shown and shown[0].startswith(
-            "Lap 11: 2.62 · the lap the Quickest column names; 10 more are level"), shown
+            "Lap 7: 2.62 · the lap the Quickest column names; 11 more are level"), shown
         assert "· the quickest" not in shown[0], shown
     finally:
         _close(win)
@@ -2421,9 +2421,9 @@ def test_level_or_typical_passes_are_not_compared_and_say_why():
         pos = q.table.visualRect(q.table.model().index(1, 1)).center()      # C2: level
         compare = view.pass_menu(view._quickest_menu_pass(q.table, pos)).actions()[2]
         assert not compare.isEnabled()
-        assert compare.toolTip() == ("Lap 11's pass through C2 is within 0.07 s of your typical "
+        assert compare.toolTip() == ("Lap 7's pass through C2 is within 0.07 s of your typical "
                                      "pass as timed"), compare.toolTip()
-        assert not view.compare_pass_with_typical(10, 2) and not view._comparing()
+        assert not view.compare_pass_with_typical(6, 2) and not view._comparing()
         assert "within 0.07 s of your typical pass" in win.statusBar().currentMessage()
         assert not view.compare_pass_with_typical(3, 1)                     # lap 4 IS C1's typical
         assert "is your typical pass through C1" in win.statusBar().currentMessage()
@@ -2890,14 +2890,14 @@ def test_each_strip_mark_says_what_is_true_of_it_on_a_tie():
     with itself. Each mark now says what is true of IT."""
     from studio.lap_table import strip_mark_tip
     qp = _demo_session().quickest_passes()
-    c2 = next(p for p in qp.passes if p.cid == 2)            # lap 11 named, 10 more level
+    c2 = next(p for p in qp.passes if p.cid == 2)            # lap 7 named, 11 more level
     marks = {m.lap_id: m for m in stats.pass_strip(c2, qp.level_s).marks}
     named = strip_mark_tip(marks[c2.lap_id], c2, (), qp.level_s)
-    assert named == (f"Lap 11: {marks[10].time_s:.2f} · the lap the Quickest column names; "
+    assert named == (f"Lap 7: {marks[6].time_s:.2f} · the lap the Quickest column names; "
                      f"{len(c2.level_laps)} more are level"), named
     other = c2.level_laps[0]
     tip = strip_mark_tip(marks[other], c2, (), qp.level_s)
-    assert tip == (f"Lap {other + 1}: {marks[other].time_s:.2f} · level with lap 11 (within "
+    assert tip == (f"Lap {other + 1}: {marks[other].time_s:.2f} · level with lap 7 (within "
                    f"{qp.level_s:.2f} s)"), tip
     assert "Quickest column" not in tip and "quickest" not in tip
     slower = next(m for m in marks.values() if not m.level and not m.behind)
@@ -3205,7 +3205,7 @@ def test_the_demo_has_no_star_and_two_typical_offers_once_luck_is_allowed_for():
             "Lap 13's pass through C3 is within 0.090 s of your typical pass as timed: the "
             "quickest of 14 passes is expected to read about 0.020 s quicker than typical by luck "
             "alone"), enabled[3][1]
-        assert enabled[2][1] == ("Lap 11's pass through C2 is within 0.07 s of your typical pass "
+        assert enabled[2][1] == ("Lap 7's pass through C2 is within 0.07 s of your typical pass "
                                  "as timed"), enabled[2][1]
         # …and the shipped demo's own offer runs, with no luck patch: C5's quickest (lap 10)
         # beside its typical pass, held neutral

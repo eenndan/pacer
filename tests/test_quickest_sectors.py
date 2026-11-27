@@ -1312,8 +1312,11 @@ def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
                                                                   own.pageStep())
                 finally:
                     _close(win)
-            # the demo's corner strip, which the bar may not narrow (75 has 3 px over STRIP_MIN_PX)
-            assert base[1] == (False, {(1280, 800): 75, (1440, 900): 92}[size]), (size, base)
+            # the demo's corner strip, which the bar may not narrow (72 has 0 px over STRIP_MIN_PX).
+            # It was 75 / 92 until the time-aware smoother: C2's words read "11 more laps" (lap 7,
+            # the true quickest) where they read "10 more laps", and the words column is 203 px for
+            # them (200 before), so the strip gives up 3 px at both sizes.
+            assert base[1] == (False, {(1280, 800): 72, (1440, 900): 89}[size]), (size, base)
     finally:
         prefs.set_corners_view("lap")
 
