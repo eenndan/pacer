@@ -26,6 +26,12 @@ import os
 import subprocess
 import sys
 
+import _samples
+
+# The smoke run below opens the committed hero6 clip: without the submodule its load failed in the
+# child and the file read "the smoke failed". It fails here instead, saying what to run.
+_samples.require("hero6.mp4")
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REPORT = "nanobind: leaked"
 # Unbuffered, so a child's stdout and stderr interleave in the order they were written: "the last

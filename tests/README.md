@@ -62,6 +62,21 @@ shared `$TMPDIR` ([test_temp_isolation.py](test_temp_isolation.py), no carve-out
 CPU and the VideoToolbox sessions: a check failing near its timeout or on a hardware encode under
 that load is re-run alone before it is believed.
 
+**Running tests in an unbuilt worktree.** A fresh agent worktree has no `.pixi` env, no compiled
+`_pacer` beside `bindings/pacer/pacer/__init__.py`, no `build/` (so no CTest) and an EMPTY
+`3rdparty/gpmf-parser`. Run `git submodule update --init --recursive`, then one file at a time with
+the main checkout's interpreter and pytest, as AGENTS.md's "Run one test" spells out: conftest.py
+then imports the env's deployed `pacer` (built from the main checkout, so a C++ edit here is not in
+it) and puts the interpreter's `bin/` on PATH for ffmpeg/ffprobe. What each symptom means:
+`bindings not built in this tree — using the env's deployed pacer at …` on stderr is that fallback
+working ([studio/dev/_bindings.py](../studio/dev/_bindings.py)); `No module named 'pacer._pacer'` is
+a `PYTHONPATH=bindings/pacer` you set by hand (drop it); `3rdparty/gpmf-parser is empty` at import
+is [_samples.py](_samples.py) (a missing clip fails, never skips: CI always has the submodule);
+`No such file or directory: 'ffprobe'` is a bare `python tests/test_x.py` with the env's `bin/`
+off PATH (use pytest, or `PYTHONPATH=tests/_site`, whose sitecustomize.py adds it). Two reds
+here are real, not the environment: `test_bindings_import`'s deployed-copy check needs a build,
+and anything that changes C++ needs `pixi run build` before its test means anything.
+
 **Reading a hang dump.** A Python test still running 10 % (1 to 30 s) before its timeout writes
 `==== HANG DUMP: running test: <test_…> (<file>:<line>)`, then every thread's stack (most recent
 call first), into its log above `***Timeout` ([_hang_dump.py](_hang_dump.py), armed in every

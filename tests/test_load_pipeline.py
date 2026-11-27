@@ -29,12 +29,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
+import _samples  # noqa: E402
+
 from studio import data_quality, ingest, load, stats  # noqa: E402
 from studio.dev.golden_compare import EPS, walk  # noqa: E402
 from studio.dev.golden_session_dump import fingerprint  # noqa: E402
 from studio.session import Session  # noqa: E402
 
-FIXTURE = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
+# The committed clip, which CI checks out with the submodule. Missing fails the file here, by name:
+# each test used to print "skip" and return, and the file PASSED having loaded nothing.
+FIXTURE = _samples.require("hero6.mp4")
 BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "load_hero6_baseline.json")
 
 # --- the GPS5-era wall-clock claim (see the test at the foot of this file) ---------------------
@@ -47,13 +51,6 @@ NO_GPS_CLIP = "karma.mp4"
 # hero6's first KEPT fix, measured. Pinned as an EPOCH (timezone-independent); what it renders to
 # is computed locally in the test, the same LOCAL convention session_date/clock_hhmm use.
 HERO6_FIRST_FIX_MS = 1516822091654
-
-
-def _have_fixture() -> bool:
-    if os.path.exists(FIXTURE):
-        return True
-    print(f"skip: fixture {FIXTURE} not checked out (submodule)")
-    return False
 
 
 def _load_fingerprint() -> dict:
@@ -72,8 +69,6 @@ def _compare(a: dict, b: dict) -> tuple[list, dict]:
 def test_load_pipeline_is_deterministic():
     """Two full Session.load runs of the same file must fingerprint identically — a flaky gate is
     worse than none, and non-determinism here would mean the load pipeline depends on wall-clock/RNG."""
-    if not _have_fixture():
-        return
     diffs, stats = _compare(_load_fingerprint(), _load_fingerprint())
     assert not diffs, f"load pipeline is non-deterministic: {diffs[:5]}"
     assert stats["max"] <= EPS, f"two loads drifted by {stats['max']:g} at {stats['max_path']}"
@@ -84,8 +79,6 @@ def test_load_pipeline_media_clock_invariants():
     """The categorical invariants the numeric fingerprint doesn't name: cleaning kept a real trace,
     the clip is media-clock fallback (no GPS9 true clock), no fixes dropped, and it is not a known
     track. Drives load_recording directly for the timing_quality the Session wraps."""
-    if not _have_fixture():
-        return
     laps, cs, video_path, chapter_map, imu, track_name, tq, strip = load.load_recording([FIXTURE])
     assert laps.point_count() > 0, "cleaning dropped the whole trace"
     assert track_name is None, f"a bundled test clip is not a known track: {track_name}"
@@ -109,8 +102,6 @@ def test_load_pipeline_media_clock_invariants():
 def test_load_pipeline_matches_baseline():
     """The gate: the whole-pipeline Session fingerprint must match the committed baseline within
     eps 1e-9 — any drift in cleaning / smoothing / segmentation / start-line-fit FAILS CI."""
-    if not _have_fixture():
-        return
     assert os.path.exists(BASELINE), (
         f"missing baseline {BASELINE} — regenerate with "
         f"`python tests/test_load_pipeline.py --write-baseline`")
@@ -142,8 +133,6 @@ def test_a_gps5_era_clip_is_rejected_by_spacing_and_still_publishes_a_wall_clock
         A "fix" that made them None on a media-clock recording fails here.
 
     The last block is the sentinel's real trigger: a recording with no GPS stream at all."""
-    if not _have_fixture():
-        return
     rows = []
     for name in GPS5_ERA_CLIPS:
         path = os.path.join(SAMPLES_DIR, name)
@@ -210,8 +199,6 @@ def test_the_media_clock_bound_covers_every_gps5_era_clip():
 
     The bound said "up to ~0.1 s" while hero7.mp4 spreads 138 ms: it must cover every clip, and
     data_quality's rationale must quote the widest spread as measured here."""
-    if not _have_fixture():
-        return
     bound = re.fullmatch(r"up to ~(\d+(?:\.\d+)?) s", data_quality.MEDIA_CLOCK_LAP_ERROR)
     assert bound, f"the bound is no longer 'up to ~X s': {data_quality.MEDIA_CLOCK_LAP_ERROR!r}"
     bound_ms = float(bound.group(1)) * 1e3

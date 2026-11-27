@@ -26,7 +26,7 @@ What is pinned here:
     the SD card again — nothing on the card can repair a file overwritten in place.
 
 Real files on disk under a temp dir + the committed `3rdparty/gpmf-parser/samples/hero6.mp4`
-fixture (skipped if the submodule isn't checked out). Offscreen Qt for the notice half; no user
+fixture (the file fails at import, by name, if the submodule isn't checked out). Offscreen Qt for the notice half; no user
 data is read or written.
 
 Run: QT_QPA_PLATFORM=offscreen python tests/test_unreadable_chapter.py
@@ -53,6 +53,7 @@ for _mod, _name in ((prefs, "prefs"), (library, "library"), (track_db, "track_db
     os.makedirs(_dir, exist_ok=True)
     _mod._app_support_dir = (lambda d=_dir: d)
 
+import _samples  # noqa: E402
 from _qtapp import themed_app  # noqa: E402
 
 _APP = themed_app()
@@ -60,29 +61,14 @@ _APP = themed_app()
 from studio import chapters, ingest, sidecar  # noqa: E402
 from studio.session import Session  # noqa: E402
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIXTURE = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero6.mp4")
+# Half this file loads the committed clip. Missing fails the file here, by name, before any window
+# is built: it used to record each test as SKIPPED and exit 0, which CTest reported as Passed.
+FIXTURE = _samples.require("hero6.mp4")
 
 # The exact shape of the destroyed file: a JSON dump, written over an .MP4, that still parses as a
 # GoPro chapter name. Byte-for-byte irrelevant; what matters is that it does not open with an ISO
 # box header. (The real one starts `{"base": {"activ…` — a golden_session_dump.)
 _JSON_STUB = json.dumps({"base": {"valid_lap_ids": [0, 1, 2]}}).encode() * 40
-
-
-_SKIPPED: list[str] = []
-
-
-def _have_fixture(test_name: str) -> bool:
-    """Whether the committed clip is checked out — and if not, RECORD the skip by name.
-
-    Loud on purpose. The repo's known false-pass shape is a fixture-gated test that returns
-    silently while the runner prints a blanket "all tests passed"; `_run_all` refuses to print
-    that line once anything is in `_SKIPPED`."""
-    if os.path.exists(FIXTURE):
-        return True
-    _SKIPPED.append(test_name)
-    print(f"SKIP {test_name}: fixture {FIXTURE} not checked out (submodule)")
-    return False
 
 
 def _unreadable(path: str):
@@ -157,14 +143,11 @@ def test_probe_mp4_separates_read_and_not_video_from_could_not_read():
             with open(other, "wb") as f:
                 f.write(b"\x00\x00\x00\x18" + box + b"\x00" * 32)
             assert chapters.is_mp4_container(other), box
-    if _have_fixture("probe_mp4 on the committed clip"):
-        assert chapters.probe_mp4(FIXTURE) == chapters.MP4_CONTAINER
+    assert chapters.probe_mp4(FIXTURE) == chapters.MP4_CONTAINER
     print("test_probe_mp4_separates_read_and_not_video_from_could_not_read OK")
 
 
 def test_split_non_mp4_partitions_and_keeps_order():
-    if not _have_fixture("split_non_mp4 partition"):
-        return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=2, real_chapters=(1, 3))
         kept, skipped = chapters.split_non_mp4(paths)
@@ -181,8 +164,6 @@ def test_split_non_mp4_never_skips_a_file_it_could_not_read():
     went away, or simply MOVED is not junk: skipping it would analyse part of the user's recording
     and label an absent file "not a readable video". Those paths are KEPT and go to the loader,
     which fails loudly on them exactly as it did before any of this existed."""
-    if not _have_fixture("split_non_mp4 keeps unreadable paths"):
-        return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=1, real_chapters=(2, 3))
         restore = _unreadable(paths[2])          # chapter 3: intact footage, no read permission
@@ -235,8 +216,6 @@ def test_discovery_still_lists_the_junk_sibling_and_keeps_the_sidecar_key():
     exactly why a single-chapter and a full-chain open share one entry), so library history
     survives either way — asserted here so the justification cannot rot into folklore. The skip
     belongs to the LOAD, which is what actually cannot read the file."""
-    if not _have_fixture("discovery keeps the sidecar key"):
-        return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=1, real_chapters=(2, 3))
         sibs = chapters.discover_siblings(paths[1])          # opened via an INTACT chapter
@@ -253,8 +232,6 @@ def test_discovery_still_lists_the_junk_sibling_and_keeps_the_sidecar_key():
 def test_load_skips_the_junk_sibling_and_records_it():
     """THE BUG, end to end: the full-recording load of a chaptered recording whose chapter 1 is not
     video. It must SUCCEED on the intact chapters and report the one it left out."""
-    if not _have_fixture("load skips the junk sibling"):
-        return
     with tempfile.TemporaryDirectory() as root:
         paths = _recording(root, junk_chapter=1, real_chapters=(2, 3))
         sibs = chapters.discover_siblings(paths[0])
@@ -272,8 +249,6 @@ def test_load_skips_the_junk_sibling_and_records_it():
 def test_an_ordinary_load_reports_nothing_skipped():
     """The negative control: a clean recording's `skipped_chapters` is empty and the notice is
     silent, so the clause can never become background noise."""
-    if not _have_fixture("ordinary load reports nothing skipped"):
-        return
     s = Session.load([FIXTURE])
     assert s.skipped_chapters == [], s.skipped_chapters
     assert chapters.skipped_notice(s.skipped_chapters) is None
@@ -385,8 +360,6 @@ def test_an_intact_but_unreadable_chapter_is_never_called_overwritten():
     loader raises its own RuntimeError (never an OSError), and control fell through into "it has
     been overwritten or replaced". The app asserted that the user's footage was destroyed. It must
     land on the permission sentence instead — which the docstring had been advertising all along."""
-    if not _have_fixture("unreadable chapter is not called overwritten"):
-        return
     from studio.app import StudioWindow
 
     with tempfile.TemporaryDirectory() as root:
@@ -413,8 +386,6 @@ def test_the_failure_blames_the_chapter_the_loader_actually_opened():
     """D3 — MISATTRIBUTION. With a junk chapter 1 beside a real chapter 2, the skipped file never
     reaches the loader, so a failure in chapter 2 must not be reported against chapter 1. On the
     owner's D24 that is the live configuration of every 0060 load."""
-    if not _have_fixture("failure blames the chapter the loader opened"):
-        return
     from studio.app import StudioWindow
 
     with tempfile.TemporaryDirectory() as root:
@@ -490,14 +461,6 @@ def _run_all():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
-    # NEVER print a blanket pass line over a silent skip. Half this file is gated on a submodule
-    # fixture, and "all tests passed" under a fixture that isn't checked out is the exact false-
-    # pass shape this repo has been bitten by before.
-    if _SKIPPED:
-        print(f"\nunreadable-chapter tests: {len(_SKIPPED)} SKIPPED (fixture absent) — "
-              + "; ".join(_SKIPPED))
-        print("the rest passed; this run did NOT cover the load path")
-        return
     print("\nall unreadable-chapter tests passed")
 
 

@@ -52,8 +52,11 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import APP_NAME, __version__, logsetup  # noqa: E402
 from studio import app as studio_app  # noqa: E402
+from studio.dev._bindings import tree_bindings  # noqa: E402
 
-_BINDINGS = os.path.join(_REPO, "bindings", "pacer")
+# This tree's built bindings for the children; None in an unbuilt worktree, whose children then
+# import the env's deployed `pacer` as this process does (studio/dev/_bindings.py).
+_BINDINGS = tree_bindings(_REPO)
 
 
 # ------------------------------------------------------------------------------ harness
@@ -113,7 +116,9 @@ def _child_env(app_support: str, home: str) -> dict:
                QT_QPA_PLATFORM="offscreen")
     env.pop("PYTHONFAULTHANDLER", None)
     env.pop("PYTHONDEVMODE", None)
-    env["PYTHONPATH"] = os.pathsep.join(p for p in (_BINDINGS, env.get("PYTHONPATH")) if p)
+    path = os.pathsep.join(p for p in (_BINDINGS, env.get("PYTHONPATH")) if p)
+    if path:
+        env["PYTHONPATH"] = path
     return env
 
 

@@ -48,6 +48,7 @@ sys.path.insert(0, _REPO)
 import _footage  # noqa: E402
 
 from studio.dev import footage as dev_footage  # noqa: E402
+from studio.dev._bindings import tree_bindings  # noqa: E402
 
 # Every real-footage check in the repo on 2026-09-19, found by searching tests/, studio/dev/ and
 # pyproject.toml for a recording path, a footage variable or a skip branch (the PR has the table),
@@ -137,7 +138,10 @@ def _no_footage_env(home: str) -> dict:
            if k not in _FOOTAGE_ENVS + _RETIRED_ENVS + (_footage.DEFAULTS_ENV,)}
     env["HOME"] = home                      # every `~/Desktop/...` default now resolves into `home`
     env["QT_QPA_PLATFORM"] = "offscreen"
-    env["PYTHONPATH"] = os.path.join(_REPO, "bindings", "pacer")
+    if (built := tree_bindings(_REPO)) is not None:
+        env["PYTHONPATH"] = built
+    else:                                   # an unbuilt tree: the children import deployed pacer
+        env.pop("PYTHONPATH", None)
     env["PACER_APP_SUPPORT_JAIL"] = "1"
     return env
 

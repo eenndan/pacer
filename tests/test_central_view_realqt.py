@@ -42,6 +42,9 @@ from types import SimpleNamespace
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# A committed clip is required INSIDE the test that opens it, before any window (and up front by
+# this file's own runner): two dozen files import this one's helpers and need no clip.
+import _samples  # noqa: E402
 
 # Build the real widget tree with the inert media triplet (no decoder/audio device) — set BEFORE
 # importing the studio widgets (the seam is read once at PlayerPane construction).
@@ -1621,8 +1624,7 @@ def test_hero8s_refused_imu_is_disclosed_on_the_real_view():
     trajectory." and the DATA TRUST card said "g-meter: GPS lateral · GPS-derived longitudinal",
     unmarked. The refusal existed only on stdout."""
     from studio.session import Session
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "3rdparty", "gpmf-parser", "samples", "hero8.mp4")
+    path = _samples.require("hero8.mp4")
     s = Session.load([path])
     axis = s.gmeter_axis()
     assert axis is not None and not axis.ok and not axis.has_direction, axis
@@ -1655,8 +1657,7 @@ def test_hero8s_gps_derived_lateral_axis_is_named_on_the_real_stats_page():
     from studio import gmeter
     from studio.session import Session
     from studio.stats_panel import GG_TOOLTIP, LAP_TABLE_TOOLTIP, PEAK_LAT_TOOLTIP
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "3rdparty", "gpmf-parser", "samples", "hero8.mp4")
+    path = _samples.require("hero8.mp4")
     s = Session.load([path])
     assert s.has_gmeter and s.gmeter_source() == "gps", (s.has_gmeter, s.gmeter_source())
     refusal = s.gmeter_axis().refusal()
@@ -1711,8 +1712,7 @@ def test_karmas_absent_g_meter_is_not_described_as_an_accelerometer_page():
     from studio import gmeter
     from studio.session import Session
     from studio.stats_panel import LAP_TABLE_TOOLTIP, NO_GMETER_CLAUSE, PEAK_LAT_TOOLTIP
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "3rdparty", "gpmf-parser", "samples", "karma.mp4")
+    path = _samples.require("karma.mp4")
     s = Session.load([path])
     assert not s.has_gmeter, "karma.mp4 is the no-g-meter fixture; it grew a g-meter"
     view = CentralView(s, [path], sidecar_path=None)
@@ -2941,4 +2941,7 @@ def test_motion_interruptions_end_the_roll_with_no_timer_left():
 
 
 if __name__ == "__main__":
+    # The file's own run fails at once on a missing clip, rather than 30 s in (tests/_samples.py).
+    _samples.require("hero8.mp4")
+    _samples.require("karma.mp4")
     _run_all()

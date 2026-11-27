@@ -54,7 +54,13 @@ sys.path.insert(0, _ROOT)
 # regular package beats any number of namespace portions, so putting it on the path settles the
 # resolution in every install state, including an env the build has not deployed into yet.
 # Inserted immediately after the repo root: exactly where `PYTHONPATH=bindings/pacer` would put it.
-sys.path.insert(1, os.path.join(_ROOT, "bindings", "pacer"))
+# Only when this tree has BUILT them: an unbuilt worktree's package has no `_pacer` extension, and
+# putting it first would shadow the env's deployed copy (studio/dev/_bindings.py says which runs).
+from studio.dev._bindings import tree_bindings  # noqa: E402
+
+_TREE_BINDINGS = tree_bindings(_ROOT)
+if _TREE_BINDINGS is not None:
+    sys.path.insert(1, _TREE_BINDINGS)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # The gate's recording: PACER_GOLDEN_MP4, else `studio.dev.footage.RECORDING_DEFAULT` — since G2

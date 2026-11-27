@@ -3761,7 +3761,9 @@ class _Footage:
         self.root = _footage.directory(_FIGURES_ENV, _FIGURES_WHAT, [
             os.path.join(folder, f) for folder, files in (_LAP_SETS[n] for n in self.names) for f in files])
         sys.path.insert(0, _REPO)
-        sys.path.insert(0, os.path.join(_REPO, "bindings", "pacer"))
+        from studio.dev._bindings import tree_bindings
+        if (built := tree_bindings(_REPO)) is not None:   # None: unbuilt tree, deployed pacer
+            sys.path.insert(0, built)
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         os.environ.setdefault("PACER_NO_MEDIA", "1")
         from studio.dev._jail import divert_app_support

@@ -26,8 +26,11 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(ROOT, "bindings", "pacer"))
 sys.path.insert(0, ROOT)
+from studio.dev._bindings import tree_bindings  # noqa: E402
+
+if (_TREE_BINDINGS := tree_bindings(ROOT)) is not None:   # None: an unbuilt tree, deployed pacer
+    sys.path.insert(1, _TREE_BINDINGS)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402

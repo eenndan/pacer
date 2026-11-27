@@ -10,7 +10,10 @@ pytest run as safe as that script run, and makes it run the same tests:
   app-support directory. It is set here, before pytest imports any test module.
   tests/test_app_support_jail.py pins it.
 * What a registration's environment gives each file: offscreen Qt, and the built bindings first on
-  sys.path (the repo's C++ `pacer/` directory would otherwise shadow them).
+  sys.path (the repo's C++ `pacer/` directory would otherwise shadow them) — only when this tree
+  HAS built them: in an unbuilt worktree the env's deployed `pacer` is imported instead, and one
+  stderr line says so (studio/dev/_bindings.py). And the interpreter's own `bin/` on PATH, where
+  the env keeps ffmpeg and ffprobe: an agent starting the env's python directly has it nowhere else.
 * What each file's own runner does: leave out its FOOTAGE_CHECKS, SOAK_CHECKS and VIDEOTOOLBOX_CHECKS
   (each runs as its own `footage.` / `soak.` / `videotoolbox.<check>` registration; the soak alone
   is ~113 s), and run a test that
@@ -28,11 +31,35 @@ import pytest
 
 os.environ.setdefault("PACER_APP_SUPPORT_JAIL", "1")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-_BINDINGS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "bindings", "pacer")
-if _BINDINGS not in sys.path:
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_ENV_BIN = os.path.dirname(sys.executable)
+if _ENV_BIN not in os.environ.get("PATH", "").split(os.pathsep):
+    os.environ["PATH"] = os.pathsep.join(p for p in (_ENV_BIN, os.environ.get("PATH")) if p)
+
+
+def _load_bindings_module():
+    """studio/dev/_bindings.py, loaded by its path so the repo root never joins sys.path here."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_pacer_tree_bindings", os.path.join(_REPO, "studio", "dev", "_bindings.py"))
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_BINDINGS_MODULE = _load_bindings_module()
+_BINDINGS = _BINDINGS_MODULE.tree_bindings(_REPO)
+if _BINDINGS is not None and _BINDINGS not in sys.path:
     sys.path.insert(0, _BINDINGS)
 _hang_dump.arm_from_environment()
+
+
+def pytest_terminal_summary(terminalreporter):
+    """pytest captures the stderr line conftest's import wrote: repeat it where a run ends."""
+    if _BINDINGS_MODULE.NOTE:
+        terminalreporter.write_line(_BINDINGS_MODULE.NOTE)
 
 
 def _by_registration(item) -> bool:
