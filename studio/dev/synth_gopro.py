@@ -305,17 +305,19 @@ class Habit:
     clean_laps: tuple[int, ...] = ()
 
 
-def _apply_habit(habit: Habit | None, grip: np.ndarray, brake: np.ndarray, laps: int):
+def _apply_habit(habit: Habit | tuple[Habit, ...] | None, grip: np.ndarray, brake: np.ndarray, laps: int):
     """`_driver`'s (grip, brake) with `habit` applied — new arrays; the inputs are untouched. Grid lap
     k IS timed lap k: the out-lap is grid lap 0 and every corner lies past the main straight's line,
     so grid laps 1..`laps` are the flying laps and the in-lap (`laps` + 1) is never changed."""
     if habit is None:
         return grip, brake
     grip, brake = grip.copy(), brake.copy()
-    for k in range(1, laps + 1):
-        if k not in habit.clean_laps:
-            grip[k, habit.cid - 1] *= habit.grip
-            brake[k, habit.cid - 1] *= habit.brake
+    # A tuple plants one habit per corner (a fixture that must rank several corners).
+    for h in (habit if isinstance(habit, tuple) else (habit,)):
+        for k in range(1, laps + 1):
+            if k not in h.clean_laps:
+                grip[k, h.cid - 1] *= h.grip
+                brake[k, h.cid - 1] *= h.brake
     return grip, brake
 
 
@@ -337,7 +339,7 @@ class Truth:
     media_ppm: float
     chapter_payloads: list[int] = field(default_factory=list)
     origin: tuple[float, float] = ORIGIN   # where the circuit's local frame is anchored (lat, lon)
-    habit: Habit | None = None             # the planted habit, if any (`Habit`)
+    habit: Habit | tuple[Habit, ...] | None = None             # the planted habit, if any (`Habit`)
 
     def crossings(self, line_latlon) -> np.ndarray:
         """True times the kart crossed the segment [[lat, lon], [lat, lon]] (e.g. the app's own
@@ -401,7 +403,8 @@ class Truth:
                "media_ppm": self.media_ppm, "chapter_payloads": self.chapter_payloads,
                "duration_s": self.t_end}
         if self.habit is not None:          # only when set: a habit-free truth.json is unchanged
-            out["habit"] = vars(self.habit)
+            out["habit"] = ([vars(h) for h in self.habit] if isinstance(self.habit, tuple)
+                            else vars(self.habit))
         return out
 
 
@@ -426,7 +429,7 @@ def _driver(rng, circuit: Circuit, n_laps: int):
 
 def simulate(seed: int = DEFAULT_SEED, laps: int = 14, mirror: bool = False,
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
-             origin: tuple[float, float] = ORIGIN, *, habit: Habit | None = None,
+             origin: tuple[float, float] = ORIGIN, *, habit: Habit | tuple[Habit, ...] | None = None,
              reverse: bool = False, layout=None) -> Truth:
     """The kart's motion: out of the pits, `laps` timed laps (one of them slow), an in-lap, a stop.
 
@@ -883,7 +886,7 @@ class Recording:
 def build(seed: int = DEFAULT_SEED, laps: int = 14, chapters: int = 2, gps_noise: float = 1.0,
           mirror: bool = False, gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
           origin: tuple[float, float] = ORIGIN, *,
-          habit: Habit | None = None, reverse: bool = False,
+          habit: Habit | tuple[Habit, ...] | None = None, reverse: bool = False,
           layout=None) -> tuple[Truth, list[list[bytes]]]:
     """The recording's telemetry — one list of GPMF payloads per chapter — and its ground truth.
     Pure and deterministic: no files, no ffmpeg; the same arguments give the same bytes."""
@@ -903,7 +906,7 @@ def generate(out_dir: str, seed: int = DEFAULT_SEED, laps: int = 14, chapters: i
              gps_lag_s: float = GPS_LAG_S, media_ppm: float = MEDIA_PPM,
              origin: tuple[float, float] = ORIGIN, video=None, *,
              frames_per_payload: int = FRAMES_PER_PAYLOAD, audio: bool = False,
-             timecode: str | None = None, habit: Habit | None = None, reverse: bool = False,
+             timecode: str | None = None, habit: Habit | tuple[Habit, ...] | None = None, reverse: bool = False,
              layout=None) -> Recording:
     """Write the synthetic recording into `out_dir` (created; must not already hold files) and return
     its chapter paths and ground truth. Only the video bytes depend on the ffmpeg build.
