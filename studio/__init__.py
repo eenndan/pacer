@@ -33,7 +33,7 @@ Run:  pixi run studio [GoPro.MP4 ...]   (or: python -m studio [files])
 # user-visible sentences, fixed in U5). Identifiers are not names and keep their own spelling: the
 # `pacer` package, "~/Library/Application Support/pacer", ".pacer.json" sidecars and the
 # `app.pacer.studio` bundle id.
-__version__ = "0.26.0"
+__version__ = "0.27.0"
 APP_NAME = "Pacer Studio"
 
 
