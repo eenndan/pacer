@@ -73,9 +73,10 @@ working ([studio/dev/_bindings.py](../studio/dev/_bindings.py)); `No module name
 a `PYTHONPATH=bindings/pacer` you set by hand (drop it); `3rdparty/gpmf-parser is empty` at import
 is [_samples.py](_samples.py) (a missing clip fails, never skips: CI always has the submodule);
 `No such file or directory: 'ffprobe'` is a bare `python tests/test_x.py` with the env's `bin/`
-off PATH (use pytest, or `PYTHONPATH=tests/_site`, whose sitecustomize.py adds it). Two reds
-here are real, not the environment: `test_bindings_import`'s deployed-copy check needs a build,
-and anything that changes C++ needs `pixi run build` before its test means anything.
+off PATH (use pytest, or `PYTHONPATH=tests/_site`, whose sitecustomize.py adds it). Four files
+stay red here, each saying "build first", and rightly: `test_bindings_import` compares the deployed
+copy with this tree's build, and `test_app_support_jail`, `test_footage_checks` and
+`test_parallel_suite` list this build's CTest registrations. A C++ change needs `pixi run build`.
 
 **Reading a hang dump.** A Python test still running 10 % (1 to 30 s) before its timeout writes
 `==== HANG DUMP: running test: <test_…> (<file>:<line>)`, then every thread's stack (most recent
