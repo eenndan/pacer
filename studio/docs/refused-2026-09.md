@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Forty-three features were built far enough to **measure**, and the measurement said not to ship
+Forty-four features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -3296,6 +3296,58 @@ estimated. The synthetic 18 Hz stream in this matrix carries GPS9 times, so it i
 **What would be new evidence:** an unflagged lap with a hole under 0.35 s whose split moves by
 more than 0.15 s, or whose corner time moves by more than 0.07 s, at the reference noise; or a
 camera whose GPS runs slower than 10 Hz, where 0.35 s is less than three missing fixes.
+
+---
+
+## 44. A stronger plate behind the burned export Δ — refused (wave 26)
+
+**The idea.** The burned-in export prints the lap's Δ to your best in three colours: white when it
+is level, red when behind, green when ahead. In Classic it sits on the strip's dark plate, drawn at
+alpha 165 (`studio/export_video.py`), and over bright footage the plate lets the picture through.
+The proposal was a stronger plate behind the Δ, so the coloured figure clears 4.5:1 against what is
+behind it for every viewer, deuteranopes and protanopes included.
+
+**How it was measured.** The burned Δ through the real `OverlayPainter`, Classic and Broadcast, on
+the synthetic demo, at 1080p and 4K, over flat bright, sky and dark frames. The Δ ink was found by
+diffing each frame against the same frame with no Δ; the plate is that frame's modal colour inside
+the ink's box. Contrast is WCAG's ratio for normal vision and under simulated deuteranopia and
+protanopia (Machado 2009, severity 1), written normal / deutan / protan. Two baselines: the fill
+against the plate alone (the rule Broadcast's `_PLATE_ALPHA` is set by: no outline counted), and
+the fill against the 2.2-unit dark outline every figure is drawn with.
+
+| Classic, unless named | behind (red) | ahead (green) | level (white) |
+|---|---|---|---|
+| bright footage, fill vs plate | 2.09 / 2.49 / 1.49 | 3.91 / 3.69 / 4.25 | 6.83 / 6.89 / 6.79 |
+| bright footage, fill vs the outline | 5.90 / 6.99 / 4.24 | 11.05 / 10.34 / 12.08 | 19.30 |
+| sky, fill vs plate | 2.43 / 2.91 / 1.71 | | |
+| dark footage, fill vs plate | 5.64 / 6.71 / 4.04 | | |
+| Broadcast, bright, fill vs plate | 4.88 / 5.76 / 3.49 | | |
+
+The same sweep worked analytically, over flat backgrounds with the plate composited as Qt
+composites it, agrees with the painter to 0.04: Classic's plate at 165 gives 2.08 / 2.46 / 1.49
+behind on bright footage. Raising it to 230, Broadcast's alpha, would give 4.87 / 5.77 / 3.49.
+
+What the numbers say:
+- **With the outline counted, every colour already clears 4.5:1 for normal vision**, on every
+  background: the outline is the figure's own edge, drawn on every frame.
+- **Protan red cannot reach 4.5:1 without a hue change, even on an opaque plate.** Against the
+  outline's own colour it peaks at 4.29. The plate's strength cannot buy what the red does not
+  have, and changing the hue was ruled out for this wave.
+- **A stronger plate darkens the strip over every frame** for a gain only the no-outline rule
+  sees, and it still leaves protan red under 4.5:1.
+
+**Why it is refused.** By the measure the figure is read with (fill against its outline) every
+colour clears 4.5:1 for normal vision, and the one case that fails, protan red, fails on an opaque
+plate too. A stronger plate is a cost on every exported frame that does not close that case.
+
+**What stays open.** The burned Δ has no cue but its hue: level is white, past the step is
+coloured, and there is no arrow or weight to say which. Raising Classic's plate to 230 would meet
+the no-outline rule Broadcast uses (4.87 / 5.77 / 3.49 behind on bright footage) if that rule is
+ever applied to Classic.
+
+**What would be new evidence:** a measurement of the exported Δ on real footage where a viewer
+with normal vision misreads it, or a ruling that allows a hue change, which is what protan red
+needs.
 
 ---
 
