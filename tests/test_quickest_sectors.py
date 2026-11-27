@@ -1153,7 +1153,9 @@ def test_drawing_lines_never_takes_the_corner_rows_strip_or_cuts_their_words():
                     _close(win)
             print("strip (hidden, px)", size, widths)
             assert len(set(widths.values())) == 1, (size, widths)
-            assert not widths[0][0], "the demo's corner strip shows at this size"
+            # Docked at 1280×800 the demo's words take the row since its Coaching headline is
+            # one corner (test_quickest_passes._strip_room_everywhere): the strip is hidden there.
+            assert widths[0][0] == (size == (1280, 800)), (size, widths[0])
     finally:
         prefs.set_corners_view("lap")
 
@@ -1316,7 +1318,9 @@ def test_every_row_is_reachable_and_a_bar_says_when_some_are_below():
             # It was 75 / 92 until the time-aware smoother: C2's words read "11 more laps" (lap 7,
             # the true quickest) where they read "10 more laps", and the words column is 203 px for
             # them (200 before), so the strip gives up 3 px at both sizes.
-            assert base[1] == (False, {(1280, 800): 72, (1440, 900): 89}[size]), (size, base)
+            # Docked at 1280×800 it is hidden since the demo's Coaching headline is one corner
+            # (cool/coaching-ranks-past-the-step: the lap column opens 482 px, its words' width).
+            assert base[1] == {(1280, 800): (True, 0), (1440, 900): (False, 89)}[size], (size, base)
     finally:
         prefs.set_corners_view("lap")
 

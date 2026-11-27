@@ -606,8 +606,13 @@ def test_the_readout_repaints_only_when_a_printed_run_changes():
 
 def test_the_marks_cost_the_video_no_height():
     """Glyphs on the groove: the slider keeps its height and the video its pixels (main: 498×230
-    at 1280×800, 515×277 at 1440×900; this build measured 498×231 / 515×277)."""
-    for size, floor in (((1280, 800), (498, 230)), ((1440, 900), (515, 277))):
+    at 1280×800, 515×277 at 1440×900; this build measured 498×231 / 515×277).
+
+    482 wide at 1280×800 since cool/coaching-ranks-past-the-step: the video shares the left column,
+    which opens at the docked lap panel's minimum width, and the demo's shorter Coaching headline
+    ("0.36 s in your worst corner") made that 468 px; Quickest passes' words (`QuickestPassTable.
+    _hold_words_width`) now hold it at 482. Not the marks: the height is the claim here."""
+    for size, floor in (((1280, 800), (482, 230)), ((1440, 900), (515, 277))):
         win = _window(size)
         try:
             video = win.view.video
