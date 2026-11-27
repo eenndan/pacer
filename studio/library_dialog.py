@@ -272,6 +272,10 @@ def _update_summary_text(summary: dict) -> tuple[str, str]:
     counts = sum(1 for _a, d in diffs if set(d) == {"lap_count"})
     if counts:
         parts.append(f"{_plural(counts, 'lap count')} changed")
+    # A personal best those changes moved (`library.pb_changes`), named as the Library names it.
+    pbs = [f"your {track}{', ' + _library.ROTATION_WORDS[way] if way else ''} best is now "
+           f"{fmt_time(best)}" for track, way, best in summary.get("pbs") or []]
+    parts += pbs
     if failed:
         parts.append(f"{len(failed)} could not be measured")
     text = " · ".join(parts)
@@ -291,6 +295,7 @@ def _update_summary_text(summary: dict) -> tuple[str, str]:
         lines.append(f"{_library.entry_name(a)}: " + ", ".join(what))
     if lines:
         lines.insert(0, "Changed beyond the ideal lap, as re-opening would have changed them:")
+        lines += [p[:1].upper() + p[1:] + "." for p in pbs]
     if failed:
         lines.append("Not updated, left as they were:")
         lines.extend(f"{_library.entry_name(r)}: {why}" for r, why in failed)

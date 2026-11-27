@@ -662,9 +662,104 @@ def test_an_update_never_writes_back_a_row_forgotten_meanwhile():
         before, after = library.remeasure_and_save("GX0068", fresh, path)
         assert before["ideal_version"] == 1 and after["ideal_version"] == _CURRENT
         assert after["theoretical"] == 46.0
+        # Another outing under that number (a second camera, 3 days on) is not this row's: said so.
+        other = {**_entry("GX010068", [clip], theo=45.0, date="2026-09-22"),
+                 "start_ms": 1_790_000_000_000}
+        library.save({"entries": [{**_entry("GX010068", [clip], ideal_version=1),
+                                   "start_ms": 1_789_740_000_000}]}, path)
+        assert library.remeasure_and_save("GX0068", other, path) == library.REMEASURE_OTHER
+        assert library.load(path)["entries"][0]["ideal_version"] == 1
         library.save(library.empty_index(), path)
-        assert library.remeasure_and_save("GX0068", fresh, path) is None
+        assert library.remeasure_and_save("GX0068", fresh, path) == library.REMEASURE_GONE
         assert library.load(path)["entries"] == []
+
+
+def test_an_update_says_when_it_moved_a_personal_best_and_only_then():
+    """A row 0.25.0 marked degraded that re-measures trusted can become the track's best: the PB
+    chart is read off the rows, so the finish line says it once, by the Library's own summary
+    (`library.track_summary`). A run that moved no best says nothing about one."""
+    from studio.library_dialog import _update_summary_text
+    a = {**_entry("GX010061", ["/x/GX010061.MP4"], best=45.0, date="2026-09-01"),
+         "track": "Track T"}
+    b = {**_entry("GX010062", ["/x/GX010062.MP4"], best=44.928, date="2026-09-02"),
+         "track": "Track T", "degraded": True}
+    b_now = {**b, "degraded": False}
+    before, after = {"entries": [a, b]}, {"entries": [a, b_now]}
+    assert library.pb_changes(before, after, [b, b_now]) == [("Track T", 0, 44.928)]
+    line, hover = _update_summary_text({"updated": [b_now], "changed": [(b, b_now)], "failed": [],
+                                        "pbs": library.pb_changes(before, after, [b, b_now])})
+    assert line == "1 updated · 1 now reads as trusted · your Track T best is now 0:44.928", line
+    assert "Your Track T best is now 0:44.928." in hover, hover
+    slower = {**b, "best": 45.5}
+    assert library.pb_changes({"entries": [a, slower]},
+                              {"entries": [a, {**slower, "degraded": False}]}, [slower]) == []
+
+
+def test_an_unreadable_files_reason_names_the_file_not_its_folder():
+    """The Library's hover says which FILE could not be read; its folder goes to the log only."""
+    from studio import workers
+    path = "/Volumes/pacer-test-drive/Race day/GX017003.MP4"
+    saved = workers.Session.load
+
+    def refuse(paths):
+        raise ValueError(f"Failed to open file: {paths[0]}")
+    workers.Session.load = staticmethod(refuse)
+    try:
+        w = workers.RemeasureWorker(1, "GX7003", [path])
+        got = []
+        w.measured.connect(lambda *a: got.append(a))
+        w.run()                     # on this thread: the reason, not the threading, is the test
+    finally:
+        workers.Session.load = saved
+    assert got == [(1, "GX7003", None, "Failed to open file: GX017003.MP4")], got
+
+
+def test_closing_the_window_stops_an_update_read():
+    """The window's close cancels Library ▸ Update's read like its own two loads (a read stuck on a
+    damaged file must not hold quit for the drain's 60 s), and the drain then joins it."""
+    import time
+
+    from PySide6.QtCore import QThread, Signal
+
+    from studio import library_controller
+    from studio.app import StudioWindow
+
+    class _Stuck(QThread):
+        measured = Signal(int, str, object, str)
+
+        def __init__(self, token, fingerprint, paths):
+            super().__init__()
+            self._token, self.cancelled = token, False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def run(self):
+            end = time.time() + 30
+            while not self.cancelled and time.time() < end:
+                time.sleep(0.01)
+
+    with tempfile.TemporaryDirectory() as d:
+        clip = os.path.join(d, "GX010068.MP4")
+        open(clip, "wb").close()
+        saved = library_controller.RemeasureWorker
+        library_controller.RemeasureWorker = _Stuck
+        try:
+            win = StudioWindow([])
+            updater = win.library_ctl.ideal_updater()
+            updater.start([_entry("GX010068", [clip], ideal_version=1)])
+            worker = updater._worker
+            assert worker is not None and worker.isRunning()
+            t = time.time()
+            win.close()
+            took = time.time() - t
+        finally:
+            library_controller.RemeasureWorker = saved
+        assert worker.cancelled, "closing the window left Library ▸ Update reading"
+        assert took < 10, f"quit waited {took:.1f} s on the update's read"
+        assert not updater.running()
+        win.deleteLater()
+        QApplication.processEvents()
 
 
 # ------------------------------------------------------------------ runner

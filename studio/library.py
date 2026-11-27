@@ -1609,23 +1609,30 @@ def ideal_update_rows(index: dict, current: int) -> tuple[list[dict], list[dict]
     return present, absent
 
 
+REMEASURE_GONE = "its row was forgotten or replaced meanwhile"
+REMEASURE_OTHER = "the file at that path is now a different recording"
+
+
 def remeasure_and_save(fingerprint_key: str, entry: dict,
-                       path: str | None = None) -> tuple[dict, dict] | None:
+                       path: str | None = None) -> tuple[dict, dict] | str:
     """Write `entry`, a fresh measurement of the row `fingerprint_key`, exactly as a re-open writes
     one (``keyed`` against the index, then ``upsert``), but only while that row is still there and
-    `entry` keys to it: a row forgotten, cleared or restored away meanwhile is not written back, and
-    a measurement that keys elsewhere is not this row's. One lock round the read and the write.
-    Returns (before, after) — the stored row and what it is now — or None when nothing was written.
-    Any OSError from the write propagates to the caller, which guards it."""
+    `entry` keys to it: a row forgotten, cleared or restored away meanwhile is not written back
+    (``REMEASURE_GONE``), and a measurement that keys elsewhere — another camera's recording, or
+    another outing, now at that path — is not this row's (``REMEASURE_OTHER``). One lock round the
+    read and the write. Returns (before, after) — the stored row and what it is now — or the reason
+    nothing was written. Any OSError from the write propagates to the caller, which guards it."""
     if path is None:
         path = library_path()
     with _jsonstore.locked(path):
         index = load(path)
         rows = {e.get("fingerprint"): e for e in index.get("entries", [])}
         before = rows.get(fingerprint_key)
+        if before is None:
+            return REMEASURE_GONE
         keyed_entry = keyed(entry, index)
-        if before is None or keyed_entry["fingerprint"] != fingerprint_key:
-            return None
+        if keyed_entry["fingerprint"] != fingerprint_key:
+            return REMEASURE_OTHER
         before = copy.deepcopy(before)
         upsert(index, keyed_entry)
         save(index, path)
@@ -1648,6 +1655,23 @@ def remeasure_changes(before: dict, after: dict) -> dict:
         out["lap_count"] = (before.get("lap_count"), after.get("lap_count"))
     if trust_label(before) != trust_label(after):
         out["trust"] = (trust_label(before), trust_label(after))
+    return out
+
+
+def pb_changes(before: dict, after: dict, rows: list[dict]) -> list[tuple[str, int, float]]:
+    """The personal bests that a re-measurement of `rows` moved, read from the index `before` and
+    `after` it the way the Library's summary line reads them (``track_summary``'s trustworthy best;
+    per direction where a track has rows both ways round, as the Library names it): a list of
+    (track, rotation — 0 when the track is driven one way —, the best now). A best that did not
+    move by the millisecond the Library prints, or that no longer exists, is not listed."""
+    out = []
+    for track in sorted({t for e in rows for t in (e.get("track"),) if t}):
+        ways = (1, -1) if both_ways(after, track) else (0,)
+        for way in ways:
+            old = (track_summary(one_way(before, way), track) or {}).get("best")
+            new = (track_summary(one_way(after, way), track) or {}).get("best")
+            if new is not None and (old is None or abs(float(new) - float(old)) >= 5e-4):
+                out.append((track, way, float(new)))
     return out
 
 

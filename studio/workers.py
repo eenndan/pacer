@@ -4,6 +4,7 @@ no reach into StudioWindow internals."""
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import time
@@ -14,6 +15,23 @@ from . import chapters, demo, export_video, ingest, sidecar
 from .session import Session
 
 _log = logging.getLogger(__name__)
+
+
+def start_load(worker: QThread) -> None:
+    """Start a recording-loading worker from the GUI thread, after one `gc.collect()` there — the
+    one door every Session-loading worker goes through (`StudioWindow._start_load_worker`, Library ▸
+    Update's `IdealUpdater`), so the guard below cannot be forgotten by the next one.
+
+    A MITIGATION, not a cure. Python's cyclic GC runs on whichever thread trips its threshold, and
+    Qt widgets held only by reference cycles (LapTable's own closures hold it in some) crash or
+    deadlock in ~QTableView when that thread is a load worker's — test_studio_features' reentrant
+    load did, 3 runs of 3, with 441 cyclic Qt/studio objects from earlier windows pending; main has
+    the same hazard under a forced worker collect. Collecting HERE frees what is pending when a load
+    starts, on the GUI thread. Garbage made while a load runs, and the other worker threads (export,
+    which collects for itself, demo resolve), stay exposed: the cure is fewer cycles.
+    tests/test_load_worker_gc.py pins this collect for both callers."""
+    gc.collect()
+    worker.start()
 
 
 class VideoExportWorker(QThread):
@@ -192,8 +210,13 @@ class RemeasureWorker(QThread):
                 return
             entry = session.library_entry(self._paths)
         except Exception as exc:  # noqa: BLE001 — a row that fails to load is left as it was
-            first = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:200]
-            self.measured.emit(self._token, self._fingerprint, None, first)
+            first = (str(exc).strip().splitlines() or [type(exc).__name__])[0]
+            # The whole path goes to the log; the Library's hover names the file only.
+            _log.warning("library update: %s not measured: %s", self._fingerprint, first)
+            for p in self._paths:
+                for spelt in (os.path.realpath(p), os.path.abspath(p), p):
+                    first = first.replace(spelt, os.path.basename(p))
+            self.measured.emit(self._token, self._fingerprint, None, first[:200])
             return
         self.measured.emit(self._token, self._fingerprint, entry, "")
 

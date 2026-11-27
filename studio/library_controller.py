@@ -71,7 +71,7 @@ from .library_dialog import LibraryDialog
 from .overlays import PBToast
 from .session import DEFAULT_SAMPLE, fmt_time
 from .session_record_dialog import SessionRecordDialog
-from .workers import RemeasureWorker
+from .workers import RemeasureWorker, start_load
 
 _log = logging.getLogger("studio.app")
 
@@ -210,6 +210,7 @@ class IdealUpdater(QObject):
         self._changed: list[tuple[dict, dict]] = []
         self._failed: list[tuple[dict, str]] = []
         self._cancelled = False
+        self._index_before = library.load()      # the PBs as they stood, for `library.pb_changes`
         _log.info("library update: re-measuring %d row(s) measured by an older ideal lap",
                   len(rows))
         self.progress.emit(0, self._total)
@@ -250,7 +251,7 @@ class IdealUpdater(QObject):
             workers.add(worker)
         worker.measured.connect(self._on_measured)
         worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
-        worker.start()
+        start_load(worker)         # after the GUI-thread gc.collect() every loading worker gets
 
     def _on_measured(self, token: int, fingerprint: str, entry, error: str) -> None:
         if token != self._token or not self._running:
@@ -265,8 +266,8 @@ class IdealUpdater(QObject):
             _log.exception("library update: %s not written", fingerprint)
             self._failed.append((row, f"the library could not be written ({exc.strerror or exc})"))
             return
-        if written is None:
-            self._failed.append((row, "its row changed meanwhile"))
+        if isinstance(written, str):
+            self._failed.append((row, written))
             return
         before, after = written
         self._updated.append(after)
@@ -295,9 +296,13 @@ class IdealUpdater(QObject):
     def _finish(self) -> None:
         self._running = False
         self._token += 1
+        index = library.load()
+        moved = [r for pair in self._changed for r in pair]
         summary = {"updated": list(self._updated), "changed": list(self._changed),
                    "failed": list(self._failed), "cancelled": self._cancelled,
-                   "total": self._total, "index": library.load()}
+                   "total": self._total, "index": index,
+                   # A personal best the run moved, said once: the PB chart is read off the rows.
+                   "pbs": library.pb_changes(self._index_before, index, moved)}
         _log.info("library update: %d updated, %d changed beyond the ideal, %d not, of %d%s",
                   len(self._updated), len(self._changed), len(self._failed), self._total,
                   " (cancelled)" if self._cancelled else "")
@@ -939,6 +944,12 @@ class LibraryController:
         if getattr(self, "_ideal_updater", None) is None:
             self._ideal_updater = IdealUpdater(self.win)
         return self._ideal_updater
+
+    def cancel_ideal_update(self) -> None:
+        """Stop a Library ▸ Update run, if one was ever made and is running (the window closing)."""
+        updater = getattr(self, "_ideal_updater", None)
+        if updater is not None:
+            updater.cancel()
 
     def _reference_target(self, index: dict) -> dict | None:
         """The open session's own library entry — keyed as the index files it, so the row of the
