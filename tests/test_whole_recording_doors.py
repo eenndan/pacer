@@ -48,6 +48,7 @@ from _qtapp import themed_app  # noqa: E402
 _APP = themed_app()
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox  # noqa: E402
+from test_debrief_landing import three_habits  # noqa: E402  (a debrief needs ranked corners)
 
 from studio import focus, library  # noqa: E402
 from studio.app import StudioWindow  # noqa: E402
@@ -61,12 +62,20 @@ _FP = "GX9001"          # synth_gopro's recording number, chapter index stripped
 _REC = {}               # the one generated recording, shared: {"ch": [ch1, ch2], "folder": ...}
 
 
+def _habits():
+    """`test_debrief_landing.three_habits` with its clean laps spread over both chapters (2, 5, 8,
+    11, 14), so chapter 2 opened alone still ranks corners past the timing step and lands on its
+    debrief, as the habit-free recording did before Coaching ranked only past the step."""
+    from dataclasses import replace
+    return tuple(replace(h, clean_laps=(2, 5, 8, 11, 14)) for h in three_habits())
+
+
 def _recording() -> list[str]:
     """The two chapters of ONE synthetic recording of the built-in demo circuit, generated once."""
     if not _REC:
         folder = tempfile.mkdtemp(prefix="doors_rec_")
         rec = sg.generate(os.path.join(folder, "0001"), md.DEMO_SEED, md.DEMO_LAPS, chapters=2,
-                          origin=md.DEMO_ORIGIN)
+                          origin=md.DEMO_ORIGIN, habit=_habits())
         _REC.update(ch=list(rec.paths), folder=folder)
     return _REC["ch"]
 

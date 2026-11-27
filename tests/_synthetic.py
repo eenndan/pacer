@@ -607,3 +607,16 @@ def figure8_trace(laps: int = 8, a: float = 150.0, b_over_a: float = 1.5, peak_a
     return SimpleNamespace(t=t, x=np.interp(s_in, cum, px), y=np.interp(s_in, cum, py),
                            v=np.interp(s_in, cum, speed), s=k * lap_m + s_in, lap_m=lap_m,
                            lap_s=lap_s, node_s=node_fast, peak_s=peak)
+
+
+# A test fixture that must RANK corners (cool/coaching-ranks-past-the-step).
+def sweep_habits(laps: int):
+    """Five planted habits for the sweeps, so their sessions RANK corners: since Coaching ranks only
+    past the 0.07 s timing step (cool/coaching-ranks-past-the-step), the habit-free seeds these
+    sweeps drove ranked little (the theme sweep: 0 of 41 sessions ranking more corners than the
+    shortlist; 11 with these). C1, C3, C5, C6 and C7 are slower by grip × 0.82 / 0.86 / 0.88 /
+    0.90 / 0.90 on every lap but every third from lap 2 — the laps that reach the target."""
+    from studio.dev import synth_gopro as sg
+    clean = tuple(range(2, laps + 1, 3))
+    return tuple(sg.Habit(cid=c, grip=g, brake=1.0, clean_laps=clean)
+                 for c, g in ((1, 0.82), (3, 0.86), (5, 0.88), (6, 0.90), (7, 0.90)))

@@ -206,6 +206,17 @@ def test_the_debrief_line_carries_the_compare_within_its_budget():
 _SLOW_SEED = 7   # true best 45.099 s at the built-in line; the demo seed's is 44.956 s
 
 
+def _habits(seed: int):
+    """Planted habits, so each open lands on a debrief: since Coaching ranks only past the timing
+    step the habit-free recordings these journeys drove rank nothing, and a first open with nothing
+    ranked lands nowhere. The slow seed takes `_synthetic.sweep_habits` (it ranks C1, C5 and C3, so
+    its debrief fills the focus list), the demo seed `test_debrief_landing.three_habits`; each one's
+    clean laps hold a lap no slower than its habit-free best, so the PB between them stands."""
+    from _synthetic import sweep_habits
+    from test_debrief_landing import three_habits
+    return sweep_habits(14) if seed == _SLOW_SEED else three_habits()
+
+
 def _recordings(folder: str) -> tuple[str, str]:
     """Two DIFFERENT recordings of the built-in demo circuit (verified timing, one lap length): a
     slower one, then a faster one — so the second open is a new personal best over the first.
@@ -215,7 +226,7 @@ def _recordings(folder: str) -> tuple[str, str]:
     out = []
     for n, seed in (("9001", _SLOW_SEED), ("9002", md.DEMO_SEED)):
         rec = sg.generate(os.path.join(folder, f"gen{n}"), seed, md.DEMO_LAPS, chapters=1,
-                          origin=md.DEMO_ORIGIN)
+                          origin=md.DEMO_ORIGIN, habit=_habits(seed))
         os.makedirs(os.path.join(folder, n))
         out.append(os.path.join(folder, n, f"GX01{n}.MP4"))
         os.replace(rec.paths[0], out[-1])

@@ -3251,15 +3251,9 @@ def _generate(out_dir: str, seed: int, laps: int, habit=None):
 
 
 def _sweep_habits(laps: int):
-    """Five planted habits for the sweeps, so their sessions RANK corners: since Coaching ranks only
-    past the 0.07 s timing step (cool/coaching-ranks-past-the-step), the habit-free seeds these
-    sweeps drove ranked little (the theme sweep: 0 of 41 sessions ranking more corners than the
-    shortlist; 11 with these). C1, C3, C5, C6 and C7 are slower by grip × 0.82 / 0.86 / 0.88 /
-    0.90 / 0.90 on every lap but every third from lap 2 — the laps that reach the target."""
-    from studio.dev import synth_gopro as sg
-    clean = tuple(range(2, laps + 1, 3))
-    return tuple(sg.Habit(cid=c, grip=g, brake=1.0, clean_laps=clean)
-                 for c, g in ((1, 0.82), (3, 0.86), (5, 0.88), (6, 0.90), (7, 0.90)))
+    """`_synthetic.sweep_habits` (moved there: the report test drives it too)."""
+    from _synthetic import sweep_habits
+    return sweep_habits(laps)
 
 
 def _level_sessions() -> dict:
@@ -4265,8 +4259,9 @@ def test_the_docked_page_jumps_and_compares_without_widening():
         # The demo's circuit with THREE planted habits (`test_debrief_landing.three_habits`):
         # since Coaching ranks only past the timing step the demo itself ranks C1 alone, and this
         # page needs a second ranked row to pick.
-        from studio.dev import synth_gopro as sg
         from test_debrief_landing import three_habits
+
+        from studio.dev import synth_gopro as sg
         rec = sg.generate(os.path.join(folder, "gen"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
                           origin=md.DEMO_ORIGIN, habit=three_habits())
         os.makedirs(os.path.dirname(path))
@@ -4309,8 +4304,8 @@ def test_the_docked_page_jumps_and_compares_without_widening():
 
             # DOCKED, 1280x800: no row action, the pair on the chip's line, aimed at C1.
             c = v.compare
-            # 497 px with this recording (498 with the demo before the timing step; the docked
-            # width follows the window's content, not the Coaching rows' count).
+            # 497 px with this recording (498 with the demo before the timing step: the docked
+            # width follows the window's content).
             assert page.width() == 497 and t.isColumnHidden(cp._PANEL_COL_GO), page.width()
             assert jump.isVisible() and cmp_.isVisible() and jump.isEnabled() and cmp_.isEnabled()
             assert (jump.text(), cmp_.text()) == ("Jump to C1", "Compare C1")

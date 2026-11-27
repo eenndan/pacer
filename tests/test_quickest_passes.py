@@ -1583,7 +1583,13 @@ def _strip_room_everywhere():
     """The fit, at whatever device pixel ratio this process runs: docked at 1280×800 and 1440×900
     and in a maximised panel, every row's "Level with" words painted whole in every state — its
     count, each level lap cycled, playing, and with Loop on — no scrollbar, the strip shown beside
-    them (stepping aside under Loop). Returns the strip widths."""
+    them (stepping aside under Loop). Returns the strip widths of the states that show it.
+
+    DOCKED AT 1280×800 THE DEMO'S WORDS TAKE THE ROW (cool/coaching-ranks-past-the-step). The
+    grid's lap column opens at the Coaching page's minimum width, which its one-line headline sets:
+    "0.43 s across your top 3 corners …" made it 498 px, "0.36 s in your worst corner …" makes it
+    468, and at 464 px of table the strip has no room beside the words, so it is hidden there — the
+    rule this test holds, at a width it did not meet before."""
     from studio.lap_table import QUICKEST_LEVEL_COL, QUICKEST_STRIP_COL
     prefs.set_corners_view("quickest")
     win = _window()
@@ -1593,9 +1599,11 @@ def _strip_room_everywhere():
         for size in ((1440, 900, False), (1280, 800, False), (1440, 900, True),
                      (1280, 800, True)):
             q = _strip_table(win, *size)
-            assert not t.isColumnHidden(QUICKEST_STRIP_COL), (size, t.viewport().width(),
-                                                               q._level_need_px)
-            widths[size] = t.columnWidth(QUICKEST_STRIP_COL)
+            no_room = size == (1280, 800, False)    # the docstring's last paragraph
+            assert t.isColumnHidden(QUICKEST_STRIP_COL) == no_room, (
+                size, t.viewport().width(), q._level_need_px)
+            if not no_room:
+                widths[size] = t.columnWidth(QUICKEST_STRIP_COL)
             assert t.rowCount() == 7
             states = [(None, False, False)] + [
                 ((qp.cid, k), running, looping) for qp in q.passes()
@@ -1606,7 +1614,7 @@ def _strip_room_everywhere():
                 q._cycle, q._running = cycle, running
                 q.set_looping(looping)
                 q._paint_playing()
-                assert t.isColumnHidden(QUICKEST_STRIP_COL) == looping, size
+                assert t.isColumnHidden(QUICKEST_STRIP_COL) == (looping or no_room), size
                 for r in range(7):
                     whole, why = _painted_whole(t, r, QUICKEST_LEVEL_COL)
                     assert whole, (size, cycle, running, looping, why)
@@ -2097,9 +2105,10 @@ def test_an_unchanged_table_repaints_its_strips_without_laying_them_out_again():
         q._strip_words_at_width()
         assert d.paints >= painted + 3 * 7, (painted, d.paints)
         assert d.layouts == laid, f"an unchanged table laid out {d.layouts - laid} strips again"
-        # a narrower window narrows the strip: each row is laid out at the new width, once
+        # another width re-lays the strip: each row is laid out at the new width, once (the
+        # maximised panel: docked at 1280x800 the demo's strip has no room, `_strip_room_everywhere`)
         wide = t.columnWidth(QUICKEST_STRIP_COL)
-        q = _strip_table(win, 1280, 800)
+        q = _strip_table(win, 1280, 800, maximised=True)
         assert t.columnWidth(QUICKEST_STRIP_COL) != wide and not t.isColumnHidden(
             QUICKEST_STRIP_COL)
         t.viewport().repaint()
@@ -2222,7 +2231,8 @@ def test_a_cached_strip_paints_the_same_pixels_as_one_laid_out_afresh():
     prefs.set_corners_view("quickest")
     win = _window()
     try:
-        for size in ((1280, 800), (1440, 900)):
+        # Maximised at 1280x800 (docked there the demo's strip has no room: _strip_room_everywhere).
+        for size in ((1280, 800, True), (1440, 900, False)):
             q = _strip_table(win, *size)
             t = q.table
             q._cycle, q._running = (3, 1), True    # C3 cycled: its strip rings lap 6
