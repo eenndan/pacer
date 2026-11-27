@@ -17,20 +17,26 @@ from .session import Session
 _log = logging.getLogger(__name__)
 
 
-def start_load(worker: QThread) -> None:
-    """Start a recording-loading worker from the GUI thread, after one `gc.collect()` there — the
-    one door every Session-loading worker goes through (`StudioWindow._start_load_worker`, the
-    reference load's `_start_reference_worker`, Library ▸ Update's `IdealUpdater`), so the guard
-    below cannot be forgotten by the next one.
+def start_worker(worker: QThread) -> None:
+    """Start one of this module's QThread workers from the GUI thread, after one `gc.collect()`
+    there — the one door every worker the app starts goes through, so the guard below cannot be
+    forgotten by the next one: the window's load (`StudioWindow._start_load_worker`), the reference
+    load (`_start_reference_worker`), Library ▸ Update's rows (`IdealUpdater`), the demo fetch
+    (`StudioWindow._open_demo`) and each file of a video export (`ExportController.
+    _run_video_export`). None is exempt: every one runs Python on its own thread, so the GC
+    threshold can trip there.
 
     A MITIGATION, not a cure. Python's cyclic GC runs on whichever thread trips its threshold, and
     Qt widgets held only by reference cycles (LapTable's own closures hold it in some) crash or
-    deadlock in ~QTableView when that thread is a load worker's — test_studio_features' reentrant
-    load did, 3 runs of 3, with 441 cyclic Qt/studio objects from earlier windows pending; main has
-    the same hazard under a forced worker collect. Collecting HERE frees what is pending when a load
-    starts, on the GUI thread. Garbage made while a load runs, and the other worker threads (export,
-    which collects for itself, demo resolve), stay exposed: the cure is fewer cycles.
-    tests/test_load_worker_gc.py pins this collect for all three callers."""
+    deadlock in ~QTableView when that thread is a worker's — test_studio_features' reentrant load
+    did, 3 runs of 3, with 441 cyclic Qt/studio objects from earlier windows pending; main has the
+    same hazard under a forced worker collect. Collecting HERE frees what is pending when a worker
+    starts, on the GUI thread. Garbage made while one runs stays exposed, and so do the plain
+    `threading.Thread`s the export starts (its pipe pumps, encoder probes and stall supervisor):
+    the cure is fewer cycles. Nothing else collects for these threads — the HTML report's
+    `gc.collect()` (`ExportController.export_report`) runs on the GUI thread for its own
+    throwaway widgets, and starts no worker. tests/test_load_worker_gc.py pins this collect for
+    all five callers."""
     gc.collect()
     worker.start()
 
