@@ -6,6 +6,30 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-11-27
+
+### Highlights
+
+- **File ▸ Library… ▸ Update stops offering a row it cannot update**: a row whose file is now a
+  different recording fails once, then is left out while the window stays open (#727)
+- **That row is named in the line's hover with its reason**, like a recording not on this Mac, and
+  is offered again if the files at its path change (#727)
+- **Ideal laps un-mute one row at a time as Update writes them**, instead of all at once when the
+  run ends (#727)
+- **The lap-strip card marks a ⚠ best lap**, with the lap card's own words: "⚠ GPS dropout — not
+  counted in your bests" (#729)
+- **The public pages say what each picture is**: the demo's stills are called the demo's, and each
+  real-footage still names its recording and the version it was captured at (#728)
+- **The in-lap dropout rule stays in seconds**, measured and refused as a rule counted in fix
+  periods (refused §43, #730)
+
+### Fixed
+
+- The lap-strip card's headline says "⚠ … — not counted in your bests" when its best lap is itself a
+  ⚠ lap (every lap flagged), as the lap card does. (#729)
+- Library ▸ Update no longer offers again a row whose file is now a different recording: its hover
+  names it with that reason. Each row's Ideal cell un-mutes the moment its row is written. (#727)
+
 ## [0.27.0] — 2026-11-27
 
 ### Highlights
@@ -2963,7 +2987,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/eenndan/pacer/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/eenndan/pacer/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/eenndan/pacer/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/eenndan/pacer/compare/v0.24.0...v0.25.0
