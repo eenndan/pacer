@@ -664,12 +664,14 @@ class FocusBlock(QWidget):
 DEBRIEF_ESC = "Esc returns to your usual layout."
 
 
-def debrief_note(promoted: list[int], saved: bool = True, day: str = focus.THIS_SESSION) -> str:
+def debrief_note(promoted: list[int], saved: bool = True, day: str = focus.THIS_SESSION,
+                 ranked: int = PANEL_TOP_N) -> str:
     """The debrief's second line: what Pacer just did to the focus list, said as the default it is
     and how to undo it (board review PS-B1: "an explicit, reversible default — say so on screen"),
     then the way out. `saved` False is the synthetic demo's list, which is never written, so it is
     not promised "for next time" (QA EVAL-2). `day` names the session (`focus.open_day`): its top
-    corners are "today's" only on the day it was recorded."""
+    corners are "today's" only on the day it was recorded. `ranked` is the shortlist's length: one
+    ranked corner is the day's "top corner" (0.29.0 QA: the demo ranks one since #740)."""
     if not promoted:
         return DEBRIEF_ESC
     labels = [f"C{c}" for c in promoted]
@@ -677,7 +679,8 @@ def debrief_note(promoted: list[int], saved: bool = True, day: str = focus.THIS_
     undo = "remove it if you won't work on it" if len(labels) == 1 else \
         "remove any you won't work on"
     where = "on your focus list for next time" if saved else "on the focus list"
-    return (f"Pacer put {who}, from {day}'s top corners, {where} — "
+    top = "top corner" if ranked == 1 else "top corners"
+    return (f"Pacer put {who}, from {day}'s {top}, {where} — "
             f"a default, not a decision: {undo}. {DEBRIEF_ESC}")
 
 
@@ -2028,8 +2031,8 @@ class OpportunitiesPanel(QWidget):
         if self._debrief:
             pb_line, promoted, compare, saved = self._debrief_lead
             kept = [c for c in promoted if c in self.focus_block.cids()]
-            self.debrief_block.set_lines(pb_line, debrief_note(kept, saved, self.focus_block.now_day),
-                                         compare)
+            note = debrief_note(kept, saved, self.focus_block.now_day, len(self.shortlist_cids()))
+            self.debrief_block.set_lines(pb_line, note, compare)
 
     def shortlist_cids(self) -> list[int]:
         """The corners the headline sums, in rank order — what the debrief pre-promotes, so the
