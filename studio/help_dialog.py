@@ -223,6 +223,31 @@ COMMANDS: list[Command] = [
     Command("Layout", "I", "Live readout over the fullscreen video: lap, lap clock, Δ, speed",
             run="toggle_live_readout"),
     Command("Layout", "Drag", "Drag any splitter: resize the panels (the layout is remembered)"),
+    # CONTROLS: the toolbar buttons that had no way in but the pointer (StudioWindow's "toolbar
+    # controls, as named commands"). The first row is the rule a Tab-focused button now follows
+    # (widgets.pressable_focus); the rest have no key — ⌘K is their door, by the name each button's
+    # tooltip uses, greyed with the button's own reason when it is off (StudioWindow.command_gate).
+    Command("Controls", "Return",
+            "Press the button the focus ring is on (Space too; Tab moves the ring)"),
+    Command("Controls", "", "Ideal lap: overlay the ideal lap's Δ on the charts",
+            run="toggle_ideal_overlay"),
+    Command("Controls", "", "Brake/Throttle band on the charts (estimated)",
+            run="toggle_brake_throttle"),
+    Command("Controls", "", "Hero readout reference: vs ideal lap, or vs best lap",
+            run="toggle_ideal_readout"),
+    Command("Controls", "", "Snap to track: timing-line handles jump to the trace",
+            run="toggle_snap_to_track"),
+    Command("Controls", "", "Add sector: drop another sector line on the map", run="add_sector"),
+    Command("Controls", "", "Reset sectors: remove every sector line you placed",
+            run="reset_sectors"),
+    Command("Controls", "", "Maximize panel: Video (again to restore)",
+            run="maximize_video_panel"),
+    Command("Controls", "", "Maximize panel: Map (again to restore)", run="maximize_map_panel"),
+    Command("Controls", "", "Maximize panel: Charts (again to restore)",
+            run="maximize_charts_panel"),
+    Command("Controls", "", "Maximize panel: Laps (again to restore)", run="maximize_lap_panel"),
+    Command("Controls", "", "Next slow lap: walk to the next lap that names its slow corner",
+            run="next_slow_lap"),
     Command("Help", QKeySequence("Ctrl+K"), "Find and run any command"),
     # `run` stays None even though `?` is a live binding: Help ▸ Keyboard shortcuts is a menu item,
     # so the palette already carries this command with the accelerator Qt paints for it. A `run`

@@ -253,6 +253,9 @@ def slow_note_tip(note) -> str:
 # the grid with its cue in view, and a click on it is the pick, as it always was.
 SLOW_FINDER_NEXT = "next ›"
 SLOW_FINDER_NEXT_NAME = "Next slow lap"
+#: What ⌘K and the status line say when "next ›" has nowhere to go: its bar is hidden with no cue row.
+SLOW_FINDER_NONE = ("Next slow lap: no lap here lost its time mostly at one or two corners, so there "
+                    "is no slow lap to walk to")
 
 
 def slow_finder_text(n: int) -> str:

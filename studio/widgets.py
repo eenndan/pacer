@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -157,6 +159,7 @@ def icon_button(glyph: str, *, tooltip: str = "", size: QSize | None = None,
     btn.setFixedSize(box)
     btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     btn.setIcon(theme.icon(glyph))
+    btn.setFocusPolicy(Qt.TabFocus)   # keyboard-pressable, never focused by a click (pressable_focus)
     if checkable:
         btn.setCheckable(True)
     if tooltip:
@@ -203,6 +206,9 @@ class ToggleButton(QPushButton):
         self.setCheckable(True)
         if tooltip:
             self.setToolTip(tooltip)
+        # Keyboard-only focus: Tab reaches it and Space / Return press it; a click never parks the
+        # keyboard on it, so Space stays play/pause for the mouse (pressable_focus).
+        self.setFocusPolicy(Qt.TabFocus)
         if icon_only:
             self.setProperty("role", "IconButton")
             self.setFixedSize(theme.ICON_BTN)
@@ -284,6 +290,7 @@ class ActionChip(QPushButton):
             self.setProperty("tone", tone)
         self.setAutoDefault(False)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)   # as every app button: see pressable_focus
 
     @classmethod
     def _is_activation(cls, event) -> bool:
@@ -303,6 +310,38 @@ class ActionChip(QPushButton):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+#: The keys that press a keyboard-focused button: the platform's (Space), plus Return / Enter,
+#: which nothing in the main window binds. See `pressable_focus`.
+PRESS_KEYS = (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)
+
+
+def pressable_focus(event) -> QAbstractButton | None:
+    """The button a plain Space / Return / Enter should PRESS instead of reaching the window's own
+    shortcuts, or None.
+
+    Space is play/pause as a window QShortcut, and a QShortcut outranks a focused button, so on all
+    fifteen tab stops of the main window a Tab-focused button could not be pressed at all (Return
+    did nothing either). The ruling: Space stays play/pause EXCEPT while the keyboard focus — the
+    ring — is visibly on a pressable control; then Space, Return and Enter press THAT control.
+    `StudioWindow` asks this from its ShortcutOverride and its keyPressEvent, once, for every button
+    in the window — `ActionChip` was the one class that had solved it for itself.
+
+    ONLY A KEYBOARD-ONLY (`Qt.TabFocus`) BUTTON QUALIFIES, and that is what keeps mouse users' Space
+    exactly as it was. A TabFocus button never takes the focus from a click, so the ring can only be
+    on it because the keyboard put it there. It is what the macOS style gives every QPushButton
+    already (measured: SH_Button_FocusPolicy = TabFocus under `macos`, StrongFocus under Fusion,
+    the offscreen style), and the app's own button classes now ask for it explicitly — ToggleButton,
+    ActionChip, `icon_button` — so the behaviour is the same on every platform the app is tested on.
+    A StrongFocus button anywhere (Fusion's default) keeps Space = play/pause, as today."""
+    if (event.modifiers() & ~Qt.KeypadModifier) != Qt.NoModifier or event.key() not in PRESS_KEYS:
+        return None
+    w = QApplication.focusWidget()
+    if (isinstance(w, QAbstractButton) and w.focusPolicy() == Qt.TabFocus
+            and w.isEnabled() and w.isVisible()):
+        return w
+    return None
 
 
 def set_tone(widget: QWidget, tone: str | None) -> None:

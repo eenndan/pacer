@@ -2031,6 +2031,7 @@ class MapView(QWidget):
         self.reset_sectors_btn = QPushButton(icon("ph.eraser"), "Reset sectors")
         for btn in (self.add_sector_btn, self.reset_sectors_btn):
             btn.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
+            btn.setFocusPolicy(Qt.TabFocus)   # pressable from the keyboard (widgets.pressable_focus)
         self.add_sector_btn.clicked.connect(self._add_sector)
         self.reset_sectors_btn.clicked.connect(self._reset_sectors)
         # Opt-in snap-to-track toggle (default off = free placement). When on, a released handle

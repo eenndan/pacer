@@ -40,7 +40,7 @@ os.environ["PACER_NO_MEDIA"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtGui import QImage  # noqa: E402
+from PySide6.QtGui import QImage, QKeySequence  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QAbstractScrollArea,
     QApplication,
@@ -290,12 +290,192 @@ def _boxes(w):
     return b
 
 
+# ------------------------------------- w26: a focused button is pressed by the keyboard, not by Space
+_PLAYED: list = []
+_WINDOW = None
+
+
+def _window_with_view():
+    """A real StudioWindow (menu bar + the real window shortcuts, Space among them) holding its own
+    real CentralView — the seam tests/test_command_palette.py uses, plus a view, because the
+    question is what Space does INSIDE the window that binds it. `toggle_playback` is recorded
+    rather than run (no media here); patched before `_build_shortcuts` binds it."""
+    global _WINDOW
+    if _WINDOW is not None:
+        return _WINDOW
+    import tempfile
+
+    from PySide6.QtWidgets import QMainWindow
+
+    from studio import app as A
+    from studio import library, prefs, units
+    from studio.export_controller import ExportController
+    from studio.library_controller import LibraryController
+    tmp = tempfile.mkdtemp(prefix="w26-focus-")
+    library._app_support_dir = prefs._app_support_dir = (lambda: tmp)
+    orig = A.StudioWindow.toggle_playback
+    A.StudioWindow.toggle_playback = lambda self: _PLAYED.append(1)
+    try:
+        win = A.StudioWindow.__new__(A.StudioWindow)
+        QMainWindow.__init__(win)
+        win._excluded_visible = True
+        win._colorblind = False
+        win._speed_unit = units.KMH
+        win.exports = ExportController(win, A.STATUS_MS)
+        win.library_ctl = LibraryController(win, A.STATUS_MS)
+        win._build_menu()
+        win._build_shortcuts()
+    finally:
+        A.StudioWindow.toggle_playback = orig
+    v, _s, _t0, _t1 = _real_central_view()
+    win.view = v
+    win.setCentralWidget(v)
+    win.resize(1440, 900)
+    win.show()
+    win.activateWindow()
+    _settle(8)
+    _WINDOW = win
+    return win
+
+
+def _buttons_on_screen(win):
+    from PySide6.QtWidgets import QAbstractButton
+    return [b for b in win.view.findChildren(QAbstractButton)
+            if b.isVisible() and b.isEnabled() and b.focusPolicy() != Qt.NoFocus]
+
+
+def _put_back(win, b):
+    """Undo a press so the next one starts from the same state: restore a maximized panel, flip a
+    toggle back. (Add sector / Reset sectors stay pressed: harmless on this sidecar-less fixture.)"""
+    v = win.view
+    if getattr(v, "_maximized_panel", None) is not None:
+        v._restore_splitter_sizes()
+    elif b.isCheckable():
+        b.click()
+    _settle(3)
+
+
+def test_a_keyboard_focused_button_presses_on_space_return_and_enter():
+    """On all fifteen tab stops of the window a Tab-focused button could not be pressed: Space was
+    play/pause (a window QShortcut outranks the focused button) and Return / Enter did nothing,
+    while seven of those controls had no other way in. Now, with the ring on a button, Space,
+    Return and keypad Enter press THAT button and play nothing. And every button the keyboard can
+    reach on screen must be keyboard-ONLY (Qt.TabFocus) — the property that keeps the mouse half of
+    the ruling true (next test); a button added tomorrow with StrongFocus fails here."""
+    from PySide6.QtTest import QTest
+    win = _window_with_view()
+    buttons = _buttons_on_screen(win)
+    assert len(buttons) >= 8, [b.text() or b.toolTip()[:20] for b in buttons]
+    strong = [b.text() or b.toolTip()[:30] for b in buttons if b.focusPolicy() != Qt.TabFocus]
+    assert not strong, f"buttons a click would park the keyboard on (not Qt.TabFocus): {strong}"
+    failed = []
+    for b in buttons:
+        pressed = []
+        b.clicked.connect(lambda *_a, _p=pressed: _p.append(1))
+        for key, mod in ((Qt.Key_Space, Qt.NoModifier), (Qt.Key_Return, Qt.NoModifier),
+                         (Qt.Key_Enter, Qt.KeypadModifier)):
+            if not (b.isVisible() and b.isEnabled()):
+                break
+            b.setFocus(Qt.TabFocusReason)
+            _settle(2)
+            _PLAYED.clear()
+            pressed.clear()
+            QTest.keyClick(_APP.focusWidget(), key, mod)
+            _settle(3)
+            if pressed != [1] or _PLAYED:
+                failed.append(f"{_label(b)} {QKeySequence(key).toString()}: pressed {len(pressed)}, "
+                              f"played {len(_PLAYED)}")
+            if pressed:
+                _put_back(win, b)
+    assert not failed, failed
+    print(f"test_a_keyboard_focused_button_presses_on_space_return_and_enter OK ({len(buttons)} buttons)")
+
+
+def test_a_mouse_click_leaves_space_as_play_pause():
+    """The other half of the ruling: a mouse user's Space is play/pause exactly as before. Each
+    toolbar button is CLICKED with the mouse (from a grid that has the keyboard), then Space is
+    pressed: it plays, the button is not pressed a second time, and the keyboard never left the
+    grid. On main, under the Fusion style the tests run in, every click left the focus (and the
+    ring) on the button."""
+    from PySide6.QtTest import QTest
+    win = _window_with_view()
+    v = win.view
+    grid = v.table.table
+    targets = [v.map.snap_btn, v.map.add_sector_btn, v.map.reset_sectors_btn, v.race_btn,
+               v.plots.ideal_btn, v.plots.brake_throttle_btn, v.ideal_readout_btn, v._map_max_btn,
+               v._plots_max_btn, v._video_max_btn, v._table_max_btn]
+    failed, clicked = [], 0
+    for b in targets:
+        if not (b.isVisible() and b.isEnabled()):
+            continue
+        grid.setFocus(Qt.MouseFocusReason)
+        _settle(2)
+        pressed = []
+        b.clicked.connect(lambda *_a, _p=pressed: _p.append(1))
+        QTest.mouseClick(b, Qt.LeftButton, Qt.NoModifier, b.rect().center())
+        _settle(3)
+        clicked += bool(pressed)
+        focus = _APP.focusWidget()
+        _PLAYED.clear()
+        pressed.clear()
+        QTest.keyClick(focus or win, Qt.Key_Space)
+        _settle(3)
+        if focus is b or pressed or _PLAYED != [1]:
+            failed.append(f"{_label(b)}: focus on it={focus is b} re-pressed={len(pressed)} "
+                          f"played={len(_PLAYED)}")
+        _put_back(win, b)
+    assert clicked >= 6, f"only {clicked} toolbar buttons could be clicked: the fixture changed"
+    assert not failed, failed
+    print(f"test_a_mouse_click_leaves_space_as_play_pause OK ({clicked} buttons clicked)")
+
+
+def test_typing_a_space_in_a_text_field_still_types_it():
+    """A focused text field keeps Space as a character (and ⌥← as word movement): the
+    button rule is about buttons only."""
+    from PySide6.QtTest import QTest
+    win = _window_with_view()
+    field = win.view.marks_panel.search
+    win.view.tab_bar.setCurrentIndex(4)
+    _settle(3)
+    field.setFocus(Qt.MouseFocusReason)
+    _settle(2)
+    _PLAYED.clear()
+    QTest.keyClicks(field, "a b")
+    QTest.keyClick(field, Qt.Key_Left, Qt.AltModifier)
+    assert field.text() == "a b" and not _PLAYED, (field.text(), _PLAYED)
+    assert field.cursorPosition() == 2, field.cursorPosition()
+    field.clear()
+    win.view.tab_bar.setCurrentIndex(0)
+    _settle(3)
+    print("test_typing_a_space_in_a_text_field_still_types_it OK")
+
+
+def test_lap_race_takes_its_tab_stop_in_visual_order():
+    """"Lap race" sits LEFT of the map toolbar's right-aligned run but was built after it, so Tab
+    visited it after "Reset sectors". It now comes straight after the map header's button, then the
+    run left to right — the order the eye reads the bar in."""
+    win = _window_with_view()
+    v = win.view
+    order = [v._map_max_btn]
+    while len(order) < 7:
+        order.append(order[-1].nextInFocusChain())
+    stops = [w for w in order if w.focusPolicy() != Qt.NoFocus]
+    want = [v._map_max_btn, v.race_btn, v.map.rainbow_combo, v.map.snap_btn,
+            v.map.add_sector_btn, v.map.reset_sectors_btn]
+    assert stops[:6] == want, [_label(w) for w in stops[:6]]
+    print("test_lap_race_takes_its_tab_stop_in_visual_order OK")
+
+
 def _run_all():
     test_every_tab_stop_paints_a_focus_cue()
     test_a_checked_toggle_is_still_visibly_focusable()
     test_the_table_focus_ring_paints_on_all_four_edges()
     test_every_id_rule_that_borders_a_control_also_rings_it()
     test_taking_focus_never_moves_or_resizes_a_control()
+    test_a_keyboard_focused_button_presses_on_space_return_and_enter()
+    test_a_mouse_click_leaves_space_as_play_pause()
+    test_typing_a_space_in_a_text_field_still_types_it()
+    test_lap_race_takes_its_tab_stop_in_visual_order()
     print("\nAll focus-cue tests passed.")
 
 

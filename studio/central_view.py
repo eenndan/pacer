@@ -1216,6 +1216,10 @@ class CentralView(QWidget):
         strip_lay.addWidget(self.quality_banner)
         map_panel = self._headered(self._map_header, (self._trust_strip, 0), (self.map, 1),
                                    toolbar=self._map_toolbar)
+        # Tab in VISUAL order: "Lap race" sits left of the toolbar's right-aligned run but was built
+        # after it, so Tab visited it after Reset sectors. Moved to just after the header's button,
+        # i.e. before the colour combo (one panel now, so both are in one focus chain).
+        QWidget.setTabOrder(self._map_max_btn, self.race_btn)
 
         # CHARTS: identity + the hero Δ/speed readout + ⛶ in the header; every control below it.
         #
