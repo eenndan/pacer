@@ -153,8 +153,8 @@ _NO_PHASES = PhaseLoss(entry=0.0, apex=0.0, exit=0.0)
 #   0068  C1         1   0.147    0.464  0.200     4/36  ranked
 #   0068  C5         2   0.093    0.064  0.065     3/35  ranked
 #   0068  C7         3   0.078    0.081  0.102     4/36  ranked
-#   0068  C2         5   0.060    0.136  0.096     5/35  ranked
-#   0068  C3         6   0.049    0.117  0.091     9/36  ranked
+#   0068  C2         5   0.060    0.136  0.096     5/35  level
+#   0068  C3         6   0.049    0.117  0.091     9/36  level
 #   0068  C4         4   0.072    0.163  0.171    10/35  spread
 #   0064  C1         1   0.229    1.278  0.309     3/61  ranked
 #   0064  C4         2   0.193    1.051  0.231     5/61  ranked
@@ -274,7 +274,7 @@ ABSTAIN_LEVEL = "level"         # the loss itself is inside the timing step (`lo
 # 127 more under 0.07 s; after, 1 and 19. Of the 92 that truly lost 0.07 s or more, 10 leave the
 # list. A planted 0.10 or 0.20 s corner never leaves it (40 of 40 kept); a planted 0.05 s one
 # leaves on 7 of 10 days. 103 of the 188 days rank no corner after (habit-free 14 laps: 28 of 40).
-LOSS_STEP_S = stats_service.corner_delta_step(False)
+LOSS_STEP_S = stats_service.PB_PRECISION_S   # = stats.corner_delta_step(False)
 
 
 def loss_is_level(time_lost: float) -> bool:
@@ -613,10 +613,10 @@ class Opportunity:
 # else moved:
 #
 #   lap set           laps  ranked  ranked s  abstained s  execution   pace  top cause
-#   0068                36       5     0.426        0.072       78 %   22 %  consistency 78 %
+#   0068                36       3     0.318        0.180       71 %   29 %  consistency 71 %
 #   0064                62       4     0.768        0.106        0 %  100 %  consistency 100 %
-#   0068 chapter 1      26       3     0.228        0.226      100 %    0 %  consistency 61 %
-#   0068 chapter 2       9       3     0.225        0.211      100 %    0 %  coasting 26 %
+#   0068 chapter 1      26       2     0.182        0.272      100 %    0 %  consistency 51 %
+#   0068 chapter 2       9       1     0.118        0.318      100 %    0 %  none 0 %
 #   0064 chapter 1      17       0     0.000        3.738        0 %    0 %  none 0 %
 #   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  consistency 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
@@ -629,16 +629,28 @@ class Opportunity:
 # recording's should not move: its ranked rows' middle halves, in the evidence table above, are
 # 0.187-0.309 s, far over the 0.07 s step. Its chapters' rows are not re-verified, nor is the
 # "14 of the 15 ranked rows" below for 0065 and 0067 (0068's four consistency rows did not move).
+# cool/coaching-ranks-past-the-step (2026-11-27) re-measured the 0068 rows again, the one recording
+# on the machine, when a row whose loss is inside the timing step stopped ranking (ABSTAIN_LEVEL):
+# in the evidence table 0068's C2 (0.060 s) and C3 (0.049 s) read level, and in this one 0068 went
+# from 5 ranked rows and 0.426 s (execution and consistency each 78 %) to 3 and 0.318 s (71 %),
+# chapter 1 from 3 to 2 (consistency 61 % to 51 %), and chapter 2 from 3 to 1, its one ranked row a
+# level-reason C1 that names no cause (coasting 26 % to none). THE 0064 ROWS WERE MEASURED BEFORE
+# THAT RULE, the recording not being on the machine. The rule only holds back a RANKED row whose
+# printed loss is under 0.07 s, so three of them cannot move: the full recording's ranked losses
+# are 0.167 s and more (the evidence table), its chapter 1 ranks nothing, and its chapter 3's one
+# ranked row is the whole 0.121 s. Its chapter 2 ranks two rows totalling 0.345 s, and whether one
+# of them is under the step cannot be known without the recording; its footage check will say.
 #
-# 0068 splits 78 % execution / 22 % pace and 0064 splits 0 % / 100 % — the same track two months
+# 0068 splits 71 % execution / 29 % pace and 0064 splits 0 % / 100 % — the same track two months
 # apart, and the theme comes out opposite, as it did on D24. That is the finding that justifies the
 # feature. The cause axis names the same top cause on the two full recordings — consistency holds
-# 78 % of 0068's ranked time and 100 % of 0064's, a theme on each — and that is the absence of a
-# lever: since the levers are the laps' habit (ADV-1), consistency is the reason on 14 of the 15
-# ranked rows of the four working-set recordings, none of them carries a measured line difference,
+# 71 % of 0068's ranked time and 100 % of 0064's, a theme on each — and that is the absence of a
+# lever: since the levers are the laps' habit (ADV-1), consistency is the reason on 12 of the 13
+# ranked rows of the four working-set recordings (14 of 15 before the timing step held back two of
+# 0068's; 0065's and 0067's not re-verified), none of them carries a measured line difference,
 # and the row says so with the spread it reads. The axis
-# still does not survive every smaller lap set: of the five single chapters, two name no single
-# cause (0064's chapter 1, which ranks nothing, and 0068's chapter 2), so the cause line is
+# still does not survive every smaller lap set: of the five single chapters, three name no single
+# cause (0064's chapter 1, which ranks nothing, and 0068's chapters 1 and 2), so the cause line is
 # conditional and can read
 # "no single cause dominates".
 #
@@ -651,9 +663,9 @@ class Opportunity:
 # moved 0064 to execution.) Corners cluster near the 1-in-10 reach line, so a different lap set
 # moves several of them across it at once. The sentence therefore always states its own share, and
 # THEME_SPLIT exists so a balanced session is not forced to pick a side. No lap set of the working
-# set lands on a SPLIT — 0068 comes closest, at 78 % execution. Its Theme.kind stays execution, but
+# set lands on a SPLIT — 0068 comes closest, at 71 % execution. Its Theme.kind stays execution, but
 # since COACHING-4 the page PRINTS the split form for it and names the corner: its C1 sits on the
-# reach line, and one lap the other way through it would be a SPLIT (`theme_tipping_row`; the note
+# reach line, and one lap the other way through it would make it pace (`theme_tipping_row`; the note
 # above THEME_SHARE has the numbers).
 THEME_EXECUTION = "execution"  # most of the ranked time is in corners already driven at this pace
 THEME_PACE = "pace"            # most of it is in corners the driver has rarely reached
@@ -661,10 +673,11 @@ THEME_SPLIT = "split"          # neither side holds a clear majority — say so,
 THEME_NONE = "none"            # nothing ranked (every row abstained, or there are no rows)
 
 # The share one side must hold before it is called the session's theme. 0.60 is a clear majority
-# with room to spare; measured on the THEME table above, 0068 lands at 0.78 and 0064 at 1.00. One
+# with room to spare; measured on the THEME table above, 0068 lands at 0.71 and 0064 at 1.00. One
 # corner tips 0068:
-# 0068 would fall to a SPLIT if its C1 (reached on 4 of 36 laps; the line is 4) tipped the other
-# way. No single corner tips 0064, whose every ranked corner is pace work; it would take two. Since
+# 0068 would fall to a SPLIT if its C7 (reached on 4 of 36 laps; the line is 4) tipped the other
+# way, and to pace if its C1 did (it was C1 that made the SPLIT until the timing step held back its
+# C2 and C3). No single corner tips 0064, whose every ranked corner is pace work; it would take two. Since
 # COACHING-4 the sentence says so when one corner tips it (`theme_tipping_row`).
 THEME_SHARE = 0.60
 
@@ -772,7 +785,8 @@ def headline_theme(rows: list[Opportunity]) -> Theme:
 # WHY. The theme's side is decided per corner by the reach line (`reach_line`), and corners cluster
 # near it: on 0068 (SD_19_09_26 in the QA lanes) C1 and C7 are each reached on exactly 4 of 36 laps
 # with the line at 4, and one lap fewer through EITHER moves 0.15 s or 0.08 s from execution to pace
-# and the session to a SPLIT. The QA round-4 resample (ADV-5) reproduced its "78 % execution" in
+# and the session to pace or to a SPLIT (a SPLIT either way before the timing step). The QA round-4
+# resample (ADV-5) reproduced its "78 % execution" in
 # only 56 % of 1,000 resamples. Printing "Most … is execution" there states a side one lap decides;
 # the owner's ruling RUL-8 (docs/DECISIONS.md) is that the sentence then names that corner.
 #
@@ -1844,7 +1858,7 @@ def theme_sentence(theme: Theme, rows: list[Opportunity] | None = None) -> str:
                 "in corners you have rarely been quick through.")
     # SPLIT: state both halves rather than crowning the larger one — this is the honest answer
     # when no side clears THEME_SHARE, and it is a real state: D24's 0060 chapter 2 landed here.
-    # No lap set of the working set lands there — 0068 comes closest, at 78 % execution
+    # No lap set of the working set lands there — 0068 comes closest, at 71 % execution
     # (the THEME table above coaching.THEME_SHARE, over every ranked row). Its kind stays
     # execution, yet since COACHING-4 this was the form its page printed, naming C1, the corner on
     # the reach line that decides it (over its top 3 alone, not re-measured: `headline_theme`).

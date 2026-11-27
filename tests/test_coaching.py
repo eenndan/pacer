@@ -2055,7 +2055,7 @@ def test_the_session_theme_is_one_line_and_refuses_to_invent_one():
     """Part 3: cluster to ONE theme, on SHARE OF RANKED TIME (the ranking's own unit), and say
     "no single theme" rather than crowning a plurality.
 
-    Measured on the real recordings the two working-set recordings come out OPPOSITE — 0068 is 78 %
+    Measured on the real recordings the two working-set recordings come out OPPOSITE — 0068 is 71 %
     execution and 0064 is 100 % pace — which is what makes the axis worth stating at all."""
     execution = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE]))
     assert execution.kind == K.THEME_EXECUTION and execution.share == 0.75, execution
@@ -2083,9 +2083,9 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does not generalize to every lap set: consistency holds 78 % of
-    0068's ranked time and 100 % of 0064's (a theme on each), but one of the five single chapters
-    names no single cause, so the "no single cause" branch is a real case on real recordings and is
+    Measured, the cause axis does not generalize to every lap set: consistency holds 71 % of
+    0068's ranked time and 100 % of 0064's (a theme on each), but three of the five single chapters
+    name no single cause, so the "no single cause" branch is a real case on real recordings and is
     asserted here as a first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).

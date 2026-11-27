@@ -178,11 +178,15 @@ def nailed(s: Session) -> dict:
         same += len(hit) == len(fires)
         for k in hit:
             per[mx.cids[k]] += 1
-    ranked = [int(o.cid) for o in s.coaching_opportunities().ranked_rows()]
+    opps = s.coaching_opportunities()
+    ranked = [int(o.cid) for o in opps.ranked_rows()]
+    # Since Coaching ranks only past the timing step its level corners are held back, not ranked.
+    level = [int(o.cid) for o in opps.rows if o.evidence.abstain == "level"]
     return {"corners": len(rep), "median_loss": loss, "fires": fires,
             "jitter_same_count": round(same / JITTER_DRAWS, 2),
             "jitter_fires": {str(c): round(v / JITTER_DRAWS, 2) for c, v in per.items()},
-            "coaching_ranked": ranked, "praised_and_ranked": [c for c in fires if c in ranked]}
+            "coaching_ranked": ranked, "praised_and_ranked": [c for c in fires if c in ranked],
+            "praised_and_level": [c for c in fires if c in level]}
 
 
 # ─── §31 the ideal-lap film ─────────────────────────────────────────────────────────────────────

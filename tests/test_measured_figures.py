@@ -168,7 +168,7 @@ class EvRow:
 
 
 _EV_LINE = re.compile(r"^#\s+(00\d\d)\s+C(\d+)\s+(\d+)\s+(\d\.\d{3})\s+(\d\.\d{3})\s+(\d\.\d{3})\s+"
-                      r"(\d+)/(\d+)\s+(ranked|spread|one_off|few_laps)\s*$")
+                      r"(\d+)/(\d+)\s+(ranked|spread|one_off|few_laps|level)\s*$")
 
 
 def _evidence_rows() -> list[EvRow]:
@@ -754,9 +754,13 @@ def test_the_brake_habit_prose_is_its_table_s_arithmetic():
     text = _flatten(_read(_COACHING))
     hint_min = _constant(_PANEL, "BRAKE_HINT_MIN_M")
     for r in rows:
-        # A row is a RANKED coaching row, and its rank is the evidence table's for that corner.
+        # A row is a RANKED coaching row, and its rank is the evidence table's for that corner. The
+        # table records the retired hint (L7), measured when 0068's C2 still ranked: since the
+        # timing step that row reads level, its loss (0.060 s) inside it, and no other row moved.
         match = [e for e in ev if (e.rec, e.cid) == (r.rec, r.cid)]
-        assert match and match[0].gate == "ranked" and match[0].rank == r.rank, (
+        was_ranked = match and (match[0].gate == "ranked" or (
+            match[0].gate == "level" and match[0].lost < _constant(_LIBRARY, "PB_PRECISION_S")))
+        assert was_ranked and match[0].rank == r.rank, (
             f"{r!r} is not a ranked row of the evidence table: {match}")
         # "laps" is out of the session's clean laps, which the THEME table counts.
         assert r.clean == themes[r.rec].laps and r.laps <= r.clean, (r, themes[r.rec])
@@ -3299,10 +3303,14 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
     if ((hit := find(30, r"only (C\d+(?:, C\d+)*(?: and C\d+)?) fires? in more than four draws in five",
                      "the steady corners")) and over != re.findall(r"C(\d+)", hit[0])):
         probs.append(f"§30: only {hit[0]} fire in > 80 % of draws, the probe: {over}")
-    if (hit := find(30, r"It would praise (C\d+(?:, C\d+)* and C\d+), which the Coaching page ranks", "the contradiction")):
-        both = n_["praised_and_ranked"]
-        if hit[0] != ", ".join(f"C{c}" for c in both[:-1]) + f" and C{both[-1]}":
-            probs.append(f"§30: it would praise {hit[0]} that Coaching ranks, the probe: {both}")
+    # Since the timing step the corners it would praise are ones Coaching holds back as level, and
+    # none it ranks (cool/coaching-ranks-past-the-step): the sentence says both.
+    if (hit := find(30, r"It would praise (C\d+(?:, C\d+)* and C\d+), which the Coaching page ranked", "the contradiction")):
+        both = n_["praised_and_level"]
+        if not both or hit[0] != ", ".join(f"C{c}" for c in both[:-1]) + f" and C{both[-1]}":
+            probs.append(f"§30: it would praise {hit[0]} that Coaching holds back as level, the probe: {both}")
+        if n_["praised_and_ranked"]:
+            probs.append(f"§30: it would praise {n_['praised_and_ranked']}, which Coaching ranks")
     if (hit := find(30, r"`Session\.coaching_opportunities`, ranked (C\d+(?:, C\d+)*)\)", "the coaching ranking")):
         if hit[0] != ", ".join(f"C{c}" for c in n_["coaching_ranked"]):
             probs.append(f"§30: Coaching ranks {hit[0]}, the probe: {n_['coaching_ranked']}")
