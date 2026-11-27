@@ -134,7 +134,7 @@ this still says "0% of moving fixes rejected".*
   every lap of the session on one image, and the overlay comes in two styles, Classic or
   Broadcast, with a ghost of your best lap and corner cards as extras you tick.
 
-<img src="docs/media/report.png" width="660" alt="The first screen of the synthetic demo's session report, as File ▸ Export ▸ Session report (HTML)… writes it: the recording, track, date, 14 laps, best lap 0:44.950 (lap 13) and verified timing; the lap card with its +0.30 s to the ideal lap and C1 +0.36 s as the biggest opportunity; and COACHING: 0.43 s across your top 3 corners, apex speed the common thread with 84% of that time in C1, and the ranked corners with their reasons">
+<img src="docs/media/report.png" width="660" alt="The first screen of the synthetic demo's session report, as File ▸ Export ▸ Session report (HTML)… writes it: the recording, track, date, 14 laps, best lap 0:44.950 (lap 13) and verified timing; the lap card with its +0.30 s to the ideal lap and C1 +0.36 s as the biggest opportunity; and COACHING: 0.36 s in your worst corner, apex speed the common thread with all of that time in C1, its one ranked corner, and the corners held back as level with the best lap or not ranked, each with its reason">
 
 <img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 

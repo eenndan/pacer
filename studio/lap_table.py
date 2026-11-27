@@ -4088,6 +4088,21 @@ class QuickestPassTable(QWidget):
                       for k in range(len(qp.play_order()))]
         return self._level_px(texts)
 
+    def _hold_words_width(self) -> None:
+        """The table never narrower than its "Level with" words need whole, looping included (the
+        longest state, which the strip steps aside for). The grid's lap column opened at whatever
+        the docked panel's pages asked for, and this page asked for none: it was the Coaching
+        headline's length that kept the demo's words whole at 1280x800 (cool/coaching-ranks-past-
+        the-step: "0.36 s in your worst corner" made the column 468 px and cut "· looping")."""
+        passes = self.result.passes if self.result is not None else ()
+        need = max(self._level_need_px, self._level_px(
+            [quickest_cycle_text(qp, k, True, True) for qp in passes
+             for k in range(len(qp.play_order()))]))
+        t = self.table
+        others = sum(t.columnWidth(c) for c in range(QUICKEST_LEVEL_COL)) + \
+            t.columnWidth(QUICKEST_PLAY_COL)
+        t.setMinimumWidth(others + need + 2 * t.frameWidth() if need else 0)
+
     def _level_px(self, texts) -> int:
         """The width a "Level with" cell needs to print the widest of `texts` whole (0: no rows)."""
         t = self.table
@@ -4369,6 +4384,7 @@ class QuickestPassTable(QWidget):
             data[0] for r in range(len(passes))
             if (data := self.table.item(r, QUICKEST_STRIP_COL).data(STRIP_ROLE)))
         self._level_need_px = self._measure_level_need()
+        self._hold_words_width()
         self._paint_playing()
         self._fit_strip()
         if row >= 0:

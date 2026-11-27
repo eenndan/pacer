@@ -2055,7 +2055,7 @@ def test_the_session_theme_is_one_line_and_refuses_to_invent_one():
     """Part 3: cluster to ONE theme, on SHARE OF RANKED TIME (the ranking's own unit), and say
     "no single theme" rather than crowning a plurality.
 
-    Measured on the real recordings the two working-set recordings come out OPPOSITE — 0068 is 78 %
+    Measured on the real recordings the two working-set recordings come out OPPOSITE — 0068 is 71 %
     execution and 0064 is 100 % pace — which is what makes the axis worth stating at all."""
     execution = K.session_theme(_themed([K.REACH_REPEAT] * 3 + [K.REACH_RARE]))
     assert execution.kind == K.THEME_EXECUTION and execution.share == 0.75, execution
@@ -2083,9 +2083,9 @@ def test_the_theme_names_at_most_two_actions_and_no_cause_it_cannot_measure():
     """Compression is the point: one theme, then AT MOST two actions — and when no cause holds a
     majority the action says exactly that instead of naming one.
 
-    Measured, the cause axis does not generalize to every lap set: consistency holds 78 % of
-    0068's ranked time and 100 % of 0064's (a theme on each), but one of the five single chapters
-    names no single cause, so the "no single cause" branch is a real case on real recordings and is
+    Measured, the cause axis does not generalize to every lap set: consistency holds 71 % of
+    0068's ranked time and 100 % of 0064's (a theme on each), but three of the five single chapters
+    name no single cause, so the "no single cause" branch is a real case on real recordings and is
     asserted here as a first-class output, not as a fallback."""
     # DISTINCT losses on purpose: four IDENTICAL ones are a tie by construction, and a tied lead is
     # now named as one (see test_t4_a_lead_corner_inside_the_pairs_own_spread_is_not_crowned_alone).
@@ -3244,10 +3244,16 @@ def _telemetry_picture(path, truth, first_payload, n_payloads, ffmpeg):
                    check=True, capture_output=True)
 
 
-def _generate(out_dir: str, seed: int, laps: int):
-    """One chapter of the synthetic GoPro under `_telemetry_picture`."""
+def _generate(out_dir: str, seed: int, laps: int, habit=None):
+    """One chapter of the synthetic GoPro under `_telemetry_picture`, with `habit` planted."""
     from studio.dev import synth_gopro as sg
-    return sg.generate(out_dir, seed, laps, chapters=1, video=_telemetry_picture)
+    return sg.generate(out_dir, seed, laps, chapters=1, video=_telemetry_picture, habit=habit)
+
+
+def _sweep_habits(laps: int):
+    """`_synthetic.sweep_habits` (moved there: the report test drives it too)."""
+    from _synthetic import sweep_habits
+    return sweep_habits(laps)
 
 
 def _level_sessions() -> dict:
@@ -3296,22 +3302,166 @@ def test_coaching_never_prints_consistency_where_corners_calls_the_spread_level(
     print(f"ok level step: no consistency reason where CORNERS calls it level ({seen_level} level rows)")
 
 
-def test_the_level_step_leaves_the_ranking_as_it_was():
-    """The rule moves a reason, never a rank: the ranked corners and their order on each session are
-    main's, and on the demo the debrief still pre-promotes C1, C2 and C7."""
+def test_the_level_reason_moves_no_rank_and_the_step_holds_level_losses_back():
+    """#587's level REASON moves a reason, never a rank; the timing step (cool/coaching-ranks-past-
+    the-step) is what holds a row back. Before it the ranked corners were `_MAIN_RANKED`: the demo's
+    C2, C7 and C4 lost +0.04 / +0.03 / +0.03 s, all under 0.07 s, and still ranked — the debrief
+    pre-promoted C1, C2 and C7. Now only the rows past the step rank, and each held-back row keeps
+    its measured level reason underneath (`ABSTAIN_LEVEL` decides the rank, not the reason)."""
+    now = {"demo": [1], "seed 20260924, 14 laps": [], "seed 7, 12 laps": []}
     for name, s in _level_sessions().items():
-        ranked = [r.cid for r in s.coaching_opportunities().ranked_rows()]
-        assert ranked == _MAIN_RANKED[name], (name, ranked)
+        opps = s.coaching_opportunities()
+        ranked = [r.cid for r in opps.ranked_rows()]
+        assert ranked == now[name], (name, ranked)
+        held = [r.cid for r in opps.rows if r.evidence.abstain == K.ABSTAIN_LEVEL]
+        assert held and set(held) <= set(_MAIN_RANKED[name]), (name, held, _MAIN_RANKED[name])
+        for r in opps.rows:
+            assert (r.evidence.abstain == K.ABSTAIN_LEVEL) == (
+                r.evidence.abstain in ("", K.ABSTAIN_LEVEL) and K.loss_is_level(r.time_lost)), r
     demo = _level_sessions()["demo"].coaching_opportunities()
-    kinds = [(r.cid, r.reason.kind) for r in demo.ranked_rows()]
+    kinds = [(r.cid, r.reason.kind) for r in demo.rows if r.cid in (1, 2, 7, 4)]
     assert kinds == [(1, K.REASON_APEX), (2, K.REASON_LEVEL), (7, K.REASON_LEVEL),
                      (4, K.REASON_LEVEL)], kinds
-    # The theme is unchanged on the demo: the level rows were never its cause. (84 %: its printed
-    # cells over the headline's, +0.36 of +0.43 s; `test_the_theme_counts_the_headlines_corners`.)
+    # The theme counts C1 alone now (84 % of +0.43 s before; all of +0.36 s now).
     assert K.theme_actions(demo.theme, demo.rows) == [
-        "Apex speed is the common thread — 84% of that time is in C1.",
+        "Apex speed is the common thread — 100% of that time is in C1.",
         "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."]
-    print(f"ok ranking unchanged: {_MAIN_RANKED}")
+    print(f"ok ranking: {now} (before the step: {_MAIN_RANKED})")
+
+
+def test_the_demo_ranks_only_past_the_timing_step():
+    """The owner's ruling, on the shipped demo and the real panel: C2 (+0.04 s), C7 and C4 (+0.03 s)
+    are not ranked, not in the loss colour and say they are level with the best lap in words (the
+    "Not ranked:" sentence reads the same in greyscale); C1 is ranked and leads; the headline is
+    "0.36 s in your worst corner" and the debrief's focus default is C1 alone."""
+    _qapp()
+    from PySide6.QtGui import QColor
+
+    from studio import theme
+    from studio.coaching_panel import _PANEL_COL_REASON, OpportunitiesPanel
+    from studio.theme import C
+    s = _level_sessions()["demo"]
+    opps = s.coaching_opportunities()
+    assert K.headline(opps) == ("Whole session · 0.36 s in your worst corner vs your best lap "
+                                "(median of 14 clean laps)"), K.headline(opps)
+    assert [r.cid for r in K.shortlist(opps)] == [1]
+    panel = OpportunitiesPanel(s)
+    panel.resize(1400, 900)
+    panel.show()
+    for _ in range(6):
+        _APP.processEvents()
+    assert panel.shortlist_cids() == [1], panel.shortlist_cids()
+    t = panel.table
+    cells = {t.item(r, 0).text().split()[0]: (t.item(r, 1), t.item(r, _PANEL_COL_REASON))
+             for r in range(t.rowCount())}
+    lost, reason = cells["C1"]
+    assert lost.foreground().color() == QColor(theme.delta_colour(0.36)), lost.foreground().color()
+    assert reason.text().startswith("carry more apex speed"), reason.text()
+    for c, printed in (("C2", "0.04"), ("C7", "0.03"), ("C4", "0.03")):
+        lost, reason = cells[c]
+        assert lost.foreground().color() == QColor(C.text_dim), (c, lost.foreground().color())
+        assert reason.text() == (f"Not ranked: level with your best lap here — the {printed} s is "
+                                 "within timing precision (under 0.07 s)."), (c, reason.text())
+    panel.close()
+    print("ok demo: C1 ranked alone; C2, C7, C4 muted and 'Not ranked: level …' in words")
+
+
+def test_a_planted_corner_ranks_past_the_step_and_one_inside_it_does_not():
+    """Planted truth on the demo circuit (seed 402 at the reference noise, the probe grid of
+    cool/coaching-ranks-past-the-step): C4 driven slower by a true ~0.20 s on every lap but the
+    three truly fastest ranks, first; the same corner slower by ~0.05 s — inside the 0.07 s step —
+    is held back as level and is on no shortlist."""
+    import tempfile
+
+    from studio import chapters
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    from studio.session import Session
+    from studio.stats import REFERENCE_SIGMAS
+    t = sg.simulate(402, 14, origin=md.DEMO_ORIGIN)
+    d = np.arange(1, 16) * t.circuit.length - t.s_start
+    clean = tuple(int(k) + 1 for k in np.argsort(np.diff(np.interp(d, t.d_nodes, t.t_nodes)))[:3])
+    got = {}
+    with tempfile.TemporaryDirectory(prefix="coach_plant_") as tmp:
+        for planted, grip in ((0.20, 0.837), (0.05, 0.955)):
+            habit = sg.Habit(cid=4, grip=grip, brake=1.0, clean_laps=clean)
+            rec = sg.generate(os.path.join(tmp, str(planted)), 402, 14, chapters=1,
+                              gps_noise=REFERENCE_SIGMAS.noise, origin=md.DEMO_ORIGIN,
+                              habit=habit, video=_telemetry_picture)
+            opps = Session.load(chapters.discover_siblings(rec.paths[0])).coaching_opportunities()
+            got[planted] = next(r for r in opps.rows if r.cid == 4), K.shortlist(opps)
+    row, short = got[0.20]
+    assert row.evidence.ranked and short and short[0].cid == 4 and row.time_lost > 0.15, row
+    row, short = got[0.05]
+    assert row.evidence.abstain == K.ABSTAIN_LEVEL and 4 not in [r.cid for r in short], row
+    print(f"ok planted: 0.20 s ranks first (+{got[0.20][0].time_lost:.2f} s), 0.05 s held back "
+          f"(+{got[0.05][0].time_lost:.2f} s)")
+
+
+def test_the_step_is_decided_on_the_printed_loss_at_its_edge():
+    """The boundary, on the row's number, its colour and its ranked state together: +0.0651 s
+    prints "+0.07 s" and ranks in the loss colour, as does exactly 0.07; +0.0649 prints "+0.06 s"
+    and is held back, muted. Deciding on the raw value (0.0651 < 0.07) or with `<=` (0.07 level)
+    breaks one of the three."""
+    _qapp()
+    from PySide6.QtGui import QColor, QFont
+
+    from studio import theme
+    from studio.coaching_panel import _lost_cell
+    from studio.theme import C
+    for loss, printed, ranked in ((0.0651, "+0.07 s", True), (0.07, "+0.07 s", True),
+                                  (0.0649, "+0.06 s", False)):
+        corners, best, times, lap_times = _level_fixture([loss] * 3, [0.01] * 3)
+        opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                          sigmas_by_cid={c.cid: 0.01 for c in corners})
+        row = opp.rows[0]
+        assert K.lost_text(row) == printed, (loss, K.lost_text(row))
+        assert row.evidence.ranked == ranked, (loss, row.evidence)
+        assert (row.evidence.abstain == K.ABSTAIN_LEVEL) == (not ranked), (loss, row.evidence)
+        colour = _lost_cell(row, QFont()).foreground().color()
+        want = QColor(theme.delta_colour(row.time_lost)) if ranked else QColor(C.text_dim)
+        assert colour == want, (loss, colour.name(), want.name())
+    print("ok step edge: +0.0651 and +0.07 rank in the loss colour, +0.0649 is level and muted")
+
+
+def test_a_level_session_says_so_in_one_sentence():
+    """A session where nothing ranks and the losses are inside the step is a real answer, not an
+    empty panel: the headline and the theme block say so, in `coaching`'s words, the page shows
+    the held-back rows, and no row's Jump is the amber CTA (nothing is recommended). The synthetic
+    GoPro seed 20260924 (the golden gate's recording) holds its three corners back as level and the
+    rest fail other tests; a session of level rows alone reads the same."""
+    import dataclasses
+    _qapp()
+    from studio.coaching_panel import _PANEL_COL_GO, OpportunitiesPanel
+    s = _level_sessions()["seed 20260924, 14 laps"]
+    opps = s.coaching_opportunities()
+    assert not K.shortlist(opps) and opps.theme.kind == K.THEME_NONE
+    sentence = ("No corner is ranked: each is within timing precision (0.07 s) of your best lap, "
+                "or its row says why. Look at your consistency and your ideal lap instead.")
+    headline = ("Whole session · no corner stands out vs your best lap (median of 14 clean laps)")
+    assert K.theme_lines(opps) == (sentence, []), K.theme_lines(opps)
+    assert K.headline(opps) == headline, K.headline(opps)
+    panel = OpportunitiesPanel(s)
+    panel.resize(1400, 900)
+    panel.show()
+    for _ in range(6):
+        _APP.processEvents()
+    assert panel.theme_block.headline.text() == sentence and not panel.theme_block.isHidden()
+    assert panel.summary_label.text() == headline
+    t = panel.table
+    assert t.rowCount() >= 3 and panel.shortlist_cids() == []
+    variants = [t.cellWidget(r, _PANEL_COL_GO).jump.property("variant") for r in range(t.rowCount())]
+    assert "primary" not in variants, variants
+    panel.close()
+    level = [r for r in opps.rows if r.evidence.abstain == K.ABSTAIN_LEVEL]
+    only = dataclasses.replace(opps, rows=level)
+    assert K.no_focus_sentence(only) == sentence and K.headline(only) == headline
+    # A session whose corners fail only the spread test keeps the words it always had.
+    spread = dataclasses.replace(opps, rows=[dataclasses.replace(r, evidence=dataclasses.replace(
+        r.evidence, abstain=K.ABSTAIN_SPREAD)) for r in opps.rows])
+    assert K.no_focus_sentence(spread) == "" and K.theme_lines(spread) == ("", [])
+    assert "no corner clears its own lap-to-lap spread" in K.headline(spread)
+    print(f"ok level session: {sentence!r}")
 
 
 def _level_fixture(plan, spread):
@@ -3460,31 +3610,32 @@ def test_page_text_is_what_the_coaching_page_prints_on_the_demo():
         assert page.theme == panel.theme_block.headline.text() != "", page.theme
         assert list(page.actions) == panel.theme_block.full_text().split("\n")[1:], page.actions
         assert page.actions[-1] == "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."
-        assert [r.cid for r in page.shortlist] == panel.shortlist_cids() == [1, 2, 7]
+        assert [r.cid for r in page.shortlist] == panel.shortlist_cids() == [1]
         shown = rows_on_screen()
         assert len(shown) >= len(page.shortlist), shown
         assert shown == [(r.corner, r.lost, r.done_it, r.reason)
                          for r in page.rows[:len(shown)]], (shown, page.rows)
-    # THE SHORTLIST IS THE RANKED ROWS, NOT THE FIRST ROWS. The synthetic GoPro seed 7 ranks two
-    # corners and abstains on the next shown ones, so a shortlist cut as `rows[:3]` would sum an
-    # abstained corner into the headline.
-    s7 = _level_sessions()["seed 7, 12 laps"]
+    # THE SHORTLIST IS THE RANKED ROWS, NOT THE FIRST ROWS. The planted sweep's seed 3 at 10 laps
+    # ranks two corners and abstains on the next shown ones, so a shortlist cut as `rows[:3]` would
+    # sum an abstained corner into the headline. (Seed 7 at 12 laps, habit-free, was the subject
+    # until the timing step held both its corners back.)
+    s7 = _sweep_sessions()["seed 3, 10 laps"]
     o7 = s7.coaching_opportunities()
     p7 = K.page_text(o7, s7.coaching_brake_direction())
-    assert [r.cid for r in p7.shortlist] == [5, 6], p7.shortlist
+    assert [r.cid for r in p7.shortlist] == [1, 5], p7.shortlist
     assert all(r.ranked for r in p7.shortlist), p7.shortlist
     assert len(p7.rows) >= 3 and not p7.rows[2].ranked, p7.rows   # rows[:3] would differ
     assert [r.cid for r in p7.shortlist] != [r.cid for r in p7.rows[:3]]
-    assert OpportunitiesPanel(s7).shortlist_cids() == [5, 6]
+    assert OpportunitiesPanel(s7).shortlist_cids() == [1, 5]
     assert p7.headline.startswith("Whole session · ") and "top 2 corners" in p7.headline, p7.headline
     print(f"ok page_text: {page.headline!r}; {len(page.rows)} rows equal the page's cells; "
-          f"seed 7 shortlist C5, C6 over {len(p7.rows)} shown rows")
+          f"seed 3 shortlist C1, C5 over {len(p7.rows)} shown rows")
 
 
 def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     """Review of #592 (P3): the headline strip's hover said "The total is your top 3 corners" over a
     headline summing two (seed 7), and described a total where none is ranked. It counts the
-    shortlist now; with three ranked (the demo) it is the sentence it always was, byte for byte."""
+    shortlist now; with three ranked it is the sentence it always was, byte for byte."""
     _qapp()
     import dataclasses
 
@@ -3498,10 +3649,14 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
         "Coaching ▸ Opportunities (or the panel's maximize button) shows this page full-window, "
         "where each row also carries where in the corner the time goes and a Jump to it.")
     assert cp._SCOPE_TOOLTIP == cp.scope_tooltip(3) == main_scope
-    demo = _level_sessions()["demo"]
-    assert cp.OpportunitiesPanel(demo).summary_label.toolTip().endswith(
+    # Three ranked: the planted sweep's seed 2 at 10 laps (the demo, since the timing step, ranks C1
+    # alone and says "your worst corner"); two: its seed 3 at 10 laps.
+    three = _sweep_sessions()["seed 2, 10 laps"]
+    assert cp.OpportunitiesPanel(three).summary_label.toolTip().endswith(
         main_scope + " " + K.medians_note())
-    tip7 = cp.OpportunitiesPanel(_level_sessions()["seed 7, 12 laps"]).summary_label.toolTip()
+    demo_tip = cp.OpportunitiesPanel(_level_sessions()["demo"]).summary_label.toolTip()
+    assert "The total is your worst corner that cleared" in demo_tip, demo_tip
+    tip7 = cp.OpportunitiesPanel(_sweep_sessions()["seed 3, 10 laps"]).summary_label.toolTip()
     assert "The total is your top 2 corners that cleared" in tip7 and "top 3" not in tip7, tip7
     opp = _populated_opps()
     one = dataclasses.replace(opp, rows=[opp.rows[0]] + [dataclasses.replace(
@@ -3512,7 +3667,7 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     none = dataclasses.replace(opp, rows=[dataclasses.replace(
         r, evidence=dataclasses.replace(r.evidence, abstain=K.ABSTAIN_SPREAD)) for r in opp.rows])
     tip0 = _full_window_page(none).summary_label.toolTip()
-    assert "No corner clears its own lap-to-lap spread, so there is no total" in tip0, tip0
+    assert "No corner is ranked, so there is no total" in tip0, tip0
     assert "The total is" not in tip0, tip0
     print("ok scope hover: top 3 unchanged, top 2 / worst corner / no total where true")
     _close_pages()
@@ -3525,16 +3680,29 @@ def test_a_level_row_takes_no_phase_tail():
     the same sentence quotes. Every surface prints this one sentence (`page_text` feeds the report
     and the debrief, `test_page_text_is_what_the_coaching_page_prints_on_the_demo` pins it to the
     page's cells). A row with any other reason keeps its tail, here over a third at the step."""
+    # Since the timing step (cool/coaching-ranks-past-the-step) the demo's C7 (+0.03 s) is held
+    # back, so its row prints the level sentence of the step — still with no phase tail.
     demo = _level_sessions()["demo"].coaching_opportunities()
     c7 = next(r for r in demo.rows if r.cid == 7)
     assert c7.reason.kind == K.REASON_LEVEL and c7.phases.dominant == K.PHASE_APEX, c7
     assert max(c7.phases.as_tuple()) < K.LEVEL_STEP_S, c7.phases
-    want = ("no one habit explains it: your passes here are level with each other "
-            "(middle half spans 0.05 s, under 0.07 s)")
-    assert K.reason_sentence(c7, reach=False) == want, K.reason_sentence(c7, reach=False)
+    held = ("Not ranked: level with your best lap here — the 0.03 s is within timing precision "
+            "(under 0.07 s).")
+    assert K.reason_sentence(c7, reach=False) == held, K.reason_sentence(c7, reach=False)
     for directions in (None, _level_sessions()["demo"].coaching_brake_direction()):
         row = next(r for r in K.page_text(demo, directions).rows if r.cid == 7)
-        assert row.reason == want, row.reason
+        assert row.reason == held, row.reason
+    # A RANKED level-reason row (+0.30 s on every lap, a 0.02 s spread) over an apex-heavy third.
+    corners, best, times, lap_times = _level_fixture([0.30] * 3, [0.05, 0.02, 0.02])
+    opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                      sigmas_by_cid={c.cid: 0.03 for c in corners},
+                      phases_by_cid={1: (0.011, 0.020, 0.001)})
+    r1 = opp.rows[0]
+    assert r1.evidence.ranked and r1.reason.kind == K.REASON_LEVEL, r1
+    assert r1.phases.dominant == K.PHASE_APEX, r1.phases
+    want = ("no one habit explains it: your passes here are level with each other "
+            "(middle half spans 0.05 s, under 0.07 s)")
+    assert K.reason_sentence(r1, reach=False) == want, K.reason_sentence(r1, reach=False)
     for name, s in _level_sessions().items():
         for r in s.coaching_opportunities().rows:
             if r.reason.kind == K.REASON_LEVEL:
@@ -3619,21 +3787,25 @@ def test_the_theme_counts_the_headlines_corners():
     in the sentence reads as all of it, so there the sentence names the headline's base, "the time
     in your top 3 corners" (`test_the_sentence_names_its_base_when_more_is_ranked_than_summed`);
     the three rows alone, and the rows-less call, keep "the time on offer"."""
-    demo = _level_sessions()["demo"].coaching_opportunities()
-    assert K.headline(demo).startswith("Whole session · 0.43 s across your top 3 corners"), \
-        K.headline(demo)
-    assert (len(demo.ranked_rows()), demo.theme.n_ranked, len(K.shortlist(demo))) == (4, 3, 3), \
-        demo.theme
-    sentence, acts = K.theme_lines(demo)
+    # The subject: four ranked corners, three on the shortlist. The demo was it (its C4 fourth)
+    # until the timing step held its C2, C7 and C4 back (cool/coaching-ranks-past-the-step); the
+    # planted sweep's seed 1 at 10 laps is it now: C7, C5, C3 summed, C6 listed under them.
+    s1 = _sweep_sessions()["seed 1, 10 laps"].coaching_opportunities()
+    assert K.headline(s1).startswith("Whole session · 0.44 s across your top 3 corners"), \
+        K.headline(s1)
+    assert (len(s1.ranked_rows()), s1.theme.n_ranked, len(K.shortlist(s1))) == (4, 3, 3), \
+        s1.theme
+    sentence, acts = K.theme_lines(s1)
     assert sentence == ("All of the time in your top 3 corners is in corners you have already "
                         "driven at this pace: repeat it, no new speed needed.")
-    assert acts[0] == "Apex speed is the common thread — 84% of that time is in C1.", acts[0]
-    # The printed percentage is the shortlist's printed cells' ratio, the headline's 0.43 s.
-    c1 = [r for r in K.shortlist(demo) if r.cid == 1]
-    assert (K.shown_total(c1), round(K.shown_total(K.shortlist(demo)), 2)) == (0.36, 0.43)
-    assert f"{K.shown_total(c1) / K.shown_total(K.shortlist(demo)):.0%}" == "84%"
-    # `session_theme` itself still clusters every row it is given (the THEME tables' verdict).
-    assert round(K.session_theme(demo.rows).cause_share, 4) == 0.7864
+    assert acts[0] == "Apex speed is the common thread — 68% of that time is in C7, C3.", acts[0]
+    # The printed percentage is the shortlist's printed cells' ratio, the headline's 0.44 s.
+    cause = [r for r in K.shortlist(s1) if r.cid in (7, 3)]
+    assert (round(K.shown_total(cause), 2), round(K.shown_total(K.shortlist(s1)), 2)) == (0.30, 0.44)
+    assert f"{K.shown_total(cause) / K.shown_total(K.shortlist(s1)):.0%}" == "68%"
+    # `session_theme` itself still clusters every row it is given (the THEME tables' verdict):
+    # over all four ranked rows apex falls under THEME_SHARE and no cause is named.
+    assert K.session_theme(s1.rows).cause == K.REASON_NONE
 
     def rows(reaches, kinds, losses=(0.5, 0.3, 0.2, 0.1)):
         return [_ranked_row(i + 1, loss, 0.01, reach=reach, kind=kind, n_laps=40,
@@ -3710,7 +3882,8 @@ def _theme_sweep() -> dict:
         with tempfile.TemporaryDirectory(prefix="theme_sweep_") as tmp:
             for seed in range(1, 13):
                 for laps in (14, 20):
-                    rec = _generate(os.path.join(tmp, f"s{seed}_l{laps}"), seed, laps)
+                    rec = _generate(os.path.join(tmp, f"s{seed}_l{laps}"), seed, laps,
+                                    _sweep_habits(laps))
                     _THEME_SWEEP[f"seed {seed}, {laps} laps"] = list(
                         Session.load(rec.paths).coaching_opportunities().rows)
     return _THEME_SWEEP
@@ -3743,10 +3916,13 @@ def test_every_corner_the_theme_names_is_on_the_headlines_shortlist():
         fell += _check_printed_shares(rows)
     assert not off, off
     assert len(sweep) == 41 and longer >= 5, (len(sweep), longer)
-    s9 = _theme_sweep()["seed 9, 20 laps"]
-    assert K.theme_actions(K.headline_theme(s9), s9)[0] == (
-        "No single cause dominates these corners — work them one at a time.")
-    assert K.session_theme(s9).cause == K.REASON_APEX
+    # The classification is the shortlist's: the planted seed 1 at 10 laps names apex over its top 3
+    # (C7, C3) where all four ranked rows name no cause. (Habit-free seed 9 at 20 laps was this
+    # subject, the other way round, until the timing step held its corners back.)
+    s1 = _theme_sweep()["seed 1, 10 laps"]
+    assert K.theme_actions(K.headline_theme(s1), s1)[0] == (
+        "Apex speed is the common thread — 68% of that time is in C7, C3.")
+    assert K.session_theme(s1).cause == K.REASON_NONE
     print(f"ok theme sweep: {len(sweep)} sessions, {longer} ranking more than the shortlist, "
           f"{fell} share(s) on the guard's fallback")
 
@@ -3820,18 +3996,20 @@ def test_a_tied_corner_that_prints_nothing_is_not_named():
     the display floor (`DISPLAY_MIN_LOST_S`) and shown on no surface. A tied corner that prints
     +0.00 s is not named; the tie test itself is unchanged. The lap card asks the same
     `lead_ties`, so its opportunity there is C3 alone, as on the page."""
-    from studio import share_card
-    s5 = _sweep_sessions()["seed 5, 6 laps"]
-    opps = s5.coaching_opportunities()
-    floor = [r for r in opps.rows if r.evidence.ranked and r.time_lost < K.DISPLAY_MIN_LOST_S]
-    assert [r.cid for r in floor] == [1], floor   # the corner the tie used to name
-    acts = K.theme_actions(opps.theme, list(opps.rows))
-    assert acts[1] == "Start with C3: +0.01 s, and you have matched it on 2 of 6 laps.", acts
-    assert "+0.00 s" not in " ".join(acts) and "C1" not in acts[1], acts
-    assert [r.cid for r in K.lead_ties(list(opps.rows), 3)] == [3]
-    top = share_card._top_opportunity(s5, "kmh")
-    assert top is not None and top.cids == (3,) and top.tied_low_s is None, top
-    print(f"ok sub-floor tie: {acts[1]!r}; card {top.corner_label!r}")
+    # Since the timing step (cool/coaching-ranks-past-the-step) a corner that prints +0.00 s can no
+    # longer be ranked from real laps at all: it is held back as level, so no session can tie it.
+    # Seed 5 at 6 laps, habit-free (C3 +0.01 s, C1 +0.003 s), ranked neither; the sweeps' sessions
+    # hold every sub-floor corner back.
+    for name, s in _sweep_sessions().items():
+        for r in s.coaching_opportunities().rows:
+            if r.time_lost < K.DISPLAY_MIN_LOST_S:
+                assert not r.evidence.ranked, (name, r.cid, r.time_lost, r.evidence)
+    # `lead_ties`' own floor still holds for rows built without the gate (constructed here).
+    rows = [_ranked_row(3, 0.0100, 0.05, n_laps=6, reach_laps=2),
+            _ranked_row(1, 0.0030, 0.05, n_laps=6, reach_laps=2)]
+    assert abs(rows[0].time_lost - rows[1].time_lost) < K._tie_margin(rows[0], rows[1])
+    assert [r.cid for r in K.lead_ties(rows, 3)] == [3]
+    print("ok sub-floor tie: no real sub-floor corner ranks; lead_ties drops a constructed one")
 
 # --------------------------------------------- a row's Compare: see the loss the row names
 # cool/compare-at-corner. Seeing a row's "+0.36 s" took ~10 actions: Jump put the best lap alone at
@@ -3861,7 +4039,8 @@ def _sweep_sessions() -> dict:
         _SWEEP_SESSIONS["_tmp"] = tmp
         for seed in range(1, 9):
             for laps in (6, 10):
-                rec = _generate(os.path.join(tmp.name, f"s{seed}_l{laps}"), seed, laps)
+                rec = _generate(os.path.join(tmp.name, f"s{seed}_l{laps}"), seed, laps,
+                                _sweep_habits(laps))
                 _SWEEP_SESSIONS[f"seed {seed}, {laps} laps"] = Session.load(rec.paths)
     return {k: v for k, v in _SWEEP_SESSIONS.items() if not k.startswith("_")}
 
@@ -3898,10 +4077,12 @@ def test_a_rows_compare_says_the_rows_own_time_lost():
     print(f"ok status = row Time lost on all {checked} enabled Compares of {len(sessions)} sessions")
 
 
-def _land_compare_at_c1(v, s, button) -> float:
+def _land_compare_at_c1(v, s, button, typical: int = 3, status: str | None = None) -> float:
     """Click `button` on the demo's window; the compare it lands must be the one C1's row
     names (lap 4's typical pass vs lap 13's, both panes at their own C1 entry, the charts on
-    C1, C1 ringed, the status naming both passes). Returns the click's cost in ms."""
+    C1, C1 ringed, the status naming both passes). Returns the click's cost in ms. `typical` is
+    the typical pass's lap id and `status` the status line, for a recording other than the demo
+    (`status` None leaves the demo's)."""
     import time
 
     from test_debrief_landing import _settle
@@ -3919,11 +4100,11 @@ def _land_compare_at_c1(v, s, button) -> float:
     finally:
         v.video.seek_pane = real_seek
         v.statusNotice.disconnect(notices.append)
-    assert c.active and not c.cross and (c.lap_a, c.lap_b) == (3, best), (
+    assert c.active and not c.cross and (c.lap_a, c.lap_b) == (typical, best), (
         c.lap_a, c.lap_b)
     assert getattr(v, "_maximized_panel", None) is None, "the grid is back"
     entry = {side: s.corners.corner_entry_media_time(lap, 1)
-             for side, lap in ((0, 3), (1, best))}
+             for side, lap in ((0, typical), (1, best))}
     assert {side: sec for side, sec in seeks} == entry, (seeks, entry)
     x0, x1 = s.corner_plot_window(1, v.plots.axis_mode())
     lo, hi = v.plots.p_speed.getViewBox().viewRange()[0]
@@ -3931,7 +4112,7 @@ def _land_compare_at_c1(v, s, button) -> float:
     assert lo <= x0 and hi >= x1 and lo >= x0 - pad - 1e-6 and hi <= x1 + pad + 1e-6, (
         lo, hi, x0, x1)
     assert v.map.pinned_corner() == "C1"
-    assert notices[-1] == (
+    assert notices[-1] == status or status is None and notices[-1] == (
         "C1 · lap 4 3.39 s vs lap 13 3.02 s (best lap) as timed — lap 4's is your typical pass "
         "here (median of 14: 3.38 s); typical loss through C1: +0.36 s · C or Esc: back to one "
         "video"), notices
@@ -4078,8 +4259,8 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
 
 
 def test_the_docked_page_jumps_and_compares_without_widening():
-    """Wave 10, design 1A (owner-approved 2026-11-18, Q1 (a)), on the published demo in the real
-    window, offscreen. At 1280x800 the docked Coaching tab (498 px) gives no row its Jump or
+    """Wave 10, design 1A (owner-approved 2026-11-18, Q1 (a)), on the demo circuit (three planted habits) in the real
+    window, offscreen. At 1280x800 the docked Coaching tab (499 px) gives no row its Jump or
     Compare; on main the page offered neither without a widen or a maximize. Now the focus list's
     line carries "Jump to C1" (the one primary) and "Compare C1", nothing selected for the driver:
     each lands exactly what C1's own row button lands; picking the C2 row re-aims both; Return in
@@ -4100,7 +4281,16 @@ def test_the_docked_page_jumps_and_compares_without_widening():
     sidecar.save = lambda *a, **k: None
     with tempfile.TemporaryDirectory(prefix="coach_pair_") as folder, _fresh_app_support():
         path = os.path.join(folder, "demo", "GX019001.MP4")
-        md.make(path, render=False)
+        # The demo's circuit with THREE planted habits (`test_debrief_landing.three_habits`):
+        # since Coaching ranks only past the timing step the demo itself ranks C1 alone, and this
+        # page needs a second ranked row to pick.
+        from test_debrief_landing import three_habits
+
+        from studio.dev import synth_gopro as sg
+        rec = sg.generate(os.path.join(folder, "gen"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
+                          origin=md.DEMO_ORIGIN, habit=three_habits())
+        os.makedirs(os.path.dirname(path))
+        os.replace(rec.paths[0], path)
         win = StudioWindow([])
         win.resize(1280, 800)
         win.show()
@@ -4139,13 +4329,16 @@ def test_the_docked_page_jumps_and_compares_without_widening():
 
             # DOCKED, 1280x800: no row action, the pair on the chip's line, aimed at C1.
             c = v.compare
-            assert page.width() == 498 and t.isColumnHidden(cp._PANEL_COL_GO), page.width()
+            # 499 px with this recording (the demo's is main's 498): the headline strip keeps
+            # its widest form's width (`coaching.widest_headline`), and this recording's own
+            # top-3 headline prints a pixel wider than that form.
+            assert page.width() == 499 and t.isColumnHidden(cp._PANEL_COL_GO), page.width()
             assert jump.isVisible() and cmp_.isVisible() and jump.isEnabled() and cmp_.isEnabled()
             assert (jump.text(), cmp_.text()) == ("Jump to C1", "Compare C1")
             assert (jump.accessibleName(), cmp_.accessibleName()) == ("Jump to C1", "Compare at C1")
             assert jump.property("variant") == "primary"
             assert page.focus_line.isVisible() and page.focus_line.text() == (
-                "Focus list: C1 · C2 · C7")
+                "Focus list: C1 · C5 · C6")
             assert page.focus_line.geometry().right() < jump.geometry().left()
             assert not t.selectionModel().selectedRows() and v.map.pinned_corner() is None, (
                 "nothing is selected, and nothing ringed, on the driver's behalf")
@@ -4174,17 +4367,22 @@ def test_the_docked_page_jumps_and_compares_without_widening():
             # COMPARE lands what C1's own Compare lands (the v0.14.0 assertions, reused).
             compares = []
             page.compare_requested.connect(lambda tp, lost: compares.append((tp, lost)))
-            took_ms = _land_compare_at_c1(v, s, cmp_)
+            # This recording's C1 compare: lap 5's typical pass against the best lap's.
+            at_c1 = {"typical": 4, "status": (
+                "C1 · lap 5 3.45 s vs lap 13 3.07 s (best lap) as timed — lap 5's is your typical "
+                "pass here (median of 14: 3.46 s); typical loss through C1: +0.39 s · C or Esc: "
+                "back to one video")}
+            took_ms = _land_compare_at_c1(v, s, cmp_, **at_c1)
             back_to_page()
-            _land_compare_at_c1(v, s, t.cellWidget(0, cp._PANEL_COL_CMP))
+            _land_compare_at_c1(v, s, t.cellWidget(0, cp._PANEL_COL_CMP), **at_c1)
             back_to_page()
             assert compares[0] == compares[1], compares
 
-            # PICKING THE C2 ROW re-aims both, and Return in the table is its Jump.
+            # PICKING THE C5 ROW re-aims both, and Return in the table is its Jump.
             t.selectRow(1)
             _settle(0.1)
-            assert (jump.text(), cmp_.text()) == ("Jump to C2", "Compare C2")
-            assert cmp_.accessibleName() == "Compare at C2"
+            assert (jump.text(), cmp_.text()) == ("Jump to C5", "Compare C5")
+            assert cmp_.accessibleName() == "Compare at C5"
             assert cmp_.toolTip() == t.cellWidget(1, cp._PANEL_COL_CMP).toolTip()
             jumps.clear()
             compares.clear()
@@ -4195,13 +4393,13 @@ def test_the_docked_page_jumps_and_compares_without_widening():
             t.setFocus()
             QTest.keyClick(t, Qt.Key_Return)
             back_to_page()
-            assert len(jumps) == 3 and len(set(jumps)) == 1 and jumps[0][0] == 2, jumps
+            assert len(jumps) == 3 and len(set(jumps)) == 1 and jumps[0][0] == 5, jumps
             cmp_.click()
             back_to_page()
             t.cellWidget(1, cp._PANEL_COL_CMP).click()
             back_to_page()
             assert len(compares) == 2 and compares[0] == compares[1], compares
-            assert compares[0][0].cid == 2, compares
+            assert compares[0][0].cid == 5, compares
             t.clearSelection()
             _settle(0.1)
             assert jump.text() == "Jump to C1", "an empty selection aims the pair back at the top"
@@ -4249,7 +4447,7 @@ def test_the_docked_page_jumps_and_compares_without_widening():
             _settle(0.2)
             assert c.active and _widget_count() == before, (_widget_count(), before)
             win.toggle_compare()
-            print(f"ok docked pair: Jump to C1 / Compare C1 at 498 and 515 px, C2 on a pick, "
+            print(f"ok docked pair: Jump to C1 / Compare C1 at 498 and 515 px, C5 on a pick, "
                   f"Return jumps; compare {took_ms:.0f} ms; switch at "
                   f"{seen[True]}/{seen[False]} widths; {before} widgets after 30")
         finally:
@@ -4359,14 +4557,16 @@ def test_the_theme_share_is_the_ratio_of_the_printed_cells():
     the cells are the shortlist's: the demo's +0.36 of +0.43 s, 84 % (unrounded 0.3605 of
     0.4307 s, also 84 %), and a ranked corner under the display floor is no longer counted, so the
     guard's edges below are big losses beside a +0.01 s one."""
-    demo = _level_sessions()["demo"].coaching_opportunities()
-    short = K.shortlist(demo)
-    c1 = [r for r in short if r.cid == 1]
-    assert (round(K.shown_total(c1), 2), round(K.shown_total(short), 2)) == (0.36, 0.43), \
+    # The demo's shortlist is C1 alone since the timing step (100 %, nothing to round); the planted
+    # sweep's seed 2 at 10 laps carries a cause over two of its three summed corners.
+    s2 = _sweep_sessions()["seed 2, 10 laps"].coaching_opportunities()
+    short = K.shortlist(s2)
+    cause = [r for r in short if r.cid in (1, 7)]
+    assert (round(K.shown_total(cause), 2), round(K.shown_total(short), 2)) == (0.43, 0.60), \
         [r.time_lost for r in short]
-    assert round(demo.theme.cause_share, 4) == 0.8369, demo.theme   # 0.8370 before the time-aware smoother
-    line = K.theme_actions(demo.theme, demo.rows)[0]
-    assert line == "Apex speed is the common thread — 84% of that time is in C1.", line
+    assert round(s2.theme.cause_share, 2) == 0.72, s2.theme
+    line = K.theme_actions(s2.theme, s2.rows)[0]
+    assert line == "Apex speed is the common thread — 72% of that time is in C1, C7.", line
     for name, s in _level_sessions().items():
         if not name.startswith("_"):
             assert _check_printed_shares(s.coaching_opportunities().rows) == 0, name

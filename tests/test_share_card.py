@@ -246,6 +246,43 @@ def _abstained_opps(n_laps=4):
     return coaching.Opportunities(enough=True, n_laps=n_laps, median_lap_id=2, rows=rows)
 
 
+def test_every_no_rank_headline_fits_the_card_whole():
+    """Review of #740 (M2): with nothing ranked the card prints the Coaching headline, and the
+    timing step added its own forms. Every mix of reasons a row can be held back for — level only,
+    level beside the spread or a one-off, the spread only — at a two- and a three-digit lap count
+    is drawn whole at one of the row's steps, measured with the card's own fit, never elided. The
+    first wording ("no corner clears both timing precision (0.07 s) and its row's tests (median
+    of 148 clean laps)") was cut at the last step."""
+    from PySide6.QtGui import QPainter
+
+    def opps(kinds, n_laps):
+        rows = [coaching.Opportunity(**{**_apex_opp(cid=c, time_lost=0.03).__dict__,
+                                        "evidence": coaching.Evidence(
+                                            n_laps=n_laps, reach_laps=1, reach=coaching.REACH_RARE,
+                                            iqr=0.20 if k == coaching.ABSTAIN_SPREAD else 0.02,
+                                            abstain=k)})
+                for c, k in enumerate(kinds, start=1)]
+        return coaching.Opportunities(enough=True, n_laps=n_laps, median_lap_id=2, rows=rows)
+
+    L, S, ONE = coaching.ABSTAIN_LEVEL, coaching.ABSTAIN_SPREAD, coaching.ABSTAIN_ONE_OFF
+    pad, right = 72, share_card.CARD_W - 72
+    probe = QImage(10, 10, QImage.Format_ARGB32)
+    p = QPainter(probe)
+    seen = set()
+    try:
+        for kinds in ((L, L), (L, S), (L, ONE), (S, S)):
+            for n_laps in (14, 148):
+                line = share_card.card_data(FakeSession(opps=opps(kinds, n_laps))).no_opp
+                assert line == coaching.headline(opps(kinds, n_laps)) != "", (kinds, line)
+                seen.add(line.split(" (")[0])
+                txt, font = share_card._fit_line(p, line, right - pad, share_card._NO_OPP_PX_STEPS)
+                assert txt == line, (kinds, n_laps, font.pixelSize(), txt)
+    finally:
+        p.end()
+    assert "Whole session · no corner stands out vs your best lap" in seen, seen
+    print(f"ok no-rank card lines: {sorted(seen)} whole at every lap count")
+
+
 def test_the_no_opportunity_line_says_what_the_coaching_page_says_for_its_state():
     """QA v0.13.0: with corners listed and none ranked, the report's COACHING read "no corner
     clears its own lap-to-lap spread (median of 4 clean laps)" beside a card asking the driver to
@@ -1554,6 +1591,7 @@ if __name__ == "__main__":
     test_card_data_no_opportunity_when_too_few_laps()
     test_card_data_survives_coaching_error()
     test_no_opportunity_when_every_ranked_loss_rounds_to_zero()
+    test_every_no_rank_headline_fits_the_card_whole()
     test_the_no_opportunity_line_says_what_the_coaching_page_says_for_its_state()
     test_a_tie_the_page_will_not_rank_is_not_crowned_on_the_card()
     test_the_tie_block_draws_no_reason_and_keeps_its_names_clear_of_the_loss()

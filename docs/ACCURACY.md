@@ -290,6 +290,13 @@ shown uncoloured. At recording A's noise the same rule gives 0.21 s, and 0.07 s 
 35280 cells whose true gap is under 0.03 s (875 at C's). The same lap's corner time against a lap
 of its own recording carries the same σ.
 
+**Coaching ranks a corner only when its time lost clears the step.** A corner whose median loss to
+the best lap prints under 0.07 s is listed as level with the best lap and is never a focus corner.
+On 188 synthetic race days at recording C's noise (habit-free, and with one corner planted 0.05,
+0.10 or 0.20 s slower a lap), 42 % of the corners the list named before truly lost under 0.03 s;
+with the step, 1 of the 102 it names. It drops 11 % of the corners that truly lose 0.07 s or more,
+and never a corner planted 0.10 or 0.20 s slower.
+
 **Two speeds.** The Corners table's Δapex column differences two laps' apex speeds, km/h. An apex
 speed is the lowest GPS fix in the corner, so its noise is at most one fix's, and one fix's speed
 noise is measured on a real recording: σ 0.62 km/h per sample (recording A's 10 Hz speed against

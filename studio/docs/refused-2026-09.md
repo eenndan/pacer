@@ -2323,8 +2323,10 @@ wrong with it.**
 - **It is unstable.** Under the jitter the same number of corners fires in only 41 % of the draws,
   and only C2 and C6 fire in more than four draws in five. A line that would praise C4 or C3 depending on
   a few hundredths of noise is praising the noise.
-- **It contradicts the Coaching page.** It would praise C2 and C4, which the Coaching page ranks as
-  opportunities on the demo (`Session.coaching_opportunities`, ranked C1, C2, C7, C4).
+- **It contradicted the Coaching page.** It would praise C2 and C4, which the Coaching page ranked
+  as opportunities on the demo until it ranked only past the timing step
+  (cool/coaching-ranks-past-the-step). It now holds both back as level with the best lap
+  (`Session.coaching_opportunities`, ranked C1), so this reason has gone; the other three stand.
 - **It measures the quickest pass, not repeatability.** Typical − best is a gap to a minimum, the
   order statistic of §2. More laps bring a lower best pass while the median holds, so the line
   fires less the longer you drive.

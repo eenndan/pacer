@@ -133,15 +133,26 @@ def _assert_the_planted_call(s, ranked, shortlist):
         f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
     assert top.time_lost >= 0.30, f"C{top.cid} is worth only {top.time_lost:.3f} s"
     assert top.evidence.reach_laps >= 3 and top.evidence.reach == "repeat", top.evidence
-    assert len(ranked) > 1 and top.time_lost >= 5 * ranked[1].time_lost, (
-        f"C{top.cid} {top.time_lost:.3f} s is not 5x the next row: "
-        f"{[(r.cid, round(r.time_lost, 3)) for r in ranked]}")
-    # The other ranked corners have no lever and a middle half under the 0.07 s level step: their
-    # reason names no cause, never consistency (cool/coaching-level-step).
-    assert [r.reason.kind for r in ranked[1:]] == ["level"] * (len(ranked) - 1), ranked
-    # The debrief pre-promotes its shortlist onto the focus list; README's and FIRST_LAP's alt text
-    # for docs/media/debrief.png says "the three corners Pacer put on the focus list".
-    assert shortlist[:1] == [habit.cid] and len(shortlist) == 3, shortlist
+    # C1 is the ONE ranked corner (cool/coaching-ranks-past-the-step). Before it C2, C7 and C4 ranked
+    # behind it at +0.04 / +0.03 / +0.03 s (C1 was 9.9x the next); each is inside the 0.07 s timing
+    # step, so each is held back as level now, its reason still naming no cause (never consistency,
+    # cool/coaching-level-step).
+    assert [r.cid for r in ranked] == [habit.cid], [(r.cid, round(r.time_lost, 3)) for r in ranked]
+    rows = s.coaching_opportunities().rows
+    held = [r for r in rows if r.evidence.abstain == "level"]
+    assert [r.cid for r in held] == [2, 7, 4], held
+    assert all(r.reason.kind == "level" and r.time_lost < 0.07 for r in held), held
+    # As sharp as the old margin: C1 is at least 9x its best level row (0.361 against 0.036 s), and
+    # the one row past the step that is not ranked is C3, held back for having no second lap at
+    # its target, at under a quarter of C1.
+    assert top.time_lost >= 9 * max(r.time_lost for r in held), (top.time_lost, held)
+    past = [r for r in rows if r.cid != top.cid and r.time_lost >= 0.07]
+    assert [(r.cid, r.evidence.abstain) for r in past] == [(3, "one_off")], past
+    assert past[0].time_lost < top.time_lost / 4, past
+    # The debrief pre-promotes its shortlist onto the focus list: C1 alone. README's and FIRST_LAP's
+    # alt text for docs/media/debrief.png says "the three corners Pacer put on the focus list" until
+    # that still is re-captured.
+    assert shortlist == [habit.cid], shortlist
     times = sorted(s.lap_time(i) for i in s.valid_lap_ids())
     # The compare's default pair is the best lap and the next-fastest: both CLEAN laps here, so the
     # compare reads a real gap, but not the habit's — it is not at C1.

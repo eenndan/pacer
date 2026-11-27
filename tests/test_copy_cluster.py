@@ -52,14 +52,15 @@ def _window_on_a_session():
     """A real, jailed StudioWindow on one synthetic recording of the built-in demo circuit, opened
     TWICE: the first open lands on its debrief, the re-open on the ordinary grid — the state every
     later open of a recording arrives in, with the charts and the Laps page on screen."""
-    from test_debrief_landing import _fresh_app_support, _open
+    from test_debrief_landing import _fresh_app_support, _open, three_habits
 
     from studio.app import StudioWindow
     from studio.dev import make_demo as md
     from studio.dev import synth_gopro as sg
     with tempfile.TemporaryDirectory(prefix="copy_cluster_") as folder, _fresh_app_support():
         rec = sg.generate(os.path.join(folder, "rec"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
-                          origin=md.DEMO_ORIGIN)
+                          origin=md.DEMO_ORIGIN,
+                          habit=three_habits())
         win = StudioWindow([])
         win.resize(1440, 900)
         win.show()

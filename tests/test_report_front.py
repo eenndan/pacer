@@ -3,8 +3,8 @@ card beside a COACHING section — instead of a metadata table with its first pi
 and no Coaching rows at all, while its own CORNERS note sent the reader to "the Coaching tab's
 list".
 
-WHAT IS HELD, on real Sessions loaded from synthetic GoPro recordings (the shipped demo, and seed 7
-of the demo circuit: a three-way tie at the top, level rows and two not-ranked rows) plus a two-lap
+WHAT IS HELD, on real Sessions loaded from synthetic GoPro recordings (the shipped demo, and planted
+drives of the demo circuit: a three-way tie at the top, and a provisional shortlist of two) plus a two-lap
 session for the empty state and a one-lap one for the gaps that are 0 by construction:
 
   * the order — header, COACHING, the pinned map and chart, then the Stats groups (two columns on
@@ -42,8 +42,12 @@ _SESSIONS: dict = {}
 
 
 def _sessions() -> dict:
-    """demo (verified, planted C1 habit), seed7 (verified, a tie), seed7prov (the same drive at an
-    unknown origin: PROVISIONAL), twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
+    """demo (verified, planted C1 habit), tie (verified: seed 1 at 10 laps with
+    `_synthetic.sweep_habits` planted, a three-way tie at the top), twoprov (a DIFFERENT drive,
+    seed 3 at 10 laps planted the same way, at an unknown origin: PROVISIONAL, and two ranked
+    corners — the shortlist-of-two case). Until cool/coaching-ranks-past-the-step both were the
+    habit-free seed 7 at 12 laps, at two origins; it ranks nothing past the timing step, and no one
+    planted drive is both a three-way tie and a shortlist of two, twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
     3, one lap, driven in reverse: the ideal is that lap, every corner one pass), onedonor (seed
     29, two laps, one of them won every segment). Generated once
     per process; the TemporaryDirectory stays alive with them (sessions read their files lazily)."""
@@ -56,8 +60,9 @@ def _sessions() -> dict:
         demo = os.path.join(tmp.name, "GX019000.MP4")
         md.make(demo, render=False)
         _SESSIONS["demo"] = Session.load([demo])
-        for name, seed, laps, origin in (("seed7", 7, 12, md.DEMO_ORIGIN),
-                                         ("seed7prov", 7, 12, sg.ORIGIN),
+        from _synthetic import sweep_habits
+        for name, seed, laps, origin in (("tie", 1, 10, md.DEMO_ORIGIN),
+                                         ("twoprov", 3, 10, sg.ORIGIN),
                                          ("twolaps", md.DEMO_SEED, 2, md.DEMO_ORIGIN),
                                          ("onelap", 3, 1, md.DEMO_ORIGIN),
                                          ("onedonor", 29, 2, md.DEMO_ORIGIN)):
@@ -66,7 +71,8 @@ def _sessions() -> dict:
             # reach of that line, so the lap wears the dropout ⚠ (every seed: the teleport sits at
             # a fixed fraction of the drive) and the session reads low. Reversed, it lands clear.
             rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin,
-                              reverse=name == "onelap")
+                              reverse=name == "onelap",
+                              habit=sweep_habits(laps) if name in ("tie", "twoprov") else None)
             _SESSIONS[name] = Session.load(rec.paths)
     return _SESSIONS
 
@@ -212,19 +218,20 @@ def _assert_page_text_on_page(s, unit=None) -> dict:
 
 def test_every_coaching_string_is_page_texts_in_the_pages_order():
     """The demo: the headline, the theme, both actions, and all six shown rows — the planted C1 with
-    its braking line, three level rows, two "Not ranked" rows muted — exactly as `page_text` says
-    them, under the panel's four column words. Seed 7: a three-way tie at the top."""
+    its braking line, then five "Not ranked" rows muted (three level with the best lap inside the
+    timing step, two with no second lap at the target) — exactly as `page_text` says them, under the
+    panel's four column words. The planted tie session: a three-way tie at the top."""
     assert export_data.REPORT_COACHING_COLUMNS == tuple(
         coaching_panel.OpportunitiesPanel._COLUMNS[:4])
     got = _assert_page_text_on_page(_sessions()["demo"])
     assert got["actions"][-1] == "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."
     reasons = [r[3] for r in got["rows"]]
     assert reasons[0].endswith("\nBraking later went with quicker passes here (14 laps)"), reasons
-    assert any(r.startswith("no one habit explains it: your passes here are level") for r in reasons)
+    assert sum(r.startswith("Not ranked: level with your best lap here") for r in reasons) == 3
     muted = [r for r in got["rows"] if not r[4]]
-    assert muted and all(r[3].startswith("Not ranked: ") for r in muted), muted
-    tie = _assert_page_text_on_page(_sessions()["seed7"])
-    assert any(a.startswith("Start with C5, C1 or C6:") and "this cannot rank them" in a
+    assert len(muted) == 5 and all(r[3].startswith("Not ranked: ") for r in muted), muted
+    tie = _assert_page_text_on_page(_sessions()["tie"])
+    assert any(a.startswith("Start with C7, C5 or C3:") and "this cannot rank them" in a
                for a in tie["actions"]), tie["actions"]
     print("ok coaching: page_text row for row on the demo and on a tie")
 
@@ -234,16 +241,16 @@ def test_the_notes_say_what_the_page_says_on_hover():
     naming the row that prints a direction — the panel's own strings (`coaching`)."""
     notes = _coaching_strings(_section(ET.fromstring(_report(_sessions()["demo"])),
                                        "COACHING"))["notes"]
-    assert notes[0] == (f"{coaching.scope_note(page=False, n=3)} "
+    assert notes[0] == (f"{coaching.scope_note(page=False, n=1)} "
                         f"{coaching.medians_note(bars=False)}"), notes[0]
     assert notes[1] == f"Time lost — {coaching.COLUMN_TIPS['Time lost']}", notes[1]
     assert "versus your own best lap's same corner" in notes[1]
     assert notes[2] == f"Done it? — {coaching.COLUMN_TIPS['Done it?']}", notes[2]
     assert notes[3] == f"The braking line under C1 {coaching.BRAKE_DIRECTION_CAVEAT}", notes[3]
     assert len(notes) == 5, notes          # verified, clean clock: no Timing stamp; the pointer last
-    assert notes[4].startswith("0.43 s is how far your typical pass through these 3 corners")
-    # Seed 7 prints no direction: no caveat.
-    seven = _coaching_strings(_section(ET.fromstring(_report(_sessions()["seed7"])), "COACHING"))
+    assert notes[4].startswith("0.36 s is how far your typical pass through this corner")
+    # The tie session prints no direction: no caveat.
+    seven = _coaching_strings(_section(ET.fromstring(_report(_sessions()["tie"])), "COACHING"))
     assert not any("braking line" in n for n in seven["notes"]), seven["notes"]
     # The panel reads the same strings (byte for byte with what it printed before they moved).
     assert coaching_panel._SCOPE_TOOLTIP.startswith(coaching.scope_note() + " Coaching ▸ ")
@@ -253,16 +260,16 @@ def test_the_notes_say_what_the_page_says_on_hover():
 
 
 def test_provisional_and_degraded_timing_stamp_the_coaching_rows():
-    """PROVISIONAL (seed 7 at an unknown origin): the rows the Coaching page shows, unchanged, and
+    """PROVISIONAL (the planted two-ranked drive at an unknown origin): the rows the Coaching page shows, unchanged, and
     the report's Timing stamp under them. A degraded clock (GPS low, then the media-clock fallback)
     stamps them too; a clean one does not."""
-    prov = _sessions()["seed7prov"]
+    prov = _sessions()["twoprov"]
     assert not prov.timing_verified
     got = _assert_page_text_on_page(prov)
     stamp = f"Timing: {export_data.timing_meta(prov, where='on this page')}"
-    # The stamp, then the totals pointer (seed 7 has an IDEAL LAP section and two ranked corners).
+    # The stamp, then the totals pointer (it has an IDEAL LAP section and two ranked corners).
     assert "PROVISIONAL" in stamp and got["notes"][-2] == stamp, got["notes"]
-    assert got["notes"][-1].startswith("0.09 s is how far your typical pass through these 2 ")
+    assert got["notes"][-1].startswith("0.37 s is how far your typical pass through these 2 ")
     s = _sessions()["demo"]
     saved = s._timing_quality
     try:
@@ -306,7 +313,7 @@ def test_the_corners_note_reconciles_the_answers_in_the_reports_words():
     left = sum(r.n_laps - r.n for r in report if getattr(r, "n_laps", None) is not None)
     coach = coaching.corners_reconciliation(s.coaching_opportunities(), left, page=False)
     assert coach.startswith("The COACHING section above measures the SAME corners against your "
-                            "best lap: its headline totals 0.43 s over 3 corners"), coach
+                            "best lap: its headline totals 0.36 s over 1 corner"), coach
     gap = coaching.ideal_gap_s(s)
     assert f"{coach} {coaching.ideal_gap_sentence(gap)} {coaching.BASELINES_SENTENCE}" in first
     assert "Your ideal lap is 0.30 s under your best." in first, first
@@ -420,9 +427,9 @@ def test_coachings_total_and_the_ideal_gap_are_told_apart_on_the_first_screen():
     head = _coaching_strings(_section(root, "COACHING"))["lead"][0]
     ideal = dict((tr.findtext("th"), tr.findtext("td"))
                  for tr in _section(root, "IDEAL LAP").iter("tr"))[export_data.IDEAL_GAP_ROW]
-    assert "0.43 s across your top 3 corners" in head and ideal == "0.30 s", (head, ideal)
+    assert "0.36 s in your worst corner" in head and ideal == "0.30 s", (head, ideal)
     assert _pointer(s) == (
-        "0.43 s is how far your typical pass through these 3 corners sits from your best lap's — "
+        "0.36 s is how far your typical pass through this corner sits from your best lap's — "
         "it is not time under your best lap. Time under your best lap is the ideal lap's 0.30 s "
         "(IDEAL LAP below); the note under CORNERS ties the two together."), _pointer(s)
     # Counted right for one, two, three corners; the CORNERS clause only when that note is printed.
@@ -477,11 +484,11 @@ def test_the_scope_note_counts_the_shortlist_the_headline_sums():
     assert "The total is your top 2 corners that cleared" in coaching.scope_note(n=2)
     assert "The total is your worst corner that cleared" in coaching.scope_note(n=1)
     none = coaching.scope_note(n=0)
-    assert "No corner clears its own lap-to-lap spread, so there is no total" in none, none
+    assert "No corner is ranked, so there is no total" in none, none
     assert "top 0" not in none and "The total is" not in none
     assert coaching_panel.scope_tooltip(3) == coaching_panel._SCOPE_TOOLTIP
-    # Seed 7 provisional ranks two: the report's note says two, as its headline does.
-    s = _sessions()["seed7prov"]
+    # The provisional session ranks two: the report's note says two, as its headline does.
+    s = _sessions()["twoprov"]
     got = _coaching_strings(_section(ET.fromstring(_report(s)), "COACHING"))
     assert "top 2 corners" in got["lead"][0] and "your top 2 corners that" in got["notes"][0]
     print("ok P3: the scope note counts the headline's shortlist")

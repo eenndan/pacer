@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QFontMetricsF, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -274,6 +274,31 @@ FOCUS_LINE_GLYPH = "ph.corners-out"
 FOCUS_LINE_TIP = ("Your focus list at this track. The page keeps it to this line at this size: click "
                   "to see it whole, full-window, with its verdicts and its buttons (Coaching ▸ "
                   "Show focus list). Esc brings the grid back.")
+
+
+class _HeadlineLabel(QLabel):
+    """The headline strip's label: as wide, at least, as `widest` would print in the label's font
+    as it is laid out (`coaching.widest_headline`), so the page's minimum width does not follow
+    today's wording. Measured at layout time, so the stylesheet's font is the one measured."""
+
+    widest = ""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt's name
+        h = super().minimumSizeHint()
+        if not self.widest:
+            return h
+        # Fractional advances, rounded up: the label lays its text out at them, and integer ones
+        # left the strip a pixel short of what the same words take printed.
+        fm = QFontMetricsF(self.font())
+        # The total's digits are unknown until it is measured: each takes the widest digit's room.
+        digit = max("0123456789", key=fm.horizontalAdvance)
+        widest = self.widest.replace("0.00 s", f"{digit}.{digit}{digit} s")
+        extra = math.ceil(fm.horizontalAdvance(widest) - fm.horizontalAdvance(self.text()))
+        return QSize(h.width() + max(extra, 0), h.height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802 — Qt's name
+        h = super().sizeHint()
+        return QSize(max(h.width(), self.minimumSizeHint().width()), h.height())
 
 
 def _sentence(text: str) -> str:
@@ -1802,7 +1827,7 @@ class OpportunitiesPanel(QWidget):
 
         # --- the headline strip: the tab bar already names the page, so this is just the
         # summary sentence (no title, no chevron — a tab you leave costs nothing).
-        self.summary_label = QLabel("")  # "Whole session · 0.42 s in 3 corners …" — set in refresh()
+        self.summary_label = _HeadlineLabel("")  # "Whole session · 0.42 s in 3 corners …"
         self.summary_label.setProperty("role", "BarLabel")
         self.summary_label.setToolTip(_SCOPE_TOOLTIP)
         # The same PanelHeader the four quadrants use. This strip was a byte-identical copy of
@@ -2141,7 +2166,10 @@ class OpportunitiesPanel(QWidget):
                 self.table.setItem(r, 3, self._reason_item(opp, directions))
                 self.table.setCellWidget(r, _PANEL_COL_PHASES,  # D2
                                          PhaseBar(opp.phases))
-                self.table.setCellWidget(r, _PANEL_COL_GO, self._action_cell(opp, primary=r == 0))
+                # The amber CTA marks the corner the page RANKS first: with nothing ranked
+                # (every row held back) nothing is recommended, so no Jump is primary.
+                self.table.setCellWidget(r, _PANEL_COL_GO, self._action_cell(
+                    opp, primary=r == 0 and opp.evidence.ranked))
                 self.table.setCellWidget(r, _PANEL_COL_CMP, self._cmp_button(opp))
             if held is not None and held in self._cids:
                 self.table.selectRow(self._cids.index(held))
@@ -2749,6 +2777,10 @@ class OpportunitiesPanel(QWidget):
         show the theme block (see `_apply_theme_budget`) still has the story one hover away — the
         block sheds lines, it never deletes them."""
         self.summary_label.setText(self._headline)
+        # The strip keeps its widest form's width (`coaching.widest_headline`), not today's text's.
+        self.summary_label.widest = (coaching.widest_headline(self._n_clean) if self._headline
+                                     else "")
+        self.summary_label.updateGeometry()
         story = "\n\n".join(t for t in (self.debrief_block.full_text(),
                                         self.focus_block.full_text(),
                                         self.theme_block.full_text()) if t)

@@ -377,18 +377,30 @@ def _corners(cids) -> str:
 _GEN: dict[tuple, tuple[tempfile.TemporaryDirectory, str]] = {}
 
 
+def three_habits():
+    """The demo's planted C1 habit plus two more, at C5 and C6 (grip × 0.88 on the same laps), so a
+    journey's debrief ranks THREE corners past the timing step: C1 +0.39 s, C5 +0.15 s, C6 +0.13 s.
+    The habit-free demo circuit these journeys drove until cool/coaching-ranks-past-the-step ranked
+    C7, C5 and C3 at under 0.07 s each — no claim at all once Coaching ranks only past the step."""
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    return (md.DEMO_HABIT,) + tuple(sg.Habit(cid=c, grip=0.88, brake=1.0,
+                                             clean_laps=md.DEMO_HABIT.clean_laps) for c in (5, 6))
+
+
 def _two_recordings(folder: str) -> tuple[str, str]:
     """Two recordings of the built-in demo circuit, byte-identical telemetry under two recording
     numbers — two library identities (GX9001, GX9002), so the second open is a first open too.
     Two FRESH copies in `folder` on every call: journeys write sidecars and library rows beside
-    them, so only the generation is shared."""
+    them, so only the generation is shared. Driven with `three_habits`, so the debrief has three
+    corners to rank."""
     from studio.dev import make_demo as md
     from studio.dev import synth_gopro as sg
-    key = (md.DEMO_SEED, md.DEMO_LAPS, 1, md.DEMO_ORIGIN)
+    key = (md.DEMO_SEED, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, "three_habits")
     if key not in _GEN:
         gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
         rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
-                          origin=key[3])
+                          origin=key[3], habit=three_habits())
         _GEN[key] = (gen, rec.paths[0])
     out = []
     for n in ("9001", "9002"):
@@ -544,20 +556,62 @@ def test_the_journey_on_the_real_window():
           f"second open filled the slot with C{gone} and reached a verdict in one click")
 
 
+def test_a_first_open_with_no_corner_past_the_step_opens_the_normal_view():
+    """cool/coaching-ranks-past-the-step (review S5): a first open whose corners all lose under the
+    timing step lands on no debrief — the existing rule, nothing ranked — and opens the ordinary
+    grid on the driver's tab, with the personal-best card the debrief would otherwise carry. The
+    Coaching tab says no corner stands out, and its sentence points elsewhere. The habit-free demo
+    circuit is that session (its corners lose +0.04 s and less)."""
+    from PySide6.QtWidgets import QLabel
+
+    from studio import coaching
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    with tempfile.TemporaryDirectory(prefix="debrief_level_") as folder, _fresh_app_support():
+        rec = sg.generate(os.path.join(folder, "gen"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
+                          origin=md.DEMO_ORIGIN)
+        path = os.path.join(folder, "9101", "GX019101.MP4")
+        os.makedirs(os.path.dirname(path))
+        shutil.copyfile(rec.paths[0], path)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            _open(win, path)
+            opps = win.session.coaching_opportunities()
+            assert not coaching.shortlist(opps) and opps.rows, opps.rows
+            assert not win.view.is_debrief(), "a session with nothing ranked landed on a debrief"
+            assert win.library_ctl.landing() is None
+            toast = win._pb_toast
+            assert toast is not None and toast.isVisible(), "no personal-best card on a first open"
+            words = " ".join(lab.text() for lab in toast.findChildren(QLabel))
+            assert "First session logged" in words, words
+            page = win.view.opportunities
+            assert page.summary_label.text() == coaching.headline(opps)
+            assert "no corner stands out" in page.summary_label.text()
+            assert page.theme_block.headline.text() == coaching.no_focus_sentence(opps) != ""
+        finally:
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+    print("ok level first open: no debrief, the grid, the PB card, 'no corner stands out'")
+
+
 def _way_recordings(folder: str) -> list[str]:
-    """The demo's circuit forward (seed 1), then in reverse twice (seeds 4 and 6, 0:45.142 then
-    0:45.044), each under its own recording number: every synthetic recording is GX019001, and the
-    Library would see three as one."""
+    """The demo's circuit forward (seed 1), then in reverse twice (seeds 4 and 6),
+    each with `three_habits` planted and under its own recording number: every synthetic recording
+    is GX019001, and the Library would see three as one."""
     from studio.dev import make_demo as md
     from studio.dev import synth_gopro as sg
     out = []
     for n, (off, rev) in zip(("9301", "9302", "9303"), ((1, False), (4, True), (6, True)),
                              strict=True):
-        key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev)
+        key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev, "three_habits")
         if key not in _GEN:
             gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
             rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
-                              origin=key[3], reverse=rev)
+                              origin=key[3], reverse=rev, habit=three_habits())
             _GEN[key] = (gen, rec.paths[0])
         os.makedirs(os.path.join(folder, n))
         out.append(os.path.join(folder, n, f"GX01{n}.MP4"))
@@ -619,8 +673,8 @@ def test_a_personal_best_is_never_compared_with_the_other_way_round():
             fast = win.session.lap_time(win.session.best_lap_id())
             line, mark, prev, compare = said()
             assert line == (f"New personal best at {track} this way round: {fmt_time(fast)}, "
-                            f"0.10 s faster than your previous best ({slow})."), line
-            assert mark == "NEW PB · −0.10 s vs 1 Jun" and prev == "GX9302" and compare, said()
+                            f"0.11 s faster than your previous best ({slow})."), line
+            assert mark == "NEW PB · −0.11 s vs 1 Jun" and prev == "GX9302" and compare, said()
             rows = {e["fingerprint"]: e.get("rotation") for e in library.load()["entries"]}
             assert rows == {"GX9301": -1, "GX9302": 1, "GX9303": 1}, rows
         finally:
@@ -734,11 +788,11 @@ def test_a_mixed_library_never_names_a_way_its_figures_do_not_have():
         paths = []
         for n, (off, rev) in zip(("9311", "9312", "9313", "9314"),
                                  ((1, False), (2, False), (3, False), (1, True)), strict=True):
-            key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev)
+            key = (md.DEMO_SEED + off, md.DEMO_LAPS, 1, md.DEMO_ORIGIN, rev, "three_habits")
             if key not in _GEN:
                 gen = tempfile.TemporaryDirectory(prefix="debrief_gen_")
                 rec = sg.generate(os.path.join(gen.name, "gen"), key[0], key[1], chapters=key[2],
-                                  origin=key[3], reverse=rev)
+                                  origin=key[3], reverse=rev, habit=three_habits())
                 _GEN[key] = (gen, rec.paths[0])
             os.makedirs(os.path.join(folder, n))
             paths.append(os.path.join(folder, n, f"GX01{n}.MP4"))

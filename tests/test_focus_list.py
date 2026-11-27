@@ -805,6 +805,52 @@ def test_a_session_re_measured_against_itself_is_level():
     print("ok self: every corner of two sessions level against itself")
 
 
+def test_a_stored_corner_that_is_level_today_keeps_its_verdict():
+    """cool/coaching-ranks-past-the-step: the demo's debrief put C1, C2 and C7 on the focus list
+    before Coaching ranked only past the timing step. A list stored then still names C2 and C7,
+    which today's Coaching holds back as level (+0.04 / +0.03 s to the best lap). The cross-session
+    verdict does not read today's ranking — it compares each stored window's median with its
+    baseline — so every item keeps its verdict and its sentence, here on the same laps under
+    another identity: "no change" by exactly 0."""
+    from studio import coaching
+    s = _focus_session("demo")
+    level = {r.cid for r in s.coaching_opportunities().rows
+             if r.evidence.abstain == coaching.ABSTAIN_LEVEL}
+    assert {2, 7} <= level, level
+    then = {"fingerprint": "LIST_THEN", "track": "Demo", "date": "2026-06-01", "verified": True,
+            "degraded": False}
+    now = {**then, "fingerprint": "LIST_NOW", "date": "2026-06-08"}
+    items = s.focus_items([1, 2, 7], then)
+    assert [i.cid for i in items] == [1, 2, 7], items
+    store = _records(("LIST_THEN", _record()), ("LIST_NOW", _record()))
+    report = s.focus_report(items, now, store, "Demo")
+    assert [o.item.cid for o in report.outcomes] == [1, 2, 7] and report.n_verdicts == 3, report
+    for o in report.outcomes:
+        assert o.kind == F.OUTCOME_UNCHANGED and o.delta == 0.0, o
+        assert F.outcome_sentence(o).startswith(f"C{o.item.cid} — "), F.outcome_sentence(o)
+    print(f"ok stored level corners: {[F.outcome_sentence(o) for o in report.outcomes]}")
+
+
+def test_replace_offers_only_ranked_corners_and_says_how_many():
+    """"Replace with today's top 3" offers Coaching's shortlist, which since the timing step holds
+    only corners past it: over a list of C1, C2 and C7 kept from an earlier session, the demo offers
+    C1 alone, and the button says so ("top corner (C1)"), never a corner Coaching calls level."""
+    from studio import coaching
+    s = _focus_session("demo")
+    short = [r.cid for r in coaching.shortlist(s.coaching_opportunities())]
+    assert short == [1], short
+    then = {"fingerprint": "LIST_THEN", "track": "Demo", "date": "2026-06-01", "verified": True,
+            "degraded": False}
+    now = {**then, "fingerprint": "LIST_NOW", "date": "2026-06-08"}
+    store = _records(("LIST_THEN", _record()), ("LIST_NOW", _record()))
+    report = s.focus_report(s.focus_items([1, 2, 7], then), now, store, "Demo")
+    offer = F.replace_offer(report, short)
+    assert offer == [1], offer
+    label = F.replace_label(offer, report.now_day)
+    assert label.endswith("top corner (C1)") and "C2" not in label and "C7" not in label, label
+    print(f"ok replace: {label!r}")
+
+
 def test_no_stored_window_is_left_without_laps_where_the_corners_table_has_passes():
     """The sweep: the demo against six habit-free sessions, both orders. Every stored window that
     overlaps a corner the Stats ▸ CORNERS table timed today is timed on at least as many laps as
@@ -1279,8 +1325,8 @@ def test_the_open_session_is_today_only_on_the_day_it_was_recorded():
     assert F.outcome_sentence(few.outcomes[0]).endswith(
         "can't say: 2 clean laps through it on 20 Sep."), F.outcome_sentence(few.outcomes[0])
     assert F.replace_label([1, 5, 7], few.now_day) == "Replace with 20 Sep's top 3 (C1, C5, C7)"
-    assert F.replace_label([1], F.open_day("2026-09-20", on_day)) == "Replace with today's top 1 (C1)"
-    assert F.replace_label([1], F.open_day(None, on_day)) == "Replace with this session's top 1 (C1)"
+    assert F.replace_label([1], F.open_day("2026-09-20", on_day)) == "Replace with today's top corner (C1)"
+    assert F.replace_label([1], F.open_day(None, on_day)) == "Replace with this session's top corner (C1)"
     print("ok open day: 'today' only on the day the recording was made")
 
 
