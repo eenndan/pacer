@@ -6,6 +6,74 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-11-27
+
+### Highlights
+
+- **Coaching ranks a corner only when its time lost clears the 0.07 s timing step**: a level corner
+  is listed muted, says so, and is never put on the focus list (#740)
+- **When no corner stands out, Coaching says so in one sentence** and points to your consistency and
+  ideal lap; such a first open lands on the normal view with its personal-best card (#740)
+- **A button you reach with Tab presses on Space or Return**, and after a click Space still plays;
+  ⌘K and the ? card list eleven more controls, greyed with the reason when off (#739)
+- **The dialogs work from the keyboard**: Return in File ▸ Library… opens the selected recording,
+  Tab leaves every table, and Return never presses Delete, Clear or Restore (#738)
+- **← / → step the video on the first press from every table**, and ↑ / ↓ in the Laps table move
+  from the lap on screen (#735)
+- **Colour is no longer the only cue**: a Corners gap past its step is bold, and the GPS strip draws
+  poor seconds hatched and moderate ones at half height (#736, #737)
+- **Library ▸ Update keeps your sort, row and scroll when it ends**, and Forget, Clear library or
+  Restore stop it first, so its line counts only the rows still there (#733)
+
+### Added
+
+- ⌘K and the ? card list Ideal lap, Brake/Throttle, vs ideal, Snap to track, Add sector, Reset
+  sectors, each panel's Maximize and Next slow lap, greyed with the button's reason when off. (#739)
+- The ? card lists the Laps table's multi-select keys: ⌘↓ then ⌘Space adds a second lap, ⇧↓ / ⇧↑
+  extend the selection. (#735)
+
+### Changed
+
+- Coaching ranks a corner only when its time lost clears the 0.07 s timing step; a level corner is
+  listed as level with your best lap, muted, and is never put on the focus list. (#740)
+- When no corner stands out, Coaching says so in one sentence, recommends no corner's Jump, and
+  points to your consistency and your ideal lap instead. (#740)
+- A first open with no corner past the step opens on the normal view, not the debrief, with its
+  personal-best card. (#740)
+- The GPS-quality strip under the scrubber gives each verdict a shape as well as a colour: poor is
+  hatched, moderate is the lower half, good stays the full bar, so "where" reads without the hue.
+  (#737)
+- Corners ▸ Lap N: a Δbest/Δref or Δapex gap past its step is now also bold, so "measurable" vs
+  "level" no longer rests on colour alone (green vs neutral nearly vanishes in red-green CVD).
+  (#736)
+
+### Fixed
+
+- With no corner ranked, Coaching's note under the table no longer says every corner is listed: a
+  corner that loses under 0.005 s is not a row.
+- The lap panel's width no longer follows the Coaching headline's wording, and Quickest passes asks
+  for the width its "Level with" words need whole. (#740)
+- A button you reach with Tab or ⇧Tab presses on Space, Return or Enter (once, even held); after a
+  click, or anywhere else, Space still plays and pauses. (#739)
+- ⌘L opens the Library from the first load of a first-ever session, without opening a menu first.
+  (#739)
+- Tab reaches "Lap race" before the map toolbar's other controls, in the order they sit. (#739)
+- File ▸ Library…: Return opens the selected recording; it used to offer "Clear library". Tab now
+  leaves the table, so Open, Use as reference and Close are reachable from the keyboard. (#738)
+- The session record's Notes box, the ⌘K list and the "Inspect this number…" tables give Tab back;
+  Delete record, Delete… and Restore… are never pressed by Return. (#738)
+- Export overlay video…: Tab reaches "Use defaults" first, where it is drawn, not last. (#738)
+- ← / → (⇧ for 5 s) step the video on the first press with focus in the Laps, Coaching, Marks or
+  Stats tables, instead of moving an invisible cell cursor. (#735)
+- ↑ / ↓ in the Laps table move from the lap on screen: the best lap at load, a ⌘K, map or strip pick
+  now carries the keyboard cursor with it. (#735)
+- Library ▸ Update keeps your sort, selected row and scroll when it ends, and its hover stops saying
+  "muted until" once nothing it could measure is left muted. (#733)
+- Forget, Clear library or Restore during an Update stops it first: its line counts only the rows
+  still there at the version it wrote, never a removed one as "could not be measured". (#733)
+- A row whose file is now another recording says so in its own Ideal-cell hover, not "re-open".
+  (#733)
+
 ## [0.28.0] — 2026-11-27
 
 ### Highlights
@@ -2987,7 +3055,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/eenndan/pacer/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/eenndan/pacer/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/eenndan/pacer/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/eenndan/pacer/compare/v0.25.0...v0.26.0
