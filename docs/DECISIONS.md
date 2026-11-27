@@ -2444,3 +2444,111 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   export box's header says "couldn't finish" when the render never started; a cut lap is still the
   best when fewer than four laps have a whole trace; with no best lap the overlay export warns of
   provisional timing on a verified line; and section 28's carried lists stand as written there.
+
+## 31. Recorded at the 0.28.0 release, 2026-11-27
+
+- **v0.28.0 is a minor release**: 4 pull requests, #727 to #730, Wave 25 of the campaign section 8
+  records, its theme "the pages say what the pictures are".
+  - #727: File ▸ Library… ▸ Update no longer offers a row whose path now holds a different
+    recording. The row keys on its first kept GPS fix's clock, which only a read of the recording
+    gives, so the window's `IdealUpdater` remembers a `library.REMEASURE_OTHER` failure against the
+    files' (real path, size, mtime) for the window's life; the dialog asks `another_recording(row)`
+    and names such a row in the line's hover with that reason, as it names a recording not on this
+    Mac. Files changed at the path make the row offered again. Only that failure is remembered: a
+    row that "could not be measured" keeps the per-dialog rule. `IdealUpdater.row_written` redraws
+    each row the moment it is written, so the Ideal cells un-mute one at a time.
+  - #729: the lap strip's BEST LAP row carries the lap card's cue when the best lap is itself a ⚠
+    lap (`LapStripData.best_warning`, the words of `data_quality.not_counted_line`), in caveat
+    amber, clear of the median's label; `StudioWindow._start_reference_worker` starts its worker
+    through `workers.start_load`, the GUI-thread `gc.collect()` every loading worker gets.
+  - #728: the public pages read true against `docs/media/CAPTURED.json`: the landing footer and the
+    og/twitter alts no longer call demo stills real footage; each real-footage still names its
+    recording, says "captured at v<version>" and what today's app shows differently; README's merge
+    gate matches CI; the 0.07 s step links to its definition in ACCURACY.md; "measured and refused"
+    is in both openings; ENGINEERING.md gains "How the November work was run".
+    `tests/test_landing_page.py` ties every image's alt and caption to its record and every
+    `<doc>.md#fragment` link to a heading or an id.
+  - #730: refusal section 43, the in-lap dropout rule counted in fix periods, with its probe
+    (`studio/dev/probes/dropout_in_periods.py`).
+- **The coordinator's rulings for this wave**, each open to the owner's overrule and each
+  reversible:
+  - **The in-lap dropout rule stays in seconds** (refusal section 43). Its 0.35 s was a
+    map-drawing threshold that assumed 10 Hz; what moves splits is the loader's time-based
+    clock-run break at 0.40 s, which 0.35 s already flags at both fix rates. A rule of 3.5 fix
+    periods would flag six times as many 18 Hz laps (12 of 160 laps at 5 % rejected, against 2),
+    for errors inside the published steps.
+  - **A Library row whose file was replaced is remembered for the window's life, not on disk**:
+    after a relaunch the row is tried once more, fails once, and is then named in the hover.
+  - **The public pages state each real-footage still's capture version instead of re-capturing
+    it**: the recording is not on the build machine.
+  - **"Measured and refused" moved into both openings**, README's and the landing page's, and
+    ENGINEERING.md was brought up to November.
+- **Process.** The release QA drove the merged tree offscreen and jailed, at 1440×900 with the
+  theme applied, on synthetic recordings only. The Library Update ran on a jailed Library whose
+  rows v0.25.0's own `studio/` wrote, with every recording folder read-only for the whole run, and
+  a row added whose file is not a recording. In one window the Library was opened five times: the
+  first Update failed the other outing by name and the unreadable file as could not be measured;
+  the second open left the other outing out and named it in the hover, the store byte-identical to
+  the first run's; files of the other outing copied over it again made it offered and failed
+  again; the original files copied back made it offered and updated. The same run with the table
+  sorted by Ideal lap, by Best lap (descending, with the conditions filter hiding the wet row) and
+  with a search hiding one row kept the selection and the filter at every row written. Forget and
+  Clear library during a run resurrected no row. A reference recording loaded from Coaching ▸ Load
+  reference recording…, from the Library's Use as reference, through a second pick that cancelled
+  the first mid-load (the second won), and with the window closed mid-load (closed in 0.014 s, no
+  worker left, no box). The lap strip of a session with every lap ⚠ drew "⚠ GPS dropout — not
+  counted in your bests" on its BEST LAP row with nothing overlapping. The landing page was
+  rendered by QtWebEngine at 1280 and 390 px wide. A false alt planted on `map.png` failed the
+  landing-page guard by name. The demo read 14 laps, best lap 13 at 0:44.950, IDEAL LAP 0:44.650,
+  0.30 s, its second corner quickest on lap 7, nothing flagged.
+- **The media.** Every demo still was re-captured at 0.28.0 and came out byte-identical to the
+  committed file: `hero.png`, `og.png`, `map.png`, `debrief.png`, `quickest.png`, `report.png`,
+  `moments.png`, `accuracy.png` and `lapstrip.png` (one `lapstrip.png` capture differed in the
+  same 442 pixels as at 0.27.0, the known flicker, and a second reproduced the committed file).
+  The waivers of `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and
+  `best-lap.mp4` are renewed, their captions' capture versions unchanged: demo renders of the
+  data-trust and ideal-lap shots are byte-identical to 0.27.0's. A best-lap Classic export of the
+  demo reproduces 0.27.0's digests in the same software-decode world; with VideoToolbox available
+  it gives other digests, which v0.27.0's own `studio/` reproduces, so they come from the machine's
+  encoder path, not from the code.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name. The full gate, the soak and the smoke run on the release branch, not in the
+  QA pass.
+- **Found in this release's QA, not fixed** (nothing that would hold the release).
+  - **With only the other outing's row left, nothing in the Library names it**: no row is offered,
+    so the Update line and its hover are hidden, and the row's muted Ideal cell says "re-open the
+    recording to update it", which would open the other outing.
+  - **When an Update run ends, the table re-sorts by date, newest first, and the selection moves
+    to the first row**: a sort by Best or Ideal lap and the selected row are lost (the filter is
+    kept). During the run a table sorted by Ideal lap moves each row as its ideal changes; the
+    selection follows it.
+  - **A row forgotten during a run is counted as "could not be measured"**, and a Clear library
+    during a run leaves "2 updated · 1 best lap changed · 6 could not be measured" over an empty
+    table (the hover says each was "forgotten or replaced meanwhile").
+  - **A row whose file is not a readable recording is offered on every Library open**, as the rule
+    for failures that may be transient says.
+  - **The lap strip's ⚠ best cue is drawn by no user route**: a session whose best is a ⚠ lap has
+    no clean lap, so File ▸ Export greys the strip and the report leaves it out.
+  - **ENGINEERING.md says the November work made "one deliberate golden re-cut"**; sections 13 and
+    25 record two more reviewed re-cuts (#587, #676).
+- **Resolved from section 30**: a row whose path holds a different recording offered on every
+  Library open; the Ideal cells un-muting all at once at the end of a run; the lap strip's
+  headline with no ⚠ for an all-⚠ best; the reference load starting without the GC guard; and the
+  18 Hz 5-fix hole under the 0.35 s threshold, refused with its reasons (section 43).
+- **Open for the owner** (new, most important first).
+  - **A brake point can move by several metres from a hole of two fixes at either rate**, which no
+    rule that spares single and double missing fixes can catch (section 43).
+  - **The video-export worker still starts without the shared GC guard**, and `start_load`'s
+    docstring says export collects for itself, which only the HTML report does.
+  - **The stuck-row memory is not persisted**: after a relaunch the row is tried once more.
+  - **Re-capturing the four real-footage stills** (captured at 0.2.0 to 0.6.0, 21 to 25 releases
+    old) needs the owner's recordings.
+  - **Whether Coaching should rank a corner whose time lost is under 0.07 s** stays the owner's
+    call: the published debrief still shows two in red.
+- **Open for the owner** (carried from section 30, re-checked against 0.28.0's changes): the
+  export ghost's reason for every lap of an all-⚠ session is "cannot be raced against your best
+  lap"; `tests/test_export_video.py`, `tests/test_session_log.py` and
+  `studio/dev/golden_session_dump.py` still advise `PYTHONPATH=bindings/pacer` (#731, in CI at
+  this release); Update waits while the main window's own load runs; `tests/_stale.py` still says
+  the working recordings are all here; `tests_for.py`'s timings come from a stale CTest record; and
+  section 30's carried list stands as written there.
