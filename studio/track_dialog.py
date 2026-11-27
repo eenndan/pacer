@@ -175,6 +175,12 @@ class TrackManagerDialog(QDialog):
         close_btn.clicked.connect(self.reject)
         buttons.addWidget(close_btn)
         root.addLayout(buttons)
+        # Return renames, as a double-click does (the rename asks for the new name, so it is a
+        # question, not an act), and no other button ever takes the key: auto-default, Delete…
+        # and Restore… each became Return's the moment Tab landed on them.
+        for btn in self.findChildren(QPushButton):
+            btn.setAutoDefault(False)
+        (getattr(self, "rename_btn", None) or close_btn).setDefault(True)
 
         self._backup = self._read_backup_info()
         self._rerender()

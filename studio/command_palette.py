@@ -415,6 +415,7 @@ class CommandPalette(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setTabKeyNavigation(False)     # Tab leaves the list, back to the search box
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         header = self.table.horizontalHeader()

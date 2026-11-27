@@ -272,6 +272,10 @@ class SessionRecordDialog(QDialog):
         self.notes.setPlaceholderText(
             "Anything the fields above don't hold — how the kart felt, what you changed mid-session, "
             "who else was out.")
+        # Tab moves on to Save, as in marks_panel's note box: a session's notes have no use for a
+        # tab character, and with Qt's default "wet" + Tab x3 typed "wet\t\t\t" and Save was out
+        # of the keyboard's reach.
+        self.notes.setTabChangesFocus(True)
         root.addWidget(self.notes, 1)
 
         privacy = QLabel(
@@ -292,6 +296,8 @@ class SessionRecordDialog(QDialog):
                 "Remove this recording's setup + conditions record. Your video, its timing lines "
                 "and its library row are not touched.")
             self.delete_btn.clicked.connect(self._on_delete)
+            # Never Return's: tabbed onto, an auto-default button takes the key from Save.
+            self.delete_btn.setAutoDefault(False)
             buttons.addWidget(self.delete_btn)
         buttons.addStretch(1)
         cancel = QPushButton("Cancel")
