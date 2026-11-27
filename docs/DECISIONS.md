@@ -2447,7 +2447,7 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 
 ## 31. Recorded at the 0.28.0 release, 2026-11-27
 
-- **v0.28.0 is a minor release**: 4 pull requests, #727 to #730, Wave 25 of the campaign section 8
+- **v0.28.0 is a minor release**: 5 pull requests, #727 to #731, Wave 25 of the campaign section 8
   records, its theme "the pages say what the pictures are".
   - #727: File ▸ Library… ▸ Update no longer offers a row whose path now holds a different
     recording. The row keys on its first kept GPS fix's clock, which only a read of the recording
@@ -2469,7 +2469,10 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     `tests/test_landing_page.py` ties every image's alt and caption to its record and every
     `<doc>.md#fragment` link to a heading or an id.
   - #730: refusal section 43, the in-lap dropout rule counted in fix periods, with its probe
-    (`studio/dev/probes/dropout_in_periods.py`).
+    (`studio/dev/probes/dropout_in_periods.py`). #731: `studio/dev/golden_session_dump.py`,
+    `tests/test_export_video.py` and `tests/test_session_log.py` advise `pixi run build` instead
+    of `PYTHONPATH=bindings/pacer`, and `tests/test_golden_hermetic.py` plants a namespace-only
+    `pacer` that the dump's preflight must refuse, blaming the environment.
 - **The coordinator's rulings for this wave**, each open to the owner's overrule and each
   reversible:
   - **The in-lap dropout rule stays in seconds** (refusal section 43). Its 0.35 s was a
@@ -2533,8 +2536,9 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     25 record two more reviewed re-cuts (#587, #676).
 - **Resolved from section 30**: a row whose path holds a different recording offered on every
   Library open; the Ideal cells un-muting all at once at the end of a run; the lap strip's
-  headline with no ⚠ for an all-⚠ best; the reference load starting without the GC guard; and the
-  18 Hz 5-fix hole under the 0.35 s threshold, refused with its reasons (section 43).
+  headline with no ⚠ for an all-⚠ best; the reference load starting without the GC guard; the
+  stale `PYTHONPATH=bindings/pacer` advice (#731); and the 18 Hz 5-fix hole under the 0.35 s
+  threshold, refused with its reasons (section 43).
 - **Open for the owner** (new, most important first).
   - **A brake point can move by several metres from a hole of two fixes at either rate**, which no
     rule that spares single and double missing fixes can catch (section 43).
@@ -2547,8 +2551,6 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     call: the published debrief still shows two in red.
 - **Open for the owner** (carried from section 30, re-checked against 0.28.0's changes): the
   export ghost's reason for every lap of an all-⚠ session is "cannot be raced against your best
-  lap"; `tests/test_export_video.py`, `tests/test_session_log.py` and
-  `studio/dev/golden_session_dump.py` still advise `PYTHONPATH=bindings/pacer` (#731, in CI at
-  this release); Update waits while the main window's own load runs; `tests/_stale.py` still says
+  lap"; Update waits while the main window's own load runs; `tests/_stale.py` still says
   the working recordings are all here; `tests_for.py`'s timings come from a stale CTest record; and
   section 30's carried list stands as written there.
