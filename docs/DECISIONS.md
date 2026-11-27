@@ -2182,3 +2182,140 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   chosen out-of-bests best lap is exempt from the race rule; with a lap boundary within one fix
   of a chapter join, only the lap after it is flagged; and section 27's carried lists stand as
   written there.
+
+## 29. Recorded at the 0.26.0 release, 2026-11-27
+
+- **v0.26.0 is a minor release**: 1 pull request, #715, Wave 23 of the campaign section 8
+  records, its theme "a missing GPS fix no longer moves your lap".
+  - #715: the load smoother is time-aware. A fix whose 13-fix window holds a missing fix, or is
+    cut by a gap over 1 s inside the trace, takes the value of a straight line fitted in time
+    through the fixes within ±6.5 periods of it; every other fix keeps the old value. The
+    dropout ⚠ at the line now needs two or more fixes missing in a row within 3 periods of a
+    crossing, or the trace starting or ending within 7 fixes of one. `EDGE_GUARD_FIXES` goes
+    from 14 to 8. The synthetic golden baseline was re-cut (reviewed: no lap-time leaf moved),
+    `corner_model.IDEAL_VERSION` goes from 1 to 2, and refusal sections 24, 27, 28 and 30 to 34
+    had their figures re-run (no verdict changed).
+- **The owner's ruling for this wave**: fix the smoother itself and re-cut the golden baseline,
+  rather than flag the laps it moves (section 28 deferred exactly that re-cut).
+- **What was decided for him**, each open to his overrule and each reversible:
+  - **A local straight-line fit, chosen by measurement** over the symmetric-pair boxcar and the
+    time-window boxcar. Over the synthetic matrix (10 laps × 5 seeds, 10 and 18 Hz, against the
+    generator's true crossings), the largest move of a lap with no interior gap at native noise
+    was 3.8 ms with 1–10 % of fixes rejected (pairs 7.4, time window 132.8, the old boxcar 83.8)
+    and 20.9 ms beside holes of 0.3–1.5 s (33.1, 300.7 and 305.2), with no false-fast lap; at 3×
+    and 6× noise it had the lowest maximum in every family.
+  - **Bit-identity on a recording with no missing fix is a hard constraint.** Every fix away from
+    a hole is computed by the very same operations as before; the bundled sample clips and the
+    real-recording golden dump are identical (EQUIVALENT, max |Δ| = 0). For that reason the
+    trace's own first and last fixes keep the old one-sided average, and a lap whose trace starts
+    or ends within 7 fixes of its crossing still wears the ⚠ (such laps moved by up to a third of
+    a second).
+  - **The dropout ⚠ at the line is re-scoped** to two or more fixes missing in a row within 3
+    periods of a crossing, the size and reach set by a sweep on the matrix: with no hole rule,
+    laps with a hole right at the line read up to 20.9 ms off at native noise (48 ms at 3×,
+    111 ms at 6×). Every unflagged lap is now within 4.5 ms of its clean-trace time at native
+    noise (14.5 ms at 3×, 28 ms at 6×). At 1, 2, 5 and 10 % rejected at random, 0, 0, 1 and 27 %
+    of laps wear the ⚠ (37, 50, 78 and 99 % in 0.25.0), and 0, 0, 0 and 2 of 10 sessions read low
+    by the lap vote (2, 4, 8 and 10).
+  - **The GPS-quality guard band narrows from 14 fixes to 8** (1.4 s to 0.8 s at 10 Hz): rejected
+    fixes from the start of the recording ending 0.35–0.75 s before the first crossing moved that
+    lap by up to +308 ms, a trace end the fit does not reach; from 0.8 s the lap was exact. The
+    1.24 s lock case section 28 named is now judged over the laps.
+  - **The two demo conclusions that moved are accepted as corrections toward the truth.** The
+    demo's quickest pass through corner 2 is lap 7 (2.6230 s, also the true quickest), where
+    lap 11 read quickest only because a missing fix sat inside its pass, 50 ms quick of its truth; and the
+    report's ideal-lap gap reads 0.30 s, not 0.32 (the demo's ideal lap 44.6315 → 44.6505 s, 19 ms
+    closer to the truth of its own partition and still 29 ms under it).
+  - **`IDEAL_VERSION` goes to 2**, so every Library row written before 0.26.0 shows its ideal lap
+    muted, with the hover "Ideal lap measured by an older Pacer — re-open the recording to update
+    it", until that recording is re-opened. Nothing is deleted or rewritten, and the best lap and
+    the PB do not read the stamp. A stored row records nothing about holes, so no row could be
+    declared unchanged; a recording with no missing fix re-measures the same ideal on re-opening.
+  - **Removing the bias does not bring every single pass closer to the truth**, and the public
+    text says so: of the four moved demo cells three are closer and one seeded pass (lap 11's,
+    corner 2, on `DEMO_SEED+6`) went from 18 to 37 ms off, its own GPS noise now unmasked. The evidence for
+    the fit is the matrix, not one pass.
+- **Resolved from section 28**: the time-centred smoother's re-cut (#715); a missing fix near a
+  sector line moving the splits by about ±46 ms, in its smoother part (on the QA's 14-lap
+  synthetic recording, unflagged laps' splits moved by at most 2.3 ms at 2 % rejected and 4.4 ms
+  at 5 %, where 0.25.0's moved by 65 and 74 ms; the distance-mapped part stays open, below).
+- **Process.** The release QA drove the merged tree in the real window, offscreen and jailed, at
+  1440×900 with the theme applied, on synthetic recordings only, and loaded each case through
+  the real loader of both 0.26.0 and v0.25.0's studio/: the pinned demo (rendered locally,
+  byte-identical to the published asset); a 14-lap two-chapter recording with 1, 2, 5 and 10 %
+  of fixes rejected at random, one and two fixes missing before three crossings, the trace
+  starting or ending 0.5 and 1.0 s from a crossing, a 1.5 s gap ending 0.5 and 0.15 s before a
+  crossing, a 0.3 s hole ending 0.3 s before one, a 0.6 s hole mid-lap, every fix rejected, the
+  infield cut with holes at all crossings but the cut lap's neighbours and at every crossing,
+  and a three-chapter recording with its middle chapter missing and with line holes; a 63-minute
+  recording with 5 % rejected; and a Library holding two rows written by v0.25.0's studio/. On
+  the demo the Laps tab, Stats (IDEAL LAP 0:44.650, 0.30 s on the table), DATA TRUST, the
+  debrief, the report, the lap card, the lap strip and laps.csv read 14 laps, best lap 13 at
+  0:44.950, no ⚠ and a clean verdict, and no surface names lap 11 for corner 2, 44.63 or 0.32 s. With
+  scattered rejections every unflagged lap stayed within 4.0 ms of the clean trace and the best
+  lap was the clean one (0.25.0 flagged 8 of 14 laps at 2 % and read low); one fix before each of
+  three crossings flags nothing (0.25.0: six laps), two fixes flag the two laps sharing each
+  crossing; the cut lap reads off the line (28.6 m) and the best is lap 12, a lap with no ⚠, as
+  in 0.25.0. The v1 Library rows were listed with their ideal muted and the hover, the best-lap
+  chart and the track's best unaffected; re-opening each stamped it 2 and unmuted it, and the
+  row 0.25.0 had marked degraded (8 of 14 laps ⚠ at 2 % rejected) became a trusted row with lap
+  13 best. On the 63-minute recording the load took 2.0 s with 5 % rejected against 1.6 s in
+  0.25.0 (1.3 s and 1.2 s clean), 3 laps wore the ⚠ (0.25.0: 65 of 83, low), and moving the
+  start line or adding a sector line ran the smoother no times.
+- **The media.** `hero.png` (and `og.png`, cut from it), `map.png`, `debrief.png`, `quickest.png`
+  and `report.png` were re-captured on the pinned synthetic demo at 0.26.0 and changed, each
+  because the demo's two missing fixes are now smoothed in time: the hero's and the quickest
+  shot's Δideal reads +0.04 s where it read +0.05 (the README and landing-page alt text of the
+  hero now say +0.04), the quickest shot's corner-2 row names lap 7 with 11 more laps level, the
+  debrief's and the report's corner-2 row read "2 of 14 laps" and "middle half spans 0.03 s" where
+  they read 3 and 0.04, the report's lap card reads +0.30 s to the ideal lap, and the map's line
+  moved by under a pixel in 729 pixels. The same shots rendered from v0.25.0's studio/ in the
+  same environment reproduce the committed `debrief.png`, `lapstrip.png`, `map.png` and
+  `quickest.png` exactly. `accuracy.png`, `moments.png` and `lapstrip.png` are byte-identical
+  (one `lapstrip.png` capture came out different in its "median" and "best" labels, 442 pixels,
+  the known flicker, and a second reproduced the committed file). The waivers of
+  `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are
+  renewed: a demo render of the data-trust shot differs in 89 pixels of its g-g scatter with
+  every row's words unchanged; the ideal-lap shot's demo render moved (0:44.631 → 0:44.650,
+  0.32 → 0.30 s, 9 → 8 donor laps), and whether the published recording has a missing fix was
+  not measured here; no export code changed.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name. The full gate, the soak and the smoke run on the release branch, not in the
+  QA pass. The Library's "Use as reference" was not driven; it reads no ideal-lap stamp.
+- **Found in this release's QA, not fixed** (nothing that would hold the release).
+  - **A selected Library row's muted ideal lap is drawn in the selection's full colour**, so the
+    muting shows only on rows that are not selected; the hover still says it.
+  - **Code comments still define `DROPOUT_AT_LINE` as "a fix missing beside its line"**
+    (`session.py`, `marks.py`); it now takes two in a row.
+  - **#715's media check named `debrief.png`, `quickest.png`, `hero.png` and `map.png`
+    identical**; rendered here they changed, and they are re-captured above.
+- **Open for the owner** (new, most important first).
+  - **Sector splits still move by up to ~45 ms near a hole** at native noise in the matrix, with
+    lap times within 4 ms: sector boundaries are mapped by distance, and a missing fix changes the
+    cumulative distance.
+  - **A hole longer than 0.40 s re-anchors the GPS9 clock** (`load.GPS9_MAX_DT_S`), so absolute
+    times after it shift by tens of ms: the lap holding it is flagged, but video sync moves.
+  - **One hole flags the lap finishing at a line but not the one starting there** when it ends
+    0.3 s before the line.
+  - **Holes move the auto-fitted start line by metres** (about 0.28 s up the straight on the
+    synthetic cut-lap recording).
+  - **The median fix period is one figure for the whole trace**, so a recording whose rate
+    changes mid-way would misread its steps (section 28's item, carried).
+  - **The smoother costs about 0.5 s** on a 70-minute recording with 5 % of fixes rejected.
+- **Open for the owner** (carried from section 28, re-checked against 0.26.0's change): the bests
+  fallback still crowns a dropout-only ⚠ lap when every lap is flagged, and the lap card shows
+  it as "BEST LAP" with no ⚠; a dropout shorter than 0.35 s in the last 0.7 s before the line
+  counts as a whole trace for the off-line rule; a ⚠ lap whose only hole sits just past its
+  finish has its mark under the neighbouring lap; the ghost's reason says a lap with fixes
+  missing at its line has a "place on track [that] is a guess"; the report's "Not counted" cell
+  wraps "gps-dropout" at its hyphen; DATA TRUST's Timing row can read "0% of fixes inside your
+  laps rejected — GPS fixes missing at the line on 13 of 14 laps"; the lap card and the lap
+  strip stamp "estimated timing (est)" on a true-clock session that is low by the lap vote;
+  laps.csv has no key row for `flag`; a ⚠ lap's corner-pass clip is untagged; an off-line lap
+  has no Quality code; the burned stamp says "% of fixes rejected" for the share inside the
+  laps; the export box's header says "couldn't finish" when the render never started; a cut lap
+  is still the best when fewer than four laps have a whole trace; the lap-vote sentence says
+  "at the line" when the laps' dropouts are gaps inside them; with no best lap the overlay
+  export warns of provisional timing on a verified line; the lap strip's legend truncates when
+  quicker ⚠ laps of two kinds share a line; and section 28's carried lists stand as written
+  there.
