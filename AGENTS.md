@@ -74,6 +74,9 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
   PACER_APP_SUPPORT_JAIL=1 "$(git rev-parse --path-format=absolute --git-common-dir)/../.pixi/envs/default/bin/python"
   -m pytest tests/test_x.py` — the main checkout's env, its deployed `pacer` and ffmpeg; first
   `git submodule update --init --recursive` (what each symptom means: [tests/README.md](tests/README.md)).
+- **Which tests read a module:** `pixi run python -m studio.dev.tests_for studio/<m>.py` prints the
+  test files importing it directly (a ready `ctest -R` and pytest line) and how many reach it
+  transitively, with ctest's recorded times when the build has them. An inner loop, not a gate.
 - **Real-footage checks** (`footage.<check>`) re-measure published figures on the owner's Desktop
   recordings. Without its recording a check is reported *Skipped* by name — a skip is not a pass,
   so **name every skipped `footage.*` when you report gates.** Variables, defaults and how to add

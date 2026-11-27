@@ -108,7 +108,8 @@ One row per `studio/*.py`; each Stats section's `stats_*.py` is a one-word link 
 (these four only) · `Qt` = imports Qt · `→Qt` = no Qt of its own, but a studio module it imports
 loads it · `—` = neither, so it imports headless. **Test** is the module's home file under
 [`tests/`](../tests/), the one its change extends first (`—`: none); it is not the list of tests
-that cover it (`data_quality` is imported by about 40). A change to what a module does goes in its docstring (and its
+that cover it (`data_quality` is imported by 40): `python -m studio.dev.tests_for studio/<m>.py`
+lists those, an inner loop, not a gate. A change to what a module does goes in its docstring (and its
 notes section, if that now says otherwise); this map changes when a module is added, removed or
 renamed, or changes layer.
 
