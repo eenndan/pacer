@@ -404,6 +404,23 @@ def test_a_recording_with_no_gps_is_not_sold_as_the_true_clock():
     print("test_a_recording_with_no_gps_is_not_sold_as_the_true_clock OK")
 
 
+def test_the_timing_row_concedes_a_clean_share_when_the_lap_vote_made_it_low():
+    """A recording made low by the lap vote alone has a rejected share under its concern line, and
+    the row printed both as two clauses: "0% of fixes inside your laps rejected — GPS fixes missing
+    at the line on 13 of 14 laps" read as a contradiction (DECISIONS §28). Fixes the receiver never
+    wrote are missing, not rejected: one sentence, the share conceded with "but"."""
+    voted = data_quality.TimingQuality().with_lap_dropouts(13, 14)
+    term, value, caveat = next(r for r in _trust_rows(None, quality=voted)[0] if r[0] == "Timing")
+    assert value == ("GPS9 true clock · 0% of moving fixes rejected, but GPS fixes missing at the "
+                     "line on 13 of 14 laps, so lap times can't be trusted enough to judge a PB"), value
+    assert caveat is True
+    # A share that IS the concern keeps its dash: there the two clauses agree.
+    low = data_quality.TimingQuality(dropped_fraction=0.12)
+    row = next(r for r in _trust_rows(None, quality=low)[0] if r[0] == "Timing")
+    assert "rejected — GPS quality low" in row[1], row
+    print("test_the_timing_row_concedes_a_clean_share_when_the_lap_vote_made_it_low OK")
+
+
 def test_the_card_never_says_the_gps_lag_is_both_removed_and_left_in():
     """Copy #5 (QA 2026-09-26). On MK_18_09 the Video sync row said the GPS timestamps' 0.43 s lag
     "is taken out" while the Rotation row two lines below said its figures are "measured with that
@@ -711,6 +728,7 @@ def _main():
     test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors()
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()
     test_the_card_never_says_the_gps_lag_is_both_removed_and_left_in()
+    test_the_timing_row_concedes_a_clean_share_when_the_lap_vote_made_it_low()
     test_the_rotation_row_states_the_clock_offset_the_correlation_is_measured_with()
     test_the_card_and_the_bar_are_the_same_fact_and_the_card_says_which_laps()
     test_the_card_says_whether_what_is_drawn_over_a_frame_is_that_frames_own()

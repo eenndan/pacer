@@ -362,6 +362,12 @@ def test_a_lap_carries_a_dropout_mark_exactly_when_the_app_says_it_has_one():
     gap = gapfill.find_gaps(s._lap_point_times(1))[0]
     hit = next(m for m in auto if m["type"] == marks.TYPE_DROPOUT)
     assert (hit["t"], hit["t_end"]) == (holed[gap["i"]], holed[gap["j"]])
+    # Its hover names the kind ONCE: the panel puts the type's label before the note, and a note
+    # that repeated it read "GPS dropout — GPS dropout — 2.0 s with no fix" (DECISIONS §29).
+    from studio.marks_panel import _row_tooltip
+    head = _row_tooltip(hit).splitlines()[0]
+    assert head.count(marks.TYPE_LABEL[marks.TYPE_DROPOUT]) == 1, head
+    assert head.endswith("s with no fix"), head
     print("test_a_lap_carries_a_dropout_mark_exactly_when_the_app_says_it_has_one OK")
 
 

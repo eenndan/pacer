@@ -101,6 +101,29 @@ EDGE_GUARD_FIXES = SMOOTH_REACH_FIXES + 1
 # takes over: no PB, no focus list or debrief, the Library row flagged, the banner up.
 LINE_DROPOUT_MAJORITY = 0.5
 
+# WHERE A LAP'S DROPOUT IS — the two kinds of `Session.lap_dropout_kinds` span, defined here so the
+# words for each sit beside it. `DROPOUT_IN_LAP`: a gap inside the lap longer than
+# gapfill.GAP_TIME_S; its trace is a chord across the hole, so where it drove is a guess.
+# `DROPOUT_AT_LINE`: a hole at a crossing the smoother cannot close (`_signal.LINE_HOLE_PERIODS`,
+# two or more fixes missing in a row, within `_signal.LINE_HOLE_REACH_FIXES` periods of the line),
+# or the trace's own end there; the trace is whole, its time is in doubt. The lap vote used to say
+# "missing at the line" of every ⚠ lap, gaps inside them included (DECISIONS §28).
+DROPOUT_IN_LAP = "in lap"
+DROPOUT_AT_LINE = "at line"
+#: kind → why a lap with that dropout cannot be raced (the export ghost's refusal, after its name).
+DROPOUT_RACE_REASON = {DROPOUT_IN_LAP: "has a GPS dropout inside it, so its place on track is a "
+                                       "guess",
+                       DROPOUT_AT_LINE: "has GPS fixes missing at its start/finish line, so its "
+                                        "lap time is in doubt"}
+
+
+def dropout_kinds_of(session, lap_id: int) -> set[str]:
+    """The `DROPOUT_*` kinds of `lap_id`'s dropout spans (duck-typed: empty for a double without
+    `lap_dropout_kinds`)."""
+    kinds = getattr(session, "lap_dropout_kinds", None)
+    spans: Any = kinds(lap_id) if callable(kinds) else ()
+    return {kind for *_span, kind in spans}
+
 
 @dataclass(frozen=True)
 class FixCensus:
@@ -240,11 +263,16 @@ class TimingQuality:
     _moving_fraction: float = 0.0
     _outside_s: float = 0.0
     _lap_dropouts: tuple[int, int] = (0, 0)   # (valid laps wearing the dropout ⚠, valid laps)
+    _dropout_where: tuple[int, int] | None = None   # (⚠ laps with a hole at the line, inside)
 
-    def with_lap_dropouts(self, flagged: int, laps: int) -> TimingQuality:
+    def with_lap_dropouts(self, flagged: int, laps: int, at_line: int | None = None,
+                          inside: int = 0) -> TimingQuality:
         """This verdict told how many of the `laps` valid laps wear the GPS-dropout ⚠ (`flagged`);
-        a majority of them makes it low (LINE_DROPOUT_MAJORITY)."""
-        return replace(self, _lap_dropouts=(int(flagged), int(laps)))
+        a majority of them makes it low (LINE_DROPOUT_MAJORITY). `at_line` and `inside` count the
+        ⚠ laps with a `DROPOUT_AT_LINE` / `DROPOUT_IN_LAP` span (a lap can have both), so the
+        words say where the GPS dropped out; `at_line` None is every ⚠ lap at the line."""
+        where = (int(flagged) if at_line is None else int(at_line), int(inside))
+        return replace(self, _lap_dropouts=(int(flagged), int(laps)), _dropout_where=where)
 
     @property
     def line_dropouts(self) -> tuple[int, int] | None:
@@ -257,10 +285,31 @@ class TimingQuality:
     def _share_low(self) -> bool:
         return self.dropped_fraction >= DROPPED_FIX_CONCERN_FRAC
 
-    def _line_words(self) -> str:
-        """"GPS fixes are missing at the line on 13 of 14 laps" — the measure of the lap vote."""
+    def _line_words(self, short: bool = False) -> str:
+        """The measure of the lap vote, saying WHERE the laps lost their fixes: "GPS fixes are
+        missing at the line on 13 of 14 laps" ("GPS fixes missing …" `short`) when every ⚠ lap's
+        hole is at the line, "GPS dropped out inside 13 of 14 laps" when none is, and "GPS dropped
+        out in 13 of 14 laps, at the line on 5 of them" for both."""
         flagged, laps = self.line_dropouts or self._lap_dropouts
-        return f"GPS fixes are missing at the line on {flagged} of {plural(laps, 'lap')}"
+        at_line, inside = self._dropout_where or (flagged, 0)
+        count = f"{flagged} of {plural(laps, 'lap')}"
+        if not inside:
+            return f"GPS fixes {'' if short else 'are '}missing at the line on {count}"
+        if not at_line:
+            return f"GPS dropped out inside {count}"
+        return f"GPS dropped out in {count}, at the line on {at_line} of them"
+
+    def line_clause(self) -> str:
+        """`_line_words` after a "GPS LOW —" that already says GPS, for the burned stamp, whose
+        constraint is width: "fixes missing at the line on 13 of 14 laps", "dropped out inside 13
+        of 14 laps", and "dropped out in 13 of 14 laps" without the count at the line."""
+        return self._line_words(short=True).removeprefix("GPS ").split(", at the line")[0]
+
+    @property
+    def low_by_lap_vote(self) -> bool:
+        """True when the lap vote alone (`line_dropouts`) made this verdict low: the rejected-fix
+        share is under its concern line, so a surface that prints it must not read as clean."""
+        return self.line_dropouts is not None and not self._share_low
 
     def line_sentence(self) -> str:
         """The plain-words reason a lap vote made this recording low, or "" when it did not."""
@@ -359,7 +408,7 @@ class TimingQuality:
         if self._share_low:
             parts.append(f"GPS quality low ({self._share()})")
         elif self.low_gps_quality:
-            parts.append(self._line_words().replace("GPS fixes are missing", "GPS fixes missing"))
+            parts.append(self._line_words(short=True))
         return " and ".join(parts)
 
     def concerns(self) -> list[str]:
@@ -456,7 +505,7 @@ class TimingQuality:
         if self.no_gps:
             return ""
         if low and not self._share_low:
-            line = self._line_words().replace("GPS fixes are missing", "GPS fixes missing")
+            line = self._line_words(short=True)
             return (f"a lap may read {MEDIA_CLOCK_LAP_ERROR} off, and " if media else "") + (
                 f"{line}, so lap times can't be trusted enough to judge a PB")
         if media and low:
@@ -925,7 +974,7 @@ def build_quality_timeline(times, rejected, dop, span_s: float,
 STAMP_PROVISIONAL = "PROVISIONAL — lap timing from a start/finish line that was never confirmed"
 STAMP_ESTIMATED = "ESTIMATED — lap timing from the video clock, not GPS"
 STAMP_LOW_GPS = "GPS LOW — {pct}% of fixes rejected; speed and position less accurate"
-STAMP_LINE_GPS = "GPS LOW — fixes missing at the line on {n} of {laps}; lap times uncertain"
+STAMP_LINE_GPS = "GPS LOW — {where}; lap times uncertain"   # TimingQuality.line_clause()
 
 
 def burned_timing_stamp(session) -> list[str]:
@@ -946,10 +995,9 @@ def burned_timing_stamp(session) -> list[str]:
         if getattr(quality, "media_clock", False):
             out.append(STAMP_ESTIMATED)
         if getattr(quality, "low_gps_quality", False):
-            line = getattr(quality, "line_dropouts", None)
-            out.append(STAMP_LOW_GPS.format(pct=quality.dropped_pct())
-                       if line is None or getattr(quality, "_share_low", True)
-                       else STAMP_LINE_GPS.format(n=line[0], laps=plural(line[1], "lap")))
+            out.append(STAMP_LINE_GPS.format(where=quality.line_clause())
+                       if getattr(quality, "low_by_lap_vote", False)
+                       else STAMP_LOW_GPS.format(pct=quality.dropped_pct()))
     return out
 
 

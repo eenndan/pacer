@@ -343,6 +343,21 @@ CUT_S = 5.0             # …and lasts this long: ~32 m inside the corner it ski
 HOLE_AFTER_S = 0.25     # two fixes rejected around this long after a crossing: AT its line
 
 
+def test_most_laps_with_a_gap_inside_say_inside_not_at_the_line():
+    """The lap vote counts a gap INSIDE a lap as well as a hole at its line, and its sentence said
+    "GPS fixes are missing at the line on 14 of 14 laps" of a recording whose every hole was a 1 s
+    gap mid-lap (DECISIONS §28). Measured through the real loader, the words say where they were."""
+    rec, clean = _load()
+    ids = clean.valid_lap_ids()
+    mids = np.array([clean.laps.start_timestamp(i) + clean.lap_time(i) / 2 for i in ids])
+    holed = _load_rejecting(rec, lambda t: bool(np.any((t > mids) & (t < mids + 1.0))))
+    q = holed.timing_quality
+    flagged, laps = len(holed.dropout_lap_ids()), len(holed.valid_lap_ids())
+    assert all(holed.lap_has_gap_inside(i) for i in holed.dropout_lap_ids())
+    assert q.concerns() == [f"GPS dropped out inside {flagged} of {laps} laps, so lap times can't "
+                            "be trusted enough to judge a PB."], q.concerns()
+
+
 def test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line():
     """THE DEFECT (release QA, wave 22; #712 × #698). The off-the-line rule measured only laps with
     no GPS dropout, and needs four. A hole at a crossing (then one fix, now two: one alone no longer
@@ -577,6 +592,7 @@ def _run_all():
                test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap,
                test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap,
                test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb,
+               test_most_laps_with_a_gap_inside_say_inside_not_at_the_line,
                test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line,
                test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing,
                test_the_corners_are_the_circuits,
