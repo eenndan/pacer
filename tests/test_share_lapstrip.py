@@ -409,6 +409,27 @@ def test_a_lap_timed_across_a_missing_chapter_is_hatched_with_its_own_words():
     print("test_a_lap_timed_across_a_missing_chapter_is_hatched_with_its_own_words OK")
 
 
+def test_quicker_laps_of_two_kinds_each_name_their_own_reason_and_fit():
+    """Quicker ⚠ laps of two kinds shared one legend line, "lap 3 −0.75 s, lap 4 −0.12 s, lap 6
+    −0.30 s: quicker, GPS dropout or left the line (not co…": the fit elided it, and the "or"
+    never said which lap was which (DECISIONS §28). One line per reason, each naming its laps,
+    and nothing in the planned legend is cut."""
+    s = FakeSession({0: 60.0, 1: 60.3, 2: 59.25, 3: 59.88, 4: 60.5, 5: 59.7, 6: 60.2},
+                    dropouts={3, 5})
+    why = "Lap 3 left the line your other laps drive by 34 m, so it is kept out of the bests."
+    s.lap_warnings = lambda: {2: why, 3: None, 5: None}
+    s.best_lap_id = lambda: 0
+    d = ls.lapstrip_data(s)
+    quick = [w for k, w in ls.legend_entries(d) if k == ls.TONE_QUICKER]
+    assert quick == ["lap 4 −0.12 s, lap 6 −0.30 s: quicker, GPS dropout (not counted)",
+                     "lap 3 −0.75 s: quicker, left the line (not counted)"], quick
+    plan = ls.legend_plan(d)
+    assert not [it.text for it in plan.items if it.text.endswith("…")], plan.items
+    assert [it.text for it in plan.items if it.style == ls.TONE_QUICKER] == quick
+    assert not plan.dropped, plan.dropped
+    print("test_quicker_laps_of_two_kinds_each_name_their_own_reason_and_fit OK")
+
+
 # --------------------------------------------------------------- render + export
 def test_renders_every_shape_at_the_lap_cards_size():
     for s in (long_session(), FakeSession({0: 60.0, 1: 60.4, 2: 61.0}),
