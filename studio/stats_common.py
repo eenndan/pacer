@@ -42,7 +42,7 @@ from .lap_table import (
     estimated_timing_tooltip,
 )
 from .theme import C
-from .widgets import Tile
+from .widgets import Tile, pass_step_arrows
 
 # Every report table's row height. It was a bare 22, documented here as "the consistency-table
 # convention" — a convention inherited from the ConsistencyPanel, which PR #111 DELETED, so the
@@ -206,6 +206,9 @@ class ReportTable(QTableWidget):
         self.setSelectionMode(QAbstractItemView.NoSelection)
         self.setAlternatingRowColors(True)
         self.setFocusPolicy(Qt.NoFocus)
+        # The five report tables that turn on SelectRows + ClickFocus give ← / → back to the video
+        # step; the filter reads the selection behaviour at key time (widgets.pass_step_arrows).
+        pass_step_arrows(self)
         # Vertical scrolling belongs to the outer page (each table is pinned to its content
         # height); horizontal scrolling belongs HERE, and only when the pane is too narrow.
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)

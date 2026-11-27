@@ -44,7 +44,7 @@ from ._signal import fmt_signed, fmt_time, lap_label, plural
 from .coaching import PANEL_TOP_N
 from .lap_table import PROVISIONAL_TOOLTIP, estimated_timing_tooltip, set_corner_direction
 from .theme import PROVISIONAL_COLOR, C
-from .widgets import ActionChip, EmptyState, PanelHeader, WrapLabel
+from .widgets import ActionChip, EmptyState, PanelHeader, WrapLabel, pass_step_arrows
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -1819,6 +1819,7 @@ class OpportunitiesPanel(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        pass_step_arrows(self.table)   # ← / → step the video (widgets.pass_step_arrows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(True)

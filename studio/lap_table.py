@@ -31,6 +31,7 @@ from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
     QLineF,
+    QModelIndex,
     QPointF,
     QRect,
     QRectF,
@@ -91,7 +92,15 @@ from ._signal import (
 # The ONE "level with your best" rule (DOMAIN-6): two laps closer than the best instrument can
 # separate at 2σ. The PB sentences say "level" under it; the Δ bar refuses to colour under it.
 from .library import PB_PRECISION_S, within_timing_precision
-from .widgets import NUM_ROLE, EmptyState, NumItem, ToggleButton, icon_button, set_tone
+from .widgets import (
+    NUM_ROLE,
+    EmptyState,
+    NumItem,
+    ToggleButton,
+    icon_button,
+    pass_step_arrows,
+    set_tone,
+)
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -1362,6 +1371,8 @@ class LapTable(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        # ← / → are the window's video step, not a cell walk along a row (widgets.pass_step_arrows).
+        pass_step_arrows(self.table)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # P5: no stretched last section — the data columns are content-tight and the blank trailing
         # spacer column takes the slack (see SPACER_HEADER / _apply_column_sizing). The Lap column's
@@ -2598,8 +2609,32 @@ class LapTable(QWidget):
         sm.clearSelection()
         if not sel.isEmpty():
             sm.select(sel, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        self._sync_cursor(first)
         self.table.blockSignals(False)
         self._keep_selection_visible()
+
+    def _sync_cursor(self, first) -> None:
+        """Put the table's keyboard CURRENT index on the first selected row, so ↑ / ↓ move from the
+        lap the user is looking at.
+
+        Selection and current are two different things in a QTableView, and every programmatic
+        road here (the best lap at load, ⌘K, a map or lap-strip click, the compare partner) set
+        only the selection: measured from a cold start with lap 13 selected, the current index was
+        −1 and ↓ landed on lap 2. A current row that is ALREADY selected is left alone — the user
+        put it there (⌘↓ then ⌘Space builds a non-adjacent pair from it). NoUpdate, so the selection
+        just built is not touched; the column and the horizontal scroll are kept, because moving the
+        cursor scrolls to it and the row's identity is the only thing that changed."""
+        if first is None:
+            return
+        tb = self.table
+        cur = tb.currentIndex()
+        if cur.isValid() and tb.selectionModel().isRowSelected(cur.row(), QModelIndex()):
+            return
+        col = cur.column() if cur.isValid() else 0
+        h = tb.horizontalScrollBar().value()
+        tb.selectionModel().setCurrentIndex(tb.model().index(first.row(), col),
+                                            QItemSelectionModel.NoUpdate)
+        tb.horizontalScrollBar().setValue(h)
 
     def _reveal_last_split(self):
         """L3-04: the map's "Add sector" button silently created columns that landed ENTIRELY off
@@ -3863,6 +3898,7 @@ class QuickestPassTable(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        pass_step_arrows(self.table)   # ← / → step the video (widgets.pass_step_arrows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         self.table.setAlternatingRowColors(True)
