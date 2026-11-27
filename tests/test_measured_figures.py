@@ -3001,7 +3001,7 @@ def test_the_clip_refusal_guard_fails_on_a_wrong_digit_in_each_section():
               "§25 the overlay share": ("59–64 % of what", "58–64 % of what"),
               "§25 a paint cell": ("| 5.8–6.9 |", "| 5.8–6.8 |"),
               "§26 a true count": ("| 117 | 31 / 27 |", "| 117 | 31 / 28 |"),
-              "§27 an ideal gap": ("| 0.020 | 0.014 |", "| 0.020 | 0.024 |")}
+              "§27 an ideal gap": ("| 0.020 | 0.008 |", "| 0.020 | 0.018 |")}
     for label, (old, new) in plants.items():
         assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
         assert _clip_problems(doc.replace(old, new), fig), f"the clip-refusal check missed: {label}"
@@ -3130,9 +3130,9 @@ def test_the_motion_refusal_guard_fails_on_a_wrong_figure():
               "the plain line's drawn share in prose": ("(9.8 % median,", "(10.8 % median,"),
               "the pair count in prose": ("for each of the 13 consecutive", "for each of the 12 consecutive"),
               "the swap count": ("swapped order | 0 |", "swapped order | 1 |"),
-              "a re-form count": ("row in or out) | 81 |", "row in or out) | 82 |"),
+              "a re-form count": ("row in or out) | 82 |", "row in or out) | 83 |"),
               "the scrub jumps": ("| 18 / 0 |", "| 17 / 0 |"),
-              "the ladder count in prose": ("changed on 217 ticks", "changed on 216 ticks")}
+              "the ladder count in prose": ("changed on 210 ticks", "changed on 209 ticks")}
     for label, (old, new) in plants.items():
         assert doc.count(old) == 1, f"the plant for {label!r} no longer matches once — the fixture moved"
         assert _motion_problems(doc.replace(old, new), fig), f"the motion-refusal check missed: {label}"
@@ -3296,8 +3296,9 @@ def _story_problems(doc: str, fig: dict) -> list[str]:
     if (hit := find(30, r"the same number of corners fires in only (\d+) % of the draws", "the same-count share")):
         pct(30, "the same-count share", hit[0], n_["jitter_same_count"])
     over = [c for c in cids if n_["jitter_fires"][c] > 0.8]
-    if (hit := find(30, r"only C(\d+) fires in more than four draws in five", "the steady corner")) and over != [hit[0]]:
-        probs.append(f"§30: only C{hit[0]} fires in > 80 % of draws, the probe: {over}")
+    if ((hit := find(30, r"only (C\d+(?:, C\d+)*(?: and C\d+)?) fires? in more than four draws in five",
+                     "the steady corners")) and over != re.findall(r"C(\d+)", hit[0])):
+        probs.append(f"§30: only {hit[0]} fire in > 80 % of draws, the probe: {over}")
     if (hit := find(30, r"It would praise (C\d+(?:, C\d+)* and C\d+), which the Coaching page ranks", "the contradiction")):
         both = n_["praised_and_ranked"]
         if hit[0] != ", ".join(f"C{c}" for c in both[:-1]) + f" and C{both[-1]}":
@@ -3479,12 +3480,12 @@ def test_the_story_refusal_guard_fails_on_a_wrong_figure():
     plants = {"§29 a fix cell": ("| 2.7 | 2.2 | 2.7 |", "| 2.7 | 2.3 | 2.7 |"),
               "§29 the band's px": ("would be 6.7 px long", "would be 6.8 px long"),
               "§29 a habit count": ("| laps with the habit | 8 |", "| laps with the habit | 9 |"),
-              "§30 a corner cell": ("| 0.381 | 0.050 |", "| 0.381 | 0.051 |"),
+              "§30 a corner cell": ("| 0.380 | 0.044 |", "| 0.380 | 0.045 |"),
               "§30 the count": ("it fires at 3 of 7", "it fires at 4 of 7"),
-              "§31 the cuts": ("between them | 9 / 12 |", "between them | 9 / 11 |"),
-              "§31 a seam figure": ("| 0.6 / 2.9 km/h |", "| 0.6 / 3.0 km/h |"),
+              "§31 the cuts": ("between them | 8 / 12 |", "between them | 8 / 11 |"),
+              "§31 a seam figure": ("| 0.4 / 1.8 km/h |", "| 0.4 / 1.9 km/h |"),
               "§32 a share": ("| best 3-lap run | 0.16 |", "| best 3-lap run | 0.15 |"),
-              "§32 a tie": ("seven, 6 to 11 passes", "seven, 6 to 12 passes"),
+              "§32 a tie": ("seven, 6 to 12 passes", "seven, 6 to 11 passes"),
               "§32 the noise p90": ("| 5 laps | 8 laps | 0.16 |", "| 5 laps | 9 laps | 0.16 |"),
               "§32 the noise share in prose": ("grid, and 16 %", "grid, and 18 %"),
               "§32 the noise grid count": ("draws 1,000 seeded grids", "draws 2,000 seeded grids"),
@@ -3492,11 +3493,11 @@ def test_the_story_refusal_guard_fails_on_a_wrong_figure():
               "§29 a dropped digit": ("| 1.3 | 0.7 |", "| 1.3 | 1 |"),
               "§29 the bold count": ("**Six bands", "**Five bands"),
               "§29 BRAKING's σ": ("its σ 3.9 m", "its σ 4.9 m"),
-              "§30 a jitter cell": ("| 0.00 | 0.77 |", "| 0.00 | 0.87 |"),
+              "§30 a jitter cell": ("| 0.00 | 0.84 |", "| 0.00 | 0.74 |"),
               "§30 the contradiction": ("praise C2 and C4", "praise C2 and C6"),
               "§31 the quote of §2": ("0 of 20 on both", "1 of 20 on both"),
               "§31 the quote of §5": ("grows: 0.72 / 0.60 / 0.36 s", "grows: 0.72 / 0.60 / 0.35 s"),
-              "§32 dropped digits": ("| 0.13–0.69 |", "| 0.1–0.7 |"),
+              "§32 dropped digits": ("| 0.13–0.72 |", "| 0.1–0.7 |"),
               "§32 the measured-σ column": ("| 0.16 | 0.04 |", "| 0.16 | 0.05 |"),
               "§32 the heading's count": ("## 32. Two session", "## 32. Three session"),
               "§32 the robust-σ run": ("| 0.0 | 14 laps | 14 laps |", "| 0.0 | 13 laps | 14 laps |")}
@@ -3676,15 +3677,15 @@ def test_the_corner_refusal_guard_fails_on_a_wrong_figure():
               "§33 the fewest": ("| 3 | 4 | 4 | 4 | 5 | 5 |", "| 3 | 4 | 4 | 2 | 5 | 5 |"),
               "§33 the two-thirds": ("6, 5 of 8)", "6, 6 of 8)"),
               "§33 the habit-free laps": ("sit 0.36–0.38 s under", "sit 0.36–0.39 s under"),
-              "§33 a gate cell": ("| 0.147 | 0.284 |", "| 0.147 | 0.294 |"),
-              "§33 the gate's prose": ("by chance in 28 % of", "by chance in 18 % of"),
+              "§33 a gate cell": ("| 0.150 | 0.288 |", "| 0.150 | 0.298 |"),
+              "§33 the gate's prose": ("by chance in 29 % of", "by chance in 19 % of"),
               "§33 the habit's loss": ("about 0.4 s each", "about 0.5 s each"),
               "§34 the renumbering": ("C2–C7 would become C3–C8", "C2–C7 would become C3–C9"),
-              "§34 a maxima count": ("| 2 | 1 | 1 | 1 | 4 | 1 | 5 |", "| 2 | 1 | 1 | 1 | 3 | 1 | 5 |"),
+              "§34 a maxima count": ("| 2 | 1 | 1 | 1 | 3 | 1 | 5 |", "| 2 | 1 | 1 | 1 | 4 | 1 | 5 |"),
               "§34 C5's ripple": ("reaches only 2.6 %", "reaches only 9.6 %"),
               "§34 C7's dip": ("never falls below 96.5 %", "never falls below 69.5 %"),
               "§34 a length": ("| 58.6 | 70.6 |", "| 58.6 | 70.9 |"),
-              "§34 a ▼ pass": ("| 6.7 | 29.3 | −22.6 |", "| 6.7 | 29.3 | −20.6 |"),
+              "§34 a ▼ pass": ("| 6.7 | 29.4 | −22.6 |", "| 6.7 | 29.4 | −20.6 |"),
               "§34 the habit share": ("| 50–57 % |", "| 50–60 % |"),
               "§34 the rank": ("the sixth longest", "the fifth longest"),
               "§34 the dip": ("below 98.9 %", "below 90.9 %"),

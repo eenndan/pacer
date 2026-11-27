@@ -1946,7 +1946,7 @@ Two sources, neither anybody's driving:
 | \|predicted − actual\|, median / worst decile | laps | at 25 % | at 50 % | at 75 % | at the line, worst |
 |---|---|---|---|---|---|
 | synthetic demo | 13 | 0.28 / 0.53 s | 0.13 / 0.28 s | 0.08 / 0.18 s | 0.02 ms |
-| `synth_gopro`, no habit, noise 2, three seeds | 39 | 0.27 / 0.67 s | 0.18 / 0.56 s | 0.07 / 0.21 s | 0.08 ms |
+| `synth_gopro`, no habit, noise 2, three seeds | 39 | 0.27 / 0.67 s | 0.18 / 0.56 s | 0.07 / 0.18 s | 0.08 ms |
 
 **It is exact only where the clip already says the time.** At the line the prediction is the lap
 time to within a tenth of a millisecond, and there the strip already prints the time. A
@@ -2116,9 +2116,9 @@ lap per corner (`Session.ideal_segment_bests`), and the card's own opportunity
 
 | best lap (L13), s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
 |---|---|---|---|---|---|---|---|
-| gap to the typical lap | −0.361 | −0.036 | −0.083 | −0.028 | +0.005 | −0.028 | −0.034 |
+| gap to the typical lap | −0.360 | −0.036 | −0.083 | −0.028 | +0.005 | −0.027 | −0.034 |
 | that corner's ▼ step | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 | 0.30 |
-| gap to the ideal lap | 0.020 | 0.014 | 0.000 | 0.039 | 0.093 | 0.000 | 0.047 |
+| gap to the ideal lap | 0.020 | 0.008 | 0.000 | 0.039 | 0.093 | 0.000 | 0.047 |
 
 **Against the typical lap, six cells say nothing and the seventh is already on the card.** Six of
 the seven gaps are inside their corner's ▼ step, the floor (`stats.MATRIX_SCALE_MIN_S`) under which
@@ -2184,8 +2184,8 @@ only what each one would have to move:
 | card snapshots at the tick | 1535 |
 | rows shown / packs hidden | 1–5 / up to 4 |
 | two rows still on the card swapped order | 0 |
-| the set of rows changed (a merge, a split, a row in or out) | 81 |
-| the laps changed order on the ladder underneath | 217 |
+| the set of rows changed (a merge, a split, a row in or out) | 82 |
+| the laps changed order on the ladder underneath | 210 |
 | scrubbed in jumps of 3 s: jumps / rows swapped | 18 / 0 |
 
 **On the map, a fade would be visible: the share of the whole map flatters it.** Most of the map
@@ -2207,8 +2207,8 @@ machinery it needed, both measured in #557 and both outside the tree:
 
 **On the race card, there is nothing to slide during playback.** At the playback tick, rows that
 stayed on the card never changed order over the whole race. The laps underneath did: the ladder's
-order changed on 217 ticks. Every one of those passes happened inside a pack, or showed on the card
-as the rows re-forming, which they did on 81 ticks. That follows from how the card packs laps. A
+order changed on 210 ticks. Every one of those passes happened inside a pack, or showed on the card
+as the rows re-forming, which they did on 82 ticks. That follows from how the card packs laps. A
 lap that closes on the pack ahead comes within the tie threshold of that pack's leader before it
 can pass the pack's last lap, so it joins the pack instead of overtaking its row. What changes on
 the card is which rows exist, and a slide cannot animate that.
@@ -2312,16 +2312,16 @@ best one, so praise is a corner whose typical pass (`Session.corner_report`'s me
 
 | synthetic demo, clean laps, s | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
 |---|---|---|---|---|---|---|---|
-| typical pass − best pass | 0.381 | 0.050 | 0.083 | 0.066 | 0.088 | 0.028 | 0.081 |
-| fires under ±0.035 s of cell jitter, share of draws | 0.00 | 0.77 | 0.35 | 0.56 | 0.10 | 0.95 | 0.36 |
+| typical pass − best pass | 0.380 | 0.044 | 0.083 | 0.066 | 0.088 | 0.027 | 0.081 |
+| fires under ±0.035 s of cell jitter, share of draws | 0.00 | 0.84 | 0.35 | 0.56 | 0.10 | 0.97 | 0.35 |
 
 The second row is the same rule after 1,000 seeded draws that move every corner cell by a uniform
 amount within ±0.035 s, half the level step, as §32's jitter does.
 
 **On the demo it fires at 3 of 7 corners: C2, C4 and C6, and C4 by 0.004 s. Three things are
 wrong with it.**
-- **It is unstable.** Under the jitter the same number of corners fires in only 39 % of the draws,
-  and only C6 fires in more than four draws in five. A line that would praise C4 or C3 depending on
+- **It is unstable.** Under the jitter the same number of corners fires in only 41 % of the draws,
+  and only C2 and C6 fire in more than four draws in five. A line that would praise C4 or C3 depending on
   a few hundredths of noise is praising the noise.
 - **It contradicts the Coaching page.** It would praise C2 and C4, which the Coaching page ranks as
   opportunities on the demo (`Session.coaching_opportunities`, ranked C1, C2, C7, C4).
@@ -2352,11 +2352,11 @@ measures the same two jumps at 200 seeded random cuts between two clean laps at 
 | synthetic demo | |
 |---|---|
 | segments of the partition | 15 |
-| donor laps / cuts between them | 9 / 12 |
-| ideal / best lap | 44.63 / 44.95 s |
+| donor laps / cuts between them | 8 / 12 |
+| ideal / best lap | 44.65 / 44.95 s |
 | a cut every | 3.4 s |
-| speed jump at a cut, median / largest | 0.6 / 2.9 km/h |
-| position jump at a cut, median / largest | 0.5 / 0.7 m |
+| speed jump at a cut, median / largest | 0.4 / 1.8 km/h |
+| position jump at a cut, median / largest | 0.4 / 0.7 m |
 | a random cut between two clean laps, 90th percentile | 5.7 km/h, 1.0 m |
 
 **The seams are not the problem.** The cuts jump less than random cuts at the same edges between
@@ -2364,9 +2364,9 @@ two clean laps: the largest speed jump is under the random cuts' 90th percentile
 jump is under a metre.
 
 **Three other things are.**
-- **It cuts every 3.4 s.** 12 cuts in 44.6 s, between 9 laps, is a montage, not a lap.
+- **It cuts every 3.4 s.** 12 cuts in 44.6 s, between 8 laps, is a montage, not a lap.
 - **It shows an order statistic as a lap that was driven.** The ideal is the sum of each segment's
-  minimum (§2). No lap was driven at it: on the demo it is 0.32 s under the best lap, and §2
+  minimum (§2). No lap was driven at it: on the demo it is 0.30 s under the best lap, and §2
   measured no recombination of the laps at or left of the best lap, 0 of 20 on both recordings. It
   falls as the session grows: 0.72 / 0.60 / 0.36 s for a doubling of the laps on §5's three
   fixtures. A film would give that number a picture, which is the overclaim the ideal-lap
@@ -2402,13 +2402,13 @@ run, and the best pass through each corner.
   cell above its corner's 90th-percentile deviation from the median, floored at 0.30 s
   (`stats._typical_and_scale`). The probe draws 1,000 seeded grids of pure Gaussian noise at the
   demo's 14 laps and 7 corners, each corner its demo median plus noise of that corner's own sample
-  σ (0.031–0.757 s), and again at its robust σ, 1.4826 × the median absolute deviation (0.022–0.080
+  σ (0.028–0.757 s), and again at its robust σ, 1.4826 × the median absolute deviation (0.022–0.080
   s). It marks them through the real constructor (`stats.corner_matrix`) and reads each grid's ▼
   and its longest run with no ▼.
 
 | synthetic demo, 14 clean laps, 1,000 draws | under the level step | at the measured σ | |
 |---|---|---|---|
-| best pass per corner, at six of seven corners | 0.13–0.69 | 0.07–0.69 | a tie of 6–11 passes within 0.07 s |
+| best pass per corner, at six of seven corners | 0.13–0.72 | 0.07–0.72 | a tie of 6–12 passes within 0.07 s |
 | best pass per corner, at C5 | 0.00 | 0.00 | alone |
 | longest run with no ▼ | 0.00 | 0.00 | 8 laps |
 | best 3-lap run | 0.16 | 0.04 | 5 of 12 runs within 0.07 s of the best |
@@ -2423,10 +2423,10 @@ run, and the best pass through each corner.
 | the demo | 2 | 8 laps | | |
 
 **Two moments name a lap the noise could have picked.**
-- **The best pass through a corner** is a tie at six corners of seven, 6 to 11 passes within
-  0.07 s of the quickest. Which one is named changes in up to 69 % of the draws under the level
-  step, and in 7 % to 69 % at the measured σ. Only C5's stands alone, the corner whose grip the
-  generator varies most (§27). Naming one pass of eleven as "the" best pass is a coin toss
+- **The best pass through a corner** is a tie at six corners of seven, 6 to 12 passes within
+  0.07 s of the quickest. Which one is named changes in up to 72 % of the draws under the level
+  step, and in 7 % to 72 % at the measured σ. Only C5's stands alone, the corner whose grip the
+  generator varies most (§27). Naming one pass of twelve as "the" best pass is a coin toss
   presented as a moment.
 - **The longest run with no ▼** never changes under either jitter, and that was the wrong test. The
   demo's grid carries 2 ▼ in all, at C5 and C6; at every other corner the 0.30 s floor wins. Noise
@@ -2476,7 +2476,7 @@ counts at both; a slow lap with no culprit counts in M and at no corner.
   gathers at least the observed count, computed exactly, not drawn.
 - **Why that null.** Equal odds is the null most generous to the sentence: weighting the corners
   unequally makes a shared corner likelier by chance. The last row of the second table shows it,
-  with each corner weighted by its own lap-to-lap σ on the demo (0.029–0.203 s, over the 13 clean
+  with each corner weighted by its own lap-to-lap σ on the demo (0.027–0.203 s, over the 13 clean
   laps that are not slow). That row is an illustration, not a second null: C1's σ is inflated by
   the planted habit, which splits its laps into two groups.
 
@@ -2491,7 +2491,7 @@ counts at both; a slow lap with no culprit counts in M and at no corner.
 |---|---|---|---|---|---|---|
 | fewest at one corner that beats chance, p ≤ 0.05 | 3 | 4 | 4 | 4 | 5 | 5 |
 | p of half of them or more at one corner | 0.39 | 0.65 | 0.16 | 0.29 | 0.07 | 0.13 |
-| the same, each corner weighted by its σ | 0.59 | 0.83 | 0.47 | 0.66 | 0.43 | 0.58 |
+| the same, each corner weighted by its σ | 0.59 | 0.83 | 0.48 | 0.66 | 0.44 | 0.58 |
 
 **On the demo the sentence reads "1 of 1", at p 1.00: a single slow lap gathers at its own corner
 whatever that corner is.** Two things are wrong with it beyond that.
@@ -2507,13 +2507,13 @@ whatever that corner is.** Two things are wrong with it beyond that.
 
 | the gate at p ≤ 0.05 under equal odds, M | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|
-| fires by chance if culprits follow each corner's σ | 0.104 | 0.046 | 0.147 | 0.284 | 0.171 | 0.288 |
+| fires by chance if culprits follow each corner's σ | 0.106 | 0.047 | 0.150 | 0.288 | 0.175 | 0.293 |
 
 **The smaller feature is refused too: print the sentence only when p ≤ 0.05.** The gate would
 have to compute p under equal odds, the most lenient null, because one session cannot estimate
 how often each corner holds a culprit: on the demo that rate is 1 cue in 14 laps. If culprits
 instead follow each corner's spread, the gate's own threshold fires by chance far more often than
-1 time in 20: 4 of 6 at one corner (p 0.034 under equal odds) would print by chance in 28 % of
+1 time in 20: 4 of 6 at one corner (p 0.034 under equal odds) would print by chance in 29 % of
 sessions with 6 slow laps. The weights are the σ row's, so the figure is an illustration of the
 direction, not a measured rate; the right null needs per-corner culprit rates across sessions.
 
@@ -2551,15 +2551,15 @@ is placed in its own half of the bend.
 | synthetic demo, m | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
 |---|---|---|---|---|---|---|---|
 | window length | 51.8 | 54.1 | 48.8 | 56.3 | 55.6 | 58.6 | 70.6 |
-| ringed apex, into the window | 27.0 | 27.5 | 25.3 | 29.7 | 28.4 | 29.3 | 35.7 |
-| maxima of the pooled curvature | 2 | 1 | 1 | 1 | 4 | 1 | 5 |
+| ringed apex, into the window | 27.0 | 27.5 | 25.3 | 29.7 | 28.4 | 29.4 | 35.7 |
+| maxima of the pooled curvature | 2 | 1 | 1 | 1 | 3 | 1 | 5 |
 | lowest curvature between them, share of the peak | 0.989 | – | – | – | 0.024 | – | 0.965 |
 | the same between maxima over half the peak | 0.989 | – | – | – | 0.869 | – | 0.965 |
 
 | every ▼ pass on the demo, m into the window | peak loss | ringed apex | peak − apex |
 |---|---|---|---|
 | Lap 6 at C5 | 26.1 | 28.4 | −2.3 |
-| Lap 6 at C6 | 6.7 | 29.3 | −22.6 |
+| Lap 6 at C6 | 6.7 | 29.4 | −22.6 |
 
 | C1, the 8 habit laps against the 6 habit-free laps | |
 |---|---|
