@@ -1305,7 +1305,8 @@ def replace_offer(report: Report | None, shortlist: list[int]) -> list[int] | No
 def replace_label(cids: list[int], day: str) -> str:
     """The offer's button: "Replace with today's top 3 (C1, C5, C7)", the open session named
     `day` (`Report.now_day`): "Replace with 13 Sep's top 3" on a recording of 13 Sep."""
-    return f"Replace with {_days(day)} top {len(cids)} ({', '.join(f'C{c}' for c in cids)})"
+    top = "top corner" if len(cids) == 1 else f"top {len(cids)}"
+    return f"Replace with {_days(day)} {top} ({', '.join(f'C{c}' for c in cids)})"
 
 
 def report_headline(report: Report) -> str:

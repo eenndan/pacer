@@ -834,7 +834,7 @@ def test_a_stored_corner_that_is_level_today_keeps_its_verdict():
 def test_replace_offers_only_ranked_corners_and_says_how_many():
     """"Replace with today's top 3" offers Coaching's shortlist, which since the timing step holds
     only corners past it: over a list of C1, C2 and C7 kept from an earlier session, the demo offers
-    C1 alone, and the button says so ("top 1 (C1)"), never a corner Coaching calls level."""
+    C1 alone, and the button says so ("top corner (C1)"), never a corner Coaching calls level."""
     from studio import coaching
     s = _focus_session("demo")
     short = [r.cid for r in coaching.shortlist(s.coaching_opportunities())]
@@ -847,7 +847,7 @@ def test_replace_offers_only_ranked_corners_and_says_how_many():
     offer = F.replace_offer(report, short)
     assert offer == [1], offer
     label = F.replace_label(offer, report.now_day)
-    assert label.endswith("top 1 (C1)") and "C2" not in label and "C7" not in label, label
+    assert label.endswith("top corner (C1)") and "C2" not in label and "C7" not in label, label
     print(f"ok replace: {label!r}")
 
 
@@ -1325,8 +1325,8 @@ def test_the_open_session_is_today_only_on_the_day_it_was_recorded():
     assert F.outcome_sentence(few.outcomes[0]).endswith(
         "can't say: 2 clean laps through it on 20 Sep."), F.outcome_sentence(few.outcomes[0])
     assert F.replace_label([1, 5, 7], few.now_day) == "Replace with 20 Sep's top 3 (C1, C5, C7)"
-    assert F.replace_label([1], F.open_day("2026-09-20", on_day)) == "Replace with today's top 1 (C1)"
-    assert F.replace_label([1], F.open_day(None, on_day)) == "Replace with this session's top 1 (C1)"
+    assert F.replace_label([1], F.open_day("2026-09-20", on_day)) == "Replace with today's top corner (C1)"
+    assert F.replace_label([1], F.open_day(None, on_day)) == "Replace with this session's top corner (C1)"
     print("ok open day: 'today' only on the day the recording was made")
 
 

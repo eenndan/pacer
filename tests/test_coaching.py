@@ -3398,39 +3398,64 @@ def test_a_planted_corner_ranks_past_the_step_and_one_inside_it_does_not():
           f"(+{got[0.05][0].time_lost:.2f} s)")
 
 
+def test_the_step_is_decided_on_the_printed_loss_at_its_edge():
+    """The boundary, on the row's number, its colour and its ranked state together: +0.0651 s
+    prints "+0.07 s" and ranks in the loss colour, as does exactly 0.07; +0.0649 prints "+0.06 s"
+    and is held back, muted. Deciding on the raw value (0.0651 < 0.07) or with `<=` (0.07 level)
+    breaks one of the three."""
+    _qapp()
+    from PySide6.QtGui import QColor, QFont
+
+    from studio import theme
+    from studio.coaching_panel import _lost_cell
+    from studio.theme import C
+    for loss, printed, ranked in ((0.0651, "+0.07 s", True), (0.07, "+0.07 s", True),
+                                  (0.0649, "+0.06 s", False)):
+        corners, best, times, lap_times = _level_fixture([loss] * 3, [0.01] * 3)
+        opp = K.summarize(corners, list(range(len(lap_times))), lap_times, times, best,
+                          sigmas_by_cid={c.cid: 0.01 for c in corners})
+        row = opp.rows[0]
+        assert K.lost_text(row) == printed, (loss, K.lost_text(row))
+        assert row.evidence.ranked == ranked, (loss, row.evidence)
+        assert (row.evidence.abstain == K.ABSTAIN_LEVEL) == (not ranked), (loss, row.evidence)
+        colour = _lost_cell(row, QFont()).foreground().color()
+        want = QColor(theme.delta_colour(row.time_lost)) if ranked else QColor(C.text_dim)
+        assert colour == want, (loss, colour.name(), want.name())
+    print("ok step edge: +0.0651 and +0.07 rank in the loss colour, +0.0649 is level and muted")
+
+
 def test_a_level_session_says_so_in_one_sentence():
     """A session where nothing ranks and the losses are inside the step is a real answer, not an
-    empty panel: the headline and the theme block say so, in `coaching`'s words, and the page shows
-    the held-back rows. The synthetic GoPro seed 20260924 (the golden gate's recording) holds its
-    three corners back as level and the rest fail other tests; a session of level rows alone says
-    every corner is level."""
+    empty panel: the headline and the theme block say so, in `coaching`'s words, the page shows
+    the held-back rows, and no row's Jump is the amber CTA (nothing is recommended). The synthetic
+    GoPro seed 20260924 (the golden gate's recording) holds its three corners back as level and the
+    rest fail other tests; a session of level rows alone reads the same."""
     import dataclasses
     _qapp()
-    from studio.coaching_panel import OpportunitiesPanel
+    from studio.coaching_panel import _PANEL_COL_GO, OpportunitiesPanel
     s = _level_sessions()["seed 20260924, 14 laps"]
     opps = s.coaching_opportunities()
     assert not K.shortlist(opps) and opps.theme.kind == K.THEME_NONE
-    sentence = ("No corner is ranked: each is level with your best lap within timing precision "
-                "(under 0.07 s) or fails another test its row names. Look at your consistency and "
-                "your ideal lap instead.")
+    sentence = ("No corner is ranked: each is within timing precision (0.07 s) of your best lap, "
+                "or its row says why. Look at your consistency and your ideal lap instead.")
+    headline = ("Whole session · no corner stands out vs your best lap (median of 14 clean laps)")
     assert K.theme_lines(opps) == (sentence, []), K.theme_lines(opps)
-    assert K.headline(opps) == ("Whole session · no corner clears both timing precision (0.07 s) "
-                                "and its row's tests (median of 14 clean laps)"), K.headline(opps)
+    assert K.headline(opps) == headline, K.headline(opps)
     panel = OpportunitiesPanel(s)
     panel.resize(1400, 900)
     panel.show()
     for _ in range(6):
         _APP.processEvents()
     assert panel.theme_block.headline.text() == sentence and not panel.theme_block.isHidden()
-    assert panel.table.rowCount() >= 3 and panel.shortlist_cids() == []
+    assert panel.summary_label.text() == headline
+    t = panel.table
+    assert t.rowCount() >= 3 and panel.shortlist_cids() == []
+    variants = [t.cellWidget(r, _PANEL_COL_GO).jump.property("variant") for r in range(t.rowCount())]
+    assert "primary" not in variants, variants
     panel.close()
     level = [r for r in opps.rows if r.evidence.abstain == K.ABSTAIN_LEVEL]
     only = dataclasses.replace(opps, rows=level)
-    assert K.no_focus_sentence(only) == (
-        "Every corner is level with your best lap, within timing precision (under 0.07 s): nothing "
-        "here separates them. Look at your consistency and your ideal lap instead.")
-    assert K.headline(only).startswith("Whole session · every corner within timing precision "
-                                       "(0.07 s) of your best lap"), K.headline(only)
+    assert K.no_focus_sentence(only) == sentence and K.headline(only) == headline
     # A session whose corners fail only the spread test keeps the words it always had.
     spread = dataclasses.replace(opps, rows=[dataclasses.replace(r, evidence=dataclasses.replace(
         r.evidence, abstain=K.ABSTAIN_SPREAD)) for r in opps.rows])
@@ -3642,7 +3667,7 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     none = dataclasses.replace(opp, rows=[dataclasses.replace(
         r, evidence=dataclasses.replace(r.evidence, abstain=K.ABSTAIN_SPREAD)) for r in opp.rows])
     tip0 = _full_window_page(none).summary_label.toolTip()
-    assert "No corner clears its own lap-to-lap spread, so there is no total" in tip0, tip0
+    assert "No corner is ranked, so there is no total" in tip0, tip0
     assert "The total is" not in tip0, tip0
     print("ok scope hover: top 3 unchanged, top 2 / worst corner / no total where true")
     _close_pages()
@@ -4235,7 +4260,7 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
 
 def test_the_docked_page_jumps_and_compares_without_widening():
     """Wave 10, design 1A (owner-approved 2026-11-18, Q1 (a)), on the demo circuit (three planted habits) in the real
-    window, offscreen. At 1280x800 the docked Coaching tab (497 px) gives no row its Jump or
+    window, offscreen. At 1280x800 the docked Coaching tab (499 px) gives no row its Jump or
     Compare; on main the page offered neither without a widen or a maximize. Now the focus list's
     line carries "Jump to C1" (the one primary) and "Compare C1", nothing selected for the driver:
     each lands exactly what C1's own row button lands; picking the C2 row re-aims both; Return in
@@ -4304,9 +4329,10 @@ def test_the_docked_page_jumps_and_compares_without_widening():
 
             # DOCKED, 1280x800: no row action, the pair on the chip's line, aimed at C1.
             c = v.compare
-            # 497 px with this recording (498 with the demo before the timing step: the docked
-            # width follows the window's content).
-            assert page.width() == 497 and t.isColumnHidden(cp._PANEL_COL_GO), page.width()
+            # 499 px with this recording (the demo's is main's 498): the headline strip keeps
+            # its widest form's width (`coaching.widest_headline`), and this recording's own
+            # top-3 headline prints a pixel wider than that form.
+            assert page.width() == 499 and t.isColumnHidden(cp._PANEL_COL_GO), page.width()
             assert jump.isVisible() and cmp_.isVisible() and jump.isEnabled() and cmp_.isEnabled()
             assert (jump.text(), cmp_.text()) == ("Jump to C1", "Compare C1")
             assert (jump.accessibleName(), cmp_.accessibleName()) == ("Jump to C1", "Compare at C1")

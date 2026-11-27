@@ -556,6 +556,48 @@ def test_the_journey_on_the_real_window():
           f"second open filled the slot with C{gone} and reached a verdict in one click")
 
 
+def test_a_first_open_with_no_corner_past_the_step_opens_the_normal_view():
+    """cool/coaching-ranks-past-the-step (review S5): a first open whose corners all lose under the
+    timing step lands on no debrief — the existing rule, nothing ranked — and opens the ordinary
+    grid on the driver's tab, with the personal-best card the debrief would otherwise carry. The
+    Coaching tab says no corner stands out, and its sentence points elsewhere. The habit-free demo
+    circuit is that session (its corners lose +0.04 s and less)."""
+    from PySide6.QtWidgets import QLabel
+
+    from studio import coaching
+    from studio.app import StudioWindow
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    with tempfile.TemporaryDirectory(prefix="debrief_level_") as folder, _fresh_app_support():
+        rec = sg.generate(os.path.join(folder, "gen"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
+                          origin=md.DEMO_ORIGIN)
+        path = os.path.join(folder, "9101", "GX019101.MP4")
+        os.makedirs(os.path.dirname(path))
+        shutil.copyfile(rec.paths[0], path)
+        win = StudioWindow([])
+        win.resize(1440, 900)
+        win.show()
+        try:
+            _open(win, path)
+            opps = win.session.coaching_opportunities()
+            assert not coaching.shortlist(opps) and opps.rows, opps.rows
+            assert not win.view.is_debrief(), "a session with nothing ranked landed on a debrief"
+            assert win.library_ctl.landing() is None
+            toast = win._pb_toast
+            assert toast is not None and toast.isVisible(), "no personal-best card on a first open"
+            words = " ".join(lab.text() for lab in toast.findChildren(QLabel))
+            assert "First session logged" in words, words
+            page = win.view.opportunities
+            assert page.summary_label.text() == coaching.headline(opps)
+            assert "no corner stands out" in page.summary_label.text()
+            assert page.theme_block.headline.text() == coaching.no_focus_sentence(opps) != ""
+        finally:
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+    print("ok level first open: no debrief, the grid, the PB card, 'no corner stands out'")
+
+
 def _way_recordings(folder: str) -> list[str]:
     """The demo's circuit forward (seed 1), then in reverse twice (seeds 4 and 6),
     each with `three_habits` planted and under its own recording number: every synthetic recording

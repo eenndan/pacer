@@ -3,8 +3,8 @@ card beside a COACHING section — instead of a metadata table with its first pi
 and no Coaching rows at all, while its own CORNERS note sent the reader to "the Coaching tab's
 list".
 
-WHAT IS HELD, on real Sessions loaded from synthetic GoPro recordings (the shipped demo, and seed 7
-of the demo circuit: a three-way tie at the top, level rows and two not-ranked rows) plus a two-lap
+WHAT IS HELD, on real Sessions loaded from synthetic GoPro recordings (the shipped demo, and planted
+drives of the demo circuit: a three-way tie at the top, and a provisional shortlist of two) plus a two-lap
 session for the empty state and a one-lap one for the gaps that are 0 by construction:
 
   * the order — header, COACHING, the pinned map and chart, then the Stats groups (two columns on
@@ -42,10 +42,12 @@ _SESSIONS: dict = {}
 
 
 def _sessions() -> dict:
-    """demo (verified, planted C1 habit), seed7 (verified, a tie: seed 1 at 10 laps with
-    `_synthetic.sweep_habits` planted, since the habit-free seed 7 the name comes from ranks nothing
-    past the timing step), seed7prov (seed 3 at 10 laps, planted the same way, at an unknown origin:
-    PROVISIONAL, two ranked corners), twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
+    """demo (verified, planted C1 habit), tie (verified: seed 1 at 10 laps with
+    `_synthetic.sweep_habits` planted, a three-way tie at the top), twoprov (a DIFFERENT drive,
+    seed 3 at 10 laps planted the same way, at an unknown origin: PROVISIONAL, and two ranked
+    corners — the shortlist-of-two case). Until cool/coaching-ranks-past-the-step both were the
+    habit-free seed 7 at 12 laps, at two origins; it ranks nothing past the timing step, and no one
+    planted drive is both a three-way tie and a shortlist of two, twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
     3, one lap, driven in reverse: the ideal is that lap, every corner one pass), onedonor (seed
     29, two laps, one of them won every segment). Generated once
     per process; the TemporaryDirectory stays alive with them (sessions read their files lazily)."""
@@ -59,8 +61,8 @@ def _sessions() -> dict:
         md.make(demo, render=False)
         _SESSIONS["demo"] = Session.load([demo])
         from _synthetic import sweep_habits
-        for name, seed, laps, origin in (("seed7", 1, 10, md.DEMO_ORIGIN),
-                                         ("seed7prov", 3, 10, sg.ORIGIN),
+        for name, seed, laps, origin in (("tie", 1, 10, md.DEMO_ORIGIN),
+                                         ("twoprov", 3, 10, sg.ORIGIN),
                                          ("twolaps", md.DEMO_SEED, 2, md.DEMO_ORIGIN),
                                          ("onelap", 3, 1, md.DEMO_ORIGIN),
                                          ("onedonor", 29, 2, md.DEMO_ORIGIN)):
@@ -70,7 +72,7 @@ def _sessions() -> dict:
             # a fixed fraction of the drive) and the session reads low. Reversed, it lands clear.
             rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin,
                               reverse=name == "onelap",
-                              habit=sweep_habits(laps) if name.startswith("seed7") else None)
+                              habit=sweep_habits(laps) if name in ("tie", "twoprov") else None)
             _SESSIONS[name] = Session.load(rec.paths)
     return _SESSIONS
 
@@ -218,7 +220,7 @@ def test_every_coaching_string_is_page_texts_in_the_pages_order():
     """The demo: the headline, the theme, both actions, and all six shown rows — the planted C1 with
     its braking line, then five "Not ranked" rows muted (three level with the best lap inside the
     timing step, two with no second lap at the target) — exactly as `page_text` says them, under the
-    panel's four column words. Seed 7 (planted): a three-way tie at the top."""
+    panel's four column words. The planted tie session: a three-way tie at the top."""
     assert export_data.REPORT_COACHING_COLUMNS == tuple(
         coaching_panel.OpportunitiesPanel._COLUMNS[:4])
     got = _assert_page_text_on_page(_sessions()["demo"])
@@ -228,7 +230,7 @@ def test_every_coaching_string_is_page_texts_in_the_pages_order():
     assert sum(r.startswith("Not ranked: level with your best lap here") for r in reasons) == 3
     muted = [r for r in got["rows"] if not r[4]]
     assert len(muted) == 5 and all(r[3].startswith("Not ranked: ") for r in muted), muted
-    tie = _assert_page_text_on_page(_sessions()["seed7"])
+    tie = _assert_page_text_on_page(_sessions()["tie"])
     assert any(a.startswith("Start with C7, C5 or C3:") and "this cannot rank them" in a
                for a in tie["actions"]), tie["actions"]
     print("ok coaching: page_text row for row on the demo and on a tie")
@@ -247,8 +249,8 @@ def test_the_notes_say_what_the_page_says_on_hover():
     assert notes[3] == f"The braking line under C1 {coaching.BRAKE_DIRECTION_CAVEAT}", notes[3]
     assert len(notes) == 5, notes          # verified, clean clock: no Timing stamp; the pointer last
     assert notes[4].startswith("0.36 s is how far your typical pass through this corner")
-    # Seed 7 (planted) prints no direction: no caveat.
-    seven = _coaching_strings(_section(ET.fromstring(_report(_sessions()["seed7"])), "COACHING"))
+    # The tie session prints no direction: no caveat.
+    seven = _coaching_strings(_section(ET.fromstring(_report(_sessions()["tie"])), "COACHING"))
     assert not any("braking line" in n for n in seven["notes"]), seven["notes"]
     # The panel reads the same strings (byte for byte with what it printed before they moved).
     assert coaching_panel._SCOPE_TOOLTIP.startswith(coaching.scope_note() + " Coaching ▸ ")
@@ -258,10 +260,10 @@ def test_the_notes_say_what_the_page_says_on_hover():
 
 
 def test_provisional_and_degraded_timing_stamp_the_coaching_rows():
-    """PROVISIONAL (seed 7 at an unknown origin): the rows the Coaching page shows, unchanged, and
+    """PROVISIONAL (the planted two-ranked drive at an unknown origin): the rows the Coaching page shows, unchanged, and
     the report's Timing stamp under them. A degraded clock (GPS low, then the media-clock fallback)
     stamps them too; a clean one does not."""
-    prov = _sessions()["seed7prov"]
+    prov = _sessions()["twoprov"]
     assert not prov.timing_verified
     got = _assert_page_text_on_page(prov)
     stamp = f"Timing: {export_data.timing_meta(prov, where='on this page')}"
@@ -482,11 +484,11 @@ def test_the_scope_note_counts_the_shortlist_the_headline_sums():
     assert "The total is your top 2 corners that cleared" in coaching.scope_note(n=2)
     assert "The total is your worst corner that cleared" in coaching.scope_note(n=1)
     none = coaching.scope_note(n=0)
-    assert "No corner clears its own lap-to-lap spread, so there is no total" in none, none
+    assert "No corner is ranked, so there is no total" in none, none
     assert "top 0" not in none and "The total is" not in none
     assert coaching_panel.scope_tooltip(3) == coaching_panel._SCOPE_TOOLTIP
     # The provisional session ranks two: the report's note says two, as its headline does.
-    s = _sessions()["seed7prov"]
+    s = _sessions()["twoprov"]
     got = _coaching_strings(_section(ET.fromstring(_report(s)), "COACHING"))
     assert "top 2 corners" in got["lead"][0] and "your top 2 corners that" in got["notes"][0]
     print("ok P3: the scope note counts the headline's shortlist")

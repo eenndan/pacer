@@ -621,22 +621,21 @@ class Opportunity:
 #   0064 chapter 2      31       2     0.345        0.518        0 %  100 %  consistency 100 %
 #   0064 chapter 3      16       1     0.121        0.444      100 %    0 %  braking 100 %
 #
-# cool/coaching-level-step (2026-11-16) re-measured the three 0068 rows, the one recording on the
-# machine, when a row whose spread is level stopped naming consistency ("the level step" below,
-# REASON_LEVEL, which names no cause and counts towards none): 0068 chapter 2 moved from consistency
-# 74 % to coasting 26 %, and no other 0068 cell moved.
+# cool/coaching-level-step (2026-11-16) re-measured the three 0068 rows, when a row whose spread
+# is level stopped naming consistency ("the level step" below, REASON_LEVEL, which names no cause
+# and counts towards none): 0068 chapter 2 moved from consistency 74 % to coasting 26 %, and no
+# other 0068 cell moved.
 # The four 0064 rows were not re-measured, the recording not being on that machine. The full
 # recording's should not move: its ranked rows' middle halves, in the evidence table above, are
 # 0.187-0.309 s, far over the 0.07 s step. Its chapters' rows are not re-verified, nor is the
 # "14 of the 15 ranked rows" below for 0065 and 0067 (0068's four consistency rows did not move).
-# cool/coaching-ranks-past-the-step (2026-11-27) re-measured the 0068 rows again, the one recording
-# on the machine, when a row whose loss is inside the timing step stopped ranking (ABSTAIN_LEVEL):
-# in the evidence table 0068's C2 (0.060 s) and C3 (0.049 s) read level, and in this one 0068 went
-# from 5 ranked rows and 0.426 s (execution and consistency each 78 %) to 3 and 0.318 s (71 %),
+# cool/coaching-ranks-past-the-step (2026-11-27) re-measured the 0068 rows again, when a row
+# whose loss is inside the timing step stopped ranking (ABSTAIN_LEVEL): in the evidence table
+# 0068's C2 (0.060 s) and C3 (0.049 s) read level, and in this one 0068 went from 5 ranked rows and 0.426 s (execution and consistency each 78 %) to 3 and 0.318 s (71 %),
 # chapter 1 from 3 to 2 (consistency 61 % to 51 %), and chapter 2 from 3 to 1, its one ranked row a
 # level-reason C1 that names no cause (coasting 26 % to none). THE 0064 ROWS WERE MEASURED BEFORE
-# THAT RULE, the recording not being on the machine. The rule only holds back a RANKED row whose
-# printed loss is under 0.07 s, so three of them cannot move: the full recording's ranked losses
+# THAT RULE: they were not re-measured. The rule only holds back a RANKED row whose printed loss
+# is under 0.07 s, so three of them cannot move: the full recording's ranked losses
 # are 0.167 s and more (the evidence table), its chapter 1 ranks nothing, and its chapter 3's one
 # ranked row is the whole 0.121 s. Its chapter 2 ranks two rows totalling 0.345 s, and whether one
 # of them is under the step cannot be known without the recording; its footage check will say.
@@ -1605,26 +1604,21 @@ def no_focus_sentence(opps: Opportunities) -> str:
     shown corner was held back only because its loss is inside the timing step — "" otherwise
     (nothing level, or something ranked). A real answer, not an empty panel: nothing here separates
     the corners from the best lap, and it points at what this session can still measure."""
-    state = _level_state(opps)
-    if not state:
+    if not _nothing_stands_out(opps):
         return ""
-    if state == "all":
-        lead = (f"Every corner is level with your best lap, within timing precision (under "
-                f"{LOSS_STEP_S:.2f} s): nothing here separates them.")
-    else:
-        lead = (f"No corner is ranked: each is level with your best lap within timing precision "
-                f"(under {LOSS_STEP_S:.2f} s) or fails another test its row names.")
-    return lead + " Look at your consistency and your ideal lap instead."
+    return (f"No corner is ranked: each is within timing precision ({LOSS_STEP_S:.2f} s) of your "
+            "best lap, or its row says why. Look at your consistency and your ideal lap instead.")
 
 
-def _level_state(opps: Opportunities) -> str:
-    """"all" when nothing shown is ranked and every shown row is `ABSTAIN_LEVEL`, "some" when
-    nothing is ranked and at least one is, else ""."""
+# The headline's words for the same state (`headline`): the share card prints the headline itself.
+NOTHING_STANDS_OUT = f"no corner stands out {LOSS_BASELINE}"
+
+
+def _nothing_stands_out(opps: Opportunities) -> bool:
+    """Nothing shown is ranked and at least one shown row is held back only by the timing step."""
     shown = shown_rows(opps) if opps.enough else []
     kinds = {r.evidence.abstain for r in shown}
-    if not shown or ABSTAIN_NONE in kinds or ABSTAIN_LEVEL not in kinds:
-        return ""
-    return "all" if kinds == {ABSTAIN_LEVEL} else "some"
+    return bool(shown) and ABSTAIN_NONE not in kinds and ABSTAIN_LEVEL in kinds
 
 
 def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = True) -> str:
@@ -2167,11 +2161,8 @@ def headline(opps: Opportunities) -> str:
     # 3.93 s on the Stats CORNERS table, and corner by corner run 1.3x to 2450x apart — not a
     # rounding question the reader can resolve by looking harder. The scope, measured: on D24 lap 6
     # a headline that named neither understated the lap's own +2.08 s as "0.21 s".
-    level = _level_state(opps) if not rows else ""
-    if level == "all":
-        gains = f"every corner within timing precision ({LOSS_STEP_S:.2f} s) of your best lap"
-    elif level:
-        gains = f"no corner clears both timing precision ({LOSS_STEP_S:.2f} s) and its row's tests"
+    if not rows and _nothing_stands_out(opps):
+        gains = NOTHING_STANDS_OUT
     elif not rows:
         gains = "no corner clears its own lap-to-lap spread"
     else:
@@ -2180,6 +2171,17 @@ def headline(opps: Opportunities) -> str:
                  else f"{total:.2f} s across your top {len(rows)} corners")
         gains += f" {LOSS_BASELINE}"
     return f"{SCOPE_PREFIX} · {gains} ({clean_laps_phrase(opps.n_laps)})"
+
+
+def widest_headline(n_laps: int) -> str:
+    """The headline's widest form for a session of `n_laps` clean laps — its top-3 total — whose
+    width the page's strip keeps whatever form today's headline takes. The docked lap column opens
+    at the widest of its pages' minimum widths, and this strip's was its text's: when the demo's
+    headline went from "0.43 s across your top 3 corners" to "0.36 s in your worst corner"
+    (cool/coaching-ranks-past-the-step) the column fell from 498 to 468 px at 1280x800 and the
+    Corners page's Quickest passes lost its strip. A Coaching wording must not move another page."""
+    return (f"{SCOPE_PREFIX} · 0.00 s across your top {PANEL_TOP_N} corners {LOSS_BASELINE} "
+            f"({clean_laps_phrase(n_laps)})")
 
 
 def theme_lines(opps: Opportunities) -> tuple[str, list[str]]:
@@ -2393,8 +2395,8 @@ def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:
                  "view." if page else ".")
     where = "below" if page else "above"
     if n <= 0:
-        total = (f"No corner clears its own lap-to-lap spread, so there is no total; every "
-                 f"corner is listed {where} with the reason it did not clear the evidence gate.")
+        total = (f"No corner is ranked, so there is no total; every corner is listed {where} with "
+                 "the reason it is not.")
     else:
         what = "your worst corner that" if n == 1 else f"your top {n} corners that"
         total = (f"The total is {what} cleared the evidence gate; corners that did not are "

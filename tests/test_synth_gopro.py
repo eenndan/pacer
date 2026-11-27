@@ -474,7 +474,11 @@ def test_the_stats_tiles_and_the_coaching_page_are_populated():
     # same seed with a planted habit, and ranks it).
     from studio import coaching
     assert ops.enough and ops.rows, f"no coaching row ({len(ops.rows)} rows)"
-    assert ranked or coaching.theme_lines(ops)[0], [(r.cid, r.evidence.abstain) for r in ops.rows]
+    assert not ranked, ranked
+    level = [r.cid for r in ops.rows if r.evidence.abstain == coaching.ABSTAIN_LEVEL]
+    assert level == [7, 2, 4], [(r.cid, r.time_lost, r.evidence.abstain) for r in ops.rows]
+    assert coaching.theme_lines(ops) == (coaching.no_focus_sentence(ops), []) != ("", [])
+    assert "no corner stands out" in coaching.headline(ops), coaching.headline(ops)
 
 
 def test_the_imu_is_one_rigid_motion_with_the_gps():
