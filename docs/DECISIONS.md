@@ -2532,8 +2532,10 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     for failures that may be transient says.
   - **The lap strip's ⚠ best cue is drawn by no user route**: a session whose best is a ⚠ lap has
     no clean lap, so File ▸ Export greys the strip and the report leaves it out.
-  - **ENGINEERING.md says the November work made "one deliberate golden re-cut"**; sections 13 and
-    25 record two more reviewed re-cuts (#587, #676).
+- **Found in this release's QA, and fixed before the tag**: ENGINEERING.md said the November work
+  made "one deliberate golden re-cut"; sections 13, 25 and 29 record three reviewed re-cuts (#587,
+  #676, #715), and it now names all three. Its count of the late waves' refusals now includes
+  section 43.
 - **Resolved from section 30**: a row whose path holds a different recording offered on every
   Library open; the Ideal cells un-muting all at once at the end of a run; the lap strip's
   headline with no ⚠ for an all-⚠ best; the reference load starting without the GC guard; the
