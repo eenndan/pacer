@@ -70,7 +70,7 @@ from studio.dev import make_demo as md  # noqa: E402
 from studio.dev import synth_gopro as sg  # noqa: E402
 from studio.export_palette import EXPORT  # noqa: E402
 from studio.overlay import ghost  # noqa: E402
-from studio.session import Session  # noqa: E402
+from studio.session import DROPOUT_AT_LINE, Session  # noqa: E402
 
 PIC_W, PIC_H = 960, 540
 _FIX: dict = {}
@@ -363,8 +363,15 @@ def test_no_ghost_where_the_rules_forbid_one():
     with _Patched(s, lap_has_dropout=lambda i: i == lap):
         cases["a lap the Lap Race leaves out (dropout)"] = _ghost_pixels(s, lap, elements=("ghost",))
         why = ghost.unavailable_reason(s, lap)
-        assert why is not None and "GPS dropout" in why, why
+        assert why is not None and "GPS dropout inside it" in why and "guess" in why, why
     s._race_memo = None
+    # A hole at its LINE leaves the trace whole: its time is in doubt, not its place on track.
+    with _Patched(s, lap_dropout_kinds=lambda i: [(1.0, 1.3, DROPOUT_AT_LINE)]
+                  if i == lap else []):
+        why = ghost.unavailable_reason(s, lap)
+        assert why is not None and "missing at its start/finish line" in why, why
+        assert "guess" not in why, why
+    s._race_memo = s._judged_quality = None
     with _Patched(s, off_line_metres=lambda: {lap: 30.0}):
         cases["a lap the Lap Race leaves out (off the line)"] = _ghost_pixels(
             s, lap, elements=("ghost",))

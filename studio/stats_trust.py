@@ -421,7 +421,12 @@ class TrustSection:
             fixes = "fixes inside your laps" if in_laps else "moving fixes"
             value = f"{clock} · {quality.dropped_pct()}% of {fixes} rejected"
             cost = quality.cost()
-            rows.append((TIMING_TERM, f"{value} — {cost}" if cost else value,
+            # A share under its concern line beside the lap vote's cost read as a contradiction
+            # ("0% … rejected — GPS fixes missing at the line on 13 of 14 laps"): fixes the
+            # receiver never wrote are missing, not rejected. One sentence, the share conceded.
+            join = (", but " if getattr(quality, "low_by_lap_vote", False)
+                    and not quality.media_clock else " — ")
+            rows.append((TIMING_TERM, f"{value}{join}{cost}" if cost else value,
                          bool(quality.degraded)))
             tips.append("The rejected-fix share is measured over the fixes taken WHILE MOVING, "
                         "from your first start/finish crossing to your last. The stationary "

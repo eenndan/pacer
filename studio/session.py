@@ -103,11 +103,13 @@ class _Unset(enum.Enum):
 
 _UNSET: Final = _Unset.TOKEN
 
-#: The two kinds of `Session.lap_dropout_kinds` span: a gap INSIDE the lap (its trace is a chord
-#: across the hole) and a fix missing beside its start/finish line (its trace is whole, its time
-#: is not to be trusted).
-DROPOUT_IN_LAP: Final = "in lap"
-DROPOUT_AT_LINE: Final = "at line"
+#: The two kinds of `Session.lap_dropout_kinds` span (defined, and worded, in data_quality): a gap
+#: INSIDE the lap (its trace is a chord across the hole) and a hole at its start/finish line the
+#: smoother cannot close — two or more fixes missing in a row (`LINE_HOLE_PERIODS`) within
+#: `LINE_HOLE_REACH_FIXES` periods of the crossing, or the trace's own end there (its trace is
+#: whole, its time is not to be trusted).
+DROPOUT_IN_LAP: Final = data_quality.DROPOUT_IN_LAP
+DROPOUT_AT_LINE: Final = data_quality.DROPOUT_AT_LINE
 
 _EMPTY = np.empty(0)  # the `speed` slot for a LapCurve whose speed series isn't needed (Δ family)
 
@@ -1567,8 +1569,12 @@ class Session:
         judged = base
         if hasattr(getattr(self, "laps", None), "track_columns"):
             gap = self.chapter_gap_notes()
-            flagged = sum(1 for i in self.dropout_lap_ids() if i not in gap)
-            judged = base.with_lap_dropouts(flagged, len(self.valid_lap_ids()))
+            where = [data_quality.dropout_kinds_of(self, i)
+                     for i in self.dropout_lap_ids() if i not in gap]
+            judged = base.with_lap_dropouts(
+                len(where), len(self.valid_lap_ids()),
+                at_line=sum(DROPOUT_AT_LINE in k for k in where),
+                inside=sum(DROPOUT_IN_LAP in k for k in where))
         self._judged_quality = (base, judged)
         return judged
 
@@ -2211,8 +2217,9 @@ class Session:
     def lap_has_gap_inside(self, lap_id: int) -> bool:
         """True if the lap's own TRACE is broken: a `DROPOUT_IN_LAP` span, whose draw is a straight
         line across the hole (it jumped 48-86 m on the recordings that set the threshold). A lap
-        whose only dropout is a fix missing beside its line (`DROPOUT_AT_LINE`) has a whole trace:
-        its time is in doubt, not where it drove."""
+        whose only dropout is a hole at its line (`DROPOUT_AT_LINE`: two or more fixes missing in a
+        row within `LINE_HOLE_REACH_FIXES` periods of a crossing) has a whole trace: its time is in
+        doubt, not where it drove."""
         return any(kind == DROPOUT_IN_LAP for *_span, kind in self.lap_dropout_kinds(lap_id))
 
     def lap_has_dropout(self, lap_id: int) -> bool:
@@ -4768,8 +4775,8 @@ class Session:
         bundled sample): ZERO dropout marks and ZERO excluded-lap marks anywhere, and one degraded
         mark in total — the 49 s block at the head of recording 0062 where the receiver is
         acquiring its lock. See `marks.MIN_DEGRADED_S` for the run-length census behind that."""
-        # One mark per HOLE: a fix missing beside a crossing is in both the lap it ends and the
-        # lap it starts (each wears the ⚠), and drew two identical marks, one of them labelled
+        # One mark per HOLE: a hole at a crossing (two or more fixes missing in a row within
+        # LINE_HOLE_REACH_FIXES periods of it) is in both the lap it ends and the lap it starts (each wears the ⚠), and drew two identical marks, one of them labelled
         # with a lap that had not begun. The mark goes to the lap whose window holds the hole.
         owners: dict[tuple[float, float], int] = {}
         for lap_id in self.valid_lap_ids():

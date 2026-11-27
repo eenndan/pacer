@@ -770,7 +770,8 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
         `Session.lap_dropout_spans` call behind `Session.lap_has_dropout`. Passed IN rather than
         re-derived here so the mark set and the lap table's dropout flag cannot be two different
         answers: every span behind a `lap_has_dropout` lap is marked, and nothing else. A hole two
-        laps share (a fix missing at the crossing between them) arrives ONCE, under the lap that
+        laps share (a hole at the crossing between them: two or more fixes missing in a row within
+        `_signal.LINE_HOLE_REACH_FIXES` periods of it) arrives ONCE, under the lap that
         holds it (`Session.auto_marks`).
       * `excluded` — ``(lap_id, t0, t1[, why])`` per lap in `Session.excluded_lap_ids`, over that
         lap's own window, with the reason in words when known. Same rule: the strip that says a lap
@@ -783,8 +784,10 @@ def auto_marks(dropouts=(), excluded=(), timeline=None,
     to be degraded about would be a claim the app cannot support."""
     out: list[dict] = []
     for lap_id, t0, t1 in dropouts:
+        # The note only: every surface that shows a mark puts its TYPE_LABEL ("GPS dropout") in
+        # front of it, and a note that repeated it read "GPS dropout — GPS dropout — 0.3 s …".
         out.append(_auto(f"auto:dropout:{lap_id}:{t0:.3f}", TYPE_DROPOUT, t0, t1,
-                         f"GPS dropout — {t1 - t0:.1f} s with no fix", lap=lap_id))
+                         f"{t1 - t0:.1f} s with no fix", lap=lap_id))
     for lap_id, t0, t1, *why in excluded:
         # The reason travels with the lap (`Session.excluded_lap_rows`' `why`). It used to be one
         # fixed sentence — "its length is off the session median" — on every excluded lap,
