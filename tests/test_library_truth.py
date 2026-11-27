@@ -42,6 +42,7 @@ _APP = QApplication.instance() or QApplication([])
 
 from studio import (  # noqa: E402
     _jsonstore,
+    app_support,
     corner_model,
     demo,
     focus,
@@ -421,6 +422,249 @@ def test_the_cache_follows_the_file_not_the_clock():
         with open(path, "w") as f:
             f.write(text.replace("Sandown Park", "Sandown Parc"))
         assert {e["track"] for e in library.load(path)["entries"]} == {"Sandown Parc"}
+
+
+# ================================================================ Library ▸ Update (cool/...ideals)
+# v0.26.0 moved IDEAL_VERSION 1 -> 2, and every older row stays muted until its recording is opened
+# again, one by one. Library ▸ Update re-measures them in the background, the way a re-open would
+# write each row, and touches nothing else. Real window, real loader, synthetic recordings only.
+_UPD: dict = {}
+
+
+def _update_world() -> dict:
+    """Once per process: one generated two-chapter recording, copied under five recording numbers,
+    each with a CONFIRMED start line in its sidecar (what a line drag or Save as track leaves, so
+    its timing is trusted), and each measured once by the real loader as a re-open measures it."""
+    if _UPD:
+        return _UPD
+    import shutil
+
+    from studio import sidecar
+    from studio.dev import synth_gopro as sg
+    from studio.session import Session
+    gen = tempfile.TemporaryDirectory(prefix="w24-ideal-gen-")
+    src = sg.generate(os.path.join(gen.name, "gen"), laps=8, chapters=2).paths
+    root = tempfile.TemporaryDirectory(prefix="w24-ideal-recordings-")
+    recs = {}
+    for n in ("9101", "9102", "9103", "9104", "9105"):
+        folder = os.path.join(root.name, n)
+        os.makedirs(folder)
+        recs[n] = [os.path.join(folder, f"GX0{c}{n}.MP4") for c in (1, 2)]
+        for s, d in zip(src, recs[n], strict=True):
+            shutil.copyfile(s, d)
+    s = Session.load(recs["9101"])
+    start, sectors = s.timing_lines_latlon()
+    measured = {}
+    for n, paths in recs.items():
+        sidecar.save(sidecar.sidecar_path(paths[0]), None, start, sectors, confirmed=True)
+        s = Session.load(paths)
+        assert s.restore_saved_timing_lines(sidecar.sidecar_path(paths[0])) is True
+        measured[n] = s.library_entry(paths)
+        assert measured[n]["verified"] and not measured[n]["degraded"], measured[n]
+    junk = os.path.join(root.name, "junk", "GX019106.MP4")
+    os.makedirs(os.path.dirname(junk))
+    with open(junk, "wb") as f:
+        f.write(b"not a recording" * 64)
+    _UPD.update(gen=gen, root=root, recs=recs, measured=measured, junk=junk)
+    return _UPD
+
+
+def _v1_rows(world: dict) -> list[dict]:
+    """The index 0.25.0 left: three present rows (9101-9103) with an older ideal — 9103 marked
+    degraded, as 0.25.0 marked a session with scattered rejected fixes — one row whose drive is
+    gone, and one whose file is there but is not a recording. 9104 is not stored: it is the
+    session the window has open, and 9105 stays unknown."""
+    rows = []
+    for n in ("9101", "9102", "9103"):
+        e = dict(world["measured"][n], ideal_version=1,
+                 theoretical=world["measured"][n]["theoretical"] + 0.021)
+        e["degraded"] = n == "9103"
+        rows.append(e)
+    gone = ["/Volumes/pacer-test-gone-drive/GX019107.MP4"]
+    rows.append(_entry("GX019107", gone, ideal_version=1, date="2026-05-23"))
+    rows.append(_entry("GX019106", [world["junk"]], ideal_version=1, date="2026-05-24"))
+    return rows
+
+
+def _files(*roots) -> dict:
+    """Every file under `roots` with its size and mtime — what a run wrote is the difference."""
+    out = {}
+    for root in roots:
+        for d, _dirs, names in os.walk(root):
+            for name in names:
+                p = os.path.join(d, name)
+                st = os.stat(p)
+                out[p] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def _read_only(root: str, on: bool) -> None:
+    for d, dirs, names in os.walk(root):
+        for name in names:
+            os.chmod(os.path.join(d, name), 0o444 if on else 0o644)
+        for name in dirs:
+            os.chmod(os.path.join(d, name), 0o555 if on else 0o755)
+    os.chmod(root, 0o555 if on else 0o755)
+
+
+def _spin_until(cond, seconds: float = 120.0) -> None:
+    import time
+    deadline = time.time() + seconds
+    while not cond() and time.time() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert cond(), "timed out"
+
+
+def _in_library(win, drive) -> None:
+    """Run `drive(dialog)` inside File ▸ Library…'s real modal, which it must close."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication as _A
+    caught = []
+
+    def run():
+        dlg = _A.activeModalWidget()
+        try:
+            drive(dlg)
+        except BaseException as exc:  # noqa: BLE001 — re-raised outside the modal
+            caught.append(exc)
+        finally:
+            dlg.reject()
+    QTimer.singleShot(0, run)
+    win.library_ctl.open_library()
+    if caught:
+        raise caught[0]
+
+
+def _open_window(paths):
+    from studio.app import StudioWindow
+    win = StudioWindow([])
+    win.resize(1440, 900)
+    done = {"v": False}
+    win.loadFinished.connect(lambda: done.__setitem__("v", True))
+    win._load(list(paths))
+    _spin_until(lambda: done["v"])
+    return win
+
+
+def test_update_remeasures_the_older_ideals_and_touches_nothing_else():
+    """The line counts the rows whose ideal an older Pacer measured and whose files are here (the
+    gone drive in its hover); Update re-stamps each as re-opening it would — 9103, which 0.25.0
+    marked degraded, now reads as trusted, and the line says so — leaves the gone row and the
+    unreadable one exactly as they were (the latter named), and writes NOTHING but library.json:
+    the recordings' folders are read-only for the whole run. The open session, its view and Open
+    Recent's order are untouched, and no PB card is raised."""
+    from studio.library_dialog import _ideal_cell
+    world = _update_world()
+    library.save({"entries": _v1_rows(world)})
+    before_rows = {e["fingerprint"]: e for e in library.load()["entries"]}
+    win = _open_window(world["recs"]["9104"])
+    try:
+        session, paths, view, toast = win.session, list(win._paths), win.view, win._pb_toast
+        recent = [r["paths"] for r in library.recent_rows(library.load(), 50)]
+        jail = {_SEAMS.name, app_support.resolve()}
+        _read_only(world["root"].name, True)
+        seen = {}
+
+        def drive(dlg):
+            seen["at rest"] = (dlg.update_line.isVisible(), dlg.update_line.text(),
+                               dlg.update_line.toolTip(), dlg.update_btn.isVisible())
+            # What the RUN writes, from the click to its end (the dialog's own size pref aside).
+            seen["files"] = _files(world["root"].name, *jail)
+            dlg.update_btn.click()
+            seen["running"] = dlg.update_line.text()
+            _spin_until(lambda: not win.library_ctl.ideal_updater().running())
+            seen["written"] = sorted(p for p, st in _files(world["root"].name, *jail).items()
+                                     if seen["files"].get(p) != st)
+            seen["done"] = (dlg.update_line.text(), dlg.update_line.toolTip(),
+                            dlg.update_btn.isVisible())
+        _in_library(win, drive)
+        _spin_until(lambda: not win._load_workers)
+    finally:
+        _read_only(world["root"].name, False)
+    try:
+        shown, text, tip, button = seen["at rest"]
+        assert shown and button, seen["at rest"]
+        assert text == "4 ideal laps were measured by an older Pacer.", text
+        assert "1 recording is not on this Mac" in tip, tip
+        assert seen["running"].startswith("Updating 1 of 4"), seen["running"]
+        line, hover, button = seen["done"]
+        assert line == "3 updated · 1 now reads as trusted · 1 could not be measured", line
+        assert not button, "nothing is left to update, yet the button is still offered"
+        assert "GX019103.MP4: estimated → trusted" in hover, hover
+        assert "GX019106.MP4:" in hover, hover
+        rows = {e["fingerprint"]: e for e in library.load()["entries"]}
+        for n in ("9101", "9102", "9103"):
+            row, want = rows[f"GX{n}"], world["measured"][n]
+            assert row["ideal_version"] == _CURRENT, row
+            assert row["theoretical"] == want["theoretical"] and row["best"] == want["best"], row
+            assert _ideal_cell(row)[2] is None, f"{n}'s ideal is still muted"
+        assert not rows["GX9103"]["degraded"]
+        for fp in ("GX9107", "GX9106"):
+            assert rows[fp] == before_rows[fp], f"{fp} was touched: {rows[fp]}"
+        assert win.session is session and win._paths == paths and win.view is view
+        assert win._pb_toast is toast, "the update raised a PB card"
+        assert [r["paths"] for r in library.recent_rows(library.load(), 50)] == recent
+        written = seen["written"]
+        assert [os.path.basename(p) for p in written] == ["library.json"], written
+        print("files written by the Update run:", written)
+        # THE SAME ROW A RE-OPEN WRITES: open 9101 by hand now, and its row does not move.
+        updated = rows["GX9101"]
+        win._load(list(world["recs"]["9101"]))
+        _spin_until(lambda: win._paths == world["recs"]["9101"] and win._loading_token is None)
+        again = next(e for e in library.load()["entries"] if e["fingerprint"] == "GX9101")
+        assert again == updated, (again, updated)
+    finally:
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()
+        library.save(library.empty_index())
+
+
+def test_cancelling_an_update_mid_read_leaves_every_row_whole():
+    """Cancel while the second recording is being read: the first row stays updated, every other
+    row is byte for byte what it was, the read stops, and the line says it stopped."""
+    world = _update_world()
+    library.save({"entries": _v1_rows(world)})
+    before_rows = {e["fingerprint"]: e for e in library.load()["entries"]}
+    from PySide6.QtCore import QTimer
+
+    from studio.library_controller import LibraryController
+    win = SimpleNamespace(_load_workers=set())     # no window load in flight: rows start at once
+    ctl = LibraryController(win, 0)
+    updater = ctl.ideal_updater()
+    present, _absent = library.ideal_update_rows(library.load(), _CURRENT)
+    got = []
+    updater.finished.connect(got.append)
+    updater.progress.connect(
+        lambda done, _total: done == 1 and QTimer.singleShot(0, updater.cancel))
+    updater.start(present)
+    _spin_until(lambda: got and not win._load_workers)
+    (summary,) = got
+    assert summary["cancelled"] and len(summary["updated"]) == 1, summary
+    rows = {e["fingerprint"]: e for e in library.load()["entries"]}
+    first = summary["updated"][0]["fingerprint"]
+    assert rows[first]["ideal_version"] == _CURRENT
+    for fp, row in before_rows.items():
+        if fp != first:
+            assert rows[fp] == row, f"{fp} changed after the cancel: {rows[fp]}"
+    library.save(library.empty_index())
+
+
+def test_an_update_never_writes_back_a_row_forgotten_meanwhile():
+    """`library.remeasure_and_save` writes only over the row it measured: a Forget or a Clear that
+    landed while the recording was being read is not undone by the write that follows."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "library.json")
+        clip = os.path.join(d, "GX010068.MP4")
+        library.save({"entries": [_entry("GX010068", [clip], ideal_version=1)]}, path)
+        fresh = _entry("GX010068", [clip], theo=46.0)
+        before, after = library.remeasure_and_save("GX0068", fresh, path)
+        assert before["ideal_version"] == 1 and after["ideal_version"] == _CURRENT
+        assert after["theoretical"] == 46.0
+        library.save(library.empty_index(), path)
+        assert library.remeasure_and_save("GX0068", fresh, path) is None
+        assert library.load(path)["entries"] == []
 
 
 # ------------------------------------------------------------------ runner

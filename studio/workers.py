@@ -10,7 +10,7 @@ import time
 
 from PySide6.QtCore import QThread, Signal
 
-from . import demo, export_video, ingest
+from . import chapters, demo, export_video, ingest, sidecar
 from .session import Session
 
 _log = logging.getLogger(__name__)
@@ -159,6 +159,43 @@ class SessionLoadWorker(QThread):
             self.failed.emit(self._token, self._paths, exc)
             return
         self.loaded.emit(self._token, self._paths, session)
+
+
+class RemeasureWorker(QThread):
+    """One Library row's recording measured again off the UI thread, for Library ▸ Update
+    (`LibraryController.IdealUpdater`): the steps a re-open takes before it writes the row —
+    `Session.load` on the row's paths in chapter order (`StudioWindow._load`), the user's saved
+    timing lines restored from the sidecar beside the recording, READ only
+    (`Session.restore_saved_timing_lines`, `_on_session_loaded`), and `Session.library_entry` — with
+    no window, no view, no notice and no PB decision. `measured` carries the entry, or None and why
+    (a recording with no valid lap writes no row on a re-open either). The session is dropped here:
+    nothing outlives the measurement but the dict. Cancellable like `SessionLoadWorker`."""
+
+    measured = Signal(int, str, object, str)    # (token, fingerprint, entry | None, error)
+
+    def __init__(self, token: int, fingerprint: str, paths: list[str]):
+        super().__init__()
+        self._token, self._fingerprint = token, fingerprint
+        self._paths = chapters.load_order(list(paths))
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            with ingest.cancellable(lambda: self._cancelled):
+                session = Session.load(self._paths)
+            session.restore_saved_timing_lines(sidecar.sidecar_path(self._paths[0]))
+            if not session.valid_lap_ids():
+                self.measured.emit(self._token, self._fingerprint, None, "no valid laps")
+                return
+            entry = session.library_entry(self._paths)
+        except Exception as exc:  # noqa: BLE001 — a row that fails to load is left as it was
+            first = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:200]
+            self.measured.emit(self._token, self._fingerprint, None, first)
+            return
+        self.measured.emit(self._token, self._fingerprint, entry, "")
 
 
 class DemoResolveWorker(QThread):

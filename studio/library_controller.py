@@ -62,7 +62,7 @@ from dataclasses import dataclass
 # The Qt-object liveness probe (PySide6's own runtime): a Python wrapper outlives the C++ object a
 # deleteLater() has collected, and _clear_pb_toast has to tell those two apart.
 import shiboken6
-from PySide6.QtCore import QPoint, QRect
+from PySide6.QtCore import QObject, QPoint, QRect, QTimer, Signal
 from PySide6.QtWidgets import QFileDialog
 
 from . import chapters, data_quality, demo, focus, library, session_record, sidecar, track_db
@@ -71,6 +71,7 @@ from .library_dialog import LibraryDialog
 from .overlays import PBToast
 from .session import DEFAULT_SAMPLE, fmt_time
 from .session_record_dialog import SessionRecordDialog
+from .workers import RemeasureWorker
 
 _log = logging.getLogger("studio.app")
 
@@ -161,6 +162,146 @@ def missing_footage(entry: dict) -> tuple[bool, str | None]:
     paths = [p for p in entry.get("paths") or [] if p]
     missing = next((p for p in paths if not os.path.exists(p)), None)
     return (not paths or missing is not None), missing
+
+
+class IdealUpdater(QObject):
+    """Library ▸ Update (cool/library-update-ideals): re-measure the rows an older ideal-lap maths
+    measured, one recording at a time, off the UI thread, and write each row the way a re-open
+    writes it — with none of a re-open's window: the open session, Open Recent's order, the PB card,
+    the debrief and every sidecar beside the footage are left alone (the sidecar is only READ, by
+    `RemeasureWorker`). The Library window drives it and shows its `progress` and `finished`.
+
+    What a row's re-open re-decides is what it gets: `Session.library_entry` (the best lap, lap
+    count, trust flags, track and ideal, stamped with this build's version) through
+    `library.remeasure_and_save`, the re-open's `keyed` + `upsert`. A PB history is read off the rows
+    (`library.pb_series`), so it moves exactly as a re-open would move it — and a row that changed
+    more than its ideal is counted and named in `finished`, never only re-drawn.
+
+    ONE RECORDING LOADING AT A TIME: a row starts only while the window has no load of its own in
+    flight (`_load_worker`, `_ref_load_worker`), and the next starts when the last has finished.
+    `cancel` stops the read at its next GPS payload and writes nothing more; each row is written
+    whole, under the store lock, or not at all. The worker sits in the window's `_load_workers`, so
+    a window closing mid-row waits for it (`StudioWindow._drain_load_workers`)."""
+
+    progress = Signal(int, int)       # (rows done, rows to do)
+    finished = Signal(dict)           # the summary (`_finish`)
+
+    _WAIT_MS = 250                    # how often a row waiting on the window's own load looks again
+
+    def __init__(self, win, parent=None):
+        super().__init__(parent)
+        self.win = win
+        self._token = 0
+        self._queue: list[dict] = []
+        self._worker = None
+        self._running = False
+
+    def running(self) -> bool:
+        return self._running
+
+    def start(self, rows: list[dict]) -> None:
+        if self._running or not rows:
+            return
+        self._token += 1
+        self._running = True
+        self._queue = list(rows)
+        self._total, self._done = len(rows), 0
+        self._updated: list[dict] = []
+        self._changed: list[tuple[dict, dict]] = []
+        self._failed: list[tuple[dict, str]] = []
+        self._cancelled = False
+        _log.info("library update: re-measuring %d row(s) measured by an older ideal lap",
+                  len(rows))
+        self.progress.emit(0, self._total)
+        self._next()
+
+    def cancel(self) -> None:
+        if not self._running:
+            return
+        self._cancelled = True
+        if self._worker is not None:
+            self._worker.cancel()      # its result is dropped by the token, its thread by `finished`
+        self._finish()
+
+    def _window_loading(self) -> bool:
+        return any(getattr(self.win, name, None) is not None
+                   for name in ("_load_worker", "_ref_load_worker"))
+
+    def _next(self) -> None:
+        # A row still reading (a cancelled run's last, too) calls this again when it finishes.
+        if not self._running or self._worker is not None:
+            return
+        if not self._queue:
+            self._finish()
+            return
+        if self._window_loading():
+            QTimer.singleShot(self._WAIT_MS, self, self._next)
+            return
+        row = self._queue.pop(0)
+        paths = list(row.get("paths") or [])
+        if not paths or not all(os.path.exists(p) for p in paths):
+            self._failed.append((row, "its files are no longer there"))
+            self._advance()
+            return
+        worker = RemeasureWorker(self._token, str(row.get("fingerprint")), paths)
+        self._worker, self._row = worker, row
+        workers = getattr(self.win, "_load_workers", None)
+        if isinstance(workers, set):
+            workers.add(worker)
+        worker.measured.connect(self._on_measured)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        worker.start()
+
+    def _on_measured(self, token: int, fingerprint: str, entry, error: str) -> None:
+        if token != self._token or not self._running:
+            return
+        row = self._row
+        if entry is None:
+            self._failed.append((row, error or "it could not be measured"))
+            return
+        try:
+            written = library.remeasure_and_save(fingerprint, entry)
+        except OSError as exc:
+            _log.exception("library update: %s not written", fingerprint)
+            self._failed.append((row, f"the library could not be written ({exc.strerror or exc})"))
+            return
+        if written is None:
+            self._failed.append((row, "its row changed meanwhile"))
+            return
+        before, after = written
+        self._updated.append(after)
+        if library.remeasure_changes(before, after):
+            self._changed.append((before, after))
+
+    def _on_worker_finished(self, worker) -> None:
+        workers = getattr(self.win, "_load_workers", None)
+        if isinstance(workers, set):
+            workers.discard(worker)
+        worker.deleteLater()           # finished: run() has returned (`StudioWindow._release_worker`)
+        if worker is self._worker:
+            self._worker = None
+        if not self._running:
+            return
+        if worker._token == self._token:
+            self._advance()
+        else:
+            self._next()               # a cancelled run's last row, which a new run waited for
+
+    def _advance(self) -> None:
+        self._done += 1
+        self.progress.emit(self._done, self._total)
+        self._next()
+
+    def _finish(self) -> None:
+        self._running = False
+        self._token += 1
+        summary = {"updated": list(self._updated), "changed": list(self._changed),
+                   "failed": list(self._failed), "cancelled": self._cancelled,
+                   "total": self._total, "index": library.load()}
+        _log.info("library update: %d updated, %d changed beyond the ideal, %d not, of %d%s",
+                  len(self._updated), len(self._changed), len(self._failed), self._total,
+                  " (cancelled)" if self._cancelled else "")
+        self.finished.emit(summary)
 
 
 class LibraryController:
@@ -775,7 +916,9 @@ class LibraryController:
                             # reference loader (its own refusals still apply, with their notice).
                             use_as_reference=self.use_row_as_reference,
                             reference_refusal=lambda e: no_gps or library.reference_refusal(
-                                e, open_entry))
+                                e, open_entry),
+                            # Update: the rows an older ideal lap measured, re-measured in place.
+                            ideal_updater=self.ideal_updater())
         dlg.exec()
         # Nothing below reads the dialog. Parented to the window and held alive by its own
         # lambdas, it was never freed: every open left ~113 widgets (7 menus among them) behind.
@@ -789,6 +932,13 @@ class LibraryController:
         # welcome's own "Library…", the PB card).
         if self.on_library_closed is not None:
             self.on_library_closed()
+
+    def ideal_updater(self) -> IdealUpdater:
+        """The window's one `IdealUpdater`, made on first use: a run belongs to the Library window
+        that started it (closing that window cancels it), but its last worker can outlive it."""
+        if getattr(self, "_ideal_updater", None) is None:
+            self._ideal_updater = IdealUpdater(self.win)
+        return self._ideal_updater
 
     def _reference_target(self, index: dict) -> dict | None:
         """The open session's own library entry — keyed as the index files it, so the row of the

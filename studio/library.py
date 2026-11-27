@@ -1591,6 +1591,66 @@ def ideal_stale(entry: dict, current: int) -> str | None:
     return "newer" if isinstance(stamp, int) and stamp > current else "older"
 
 
+# LIBRARY ▸ UPDATE (cool/library-update-ideals): the rows an older ideal-lap maths measured, re-taken
+# one after another by the same load a re-open runs (`LibraryController.IdealUpdater`). Only an
+# "older" row with laps whose EVERY chapter is on disk is offered: a row missing a chapter would be
+# measured on less of its outing, and `_keeps` would then keep the stored row anyway. A "newer" row
+# is left alone: this build re-measuring it would put an older maths' number back.
+def ideal_update_rows(index: dict, current: int) -> tuple[list[dict], list[dict]]:
+    """(present, absent): the rows whose ideal lap an older Pacer measured (``ideal_stale``), split
+    by whether all their files are on this Mac. Rows with no laps are neither: a re-open of one
+    finds none and writes nothing."""
+    present, absent = [], []
+    for e in index.get("entries", []):
+        if ideal_stale(e, current) != "older" or not e.get("lap_count"):
+            continue
+        paths = e.get("paths") or []
+        (present if paths and all(os.path.exists(p) for p in paths) else absent).append(e)
+    return present, absent
+
+
+def remeasure_and_save(fingerprint_key: str, entry: dict,
+                       path: str | None = None) -> tuple[dict, dict] | None:
+    """Write `entry`, a fresh measurement of the row `fingerprint_key`, exactly as a re-open writes
+    one (``keyed`` against the index, then ``upsert``), but only while that row is still there and
+    `entry` keys to it: a row forgotten, cleared or restored away meanwhile is not written back, and
+    a measurement that keys elsewhere is not this row's. One lock round the read and the write.
+    Returns (before, after) — the stored row and what it is now — or None when nothing was written.
+    Any OSError from the write propagates to the caller, which guards it."""
+    if path is None:
+        path = library_path()
+    with _jsonstore.locked(path):
+        index = load(path)
+        rows = {e.get("fingerprint"): e for e in index.get("entries", [])}
+        before = rows.get(fingerprint_key)
+        keyed_entry = keyed(entry, index)
+        if before is None or keyed_entry["fingerprint"] != fingerprint_key:
+            return None
+        before = copy.deepcopy(before)
+        upsert(index, keyed_entry)
+        save(index, path)
+        after = next(e for e in index["entries"] if e.get("fingerprint") == fingerprint_key)
+    return before, after
+
+
+def remeasure_changes(before: dict, after: dict) -> dict:
+    """What a re-measurement changed BEYOND the ideal lap — the facts a PB reads: the best lap
+    (to the millisecond the Library prints), the lap count and the trust tag (``trust_label``).
+    Empty when only the ideal (and its stamp) moved."""
+    out = {}
+    b0, b1 = before.get("best"), after.get("best")
+    if b0 is None or b1 is None:
+        if (b0 is None) != (b1 is None):
+            out["best"] = (b0, b1)
+    elif abs(float(b0) - float(b1)) >= 5e-4:
+        out["best"] = (b0, b1)
+    if before.get("lap_count") != after.get("lap_count"):
+        out["lap_count"] = (before.get("lap_count"), after.get("lap_count"))
+    if trust_label(before) != trust_label(after):
+        out["trust"] = (trust_label(before), trust_label(after))
+    return out
+
+
 def prior_best(index: dict, track: str) -> float | None:
     """The fastest TRUSTWORTHY recorded best lap for `track` across the CURRENT index (seconds), or
     None when the track has no trustworthy prior best yet. Used to decide the "new personal best"
