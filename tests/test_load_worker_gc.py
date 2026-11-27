@@ -11,8 +11,10 @@ finalizer records the thread that frees it, start a load through the real method
 whose `run()` FORCES a full collection (the worst case: the threshold tripping at once), and
 require the cycle to have died on the GUI thread. Without the collect it dies on the worker.
 
-What it does not cover, by design: garbage made while a load runs, and the other worker threads
-(export, demo resolve) — the comment at the collect says so.
+Every QThread worker the app starts goes through that door (`workers.start_worker`): the window's
+load, the reference load, Library ▸ Update's rows, the demo fetch and each file of a video export,
+one test each. What it does not cover, by design: garbage made while a worker runs, and the plain
+threads an export starts — the docstring at the collect says so.
 """
 import gc
 import os
@@ -94,7 +96,7 @@ def test_garbage_pending_at_a_load_dies_on_the_gui_thread():
 
 def test_garbage_pending_at_a_reference_load_dies_on_the_gui_thread():
     """The reference recording's load (Use as reference, Compare with your previous PB) is a whole
-    `Session.load` on its own worker, so it goes through the same door (`workers.start_load`)."""
+    `Session.load` on its own worker, so it goes through the same door (`workers.start_worker`)."""
     saved_worker = studio_app.SessionLoadWorker
     studio_app.SessionLoadWorker = _CollectingWorker
     win = studio_app.StudioWindow([])
@@ -114,7 +116,7 @@ def test_garbage_pending_at_a_reference_load_dies_on_the_gui_thread():
         assert _Cyclic.died_on == [True], (
             "a cycle pending when the reference load started was freed on its worker's thread "
             f"(died_on={_Cyclic.died_on}): _start_reference_worker no longer starts through "
-            "start_load")
+            "start_worker")
     finally:
         if was_enabled:
             gc.enable()
@@ -144,7 +146,7 @@ class _CollectingRemeasure(QThread):
 
 def test_garbage_pending_at_a_library_update_row_dies_on_the_gui_thread():
     """Library ▸ Update starts one loading worker per row — 40 rows, 40 threads — so it goes
-    through the same door as the window's loads (`workers.start_load`) and gets the same collect."""
+    through the same door as the window's loads (`workers.start_worker`) and gets the same collect."""
     import tempfile
     from types import SimpleNamespace
 
@@ -169,13 +171,125 @@ def test_garbage_pending_at_a_library_update_row_dies_on_the_gui_thread():
             assert not updater.running(), "the stand-in update never finished"
             assert _Cyclic.died_on == [True], (
                 "a cycle pending when an update row started was freed on its worker's thread "
-                f"(died_on={_Cyclic.died_on}): IdealUpdater no longer starts through start_load")
+                f"(died_on={_Cyclic.died_on}): IdealUpdater no longer starts through start_worker")
         finally:
             if was_enabled:
                 gc.enable()
             library_controller.RemeasureWorker = saved
             _APP.processEvents()
     print("test_garbage_pending_at_a_library_update_row_dies_on_the_gui_thread OK")
+
+
+class _CollectingExport(QThread):
+    """Stands in for VideoExportWorker: its two signals, and a run() that is ONLY a full collection
+    — a render runs Python on its own thread for minutes, so the threshold trips there too."""
+
+    progress = Signal(int, int)
+    finished_export = Signal(bool, str)
+
+    def __init__(self, session, spec, make_renderer=None):
+        super().__init__()
+
+    def cancel(self):
+        pass
+
+    def run(self):
+        gc.collect()
+
+
+def test_garbage_pending_at_a_video_export_dies_on_the_gui_thread():
+    """Each file of a video export starts its worker through the same door as the loads
+    (`workers.start_worker`): `start_load`'s docstring said the export "collects for itself", but
+    the only collect near it is the HTML report's, on the GUI thread, which starts no worker."""
+    from PySide6.QtWidgets import QDialog, QProgressDialog
+
+    from studio import export_controller
+
+    class _Spec:
+        out_path = "/tmp/pacer-unwritten/lap.mp4"
+        source = type("S", (), {"cleanup": lambda self: None})()
+
+    made = []
+    saved = (export_controller.VideoExportWorker, QDialog.exec)
+
+    def _exec(dlg):
+        if not isinstance(dlg, QProgressDialog):
+            return saved[1](dlg)
+        deadline = time.time() + 10
+        while not made[0].isFinished() and time.time() < deadline:
+            _APP.processEvents()
+            time.sleep(0.005)
+        made[0].finished_export.emit(False, "cancelled")     # the dialog's end, as a Cancel
+        return QDialog.Accepted
+
+    export_controller.VideoExportWorker = lambda *a: made.append(_CollectingExport(*a)) or made[-1]
+    QDialog.exec = _exec
+    win = studio_app.StudioWindow([])
+    if not hasattr(win, "session"):
+        win.session = None
+    was_enabled = gc.isenabled()
+    gc.collect()
+    gc.disable()
+    try:
+        _Cyclic.died_on.clear()
+        _Cyclic()
+        win.exports._run_video_export([_Spec()])
+        assert made and made[0].isFinished(), "the stand-in export worker never ran"
+        assert _Cyclic.died_on == [True], (
+            "a cycle pending when a video export started was freed on its worker's thread "
+            f"(died_on={_Cyclic.died_on}): _run_video_export no longer starts through "
+            "start_worker")
+    finally:
+        if was_enabled:
+            gc.enable()
+        export_controller.VideoExportWorker, QDialog.exec = saved
+        _APP.processEvents()
+        win.deleteLater()
+        _APP.processEvents()
+    print("test_garbage_pending_at_a_video_export_dies_on_the_gui_thread OK")
+
+
+class _CollectingDemo(QThread):
+    """Stands in for DemoResolveWorker: its signal, and a run() that is ONLY a full collection."""
+
+    resolved = Signal(int, object)
+
+    def __init__(self, token):
+        super().__init__()
+
+    def run(self):
+        gc.collect()
+
+
+def test_garbage_pending_at_a_demo_fetch_dies_on_the_gui_thread():
+    """The demo fetch (resolve, and download on a first open) is a worker too: same door."""
+    saved = studio_app.DemoResolveWorker
+    studio_app.DemoResolveWorker = _CollectingDemo
+    win = studio_app.StudioWindow([])
+    was_enabled = gc.isenabled()
+    gc.collect()
+    gc.disable()
+    try:
+        _Cyclic.died_on.clear()
+        _Cyclic()
+        win._open_demo()
+        worker = win._demo_worker
+        deadline = time.time() + 10
+        while not worker.isFinished() and time.time() < deadline:
+            _APP.processEvents()
+            time.sleep(0.005)
+        assert worker.isFinished(), "the stand-in demo worker never finished"
+        assert _Cyclic.died_on == [True], (
+            "a cycle pending when the demo fetch started was freed on its worker's thread "
+            f"(died_on={_Cyclic.died_on}): _open_demo no longer starts through start_worker")
+    finally:
+        if was_enabled:
+            gc.enable()
+        studio_app.DemoResolveWorker = saved
+        _APP.processEvents()
+        win.deleteLater()
+        _APP.processEvents()
+    print("test_garbage_pending_at_a_demo_fetch_dies_on_the_gui_thread OK")
 
 
 if __name__ == "__main__":

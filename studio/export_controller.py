@@ -56,6 +56,7 @@ from . import (
     prefs,
     share_card,
     theme,
+    workers,
 )
 from ._signal import fmt_hms, lap_label, plural
 from .overlay import LAYOUT_PREFIX, broadcast, corner_cards, ghost
@@ -2158,7 +2159,9 @@ class ExportController:
             worker.progress.connect(on_progress)
             worker.finished_export.connect(on_done)
             dlg.canceled.connect(worker.cancel)
-            worker.start()
+            # After a GUI-thread gc.collect(), as every worker starts: the render runs Python on
+            # its own thread for minutes, where a collect could free a cyclic Qt widget.
+            workers.start_worker(worker)
 
         def on_cancel():
             # Cancelling stops the BATCH, not just the file being written: a queue that carried on
