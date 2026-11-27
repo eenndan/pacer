@@ -3673,6 +3673,28 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
     _close_pages()
 
 
+def test_the_no_total_note_claims_only_the_rows_it_prints():
+    """Release QA of 0.29.0: with nothing ranked, the scope note said "every corner is listed
+    below/above with the reason it is not", but a corner losing under `DISPLAY_MIN_LOST_S` (it
+    would print +0.00 s) is never a row — on the habit-free demo circuit 5 of its 7 corners are
+    listed, C5 and C6 are not. The note may speak only for the rows it prints."""
+    level = [s for s in _level_sessions().values()
+             if not K.shortlist(s.coaching_opportunities()) and s.coaching_opportunities().enough]
+    assert level, "no level session among the fixtures"
+    short = 0
+    for s in level:
+        opps = s.coaching_opportunities()
+        shown = K.shown_rows(opps)
+        short += len(shown) < len(opps.rows)
+        for page in (True, False):
+            note = K.scope_note(page=page, n=0)
+            assert "No corner is ranked, so there is no total" in note, note
+            if len(shown) < len(opps.rows):
+                assert "every corner" not in note, (len(shown), len(opps.rows), note)
+    assert short, "no level fixture drops a sub-resolution row: the case is untested"
+    print(f"ok no-total note: {len(level)} level session(s), {short} with an unprinted corner")
+
+
 # --------------------------------------------------- W8: coaching says only what the page shows
 def test_a_level_row_takes_no_phase_tail():
     """A level row's sentence says its passes are level, under the 0.07 s step; on main the demo's C7

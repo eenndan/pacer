@@ -2395,8 +2395,9 @@ def scope_note(*, page: bool = True, n: int = PANEL_TOP_N) -> str:
                  "view." if page else ".")
     where = "below" if page else "above"
     if n <= 0:
-        total = (f"No corner is ranked, so there is no total; every corner is listed {where} with "
-                 "the reason it is not.")
+        # Not "every corner is listed": a corner under DISPLAY_MIN_LOST_S is never a row (0.29.0 QA).
+        total = (f"No corner is ranked, so there is no total; each corner listed {where} says why "
+                 "it is not ranked.")
     else:
         what = "your worst corner that" if n == 1 else f"your top {n} corners that"
         total = (f"The total is {what} cleared the evidence gate; corners that did not are "
