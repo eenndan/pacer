@@ -19,7 +19,7 @@ Three separate claims, and they are NOT the same strength — which is the hones
 
 Pure Python + the pacer bindings; no Qt, no telemetry file, sub-second. The panel that renders
 these values is tested separately (tests/test_provenance_panel.py).
-Run: PYTHONPATH=bindings/pacer python tests/test_provenance.py
+Run: python tests/test_provenance.py
 """
 import math
 import os

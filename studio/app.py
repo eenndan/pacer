@@ -3,7 +3,6 @@ load; the panel layout lives in CentralView."""
 
 from __future__ import annotations
 
-import gc
 import logging
 import os
 import sys
@@ -99,7 +98,7 @@ from .race_controller import NO_RACE_REASON
 from .stats import is_level, with_luck
 from .video_view import PLAYBACK_RATES
 from .widgets import chip, set_tone
-from .workers import DemoResolveWorker, SessionLoadWorker
+from .workers import DemoResolveWorker, SessionLoadWorker, start_load
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
 # reporting / telemetry — nothing is sent without the user opening this).
@@ -1230,15 +1229,6 @@ class StudioWindow(QMainWindow):
 
     def _start_load_worker(self, token: int, paths: list[str]):
         """Spawn the single in-flight load worker for `token` (see _load's single-flight rule)."""
-        # A MITIGATION, not a cure. Python's cyclic GC runs on whichever thread trips its
-        # threshold, and Qt widgets held only by reference cycles (LapTable's own closures hold
-        # it in some) crash or deadlock in ~QTableView when that thread is a load worker's —
-        # test_studio_features' reentrant load did, 3 runs of 3, with 441 cyclic Qt/studio objects
-        # from earlier windows pending; main has the same hazard under a forced worker collect.
-        # Collecting HERE frees what is pending when a load starts, on the GUI thread. Garbage made
-        # while a load runs, and the other worker threads (export, demo resolve), stay exposed:
-        # the cure is fewer cycles. tests/test_load_worker_gc.py pins this collect.
-        gc.collect()
         worker = SessionLoadWorker(token, paths)
         self._load_worker = worker  # the current worker
         self._load_workers.add(worker)  # hold the in-flight worker so it isn't GC'd mid-load
@@ -1246,7 +1236,9 @@ class StudioWindow(QMainWindow):
         worker.failed.connect(self._on_load_failed_async)
         # On finish, drop the worker + launch any queued pending load (single-flight serialization).
         worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
-        worker.start()
+        # After a GUI-thread gc.collect(): the guard every loading worker starts behind
+        # (`workers.start_load`, pinned by tests/test_load_worker_gc.py).
+        start_load(worker)
 
     def _on_worker_finished(self, worker):
         """A load worker's QThread finished: drop it from the in-flight set and release it (see
@@ -1376,6 +1368,11 @@ class StudioWindow(QMainWindow):
         for loader in (getattr(self, "_load_worker", None), getattr(self, "_ref_load_worker", None)):
             if loader is not None:
                 loader.cancel()
+        # ...and Library ▸ Update's read, for the same reason (its worker is in `_load_workers`, so
+        # the drain below joins it). Closing the Library cancels it first; this is the backstop.
+        library_ctl = getattr(self, "library_ctl", None)
+        if library_ctl is not None:
+            library_ctl.cancel_ideal_update()
         self._drain_load_workers()
         super().closeEvent(event)
 

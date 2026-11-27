@@ -10,7 +10,7 @@ Two halves, and the split mirrors the feature's own architecture:
     S-split columns and the CORNERS table's Best cell offer the item; every other cell does not.
     A context menu is where "three numbers, honestly" is either true or a slogan.
 
-Offscreen Qt. Run: PYTHONPATH=bindings/pacer QT_QPA_PLATFORM=offscreen python
+Offscreen Qt. Run: QT_QPA_PLATFORM=offscreen python
 tests/test_provenance_panel.py
 """
 import ast

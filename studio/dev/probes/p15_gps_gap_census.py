@@ -23,7 +23,7 @@ hold, and this probe measures both, in that order. Its verdict is `studio/docs/r
      bridge could ever win if one did. The straight chord (what the export's map inset would draw,
      since `lap_trace_xy` is not gap-filled) is scored alongside.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p15_gps_gap_census
+    pixi run python -m studio.dev.probes.p15_gps_gap_census
 
 The kept points are the SMOOTHED trace (`load._smooth_track`, a 13-fix boxcar), and a planted gap
 is cut after smoothing, so the fixes either side of it were averaged with the fixes that are now

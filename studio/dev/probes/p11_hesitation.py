@@ -33,8 +33,8 @@ runs on — so the gap inherits that grid's 0.1 s quantum and that derivative's 
     selection control for "the top corner" (#311 measured that rule firing 19-21 % on shuffled
     data, not 5 %).
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation MK_18_09
+    pixi run python -m studio.dev.probes.p11_hesitation
+    pixi run python -m studio.dev.probes.p11_hesitation MK_18_09
 
 SAFETY: every footage folder is read-only and is snapshotted (size + mtime) around each load by
 `_m5_cache`; the app-support seams are diverted before any studio import resolves one, and the real

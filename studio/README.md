@@ -90,7 +90,7 @@ file headlessly with
 | Change what coaching says or claims | `coaching.py` (`reason_sentence`, `corner_evidence`, `session_theme`); surfaces never re-derive | `test_coaching` |
 | Change a cross-session verdict | `focus.verdict` (a refusal carries `delta=None`) | `test_focus_list` |
 | Change the first-open verdict ([frozen](../docs/DECISIONS.md#the-first-open-freeze)) | `LibraryController.update_library` (flags read by `_land_on_debrief`, `_session_notice`) | `test_debrief_lands_right` + the first-open journeys |
-| Add a lap-table column | `lap_table.py` | `test_studio_features` |
+| Add a lap-table column | `lap_table.py` | `test_lap_table_columns` (fit, sort), `test_studio_features` (cells) |
 | Add a session-record field | `session_record.py` (fields, normalizer, `_migrate`) → `session_record_dialog.py` | `test_session_record` |
 | Add a mark type or auto-detector | `marks.py` (an auto mark reads an existing detector) → `theme.mark_colour` | `test_marks` |
 | Add an export / overlay field | `export_video.py` + `gmeter_overlay.py` (compare: `export_compare.py`) | `test_export_video` |
@@ -106,8 +106,9 @@ The long form of each row is in [module-notes.md](docs/module-notes.md#common-ch
 One row per `studio/*.py`; each Stats section's `stats_*.py` is a one-word link in `stats_panel`'s.
 **Imports** is the layer in one word, checked by `test_layering`: `pacer` = imports the C++ core
 (these four only) · `Qt` = imports Qt · `→Qt` = no Qt of its own, but a studio module it imports
-loads it · `—` = neither, so it imports headless. **Test** is the file under [`tests/`](../tests/)
-that pins the module (`—`: none). A change to what a module does goes in its docstring (and its
+loads it · `—` = neither, so it imports headless. **Test** is the module's home file under
+[`tests/`](../tests/), the one its change extends first (`—`: none); it is not the list of tests
+that cover it (`data_quality` is imported by about 40). A change to what a module does goes in its docstring (and its
 notes section, if that now says otherwise); this map changes when a module is added, removed or
 renamed, or changes layer.
 

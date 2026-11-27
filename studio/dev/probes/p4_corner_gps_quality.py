@@ -24,8 +24,8 @@ Per cell it reports
 The verdict is written up in `studio/docs/refused-2026-09.md` §4. Every number there comes from
 here.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p4_corner_gps_quality
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p4_corner_gps_quality 0060
+    pixi run python -m studio.dev.probes.p4_corner_gps_quality
+    pixi run python -m studio.dev.probes.p4_corner_gps_quality 0060
 
 TWO SAFETY PROPERTIES, both enforced rather than promised, exactly as `_cache` enforces them:
   * `~/Desktop/D24` IS READ-ONLY. No path under it is ever passed as an output argument, and every

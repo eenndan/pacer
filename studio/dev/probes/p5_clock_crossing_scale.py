@@ -34,8 +34,8 @@ keep what it returned, and the kept trace is re-derived with the loader's own `_
 `_clean` and `_gps9_times` — then asserted bit-identical to `Session.tt`, so the pairs cannot
 describe a different trace from the one the app segmented.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p5_clock_crossing_scale
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p5_clock_crossing_scale 0062
+    pixi run python -m studio.dev.probes.p5_clock_crossing_scale
+    pixi run python -m studio.dev.probes.p5_clock_crossing_scale 0062
 
 TWO SAFETY PROPERTIES, both enforced rather than promised, as in `p4_corner_gps_quality`:
   * `~/Desktop/D24` IS READ-ONLY. No path under it is ever passed as an output argument, and every

@@ -143,7 +143,6 @@ CORNER_DOT_OUTLINE = C.canvas
 CORNER_LABEL_COLOR = C.text                   # near-primary so the label reads over the surface
 CORNER_LABEL_HALO = QColor(C.surface)         # dark translucent plate behind the glyphs
 CORNER_LABEL_HALO.setAlpha(190)
-CORNER_LABEL_OFFSET_PX = 14                    # px the label is nudged outward from the centroid
 # Generous px box for the overlap test (no per-frame metrics; labels are static once built).
 CORNER_LABEL_BOX_PX = (22.0, 16.0)
 # Provisional start-line callout: anchored on the start segment's midpoint, text below it. The X

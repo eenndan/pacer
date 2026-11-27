@@ -25,9 +25,9 @@ question has two halves, answered in this order. Its verdict is `studio/docs/ref
      a stand-in of `_signal._classify_laps`, asserted to reproduce the app's valid set at the
      median before the centre is varied.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p16_slow_clean_laps
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p16_slow_clean_laps --surfaces
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p16_slow_clean_laps --owner-tracks
+    pixi run python -m studio.dev.probes.p16_slow_clean_laps
+    pixi run python -m studio.dev.probes.p16_slow_clean_laps --surfaces
+    pixi run python -m studio.dev.probes.p16_slow_clean_laps --owner-tracks
 
 `--owner-tracks` copies the owner's `tracks.json` into the jail, so the start line is the one the
 owner's own app places. Without it, a fresh library's (the loader's), which is what the published

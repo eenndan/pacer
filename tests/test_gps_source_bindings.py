@@ -22,20 +22,22 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _samples  # noqa: E402
+
 import pacer  # noqa: E402
 
+# COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`): a missing clip
+# fails the file here, by name, before any test runs (tests/_samples.py).
 # A bundled GoPro Hero6 clip carries a real GPS5 stream (the deprecated lat/lon/alt/2D/3D
 # format). Used by the GPS5 field-order + Seek-clamp regression tests below.
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SAMPLES = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples")
-_HERO6 = os.path.join(_SAMPLES, "hero6.mp4")
+_HERO6 = _samples.require("hero6.mp4")
 # A hero8-era clip carries all four IMU streams (ACCL + GYRO + GRAV + CORI); the bulk-columns
 # equivalence test below uses it to exercise GRAV + the CORI quaternion-w column.
-_HERO8 = os.path.join(_SAMPLES, "hero8.mp4")
+_HERO8 = _samples.require("hero8.mp4")
 # A hero5-era clip is the counter-example that keeps the GYRO/DVNM tests honest: it names itself
 # "Camera" rather than a model, and its GYRO runs at TWICE the ACCL rate — so nothing here may
 # assume the two streams are row-aligned, or that a device name is a recognisable product name.
-_HERO5 = os.path.join(_SAMPLES, "hero5.mp4")
+_HERO5 = _samples.require("hero5.mp4")
 
 
 class _PySource(pacer.RawGPSSource):
@@ -182,7 +184,7 @@ class _PyPayloadSource(pacer.RawGPSSource):
     def seek(self, target):
         # Clamp to the first payload covering target (same contract as the C++ StubSource).
         self._idx = 0
-        for i, (_a, b, _samples) in enumerate(self._payloads):
+        for i, (_a, b, _rows) in enumerate(self._payloads):
             if target < b:
                 self._idx = i
                 return 0
@@ -199,7 +201,7 @@ class _PyPayloadSource(pacer.RawGPSSource):
     def current_time_span(self):
         if self._idx >= len(self._payloads):
             return (0.0, 0.0)
-        a, b, _samples = self._payloads[self._idx]
+        a, b, _rows = self._payloads[self._idx]
         return (a, b)
 
     def get_total_duration(self):
@@ -307,11 +309,6 @@ def test_bulk_imu_columns_equal_per_sample_callbacks_on_real_media():
     relies on."""
     seen_accl = seen_gyro = seen_grav = seen_cori = False
     for name, path in (("hero6.mp4", _HERO6), ("hero8.mp4", _HERO8)):
-        # COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`) — fail
-        # loudly rather than skip if the checkout is broken.
-        assert os.path.exists(path), (
-            f"required gpmf-parser submodule sample missing at {path} — "
-            "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
         src = pacer.GPMFSource(path)
         accl_rows = _per_sample_vec3(src.read_accl)
         # The bulk columns must equal the per-sample drain on every stream.
@@ -337,7 +334,6 @@ def test_gyro_is_read_in_radians_per_second_across_camera_generations():
     any code that zipped the two by index would be wrong there and silently right on a HERO13."""
     counts = {}
     for name, path in (("hero5.mp4", _HERO5), ("hero6.mp4", _HERO6), ("hero8.mp4", _HERO8)):
-        assert os.path.exists(path), f"required gpmf-parser submodule sample missing at {path}"
         src = pacer.GPMFSource(path)
         gyro = _per_sample_vec3(src.read_gyro)
         accl = _per_sample_vec3(src.read_accl)
@@ -446,12 +442,6 @@ def test_gps5_speed_field_order_2d_ground_3d_full():
     Golden values are the first GPS5 sample of hero6.mp4: ground_speed (2D) = 1.221,
     full_speed (3D) = 1.23. Pre-fix these came out SWAPPED (ground=1.23, full=1.221), so the
     exact-value assert below fails before fix #2 and passes after."""
-    # hero6.mp4 is COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`),
-    # so it is GUARANTEED present in CI — fail LOUDLY rather than silently skipping this
-    # field-order regression pin if the checkout is broken/uninitialised.
-    assert os.path.exists(_HERO6), (
-        f"required gpmf-parser submodule sample missing at {_HERO6} — "
-        "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
     src = pacer.GPMFSource(_HERO6)
     rows = []
     src.read_samples(lambda s, i, n: rows.append((s.ground_speed, s.full_speed)))
@@ -471,12 +461,6 @@ def test_gps5_seek_before_first_payload_clamps_no_wrap():
     EOF-looking index); after fix #1 it clamps. Drive it on the real hero6 GPMF source:
     seek(-1.0) then read the current payload and assert it yields the first samples (not an
     empty / past-the-end span)."""
-    # hero6.mp4 is COMMITTED in the gpmf-parser submodule (CI checks out `submodules: recursive`),
-    # so it is GUARANTEED present in CI — fail LOUDLY rather than silently skipping this
-    # seek-clamp regression pin if the checkout is broken/uninitialised.
-    assert os.path.exists(_HERO6), (
-        f"required gpmf-parser submodule sample missing at {_HERO6} — "
-        "run `git submodule update --init 3rdparty/gpmf-parser` (CI checks out submodules)")
     src = pacer.GPMFSource(_HERO6)
     src.seek(-1.0)  # before the first payload
     assert not src.is_end(), "seek before the first payload wrapped to a false EOF"

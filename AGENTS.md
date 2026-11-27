@@ -43,7 +43,7 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
 | task | does |
 |---|---|
 | `pixi run build` | configure + build everything (cmake + Ninja → `build/Release`), binding codegen included |
-| `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 16 real-footage checks and the 6 `videotoolbox.*` export checks run (CI reports the footage Skipped, and runs 5 of the 6: the hardware-relay check needs a real Mac); the crash soak is reported Skipped (see `test-soak`) |
+| `pixi run test` | **the pre-PR gate**: every CTest registration — on the dev Mac the 6 `videotoolbox.*` export checks run, and each of the 16 real-footage checks whose recording is on disk (CI reports the footage Skipped, and runs 5 of the 6: the hardware-relay check needs a real Mac); the crash soak is reported Skipped (see `test-soak`) |
 | `pixi run test-fast` | the inner loop: `test` minus `test_export_video` and `test_compare_lifecycle`, footage and the soak reported Skipped by name; the `videotoolbox.*` export checks run (5 of the 6 in CI) |
 | `pixi run test-footage` | only the 16 real-footage checks (`ctest -L footage`) |
 | `pixi run test-soak` | only the soaks (`ctest -L soak` with `PACER_SOAK=1`): the compare-toggle crash soak. CI runs it on pushes to main, tags, manual runs and the weekly schedule |
@@ -70,6 +70,10 @@ pacer/                # repo root: CMakeLists.txt (C++23), pyproject.toml (pixi 
   `PYTHONPATH=bindings/pacer`, which no run needs: the build deploys the whole bindings package
   into the env, `tests/test_bindings_import.py`). **One test function:** `pixi run python -m pytest
   tests/test_x.py -k <part>` (jailed by `tests/conftest.py`; for iterating, not the gate).
+  **In a worktree with no build** (no `.pixi`, nothing compiled): `QT_QPA_PLATFORM=offscreen
+  PACER_APP_SUPPORT_JAIL=1 "$(git rev-parse --path-format=absolute --git-common-dir)/../.pixi/envs/default/bin/python"
+  -m pytest tests/test_x.py` — the main checkout's env, its deployed `pacer` and ffmpeg; first
+  `git submodule update --init --recursive` (what each symptom means: [tests/README.md](tests/README.md)).
 - **Real-footage checks** (`footage.<check>`) re-measure published figures on the owner's Desktop
   recordings. Without its recording a check is reported *Skipped* by name — a skip is not a pass,
   so **name every skipped `footage.*` when you report gates.** Variables, defaults and how to add

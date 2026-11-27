@@ -126,7 +126,12 @@ def unavailable_reason(session, lap_id: int | None, follow_laps: bool = False) -
         if lap not in tracks.ids:
             why = tracks.excluded.get(lap, "")
             if why == lap_race.EXCLUDED_DROPOUT:
-                return f"{_lap_name(lap)} has a GPS dropout, so its place on track is a guess."
+                # Its own kind: a short hole at the line leaves the trace whole (only the time
+                # is in doubt), so "its place on track is a guess" is said of a gap inside it.
+                kinds = data_quality.dropout_kinds_of(session, lap)
+                kind = (data_quality.DROPOUT_IN_LAP if data_quality.DROPOUT_IN_LAP in kinds
+                        or not kinds else data_quality.DROPOUT_AT_LINE)
+                return f"{_lap_name(lap)} {data_quality.DROPOUT_RACE_REASON[kind]}."
             if why in data_quality.WARN_REASON:      # the other ⚠ kinds, in their own words
                 return f"{_lap_name(lap)} is not raced: {data_quality.WARN_REASON[why]}."
             if why == lap_race.EXCLUDED_UNMATCHED:

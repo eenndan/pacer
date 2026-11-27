@@ -32,9 +32,9 @@ THE FOUR CHECKS
      names ("Otherwise Supports All HERO<n> metadata" — the MAX and MAX2 branch off the line
      rather than following it), or from the section before it when it names none, and applies
      its own GPS5/GPS9 rows. A heading it cannot name, or a parent it has not derived, FAILS by
-     name. When the submodule is absent — a bare worktree, which is the common local case — the
-     check prints SKIP and the pinned table stands alone. So the guard runs everywhere and cannot
-     rot where it matters.
+     name. When the submodule is absent — a bare worktree, which is the common local case — this
+     check FAILS saying what to run, after the file's other checks have run: it used to print SKIP
+     and pass. The other checks need no submodule, so they still run everywhere.
   2. NO OPEN-ENDED CLAIM. "Hero 9 and newer", "Hero 9+", "Hero 11 or later" — an open-ended model
      range in a sentence that also makes a GPS9/true-clock claim is banned outright, whatever
      models it happens to cover today. It is the exact shape the original defect took, and it is
@@ -66,8 +66,10 @@ import os
 import re
 import sys
 
+import _samples
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SPEC = os.path.join(_REPO, "3rdparty", "gpmf-parser", "README.md")
+_SPEC = os.path.join(_samples.SUBMODULE, "README.md")
 
 # --- THE PINNED TRUTH TABLE ------------------------------------------------------------------
 # model -> (has_gps5, has_gps9). Derived from 3rdparty/gpmf-parser/README.md at 9a71506, sections
@@ -263,10 +265,9 @@ def _derive_from_spec(spec: str | None = None) -> dict[str, tuple[bool, bool]]:
 
 
 def test_pinned_table_matches_vendored_spec():
-    if not os.path.exists(_SPEC):
-        print("test_pinned_table_matches_vendored_spec SKIP "
-              "(3rdparty/gpmf-parser submodule not checked out; the pinned table stands)")
-        return
+    # Without the submodule this FAILS, by name (tests/_samples.py): it used to print SKIP and
+    # pass, a green over a table nobody had re-derived. CI always checks the submodule out.
+    _samples.require_file("README.md")
     derived = _derive_from_spec()
     for model, expected in _MODELS.items():
         assert model in derived, (

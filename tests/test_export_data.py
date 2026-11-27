@@ -255,6 +255,10 @@ def test_the_report_heads_the_flag_column_not_counted_and_keys_the_kinds_present
     col = headers.index("flag")
     best_rows = [tr for tr in table.findall("tr") if tr.get("class") == "best"]
     assert best_rows and all(tr.findall("td")[col].text in (None, "") for tr in best_rows)
+    # A flag is one word: "gps-dropout" wrapped at its hyphen in a squeezed table (DECISIONS §28).
+    flagged = [tr.findall("td")[col] for tr in table.findall("tr") if tr.findall("td")]
+    assert {td.get("class") for td in flagged} == {"flag"}, [td.get("class") for td in flagged]
+    assert "table.laps td.flag { white-space: nowrap; }" in text
     clean = make_session()
     clean.dropout_lap_ids = lambda: set()
     h, r = export_data.laps_table(clean)

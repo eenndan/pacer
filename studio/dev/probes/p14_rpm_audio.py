@@ -21,8 +21,8 @@ automatic gain control. This probe asks the question in the only order that can 
      then asks the weaker question it CAN answer: which ordinary sprocket pairs reproduce the
      measured tone under each reading of which engine order the tone is.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real \\
+    pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
+    pixi run python -m studio.dev.probes.p14_rpm_audio real \\
         [0064 0065 0068 0067] [--dump DIR [--reuse]]
 
 The verdict is `studio/docs/refused-2026-09.md` §11.

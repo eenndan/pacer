@@ -184,6 +184,39 @@ def test_the_share_is_judged_over_the_timed_laps():
     print("test_the_share_is_judged_over_the_timed_laps OK")
 
 
+def test_the_lap_vote_says_where_the_laps_lost_their_fixes():
+    """The lap vote counts every ⚠ dropout lap, and a gap INSIDE a lap is one as much as a hole at
+    its line; the sentence said "missing at the line" of both (DECISIONS §28). It now says what is
+    true of the laps counted: at the line, inside them, or both with the count at the line; the
+    PB refusal, the DATA TRUST cost and the burned stamp read the same words."""
+    tail = ", so lap times can't be trusted enough to judge a PB."
+    cases = {(13, 0): "GPS fixes are missing at the line on 13 of 14 laps",
+             (0, 13): "GPS dropped out inside 13 of 14 laps",
+             (5, 11): "GPS dropped out in 13 of 14 laps, at the line on 5 of them"}
+    stamps = {(13, 0): "fixes missing at the line on 13 of 14 laps",
+              (0, 13): "dropped out inside 13 of 14 laps",
+              (5, 11): "dropped out in 13 of 14 laps"}
+
+    class _S:
+        timing_verified = True
+
+    for (at_line, inside), words in cases.items():
+        q = TimingQuality().with_lap_dropouts(13, 14, at_line=at_line, inside=inside)
+        assert q.concerns() == [words + tail], q.concerns()
+        assert q.low_by_lap_vote, q
+        _S.timing_quality = q
+        assert dq.burned_timing_stamp(_S()) == [
+            f"GPS LOW — {stamps[at_line, inside]}; lap times uncertain"], dq.burned_timing_stamp(_S())
+        if inside:
+            assert "at the line on 13" not in q.untrusted() + q.cost(), (q.untrusted(), q.cost())
+    # Unsaid, every ⚠ lap is at the line (the vote's first wording), and a share-low verdict is
+    # not the vote's.
+    assert TimingQuality().with_lap_dropouts(11, 14).untrusted() == (
+        "GPS fixes missing at the line on 11 of 14 laps")
+    assert not TimingQuality(dropped_fraction=0.5).with_lap_dropouts(11, 14).low_by_lap_vote
+    print("test_the_lap_vote_says_where_the_laps_lost_their_fixes OK")
+
+
 def test_rejections_at_the_edge_of_the_laps_keep_the_whole_drive_verdict():
     """A rejected fix within the guard band beyond either edge reaches that crossing through the
     smoother, so the laps are not clear of it and the whole drive decides; just past the band the

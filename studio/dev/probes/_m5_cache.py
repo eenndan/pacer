@@ -5,8 +5,8 @@ per-(lap x corner) numbers. So a recording is loaded ONCE through the real `Sess
 everything the three probes read is packed into one pickle under `$TMPDIR`, and each probe reads
 that.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache          # all four
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache MK_18_09 # just one
+    pixi run python -m studio.dev.probes._m5_cache          # all four
+    pixi run python -m studio.dev.probes._m5_cache MK_18_09 # just one
 
 WHAT IT STORES, AND WHY EACH PIECE IS HERE
   * The per-(lap x corner) matrix the app itself publishes — `CornerModel.lap_corner_stats` (time,

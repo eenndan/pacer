@@ -15,7 +15,7 @@ Pinned on a REAL `pacer.Laps` segmentation through the loader's own unknown-trac
 - at a crossover, the laps are whole and last exactly the drive's lap time;
 - where nothing else cuts the held-peak line, the line stays where X1 put it.
 
-Imports pacer (no Qt). Run:  PYTHONPATH=bindings/pacer python tests/test_auto_line_crossover.py
+Imports pacer (no Qt). Run:  python tests/test_auto_line_crossover.py
 """
 import math
 import os

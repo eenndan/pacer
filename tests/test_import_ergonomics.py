@@ -29,8 +29,11 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
 # A committed GPMF sample — the fixture the telemetry-gate tests copy under synthetic GoPro names,
-# so "this file has telemetry" is answered by the real loader on a real file.
-TELEMETRY_FIXTURE = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples", "hero8.mp4")
+# so "this file has telemetry" is answered by the real loader on a real file. Missing fails the file
+# here, by name, before any window is built (tests/_samples.py).
+import _samples  # noqa: E402
+
+TELEMETRY_FIXTURE = _samples.require("hero8.mp4")
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow  # noqa: E402
 

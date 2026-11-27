@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Forty-one features were built far enough to **measure**, and the measurement said not to ship
+Forty-two features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -3135,6 +3135,95 @@ infield cuts on 410 m, 601 m and 971 m layouts.
 
 **What would be new evidence for a length rule:** a statistic of lap length that is not, on a
 twisty layout, as large for one kart width of line as it is for a cut.
+
+---
+
+## 42. Re-timing sector splits near a missing GPS fix, or flagging them — refused (cool/sector-splits-near-holes)
+
+**The idea.** After 0.26.0 a missing fix moves a lap time by at most 4.5 ms at native noise, but
+a sector split beside a hole was reported to move by up to ~45 ms, with nothing flagged. The
+reported cause was that splits are mapped by cumulative DISTANCE, so a hole that changes a lap's
+odometer moves where its sector line falls. When a hole changes which lap is best, every lap's
+splits were also seen to shift. Three fixes were proposed: time each split where the smoothed
+trace crosses the sector line, as laps are timed; make the de-drift frame independent of the best
+lap; or put a ⚠ on a split with a hole within reach of its line.
+
+**What a split is.** The cause named above is wrong. `Session._project_sector_lines` finds the chord
+where the lap's de-drifted trace crosses the sector line, and `lap_sector_splits` reads the time
+on that same chord. Odometer and time are both linear along a chord, so the "distance mapping" is
+already the geometric crossing, timed the way the lap's own crossings are. The first proposal is
+what ships. Two other things can move a split near a hole:
+- the smoothed trace at the line, through the time-aware fit inside its ±6.5-period reach;
+- the de-drift frame (`CornerModel.sector_shift`): a median over the clean laps, measured from the
+  best lap's trace, so a hole that flags a lap or changes the best lap moves it.
+
+**How it was measured**
+([`studio/dev/probes/sector_split_holes.py`](../dev/probes/sector_split_holes.py)). The synthetic
+GoPro, 10 laps × 5 seeds, at 10 and 18 Hz, at GPS noise 1, 1.9 (the reference recording's) and 3.
+Five sector lines sit at 0.20–0.85 of the lap; the third is at the hairpin, about 13 m/s. Each case
+goes through the real loader with fixes rejected:
+- one or two fixes missing 1–10 periods from every sector crossing of every other lap;
+- 1, 2 and 5 % of fixes rejected at random;
+- holes of 0.3–1.0 s near the sector lines and mid-sector;
+- three holes on the clean best lap.
+
+Unflagged laps only. Each split is read against the generator's true sector-line crossings and
+against the same lap on the clean trace. The splits are also re-timed with the frame pinned at the
+clean session's, which separates the two mechanisms.
+
+| at the reference noise (1.9), 10 / 18 Hz | split moved, max / p95 | of it, the trace at the line | added error σ vs truth | purple owner changed (widest clean margin) |
+|---|---|---|---|---|
+| one fix missing, 1–3 periods from a line | 17.7 / 5.8 ms; 22.7 / 5.8 ms | nearly all | +2.2; +4.0 ms | 8 of 180 (3.9 ms); 7 of 180 (7.3 ms) |
+| one fix, 4–10 periods | 20.8 / 4.3; 25.5 / 3.9 ms | nearly all | +1.4; +2.2 ms | 1 of 240 (3.9 ms); 7 of 240 (4.3 ms) |
+| two fixes in a row, 1–3 periods | 25.6 / 8.7; 35.7 / 8.8 ms | nearly all | +3.3; +6.2 ms | 8 of 180 (3.9 ms); 12 of 180 (7.3 ms) |
+| two fixes, 4–10 periods | 28.5 / 7.0; 44.2 / 6.1 ms | nearly all | +4.8; +5.7 ms | 8 of 240 (6.3 ms); 7 of 240 (13.3 ms) |
+| the best lap flagged (two fixes at its line) | 29.4 / 12.3; 36.9 / 14.6 ms | none: the frame | redraw, −14.2; +4.4 ms | 0 of 30; 0 of 30 |
+| other laps flagged (holes 0.3–1.0 s) | 24.8 / 10.7; 70.4 / 12.0 ms | none at 10 Hz; at 18 Hz a 0.33 s hole stays unflagged, up to 56.4 ms | −12.8; +12.7 ms | 0 of 630; 0 of 630 |
+
+What the numbers say:
+- **The trace at the line.** The move does not shrink as the hole gets further from the line. It is
+  as large 4–10 periods away as 1–3, and exactly zero at 10, past the fit's reach. It is symmetric:
+  at the reference noise, 148 splits moved quick by over 10 ms and 134 slow. It is the line fit
+  re-drawing the noise of the fixes around the crossing, worst at the hairpin line, not a bias.
+  Against the truth it adds at most 6.2 ms σ to a split at the reference noise (3.3 ms at 1×,
+  13.9 ms at 3×).
+- **The frame.** When a hole flags a lap or changes the best lap, the de-drift frame moves. Pinning
+  the best lap and the consensus set at the clean session's takes the knock-on of a flagged best
+  lap to at most 1.0 ms at the reference noise, and of other flagged laps to at most 3.9 ms at
+  10 Hz. Almost all of it is common to a column: the lap-specific part is at most 1.2 ms p95. The
+  reviewer's +9/−21/+12 ms on every lap is this column shift. It moves every lap's split in that
+  column alike, so no comparison within the session changes: at the reference noise no purple
+  owner moved in any of the 1,380 columns where a lap was flagged.
+- **Purple owners.** Every purple owner a hole did change sat at most 13.3 ms ahead on the clean
+  trace. That is under a tenth of the 0.15 s step, where the app already reads the laps as level.
+  The new owner was truly quicker in 17 of the 58 changed beside a line: a tie re-drawn.
+- **The step.** The house rule turns the step's 0.15 s into a split σ of 0.053 s. The worst sector's
+  0.0474 s leaves 0.024 s of headroom in quadrature. The largest added σ above, 12.7 ms, makes it
+  0.049 s, a rule of 0.14 s: inside the step.
+
+**Why each change is refused.**
+1. *Time the split at the geometric crossing.* That is how it is timed already.
+2. *A frame independent of the best lap* (anchored on the median lap, as `off_line_metres` does).
+   On hole-free data it would re-time every split of every recording. The constraint was bit-identity
+   there, an unchanged synthetic golden and an equivalent real-recording golden, and this breaks all
+   three. What it would buy is a column shift that changes no comparison. The consensus set moves
+   with any flagged lap too, so it would still move.
+3. *A split ⚠ for a hole within reach of a sector line.* No reach separates the moved splits: they
+   are as large at 4–10 periods as at 1–3. The smoother's full reach of 7 periods would flag about
+   43 % of splits at 2 % rejected (1 − 0.98²⁸, 14 fixes at each of two lines), for an added error
+   about an eighth of the split's own σ.
+
+The splits still add up to the lap, every time, because the start and the finish are the lap's
+own crossings. No lap time moved.
+
+**Left open.** At 18 Hz a hole of 5 fixes (0.33 s) passes both flags: under the 0.35 s
+interior-gap threshold, and away from the start/finish line. Beside the hairpin line it moved
+one split by up to 56 ms at the reference noise. At 10 Hz, the GPS9 cameras' rate, the same hole
+is 3 fixes and a 0.4 s gap, and that lap wears the ⚠. An 18 Hz GPS5 recording's durations are
+already muted as estimated.
+
+**What would be new evidence:** a recording whose hole-adjacent splits carry a bias rather than
+a re-drawn noise, or a split σ measured above 0.053 s with holes in it, at the reference noise.
 
 ---
 

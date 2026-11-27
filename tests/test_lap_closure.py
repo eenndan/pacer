@@ -12,7 +12,7 @@ surfaces that say why a lap was left out (the ⊘ strip, the DATA TRUST card, th
 and the auto mark) — plus the two thresholds against the populations they were measured to
 separate on the owner's footage (see the block above `_signal.MAX_LAP_GAP_M`).
 
-Run:  PYTHONPATH=bindings/pacer QT_QPA_PLATFORM=offscreen python tests/test_lap_closure.py
+Run:  QT_QPA_PLATFORM=offscreen python tests/test_lap_closure.py
 """
 import math
 import os

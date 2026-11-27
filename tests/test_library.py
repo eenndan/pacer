@@ -3248,7 +3248,8 @@ def test_dialog_privacy_note_fits_inside_the_dialog_at_its_own_minimum():
         f"the privacy note has {note.height()} px and needs {needs} px at {note.width()} px wide "
         f"(dialog {dlg.width()}x{dlg.height()}) — {needs - note.height()} px of it, including the "
         f"tracks.json sentences, paints outside its box")
-    buttons_top = min(b.y() for b in dlg.findChildren(QPushButton))
+    # The button row under the note: Update (cool/library-update-ideals) sits ABOVE the table.
+    buttons_top = min(b.y() for b in dlg.findChildren(QPushButton) if b is not dlg.update_btn)
     assert note.y() + needs <= buttons_top, (
         f"the note runs {note.y() + needs - buttons_top} px into the button row "
         f"(note y={note.y()} + {needs} px vs buttons at y={buttons_top})")

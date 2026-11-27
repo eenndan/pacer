@@ -203,5 +203,5 @@ either D24 recording.
 
 ## Reproduce
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause 0060
+    pixi run python -m studio.dev.probes.p6_corner_match_cause
+    pixi run python -m studio.dev.probes.p6_corner_match_cause 0060

@@ -89,6 +89,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -237,6 +238,70 @@ _IDEAL_ONE_DONOR_TIP = (
 # picked in float-noise units (1e-9) would still let this column print two identical cells.
 _IDEAL_SAME_S = 0.0005
 
+# LIBRARY ▸ UPDATE (cool/library-update-ideals): the line over the table while rows carry an ideal an
+# older Pacer measured, and what its run said. Its words are a re-open's: it does what opening each
+# recording would do to its row, and says so when that moved more than the ideal.
+UPDATE_BUTTON = "Update"
+UPDATE_CANCEL = "Cancel"
+UPDATE_LINE_TIP = (
+    "The ideal-lap maths changed in this version of Pacer, so these ideals are muted until their "
+    "recordings are measured again.")
+UPDATE_BUTTON_TIP = (
+    "Measure these recordings again with this version, one at a time, exactly as opening each "
+    "would — their rows are all that is written; the open session, Open Recent and the files "
+    "beside your videos are left alone. If a best lap or a row's trust changes too, the line says "
+    "so. Closing this window stops it.")
+
+
+def _update_summary_text(summary: dict) -> tuple[str, str]:
+    """(line, hover) for a finished or cancelled Update run (`IdealUpdater.finished`): how many
+    rows were updated, how many changed more than their ideal and how, and which could not be
+    measured; the hover names each of those rows."""
+    failed = summary.get("failed") or []
+    diffs = [(a, _library.remeasure_changes(b, a)) for b, a in summary.get("changed") or []]
+    parts = [f"{len(summary.get('updated') or [])} updated"]
+    # A trust tag that changed, by what the row reads as now: "trusted", or its new tag.
+    now: dict[str, int] = {}
+    for _a, d in diffs:
+        if "trust" in d:
+            label = d["trust"][1] or "trusted"
+            now[label] = now.get(label, 0) + 1
+    parts += [f"{k} now read{'s' if k == 1 else ''} as {label}" for label, k in now.items()]
+    bests = sum(1 for _a, d in diffs if "best" in d)
+    if bests:
+        parts.append(f"{_plural(bests, 'best lap')} changed")
+    counts = sum(1 for _a, d in diffs if set(d) == {"lap_count"})
+    if counts:
+        parts.append(f"{_plural(counts, 'lap count')} changed")
+    # A personal best those changes moved (`library.pb_changes`), named as the Library names it.
+    pbs = [f"your {track}{', ' + _library.ROTATION_WORDS[way] if way else ''} best is now "
+           f"{fmt_time(best)}" for track, way, best in summary.get("pbs") or []]
+    parts += pbs
+    if failed:
+        parts.append(f"{len(failed)} could not be measured")
+    text = " · ".join(parts)
+    if summary.get("cancelled"):
+        text = f"Stopped: {text}"
+    lines = []
+    for a, d in diffs:
+        what = []
+        for key, (old, new) in d.items():
+            if key == "best":
+                what.append(f"best lap {fmt_time(old) if old is not None else '—'} → "
+                            f"{fmt_time(new) if new is not None else '—'}")
+            elif key == "lap_count":
+                what.append(f"laps {old} → {new}")
+            else:
+                what.append(f"{old or 'trusted'} → {new or 'trusted'}")
+        lines.append(f"{_library.entry_name(a)}: " + ", ".join(what))
+    if lines:
+        lines.insert(0, "Changed beyond the ideal lap, as re-opening would have changed them:")
+        lines += [p[:1].upper() + p[1:] + "." for p in pbs]
+    if failed:
+        lines.append("Not updated, left as they were:")
+        lines.extend(f"{_library.entry_name(r)}: {why}" for r, why in failed)
+    return text, "\n".join(lines) or UPDATE_LINE_TIP
+
 # NUM_ROLE is studio.widgets' (it owns the shared numeric-sort cell `_NumItem` reads); the two
 # files each declared their own `Qt.UserRole` literal for the same job. `_NumItem` keeps its local
 # name — this dialog never sets the sort DIRECTION flag, so it wants the base class's "blanks last
@@ -249,6 +314,7 @@ FILTER_ROLE = Qt.UserRole + 5   # lower-cased "track date" haystack for the sear
 COND_ROLE = Qt.UserRole + 6     # the row's session-record conditions tag, "" if untagged (on Date)
 HAS_RECORD_ROLE = Qt.UserRole + 7  # True when the row HAS a session record at all (on Date)
 KEEP_ROLE = Qt.UserRole + 8     # (", <way>", trust tag): what survives eliding (on Track)
+STALE_ROLE = Qt.UserRole + 9    # True on an Ideal-lap cell another ideal version measured (muted)
 
 # The track-filter combo's two sentinels (a real track name never equals either): "all tracks" at
 # index 0, and an UNKNOWN-TRACK bucket appended when some recording's circuit isn't in the track
@@ -478,6 +544,34 @@ class _KeepTailDelegate(QStyledItemDelegate):
         shown = fm.elidedText(name, Qt.ElideRight, least)
         option.text = shown + fm.elidedText(way + suffix, Qt.ElideRight,
                                             max(0, avail - fm.horizontalAdvance(shown)))
+
+
+class _MutedWhenSelectedDelegate(QStyledItemDelegate):
+    """The Ideal-lap column's delegate: a cell carrying ``STALE_ROLE`` (measured by another version
+    of the ideal-lap maths) stays muted on a SELECTED row. Qt paints a selected item's text in the
+    selection's own ink and ignores its foreground, so the one row the user was looking at drew
+    its stale ideal in full colour and lost the cue (DECISIONS §28). There it is drawn in
+    `C.text_dim`, the dimmest enabled ink, 4.80:1 on `C.sel_bg` (`C.text_muted` is 2.58:1 there);
+    every other cell is drawn exactly as Qt draws it."""
+
+    def paint(self, painter, option, index):
+        if not (index.data(STALE_ROLE) and option.state & QStyle.State_Selected):
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)  # the selection band
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        # The style's own text margin on each side (QCommonStyle's item-view text layout).
+        margin = style.pixelMetric(QStyle.PM_FocusFrameHMargin, None, opt.widget) + 1
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(QColor(C.text_dim))
+        painter.drawText(rect.adjusted(margin, 0, -margin, 0), int(opt.displayAlignment),
+                         opt.fontMetrics.elidedText(text, Qt.ElideRight, rect.width() - 2 * margin))
+        painter.restore()
 
 
 class _LapTimeAxis(pg.AxisItem):
@@ -770,7 +864,8 @@ class LibraryDialog(QDialog):
                  manage_tracks: Callable[..., None] | None = None,
                  show_privacy: Callable[[], None] | None = None,
                  use_as_reference: Callable[[dict], None] | None = None,
-                 reference_refusal: Callable[[dict], str | None] | None = None):
+                 reference_refusal: Callable[[dict], str | None] | None = None,
+                 ideal_updater=None):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — session library")
         self._index = index
@@ -862,6 +957,30 @@ class LibraryDialog(QDialog):
         filter_row.addWidget(self.condition_filter)
         root.addLayout(filter_row)
 
+        # ----- UPDATE THE IDEALS AN OLDER PACER MEASURED (cool/library-update-ideals): one quiet
+        # line, shown only while there is something to say. The run is the app's
+        # (`LibraryController.IdealUpdater`, injected like every other act: start / cancel /
+        # running, progress and finished signals), so this dialog still writes nothing and stays
+        # pacer-free. Closing the dialog cancels a run (`done`).
+        self._updater = ideal_updater
+        self._update_summary: dict | None = None
+        update_row = QHBoxLayout()
+        update_row.setSpacing(8)
+        root.addLayout(update_row)
+        self.update_line = QLabel("")
+        self.update_line.setFont(theme.mono_font(11))
+        self.update_line.setProperty("role", "Hint")
+        update_row.addWidget(self.update_line)
+        self.update_btn = QPushButton(UPDATE_BUTTON)
+        self.update_btn.setAutoDefault(False)
+        self.update_btn.clicked.connect(self._on_update_clicked)
+        update_row.addWidget(self.update_btn)
+        update_row.addStretch(1)
+        if self._updater is not None:
+            self._updater.progress.connect(self._on_update_progress)
+            self._updater.finished.connect(self._on_update_finished)
+        self._sync_update_line()
+
         # ----- the sortable recordings table
         self.table = QTableWidget(len(self._entries), len(_HEADERS))
         self.table.setHorizontalHeaderLabels(_HEADERS)
@@ -882,6 +1001,8 @@ class LibraryDialog(QDialog):
         hdr.setSectionResizeMode(_COL_TRACK, QHeaderView.Stretch)
         self._track_delegate = _KeepTailDelegate(self.table)
         self.table.setItemDelegateForColumn(_COL_TRACK, self._track_delegate)
+        self._theo_delegate = _MutedWhenSelectedDelegate(self.table)
+        self.table.setItemDelegateForColumn(_COL_THEO, self._theo_delegate)
         for col in (_COL_DATE, _COL_LAPS, _COL_BEST, _COL_THEO, _COL_COND, _COL_TYRES):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         # The sample's mechanism, on the columns it is about (see the header-tip constants).
@@ -1228,7 +1349,71 @@ class LibraryDialog(QDialog):
         itself fully guarded."""
         if (self.width(), self.height()) != getattr(self, "_opened_size", None):
             prefs.set_library_size(self.width(), self.height())
+        if self._updater is not None:
+            # The run is this window's: it stops with it, and nothing it says lands on a dead one.
+            self._updater.progress.disconnect(self._on_update_progress)
+            self._updater.finished.disconnect(self._on_update_finished)
+            self._updater.cancel()
         super().done(result)
+
+    # ------------------------------------------------------------------ update the older ideals
+    def _sync_update_line(self) -> None:
+        """The Update line at rest: how many rows an older Pacer measured whose files are here,
+        with the ones that are not in its hover — or the last run's summary, while it stands."""
+        if self._updater is not None and self._updater.running():
+            return
+        present, absent = _library.ideal_update_rows(self._index, corner_model.IDEAL_VERSION)
+        summary = self._update_summary
+        # A row this window's run could not measure is not offered again: it would only fail again.
+        failed = {r.get("fingerprint") for r, _why in (summary or {}).get("failed") or []}
+        present = [e for e in present if e.get("fingerprint") not in failed]
+        self._update_rows = present
+        if summary is not None:
+            text, tip = _update_summary_text(summary)
+            text += f" · {len(present)} left" if present else ""
+        elif present:
+            n = len(present)
+            text = f"{_plural(n, 'ideal lap')} {'was' if n == 1 else 'were'} measured by an older Pacer."
+            tip = UPDATE_LINE_TIP
+        else:
+            text, tip = "", ""
+        if absent and (present or summary is not None):
+            m = len(absent)
+            tip += ("\n\n" + f"{_plural(m, 'recording')} {'is' if m == 1 else 'are'} not on this "
+                    "Mac, so " + ("its" if m == 1 else "their") + " ideal stays as it is until "
+                    + ("it is" if m == 1 else "they are") + " opened again.")
+        self.update_line.setText(text)
+        self.update_line.setToolTip(tip)
+        self.update_line.setVisible(bool(text) and self._updater is not None)
+        self.update_btn.setText(UPDATE_BUTTON)
+        self.update_btn.setToolTip(UPDATE_BUTTON_TIP)
+        self.update_btn.setVisible(bool(present) and self._updater is not None)
+
+    def _on_update_clicked(self) -> None:
+        if self._updater is None:
+            return
+        if self._updater.running():
+            self._updater.cancel()
+            return
+        self._update_summary = None
+        # Once a run has started the table must not jump when it ends and the button goes.
+        keep = self.update_btn.sizePolicy()
+        keep.setRetainSizeWhenHidden(True)
+        self.update_btn.setSizePolicy(keep)
+        self.update_btn.setText(UPDATE_CANCEL)
+        self.update_btn.setToolTip("Stop after nothing more is written: rows already updated stay "
+                                   "updated, the rest stay as they were.")
+        self._updater.start(list(self._update_rows))
+
+    def _on_update_progress(self, done: int, total: int) -> None:
+        self.update_line.setText(f"Updating {min(done + 1, total)} of {total}…")
+        self.update_line.setToolTip(UPDATE_LINE_TIP)
+        self.update_line.setVisible(True)
+
+    def _on_update_finished(self, summary: dict) -> None:
+        self._update_summary = summary
+        self._index = summary.get("index") or self._index
+        self._rerender()          # re-runs `_sync_update_line`, which shows the summary
 
     def _select_first_usable_row(self):
         """Select the first row (in the current sort order) whose DATE cell is NOT flagged disabled
@@ -1490,8 +1675,10 @@ class LibraryDialog(QDialog):
                         it.setFlags(it.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
                 elif col == _COL_THEO and theo_stale and theo is not None:
                     # Another version of the ideal-lap maths measured this number: kept, muted, and
-                    # the hover leads with why (see _IDEAL_OTHER_BUILD_TIP).
+                    # the hover leads with why (see _IDEAL_OTHER_BUILD_TIP). Selected, it is
+                    # drawn by _MutedWhenSelectedDelegate: Qt ignores the foreground there.
                     it.setForeground(dim)
+                    it.setData(STALE_ROLE, True)
                 elif col == _COL_TRACK and trust:
                     # Muted + italic across the row's Track cell so the tag reads as demoted, not an
                     # error. The row stays fully selectable/openable — it's just marked, not blocked.
@@ -2070,6 +2257,7 @@ class LibraryDialog(QDialog):
         if getattr(self, "clear_btn", None) is not None:
             self.clear_btn.setEnabled(bool(self._entries))
         self._sync_restore_btn()
+        self._sync_update_line()                  # a forget or a clear changes what is left to do
         self._select_first_usable_row()
         self._apply_filter()
 

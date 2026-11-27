@@ -29,7 +29,7 @@ built on it.
     direction-dependent sign bug shipped unnoticed in this campaign (#334), so the left/right
     corner split is printed for a clockwise track and an anticlockwise one.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
+    pixi run python -m studio.dev.probes.p13_grip_regrounding
 
 SAFETY: as `_m5_cache` — read-only footage snapshotted around every load, app-support seams
 diverted before any studio import resolves one, nothing written.

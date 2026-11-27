@@ -92,6 +92,59 @@ def test_garbage_pending_at_a_load_dies_on_the_gui_thread():
     print("test_garbage_pending_at_a_load_dies_on_the_gui_thread OK")
 
 
+class _CollectingRemeasure(QThread):
+    """Stands in for RemeasureWorker (Library ▸ Update): its signal, and a run() that is ONLY a
+    full collection."""
+
+    measured = Signal(int, str, object, str)
+
+    def __init__(self, token, fingerprint, paths):
+        super().__init__()
+        self._token = token
+
+    def cancel(self):
+        pass
+
+    def run(self):
+        gc.collect()
+
+
+def test_garbage_pending_at_a_library_update_row_dies_on_the_gui_thread():
+    """Library ▸ Update starts one loading worker per row — 40 rows, 40 threads — so it goes
+    through the same door as the window's loads (`workers.start_load`) and gets the same collect."""
+    import tempfile
+    from types import SimpleNamespace
+
+    from studio import library_controller
+    saved = library_controller.RemeasureWorker
+    library_controller.RemeasureWorker = _CollectingRemeasure
+    was_enabled = gc.isenabled()
+    with tempfile.TemporaryDirectory() as d:
+        clip = os.path.join(d, "GX010068.MP4")
+        open(clip, "wb").close()
+        updater = library_controller.IdealUpdater(SimpleNamespace(_load_workers=set()))
+        gc.collect()
+        gc.disable()
+        try:
+            _Cyclic.died_on.clear()
+            _Cyclic()
+            updater.start([{"fingerprint": "GX0068", "paths": [clip], "lap_count": 1}])
+            deadline = time.time() + 10
+            while updater.running() and time.time() < deadline:
+                _APP.processEvents()
+                time.sleep(0.005)
+            assert not updater.running(), "the stand-in update never finished"
+            assert _Cyclic.died_on == [True], (
+                "a cycle pending when an update row started was freed on its worker's thread "
+                f"(died_on={_Cyclic.died_on}): IdealUpdater no longer starts through start_load")
+        finally:
+            if was_enabled:
+                gc.enable()
+            library_controller.RemeasureWorker = saved
+            _APP.processEvents()
+    print("test_garbage_pending_at_a_library_update_row_dies_on_the_gui_thread OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

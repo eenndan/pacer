@@ -33,8 +33,9 @@ THE FOUR CHECKS
      reader only claims to speak for ACCL and GYRO, which is the whole reason the transform
      cannot be driven by it.
 
-Needs the bundled gpmf-parser submodule; prints SKIP and passes when it is absent (a bare
-worktree), exactly like test_camera_support.py. Needs the bindings (PYTHONPATH), no Qt.
+Needs the bundled gpmf-parser submodule, and FAILS at import, by name, when a clip is absent: it
+used to print SKIP and pass, a green that had read nothing (tests/_samples.py). Needs the
+bindings, no Qt.
 
 Run: python tests/test_imu_orientation.py
 """
@@ -45,10 +46,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import pacer  # noqa: E402
+import _samples  # noqa: E402
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SAMPLES = os.path.join(_REPO, "3rdparty", "gpmf-parser", "samples")
+import pacer  # noqa: E402
 
 # --- THE PINNED TABLE -----------------------------------------------------------------------
 # clip -> (DVNM, ACCL ORIN, ACCL ORIO). "" means the field is absent from the container.
@@ -69,6 +69,7 @@ _CLIPS: dict[str, tuple[str, str, str]] = {
     "max-360mode.mp4":   ("GoPro Max",    "XzY", "ZXY"),
     "max-heromode.mp4":  ("GoPro Max",    "XzY", "ZXY"),
 }
+_PATHS = {clip: _samples.require(clip) for clip in _CLIPS}
 
 # The presented orientation every camera that names one names. It is also, exactly, what the
 # newest camera here writes as its RAW order — which is why a HERO13's ORIN->ORIO conversion is
@@ -77,21 +78,11 @@ _CLIPS: dict[str, tuple[str, str, str]] = {
 _CANONICAL_ORIO = "ZXY"
 
 
-def _have_samples() -> bool:
-    return os.path.isdir(_SAMPLES) and any(
-        os.path.exists(os.path.join(_SAMPLES, c)) for c in _CLIPS)
-
-
 def test_every_bundled_clip_declares_what_the_table_says():
     """Check 1 + 3: the pinned ACCL declaration per clip, absences included."""
-    if not _have_samples():
-        print("SKIP pinned table: 3rdparty/gpmf-parser samples not checked out")
-        return
     seen = 0
     for clip, (dvnm, orin, orio) in sorted(_CLIPS.items()):
-        path = os.path.join(_SAMPLES, clip)
-        if not os.path.exists(path):
-            continue
+        path = _PATHS[clip]
         src = pacer.GPMFSource(path)
         assert src.device_name() == dvnm, f"{clip}: DVNM {src.device_name()!r} != {dvnm!r}"
         o = src.read_imu_orientation()
@@ -106,14 +97,9 @@ def test_accl_and_gyro_never_declare_different_frames():
     """Check 2: the invariant `studio.rotation` rests on. It is asserted, not assumed, because
     the gyro channel projects onto a gravity direction resolved in the ACCELEROMETER's frame — if
     the two streams ever disagreed, the yaw rate would be silently rotated."""
-    if not _have_samples():
-        print("SKIP accl==gyro: samples not checked out")
-        return
     seen = 0
     for clip in sorted(_CLIPS):
-        path = os.path.join(_SAMPLES, clip)
-        if not os.path.exists(path):
-            continue
+        path = _PATHS[clip]
         o = pacer.GPMFSource(path).read_imu_orientation()
         assert o.gyro_in == o.accl_in, f"{clip}: GYRO ORIN {o.gyro_in!r} != ACCL {o.accl_in!r}"
         assert o.gyro_out == o.accl_out, f"{clip}: GYRO ORIO {o.gyro_out!r} != ACCL {o.accl_out!r}"
