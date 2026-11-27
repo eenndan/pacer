@@ -396,6 +396,7 @@ if __name__ == "__main__":
     test_seam_redirect_actually_takes_effect()
     test_jail_moves_every_seam_and_adopts_an_existing_jail()
     test_preflight_blames_the_environment_when_the_bindings_are_missing()
+    test_preflight_refuses_a_planted_namespace_only_pacer()
     test_preflight_states_a_parse_failure_without_guessing_why()
     test_documented_golden_command_reaches_the_parser_without_pythonpath()
     print("OK: the jail covers every app-support seam, every harness uses it, it takes effect, "
