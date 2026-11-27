@@ -14,9 +14,9 @@ committed. This file is the tracked record. Three rules:
 On 2026-09-28 the owner said "implement the plan … don't ask me questions, run until done". So no
 ruling below was put to him: every default applied that day, not after the week the plan allowed.
 
-**The ids this page cites.** RUL-n and S1-S6 are defined on this page. The others are kept so a
-row can be traced to where it came from, and they name items in the maintainers' private notes,
-which are not in this repository:
+**The ids this page cites.** RUL-n and S1-S6 are defined on this page, and Cn is a corner as the
+app numbers it, in track order. The others are kept so a row can be traced to where it came from,
+and they name items in the maintainers' private notes, which are not in this repository:
 
 - R1-R14 (R11 here, R13 in [AGENT-GUARDRAILS.md](AGENT-GUARDRAILS.md)) and item 15-V1: the
   recommendations of the board review of 2026-09-23, and a part of item 15 on its list of owner
@@ -2556,3 +2556,116 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   lap"; Update waits while the main window's own load runs; `tests/_stale.py` still says
   the working recordings are all here; `tests_for.py`'s timings come from a stale CTest record; and
   section 30's carried list stands as written there.
+
+## 32. Recorded at the 0.29.0 release, 2026-11-27
+
+- **v0.29.0 is a minor release**: 8 pull requests, #733 to #740, Wave 26 of the campaign section 8
+  records, its theme "every cue without the mouse or the hue", plus the release pull request's QA
+  fixes (#741).
+  - #733: File ▸ Library… ▸ Update keeps the sort, the selected row and the scroll when it ends;
+    Forget, Clear library and Restore stop a running Update first, and its line counts only the
+    rows still there ("Stopped: 1 updated · 1 left"; no line over an empty library); a row whose
+    file is now another recording says so in its own Ideal-cell hover.
+  - #734: the video-export and demo workers start through `workers.start_worker`, the shared GC
+    guard every loading worker gets.
+  - #735: ← / → step the video on the first press from the Laps, Coaching, Marks and Stats tables
+    (`widgets.pass_step_arrows`), and the Laps keyboard cursor follows the lap on screen.
+  - #736: a Corners ▸ Lap N Δ gap past its step is bold as well as coloured.
+  - #737: the GPS strip under the scrubber draws poor seconds hatched and moderate ones at half
+    height; good stays the full bar.
+  - #738: File ▸ Library…'s default button is Open, Tab leaves its table, the Notes box gives Tab
+    back, and no destructive button (Delete record, Delete…, Restore…, Clear library) takes Return.
+  - #739: a button reached with Tab or ⇧Tab takes Space / Return / Enter (`widgets.KeyboardPress`),
+    and any mouse press drops it; ⌘K and the ? card list eleven "Controls" commands; ⌘L re-checks
+    its gate when pressed; no table keeps Tab.
+  - #740: Coaching ranks a corner only past the 0.07 s timing step, with a golden re-cut of 144
+    coaching leaves (no timing leaf moved) and a new phase, `gopro_habit`.
+- **The coordinator's ruling on Coaching.** Section 31 left to the owner whether Coaching should
+  rank a corner whose time lost is under 0.07 s. Asked, he replied "continue and decide yourself",
+  and the coordinator ruled: **Coaching ranks a corner only when its time lost clears the 0.07 s
+  step**; a level corner is listed muted with its reason and is never put on the focus list. The
+  synthetic sweep #740 measured: before the rule, 156 of 375 focus corners (42 %) truly lost under
+  0.03 s; after it, 1 of the 102 it names. It drops 10 of the 92 truly lossy corners (11 %), and a
+  corner planted 0.10 or 0.20 s slower is never dropped (40 of 40 kept). **The cost, plainly**: a
+  real habit worth under the step goes unranked, and on habit-free synthetic days over half the
+  sessions rank nothing, so their first open shows no debrief and no focus list. Open to the owner's
+  overrule, and reversible (one threshold, one golden re-cut).
+- **Defaults applied this wave**, each reversible:
+  - a button answers Space / Return / Enter only when it was reached with Tab or ⇧Tab; any mouse
+    press drops it, and everywhere else Space plays and pauses (#739);
+  - Return in File ▸ Library… opens the selected recording, and never offers to clear it (#738);
+  - Forget, Clear library and Restore stop a running Update (#733);
+  - a Corners gap past its step is bold, with no ▲/▼: the grid has no width budget for a prefix
+    (#736);
+  - the GPS strip's verdicts carry a shape: poor hatched, moderate half height (#737);
+  - no hue changed anywhere this wave; the burned export Δ's plate was measured and refused
+    (refusal section 44).
+- **Process.** The release QA drove the merged tree offscreen and jailed, at 1440×900 with the
+  theme applied, on synthetic recordings only, with real QTest key and mouse events: the Coaching
+  page of the demo (one ranked corner, after a three-habit session set a three-corner focus list)
+  and of the habit-free demo circuit (nothing ranked): a Tab walk reached every visible control on
+  the page and left the table; Space played with the table focused and pressed a Tab-reached Jump
+  (once, no play), and played again after a map click; ← / → stepped from the table; the chip,
+  Mark both dry and "Replace with 1 Jun's top corner (C1)" all ran from the keyboard; all 11 ⌘K
+  "Controls" rows were listed (Ideal lap greyed with its reason) and Next slow lap ran in both
+  sessions. In the Library: ⌘L opened it on a first-ever session's first load with no menu opened;
+  Tab order ran search, filters, Update, table, chart, then the buttons, Open the default; Return
+  in a search that left one row opened it; an Update was started from the keyboard and stopped by
+  Forget ("Stopped: 1 updated · 1 left"), Clear library (no line) and its own Cancel ("Stopped: 3
+  left"), and Restore after a run put the plain count back; Return on each confirmation answered
+  No, ⇧Tab then Space answered Yes; sorted by Ideal lap, an Update kept the sort, the row and the
+  scroll. The GPS strip of the demo drew its 8 poor seconds hatched and its 7 moderate ones at half
+  height, each hover naming its class. The share card, lap-strip card, Stats ▸ CORNERS BY LAP and
+  HTML report of both sessions held no "top 3", no cut line, no wrong plural. A best-lap Classic
+  export of the demo through the real File ▸ Export flow from v0.28.0's `studio/` and from 0.29.0
+  is byte-identical (9e6f987e…). First opens: the demo lands on its debrief with C1 promoted; the
+  habit-free circuit opens on the Laps grid with its personal-best card, "no corner stands out".
+- **Corners and Coaching on the same corner.** They measure different things: Corners ▸ Lap N is
+  one lap against the best lap, Coaching the median over the clean laps. On the demo, C2 is bold
+  red "+0.07" on lap 5's Corners page while Coaching calls C2 "level with your best lap here — the
+  0.04 s is within timing precision"; C4 is bold "+0.07" on laps 1 and 9, C7 "+0.08" on lap 5 and
+  "+0.07" on lap 13, and Coaching lists neither on its page (both level, +0.03 s). The Corners Δ
+  header says "Δ vs the best lap's same corner", Coaching's headline "(median of 14 clean laps)";
+  the level row's own sentence does not say "typical pass", which is where a reader could take the
+  two as contradicting.
+- **The media.** Re-captured at 0.29.0 from the pinned demo: `debrief.png` and `report.png` changed
+  (#740: one ranked corner), `hero.png`, `og.png` and `quickest.png` changed in the GPS strip only
+  (#737: 64 px, the hatched poor seconds); `map.png`, `moments.png`, `accuracy.png` and
+  `lapstrip.png` are byte-identical (one `lapstrip.png` capture differed in the known 442 pixels, a
+  second reproduced the committed file). The alts of the debrief (README, FIRST_LAP) and the report
+  (landing page) describe the new pictures. The waivers of `data-trust.png`, `ideal-lap.png`,
+  `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4` are renewed, their captions' capture versions
+  unchanged: demo renders of the data-trust and ideal-lap shots are byte-identical to v0.28.0's.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name. The full gate, the soak and the smoke run on the release branch's CI, not in the
+  QA pass. Full Keyboard Access on a real Mac was not checked by any lane (offscreen style only).
+- **Found in this release's QA, and fixed before the tag** (#741): with nothing ranked, Coaching's
+  note said every corner is listed with its reason, while a corner losing under 0.005 s is never a
+  row (the habit-free circuit lists 5 of 7); and the demo's debrief read "from 1 Jun's top corners"
+  for its one ranked corner.
+- **Found in this release's QA, not fixed** (nothing that would hold the release).
+  - **Forget this recording has no keyboard route on a Mac**: it lives only in the Library table's
+    right-click menu.
+  - **Coaching's level row does not say it is the typical pass** that is level (above).
+- **Resolved from section 31**: whether Coaching ranks under the step (the ruling above); the
+  video-export worker's GC guard (#734); the table re-sorting at the end of an Update, a forgotten
+  row counted as could not be measured, and a Clear leaving a line over an empty table (#733); the
+  other outing's row now names itself in its Ideal-cell hover (#733).
+- **Open for the owner** (new, most important first).
+  - **The real-footage coaching rows of the 0064 recording were measured before the rule** and
+    need his machine to re-measure.
+  - **A session where no corner clears the step opens on the normal view, not the debrief**: the
+    existing rule, now more common on habit-free synthetic days (over half); on the published 0068
+    tables every lap set keeps a ranked corner.
+  - **The colour-blind-safe cues are reachable only from the View menu**; the smallest honest
+    improvement is one Shortcuts row.
+  - **The burned export Δ has no non-hue cue** (refusal section 44).
+  - **Full Keyboard Access on a real Mac** was not checked.
+  - **Re-capturing the four real-footage stills** needs his recordings.
+- **Open for the owner** (carried from section 31, re-checked against 0.29.0's changes): a brake
+  point can move by several metres from a hole of two fixes at either rate (section 43); the
+  stuck-row memory is not persisted; the lap strip's ⚠ best cue is drawn by no user route (File ▸
+  Export still offers the strip only with two clean laps); a row whose file is not a readable
+  recording is offered on every Library open; the export ghost's reason for every lap of an all-⚠
+  session; Update waits while the main window's own load runs; `tests/_stale.py` and
+  `tests_for.py`'s timings; and section 30's carried list stands as written there.
