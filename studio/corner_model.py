@@ -48,7 +48,11 @@ _UNSET: Final = _Unset.TOKEN
 # 1 is the first stamped version; a row written before stamps existed carries none and reads as
 # older. tests/test_library_truth.py pins the golden baseline's ideal leaves to this number, so a
 # re-cut that moves one cannot land without the bump.
-IDEAL_VERSION = 1
+# 2: the load-time smoother reads a fix beside a missing one at its own time (`_signal._smooth_timed`).
+# A recording with no missing fix measures the same ideal as under 1, to the bit (the real-recording
+# golden is equivalent); one with a hole can move — the demo's moved 19 ms, toward its truth — and a
+# stored row cannot say which it was, so every row measured under 1 reads as older until reopened.
+IDEAL_VERSION = 2
 
 # The clip a Quickest-passes row plays (`CornerModel.pass_clip`): a lead-in long enough to see the
 # approach (2 s at the demo's 75-95 km/h is 40-55 m; its brake points sit 0-0.2 s before the entry

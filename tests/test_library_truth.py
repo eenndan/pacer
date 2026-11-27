@@ -128,6 +128,12 @@ def test_a_row_measured_by_another_ideal_version_shows_its_number_muted_and_says
             head = cell.toolTip().splitlines()[0]
             assert "older Pacer" in head and "re-open" in head.lower(), cell.toolTip()
         assert cells["GX0065"].text() == fmt_time(46.201), "a stale ideal keeps its number"
+        # Every row the owner has today was stamped 1. Under 2 (the time-aware smoother) such a row
+        # is still listed, keeps its number, is muted and says re-opening updates it: nothing is
+        # dropped and nothing claims the number is wrong.
+        if _CURRENT == 2:
+            assert cells["GX0064"].text() == fmt_time(45.805), cells["GX0064"].text()
+            assert "may not compare" in cells["GX0064"].toolTip(), cells["GX0064"].toolTip()
         newer = {fp: dlg.table.item(_row(dlg, fp), _COL_THEO) for fp in ("GX0066", "GX0067")}
         assert newer["GX0066"].foreground().color().name() == muted
         for fp, cell in newer.items():
@@ -177,6 +183,11 @@ _IDEAL_GOLDEN = {
     1: {"base": 32.79511092416341, "drift_band": 35.90774898123084,
         "drift_median": 35.90774898123084, "drift_noise": 35.90774898123084,
         "gopro": 44.68304687294224, "gopro_sectors": 44.68304687236758,
+        "ref": 32.79511092416341, "ref_cleared": 32.79511092416341},
+    # The time-aware smoother: the synthetic GoPro's two cleaner-removed teleports are re-smoothed.
+    2: {"base": 32.79511092416341, "drift_band": 35.90774898123084,
+        "drift_median": 35.90774898123084, "drift_noise": 35.90774898123084,
+        "gopro": 44.68307288382565, "gopro_sectors": 44.68307288325263,
         "ref": 32.79511092416341, "ref_cleared": 32.79511092416341},
 }
 
