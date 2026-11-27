@@ -174,9 +174,11 @@ def test_every_group_shares_one_key_column():
     assert not _K10_WAS & {d for _k, d in want}, "a K10 row still reads its old description"
     # 33: + Return, Corners ▸ Quickest passes (cool/quickest-passes); 34: + L, loop the pass
     # (cool/pass-loop-slowmo); 35: + ⌥← · ⌥→, the corner walk (cool/play-every-pass); 36: + I,
-    # the live readout over the fullscreen video (cool/fullscreen-readout); 37-48: + the Controls
-    # group, the press rule and the eleven pointer-only commands (cool/buttons-press-from-the-keyboard)
-    assert len(want) == 48, len(want)
+    # the live readout over the fullscreen video (cool/fullscreen-readout); 37-38: + ⌘Space and
+    # ⇧↓ · ⇧↑, the Laps table's multi-select keys (cool/arrows-and-table-cursor); 39-50: + the
+    # Controls group, the press rule and the eleven pointer-only commands
+    # (cool/buttons-press-from-the-keyboard)
+    assert len(want) == 50, len(want)
     for size in (None, "minimum"):
         d = _shown(ShortcutsDialog())
         if size:

@@ -90,7 +90,7 @@ from .stats_moments import MomentsSection
 from .stats_straights import StraightsSection
 from .stats_trust import TrustSection
 from .theme import C
-from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters
+from .widgets import DASH, Tile, WrapLabel, budget_plot_gutters, pass_step_arrows
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -1683,6 +1683,9 @@ class StatsView(QWidget):
         # and it remains the honest fallback below the friction circle's readable floor.
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setWidget(body)
+        # ...and while it has nothing to show, ← / → from a Stats table reach the window's video
+        # step instead of dying in this area's sideways scroll (widgets.pass_step_arrows).
+        pass_step_arrows(scroll)
         self._scroll = scroll
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

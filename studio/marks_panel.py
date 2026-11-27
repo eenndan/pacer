@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 from . import APP_NAME, theme
 from . import marks as marks_model
 from ._signal import DASH, fmt_hms, lap_label
-from .widgets import NUM_ROLE, EmptyState, NumItem, PanelToolbar, icon_button
+from .widgets import NUM_ROLE, EmptyState, NumItem, PanelToolbar, icon_button, pass_step_arrows
 
 # The filter's three senses. WHOSE, not which type: the type filter is a second control, and the
 # question a driver actually opens this page with is "what did I write down?" — which a type list
@@ -154,6 +154,7 @@ class MarksPanel(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        pass_step_arrows(self.table)   # ← / → step the video (widgets.pass_step_arrows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         # "WHAT" WRAPS (LOOK-8, QA 2026-09-26). An auto mark's sentence is the finding itself —

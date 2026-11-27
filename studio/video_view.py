@@ -44,7 +44,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFontMetrics,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -458,6 +467,10 @@ class _LapRulerSlider(QSlider):
         painter.end()
 
 
+# What each verdict's SHAPE is (`_QualityStrip._hatch`), on the strip's resting tooltip.
+STRIP_SHAPES = "Full bar: good · lower half: moderate · hatched: poor · gap: no fix."
+
+
 class _QualityStrip(QWidget):
     """A continuous band of GPS quality under the scrub bar — the app's first LOCATABLE data-trust
     surface.
@@ -654,7 +667,7 @@ class _QualityStrip(QWidget):
             self.setToolTip("")
             return
         self.setToolTip("GPS quality, one cell per second of recording — hover for the numbers.\n"
-                        + tl.summary())
+                        + (STRIP_SHAPES + "\n" if tl.reports_quality else "") + tl.summary())
         self.setAccessibleDescription(tl.summary())
 
     def mouseMoveEvent(self, ev):
@@ -674,11 +687,43 @@ class _QualityStrip(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
         painter.setPen(Qt.NoPen)
+        painter.setBrushOrigin(0, 0)    # the hatch is anchored to the widget, not to each run
         for x, w, cls in runs:
             colour = self.class_colour(cls)
-            if colour is not None:
-                painter.fillRect(x, 0, w, self.INK_H, QColor(colour))
+            if colour is None:
+                continue
+            ink = QColor(colour)
+            if cls == data_quality.MODERATE:
+                low = self.INK_H // 2
+                painter.fillRect(x, self.INK_H - low, w, low, ink)
+            elif cls == data_quality.POOR:
+                painter.fillRect(x, 0, w, self.INK_H, self._hatch(ink))
+            else:
+                painter.fillRect(x, 0, w, self.INK_H, ink)
         painter.end()
+
+    #: The poor hatch's period in px: a diagonal hole every HATCH_PX along each row, so every column
+    #: of the INK_H band keeps at least INK_H - 2 pixels of ink — a one-second dropout still paints.
+    HATCH_PX = 3
+
+    @classmethod
+    def _hatch(cls, ink: QColor) -> QBrush:
+        """`ink` with a diagonal break in it: the poor class's SHAPE (cool/gps-strip-beyond-hue).
+
+        Poor / moderate / good were told apart by hue alone, and under simulated deuteranopia
+        (Machado 2009, severity 1) poor and good sit 1.37:1 apart in luminance, moderate and good
+        1.22:1 under protanopia — while DATA TRUST tells the reader "the bar under the scrubber
+        shows where". So inside the same INK_H each verdict has a shape: good the full band
+        (unchanged, so an all-good recording looks exactly as before), moderate its lower half,
+        poor the full band broken by this hatch, no fix a hole."""
+        n = cls.HATCH_PX
+        tile = QImage(n, n, QImage.Format_ARGB32)
+        tile.fill(Qt.transparent)
+        for i in range(n):
+            for j in range(n):
+                if (i + j) % n:
+                    tile.setPixelColor(i, j, ink)
+        return QBrush(tile)
 
 
 class _MarksBand(QWidget):

@@ -298,6 +298,76 @@ def test_the_strip_follows_the_colourblind_palette():
     print("test_the_strip_follows_the_colourblind_palette OK")
 
 
+def _ink_rows(strip, sentinel="#ff00ff"):
+    """The strip rendered over a `sentinel` fill: per x, the set of rows carrying ink (any pixel the
+    paint changed). Read off the WIDGET'S OWN render, never a colour: the shape is the cue that
+    has to survive without one."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QColor, QImage, QRegion
+    from PySide6.QtWidgets import QWidget
+    img = QImage(strip.width(), strip.height(), QImage.Format_RGB32)
+    img.fill(QColor(sentinel))
+    # No DrawWindowBackground: the widget's own palette fill would cover every row of the sentinel.
+    strip.render(img, QPoint(0, 0), QRegion(), QWidget.RenderFlag.DrawChildren)
+    s = QColor(sentinel).rgb()
+    return img, {x: frozenset(y for y in range(img.height()) if img.pixel(x, y) != s)
+                 for x in range(img.width())}
+
+
+def test_poor_and_moderate_read_from_shape_alone_and_good_looks_as_it_always_did():
+    """cool/gps-strip-beyond-hue. The strip graded poor / moderate / good by HUE ALONE, and under
+    simulated colour-vision deficiency (Machado 2009, severity 1) poor and good sit 1.37:1 apart in
+    luminance (deuteranopia), moderate and good 1.22:1 (protanopia) — while DATA TRUST tells the
+    reader "the bar under the scrubber shows where". So each class now has its own SHAPE inside the
+    same INK_H: good the full band (unchanged), moderate its lower half, poor the full band broken
+    by a diagonal hatch, no fix a hole (unchanged). Measured on the widget's own render, by which
+    rows each column inks — no colour read at all.
+
+    And the default case does not move: a recording whose GPS is good throughout paints exactly the
+    solid band it always did, pixel for pixel."""
+    from PySide6.QtGui import QColor
+    times, rejected, dop = _trace([(40, _Fix()), (40, _Fix(dop=8.0)), (40, _Fix(fix=0, dop=99.0))])
+    tl = data_quality.build_quality_timeline(times, rejected, dop, span_s=120.0)
+    assert {data_quality.GOOD, data_quality.MODERATE, data_quality.POOR} <= set(tl.counts()), \
+        tl.counts()
+    strip = _strip(tl)
+    h = video_view._QualityStrip.INK_H
+    assert strip.height() == h                       # the height budget is unchanged
+    _img, rows = _ink_rows(strip)
+    full = frozenset(range(h))
+    by_cls: dict[int, set] = {}
+    for x, w, cls in strip.runs():
+        for xx in range(x, x + w):
+            by_cls.setdefault(cls, set()).add(rows[xx])
+    good, moderate, poor = (by_cls[c] for c in (data_quality.GOOD, data_quality.MODERATE,
+                                                data_quality.POOR))
+    assert good == {full}, good                                      # the full band, every column
+    assert moderate == {frozenset(range(h - h // 2, h))}, moderate   # its lower half, every column
+    # broken but never thin: every poor column keeps at least half the band (worst-wins: a
+    # one-second dropout, one column wide, still paints), and the break moves along x (a hatch)
+    assert all(r != full and len(r) >= h // 2 for r in poor), poor
+    assert len(poor) > 1, poor
+    # Shape alone tells the three apart: no column profile is shared between two classes.
+    assert not (good & moderate) and not (good & poor) and not (moderate & poor)
+
+    # All-good GPS: exactly today's band — the solid good colour over the whole run, nothing else.
+    times, rejected, dop = _trace([(120, _Fix())])
+    clean = _strip(data_quality.build_quality_timeline(times, rejected, dop, span_s=120.0))
+    img, _rows = _ink_rows(clean)
+    good_rgb = QColor(video_view._QualityStrip.class_colour(data_quality.GOOD)).rgb()
+    (x, w, cls), = clean.runs()
+    assert cls == data_quality.GOOD
+    for xx in range(img.width()):
+        for y in range(h):
+            assert (img.pixel(xx, y) == good_rgb) is (x <= xx < x + w), (xx, y)
+    # The resting tooltip says which shape is which — only where the strip grades anything.
+    assert video_view.STRIP_SHAPES in strip.toolTip(), strip.toolTip()
+    times, rejected, dop = _trace([(10, _Fix(fix=-1, dop=-1.0))])
+    gps5 = _strip(data_quality.build_quality_timeline(times, rejected, dop, span_s=10.0))
+    assert video_view.STRIP_SHAPES not in gps5.toolTip(), gps5.toolTip()
+    print("test_poor_and_moderate_read_from_shape_alone_and_good_looks_as_it_always_did OK")
+
+
 # ===================================================== 5. the DATA TRUST rotation row
 class _Check:
     """A stand-in with `rotation.RotationCheck`'s read surface (the card only reads accessors)."""
@@ -724,6 +794,7 @@ def _main():
     test_a_camera_that_reports_no_quality_is_never_painted_green()
     test_every_strip_colour_clears_wcag_and_the_deuteranopia_ramp_in_both_palettes()
     test_the_strip_follows_the_colourblind_palette()
+    test_poor_and_moderate_read_from_shape_alone_and_good_looks_as_it_always_did()
     test_a_recording_with_no_gps_is_not_sold_as_the_true_clock()
     test_the_rotation_row_reads_the_closed_lap_ratios_through_the_accessors()
     test_the_rotation_row_is_the_only_cross_check_with_an_exact_target_and_says_so()

@@ -6,9 +6,11 @@ safe to reuse from any dialog or panel without dragging that surface's dependenc
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
+    QAbstractScrollArea,
     QApplication,
     QHBoxLayout,
     QLabel,
@@ -312,6 +314,53 @@ class ActionChip(QPushButton):
         super().keyPressEvent(event)
 
 
+class _StepArrowsUp(QObject):
+    """The event filter behind `pass_step_arrows` (see there). A child of its table, so it goes
+    with it."""
+
+    _KEYS = (Qt.Key_Left, Qt.Key_Right)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and event.key() in self._KEYS:
+            mods = event.modifiers() & ~Qt.KeypadModifier
+            if mods in (Qt.NoModifier, Qt.ShiftModifier) and self._passes(obj):
+                # Ignored AND filtered: the table never sees the press, and an ignored key event
+                # travels up the parent chain to StudioWindow.keyPressEvent, the step's home.
+                event.ignore()
+                return True
+        return False
+
+    @staticmethod
+    def _passes(obj) -> bool:
+        if isinstance(obj, QAbstractItemView):
+            return (obj.selectionBehavior() == QAbstractItemView.SelectRows
+                    and obj.state() != QAbstractItemView.EditingState)
+        # A scroll area (the Stats page's): it scrolls sideways on ← / →, and accepts the key even
+        # with nothing to scroll. Only while it HAS a sideways range does the key keep that job.
+        bar = obj.horizontalScrollBar()
+        return bar.maximum() <= bar.minimum()
+
+
+def pass_step_arrows(table: QAbstractScrollArea) -> None:
+    """Let ← / → (and ⇧← / ⇧→) leave a ROW-SELECT table for the window, where they step the video.
+
+    The window steps the video ±1 s (⇧ ±5 s) in `StudioWindow.keyPressEvent`, which only runs for a
+    key the focused widget did not use. A QTableView uses ← / → to walk a CELL cursor along the row
+    — and in a table that selects whole rows that cursor is invisible and carries no meaning, so the
+    keys simply vanished: measured on the real window, after clicking a lap in column 2 it took
+    three → presses before a step fired, and ← stepped only from column 0. With this installed
+    the table never sees those two keys while it selects rows, so they always reach the step.
+
+    ↑ / ↓, Home / End, Page keys, ⌘↓ / ⌘Space / ⇧↓ (multi-select) and type-ahead are untouched,
+    and so is ⌥← / ⌥→ (the corner walk, a menu shortcut that fires before any key event). Checked
+    at KEY time, not install time: a table that selects cells, or is editing a cell, keeps its
+    arrows — the editor has the keys then, and ← must move its caret.
+
+    Also for a plain SCROLL AREA a focused widget sits inside (the Stats page): QAbstractScrollArea
+    takes ← / → to scroll sideways and accepts them even when there is nothing to scroll, so every
+    press from a Stats table died there. It passes them while it has no sideways range, and keeps
+    them for scrolling while it has one (its rare narrow-pane fallback)."""
+    table.installEventFilter(_StepArrowsUp(table))
 #: The keys that press a keyboard-focused button: the platform's (Space), plus Return / Enter,
 #: which nothing in the main window binds. See `pressable_focus`.
 PRESS_KEYS = (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)

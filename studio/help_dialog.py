@@ -162,6 +162,15 @@ COMMANDS: list[Command] = [
             "Drag the start/finish line on the map: fix lap timing (key for unknown tracks)"),
     Command("Analysis", "G", "Toggle the g-meter overlay", run="toggle_gmeter"),
     Command("Analysis", "C", "Toggle compare mode (two laps side by side)", run="toggle_compare"),
+    # The Laps table's own multi-select keys (Qt's, on the focused grid — so no `run`): the one way
+    # to put a NON-adjacent second lap on the charts and map without the pointer, and it worked
+    # for months documented nowhere. ⌘↓ / ⌘↑ walk the cursor without selecting; ⌘Space adds the
+    # lap under it. In Qt's NativeText, like the corner-walk row, so the glyphs are the menu bar's.
+    Command("Analysis", QKeySequence("Ctrl+Space"),
+            "Laps table: add the lap under the cursor — ⌘↓ / ⌘↑ move the cursor without selecting"),
+    Command("Analysis", "  ·  ".join(QKeySequence(k).toString(QKeySequence.NativeText)
+                                     for k in ("Shift+Down", "Shift+Up")),
+            "Laps table: extend the selection to the next / previous lap"),
     # The charts' two instrument gestures. Both are named commands rather than lambdas for the same
     # reason every row here is: the palette has to be able to invoke what the key binds.
     Command("Analysis", "D",

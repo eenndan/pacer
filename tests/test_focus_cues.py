@@ -290,6 +290,51 @@ def _boxes(w):
     return b
 
 
+def test_every_row_select_table_gives_left_and_right_to_the_window():
+    """← / → (⇧ ±5 s) step the video from the WINDOW's keyPressEvent, which only sees a key the
+    focused widget left alone. A table that selects whole rows has no use for them — its cell
+    cursor is invisible — yet the lap table and the Coaching table each swallowed them to walk it
+    (w26 discovery: three → presses before a step). Every focusable row-select table the view
+    builds, on every page, must let both keys (and their ⇧ forms) travel up untouched — a table
+    added tomorrow included, which is why this walks the tree rather than naming four tables.
+    Real key events through QApplication, so they propagate exactly as a press does."""
+    from PySide6.QtCore import QEvent, QObject
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QAbstractItemView
+
+    v = _view()
+
+    class _Top(QObject):
+        def __init__(self):
+            super().__init__()
+            self.got = 0
+
+        def eventFilter(self, obj, event):
+            if (obj is v and event.type() == QEvent.KeyPress
+                    and event.key() in (Qt.Key_Left, Qt.Key_Right)):
+                self.got += 1
+            return False
+
+    top = _Top()
+    v.installEventFilter(top)
+    tables = [t for t in v.findChildren(QAbstractItemView)
+              if t.selectionBehavior() == QAbstractItemView.SelectRows
+              and t.focusPolicy() != Qt.NoFocus]
+    assert len(tables) >= 4, f"only {len(tables)} row-select tables found: the walk is broken"
+    kept = []
+    try:
+        for t in tables:
+            for key in (Qt.Key_Left, Qt.Key_Right):
+                for mod in (Qt.NoModifier, Qt.ShiftModifier):
+                    before = top.got
+                    QTest.keyClick(t, key, mod)
+                    if top.got != before + 1:
+                        kept.append(f"{type(t.parent()).__name__}>{type(t).__name__} "
+                                    f"{'Shift+' if mod else ''}{'Right' if key == Qt.Key_Right else 'Left'}")
+    finally:
+        v.removeEventFilter(top)
+    assert not kept, f"row-select tables that keep ←/→ from the window's video step: {kept}"
+    print(f"test_every_row_select_table_gives_left_and_right_to_the_window OK ({len(tables)} tables)")
 # ------------------------------------- w26: a focused button is pressed by the keyboard, not by Space
 _PLAYED: list = []
 _WINDOW = None
@@ -467,6 +512,7 @@ def test_lap_race_takes_its_tab_stop_in_visual_order():
 
 
 def _run_all():
+    test_every_row_select_table_gives_left_and_right_to_the_window()
     test_every_tab_stop_paints_a_focus_cue()
     test_a_checked_toggle_is_still_visibly_focusable()
     test_the_table_focus_ring_paints_on_all_four_edges()
