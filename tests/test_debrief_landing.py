@@ -204,7 +204,12 @@ def test_the_lead_says_it_is_a_default_and_how_to_undo_it():
     demo = debrief_note([7, 5, 3], saved=False)
     assert "Pacer put C7, C5 and C3" in demo and "a default, not a decision" in demo, demo
     assert "for next time" in three and "for next time" not in demo, demo
-    for note in (three, one, none, demo):
+    # Release QA of 0.29.0: since Coaching ranks only past the step, the demo ranks ONE corner, and
+    # the lead said "Pacer put C1, from 1 Jun's top corners" — a plural for a shortlist of one.
+    alone = debrief_note([1], saved=False, ranked=1)
+    assert "'s top corner," in alone and "top corners" not in alone, alone
+    assert "'s top corners," in debrief_note([4], ranked=3), debrief_note([4], ranked=3)
+    for note in (three, one, none, demo, alone):
         assert note.endswith("Esc returns to your usual layout."), note
     print(f"ok lead: {three!r}; the demo's: {demo!r}")
 
@@ -479,7 +484,7 @@ def test_the_journey_on_the_real_window():
             # Its top corners named by the session's own day (`focus.open_day`), never "today's"
             # on a recording made another day.
             day = panel.focus_block.now_day
-            assert day != "today" and debrief_note(short, day=day) in lead, (day, lead)
+            assert day != "today" and debrief_note(short, day=day, ranked=len(short)) in lead, (day, lead)
             # The session log tells the pre-fill (Pacer's default, no click) from a hand edit, so a
             # race-day read can count the edits (FIRST-OPEN-LOOP-3).
             shown = _said(said, "debrief shown")
