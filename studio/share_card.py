@@ -220,7 +220,7 @@ class CardData:
     #                       (`provenance_line`), or "" — the footer then keeps its tagline
     no_opp: str = ""      # the line in the opportunity's place when `top_opp` is None
     #                       (`no_opportunity_line`), or "" — the row is then left empty
-    best_warn: str = ""   # "⚠ GPS dropout · not counted in your bests" when the best shown is
+    best_warn: str = ""   # "⚠ GPS dropout — not counted in your bests" when the best shown is
     #                       itself a ⚠ lap (`best_warning`), or ""
 
 
@@ -244,14 +244,11 @@ def provenance_line(session) -> str:
 
 
 def best_warning(session, best_id: int | None) -> str:
-    """The ⚠ cue for a best lap that is itself a ⚠ lap — "⚠ GPS dropout · not counted in your
-    bests" — or "". The bests fall back to a ⚠ lap only when every lap wears one (bests.py), and
-    the card printed it as "BEST LAP" with nothing the lap table gives that row (DECISIONS §28).
-    The words are the ⚠ kinds' own (`data_quality.WARN_REASON`, `NOT_COUNTED`)."""
-    kind = data_quality.lap_warning_kinds(session).get(best_id) if best_id is not None else None
-    if kind is None:
-        return ""
-    return f"⚠ {data_quality.WARN_REASON[kind]} · {data_quality.NOT_COUNTED}"
+    """The ⚠ cue for a best lap that is itself a ⚠ lap — "⚠ GPS dropout — not counted in your
+    bests", the export dialogs' own line (`data_quality.not_counted_line`) — or "". The bests fall
+    back to a ⚠ lap only when every lap wears one (bests.py), and the card printed it as "BEST
+    LAP" with nothing the lap table gives that row (DECISIONS §28)."""
+    return data_quality.not_counted_line(session, best_id)
 
 
 def no_opportunity_line(session, opps) -> str:
@@ -558,9 +555,9 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
     # --- hero: the best lap, big ---
     _draw_text(p, pad, 240, "BEST LAP", _font(28, theme.W_SEMIBOLD), theme.C.text_muted)
     if data.best_warn:   # a ⚠ best (every lap flagged): its cue on the label row, in caveat amber
-        label_w = QFontMetrics(_font(28, theme.W_SEMIBOLD)).horizontalAdvance("BEST LAP")
-        _draw_text(p, pad + label_w + 20, 240, data.best_warn, _font(28, theme.W_SEMIBOLD),
-                   theme.C.accent)
+        x = pad + QFontMetrics(_font(28, theme.W_SEMIBOLD)).horizontalAdvance("BEST LAP") + 20
+        warn, warn_font = _fit_line(p, data.best_warn, right - x, (28, 24, 21), theme.W_SEMIBOLD)
+        _draw_text(p, x, 240, warn, warn_font, theme.C.accent)
     if data.pb:     # the PB standing, on the label row of the time it is about (JOURNEY-7)
         _draw_text(p, 0, 240, data.pb, _font(28, theme.W_SEMIBOLD), theme.ahead_colour(),
                    align_right_at=right)

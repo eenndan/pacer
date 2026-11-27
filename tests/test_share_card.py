@@ -176,7 +176,7 @@ def test_a_best_lap_that_is_itself_a_warned_lap_carries_its_cue():
             return {1, 2, 3}
 
     warned = share_card.card_data(_AllDropouts(degraded=True), unit="kmh")
-    assert warned.best_warn == f"⚠ GPS dropout · {data_quality.NOT_COUNTED}", warned.best_warn
+    assert warned.best_warn == f"⚠ GPS dropout — {data_quality.NOT_COUNTED}", warned.best_warn
     assert share_card.card_data(FakeSession(), unit="kmh").best_warn == ""
     # Drawn: caveat-amber ink on the label row, right of "BEST LAP", only for the warned best.
     ink = {name: _row_ink(share_card.render_card(d), 205, 245, theme.C.accent)
@@ -184,6 +184,12 @@ def test_a_best_lap_that_is_itself_a_warned_lap_carries_its_cue():
     assert len(ink["warned"]) > 50 and min(ink["warned"]) > 72 + 100, ink["warned"][:5]
     assert ink["clean"] == [], "a clean best lap's label row grew a cue"
     assert max(ink["warned"]) < share_card.CARD_W - 72, "the cue runs past the content box"
+    # The longest reason (a lap timed across a missing chapter) is fitted, whole, in the box.
+    longest = share_card.CardData(**{**warned.__dict__, "best_warn": max(
+        (f"⚠ {w} — {data_quality.NOT_COUNTED}" for w in data_quality.WARN_REASON.values()),
+        key=len)})
+    ink = _row_ink(share_card.render_card(longest), 205, 245, theme.C.accent)
+    assert ink and max(ink) < share_card.CARD_W - 72, max(ink, default=None)
     print("test_a_best_lap_that_is_itself_a_warned_lap_carries_its_cue OK")
 
 
