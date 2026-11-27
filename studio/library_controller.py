@@ -164,6 +164,16 @@ def missing_footage(entry: dict) -> tuple[bool, str | None]:
     return (not paths or missing is not None), missing
 
 
+def _files_identity(paths: list[str]) -> tuple | None:
+    """Each file's (real path, size, mtime) — what tells "the same files" from a copy put there
+    since — or None when one cannot be stat'ed."""
+    try:
+        return tuple((os.path.realpath(p), st.st_size, st.st_mtime_ns)
+                     for p in paths for st in (os.stat(p),))
+    except OSError:
+        return None
+
+
 class IdealUpdater(QObject):
     """Library ▸ Update (cool/library-update-ideals): re-measure the rows an older ideal-lap maths
     measured, one recording at a time, off the UI thread, and write each row the way a re-open
@@ -184,6 +194,7 @@ class IdealUpdater(QObject):
     a window closing mid-row waits for it (`StudioWindow._drain_load_workers`)."""
 
     progress = Signal(int, int)       # (rows done, rows to do)
+    row_written = Signal(dict)        # a row as it now stands, the moment it is written
     finished = Signal(dict)           # the summary (`_finish`)
 
     _WAIT_MS = 250                    # how often a row waiting on the window's own load looks again
@@ -195,9 +206,20 @@ class IdealUpdater(QObject):
         self._queue: list[dict] = []
         self._worker = None
         self._running = False
+        # A row whose files measured as ANOTHER outing (`library.REMEASURE_OTHER`): fingerprint ->
+        # those files' identity then. The row keys on the first GPS fix's clock, which only a read
+        # of the recording gives, so it is remembered for the window's life rather than re-read on
+        # every Library open — and only while the files at its paths are those same files.
+        self._other_recording: dict[str, tuple | None] = {}
 
     def running(self) -> bool:
         return self._running
+
+    def another_recording(self, row: dict) -> bool:
+        """True when this window's Update found `row`'s paths holding another recording and those
+        files have not changed since: it is not offered again (`LibraryDialog`)."""
+        then = self._other_recording.get(str(row.get("fingerprint")))
+        return then is not None and then == _files_identity(row.get("paths") or [])
 
     def start(self, rows: list[dict]) -> None:
         if self._running or not rows:
@@ -267,10 +289,13 @@ class IdealUpdater(QObject):
             self._failed.append((row, f"the library could not be written ({exc.strerror or exc})"))
             return
         if isinstance(written, str):
+            if written == library.REMEASURE_OTHER:
+                self._other_recording[fingerprint] = _files_identity(row.get("paths") or [])
             self._failed.append((row, written))
             return
         before, after = written
         self._updated.append(after)
+        self.row_written.emit(after)
         if library.remeasure_changes(before, after):
             self._changed.append((before, after))
 

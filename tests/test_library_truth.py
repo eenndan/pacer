@@ -676,6 +676,87 @@ def test_update_remeasures_the_older_ideals_and_touches_nothing_else():
         library.save(library.empty_index())
 
 
+def test_a_row_whose_file_is_now_another_recording_is_not_offered_again():
+    """A row whose path now holds ANOTHER outing (its own file is gone; a recording three days on
+    sits at the path) fails Update with "the file at that path is now a different recording". From
+    then on it is not offered — the next Library open counts it in the line's hover with that
+    reason, the way a recording not on this Mac is, and a second run never reads it — and it is
+    never written. During the run each row's Ideal cell is redrawn as its row is written, not all
+    at once at the end, and the selection stays where it was."""
+    from studio.library_dialog import _COL_DATE, _COL_THEO, FP_ROLE, STALE_ROLE
+    world = _update_world()
+    mine = world["measured"]["9105"]
+    assert mine.get("start_ms"), mine
+    # 9105's row as an outing three days earlier stored it: the file at its path is not that one.
+    gone = dict(mine, ideal_version=1, theoretical=mine["theoretical"] + 0.021,
+                start_ms=mine["start_ms"] - 3 * 86_400_000)
+    first = dict(world["measured"]["9102"], ideal_version=1)
+    library.save({"entries": [first, gone]})
+    stored_gone = next(e for e in library.load()["entries"] if e["fingerprint"] == "GX9105")
+    from studio.app import StudioWindow
+    win = StudioWindow([])
+    seen = {}
+
+    def ideal_muted(dlg, fp):
+        for r in range(dlg.table.rowCount()):
+            if dlg.table.item(r, _COL_DATE).data(FP_ROLE) == fp:
+                return bool(dlg.table.item(r, _COL_THEO).data(STALE_ROLE))
+        raise AssertionError(f"{fp} is not in the table")
+
+    def selected_fp(dlg):
+        rows = dlg.table.selectionModel().selectedRows()
+        return rows[0].data(FP_ROLE) if rows else None
+
+    def run(dlg):
+        updater = win.library_ctl.ideal_updater()
+        for r in range(dlg.table.rowCount()):
+            if dlg.table.item(r, _COL_DATE).data(FP_ROLE) == "GX9105":
+                dlg.table.selectRow(r)
+        seen["selected"] = selected_fp(dlg)
+
+        def mid(done, _total):
+            if done == 1:       # 9102 written, 9105 still to read
+                seen["mid"] = (ideal_muted(dlg, "GX9102"), ideal_muted(dlg, "GX9105"),
+                               selected_fp(dlg))
+        updater.progress.connect(mid)
+        dlg.update_btn.click()
+        _spin_until(lambda: not updater.running())
+        updater.progress.disconnect(mid)
+        seen["first"] = dlg.update_line.toolTip()
+
+    def again(dlg):
+        seen["again"] = (dlg.update_line.text(), dlg.update_line.toolTip(),
+                         dlg.update_btn.isVisible())
+        dlg.update_btn.click()
+        seen["running"] = dlg.update_line.text()
+        _spin_until(lambda: not win.library_ctl.ideal_updater().running())
+    try:
+        _in_library(win, run)
+        _spin_until(lambda: not win._load_workers)
+        # Another older row arrives (as a downgrade would leave one), so the line has a count.
+        library.save({"entries": library.load()["entries"]
+                      + [dict(world["measured"]["9103"], ideal_version=1)]})
+        _in_library(win, again)
+        _spin_until(lambda: not win._load_workers)
+    finally:
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()
+    try:
+        assert f"GX019105.MP4: {library.REMEASURE_OTHER}" in seen["first"], seen["first"]
+        assert seen["mid"] == (False, True, "GX9105"), seen["mid"]
+        text, tip, button = seen["again"]
+        assert text == "1 ideal lap was measured by an older Pacer.", text
+        assert button
+        assert f"GX019105.MP4: {library.REMEASURE_OTHER}" in tip, tip
+        assert seen["running"] == "Updating 1 of 1…", seen["running"]
+        rows = {e["fingerprint"]: e for e in library.load()["entries"]}
+        assert rows["GX9105"] == stored_gone, "the other outing's row was touched"
+        assert rows["GX9103"]["ideal_version"] == _CURRENT
+    finally:
+        library.save(library.empty_index())
+
+
 def test_cancelling_an_update_mid_read_leaves_every_row_whole():
     """Cancel while the second recording is being read: the first row stays updated, every other
     row is byte for byte what it was, the read stops, and the line says it stopped."""

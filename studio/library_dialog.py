@@ -978,6 +978,7 @@ class LibraryDialog(QDialog):
         update_row.addStretch(1)
         if self._updater is not None:
             self._updater.progress.connect(self._on_update_progress)
+            self._updater.row_written.connect(self._on_row_written)
             self._updater.finished.connect(self._on_update_finished)
         self._sync_update_line()
 
@@ -1352,6 +1353,7 @@ class LibraryDialog(QDialog):
         if self._updater is not None:
             # The run is this window's: it stops with it, and nothing it says lands on a dead one.
             self._updater.progress.disconnect(self._on_update_progress)
+            self._updater.row_written.disconnect(self._on_row_written)
             self._updater.finished.disconnect(self._on_update_finished)
             self._updater.cancel()
         super().done(result)
@@ -1367,6 +1369,11 @@ class LibraryDialog(QDialog):
         # A row this window's run could not measure is not offered again: it would only fail again.
         failed = {r.get("fingerprint") for r, _why in (summary or {}).get("failed") or []}
         present = [e for e in present if e.get("fingerprint") not in failed]
+        # Nor is one whose path an earlier run found holding another recording: like a recording
+        # not on this Mac, its own file is gone, so it is named in the hover and left alone.
+        other = getattr(self._updater, "another_recording", None)
+        elsewhere = [e for e in present if other is not None and other(e)]
+        present = [e for e in present if e not in elsewhere]
         self._update_rows = present
         if summary is not None:
             text, tip = _update_summary_text(summary)
@@ -1382,6 +1389,9 @@ class LibraryDialog(QDialog):
             tip += ("\n\n" + f"{_plural(m, 'recording')} {'is' if m == 1 else 'are'} not on this "
                     "Mac, so " + ("its" if m == 1 else "their") + " ideal stays as it is until "
                     + ("it is" if m == 1 else "they are") + " opened again.")
+        if elsewhere and (present or summary is not None):
+            tip += "\n\n" + "\n".join(f"{_entry_name(e)}: {_library.REMEASURE_OTHER}, so its "
+                                      "ideal stays as it is." for e in elsewhere)
         self.update_line.setText(text)
         self.update_line.setToolTip(tip)
         self.update_line.setVisible(bool(text) and self._updater is not None)
@@ -1409,6 +1419,22 @@ class LibraryDialog(QDialog):
         self.update_line.setText(f"Updating {min(done + 1, total)} of {total}…")
         self.update_line.setToolTip(UPDATE_LINE_TIP)
         self.update_line.setVisible(True)
+
+    def _on_row_written(self, row: dict) -> None:
+        """Redraw the one row Update has just written, in place: its Ideal cell un-mutes as it is
+        measured, not all at once at the end. Selection, scroll and filter stay as they are."""
+        fp = row.get("fingerprint")
+        self._entries = [row if e.get("fingerprint") == fp else e for e in self._entries]
+        self._index = {**self._index, "entries": [row if e.get("fingerprint") == fp else e
+                                                 for e in self._index.get("entries", [])]}
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, _COL_DATE)
+            if item is not None and item.data(FP_ROLE) == fp:
+                sorting = self.table.isSortingEnabled()
+                self.table.setSortingEnabled(False)    # so the row stays put while it is refilled
+                self._fill_rows([(r, row)])
+                self.table.setSortingEnabled(sorting)
+                return
 
     def _on_update_finished(self, summary: dict) -> None:
         self._update_summary = summary
@@ -1554,14 +1580,15 @@ class LibraryDialog(QDialog):
         self._on_selection()                         # nothing visible/usable → empty state
 
     # ------------------------------------------------------------------ table build
-    def _fill_rows(self):
-        """Populate one row per entry. The DATE cell carries the row's metadata (paths / track /
+    def _fill_rows(self, rows=None):
+        """Populate one row per entry, or only `rows`: (table row, entry) pairs, as Update writes
+        them (`_on_row_written`). The DATE cell carries the row's metadata (paths / track /
         missing flag) in its data roles; a missing-file row is greyed across all columns and
         selectable but never openable, and a no-laps row is greyed and disabled. Sorting is OFF
         here (re-enabled by the caller) so insertion order is preserved while filling."""
         dim = QBrush(QColor(C.text_muted))
         both = _library.tracks_both_ways(self._index)
-        for r, e in enumerate(self._entries):
+        for r, e in enumerate(self._entries) if rows is None else rows:
             missing = _entry_missing(e)
             junk = _entry_junk(e)
             disabled = missing or junk
