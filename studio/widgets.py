@@ -421,12 +421,45 @@ class KeyboardPress(QObject):
 
     def _on_focus_changed(self, _old, new) -> None:
         if self._tabbing and isinstance(new, QAbstractButton):
-            self._button = new
+            self._hold(new)
             if not new.property("_keyboardPress"):
                 new.setProperty("_keyboardPress", True)
                 new.installEventFilter(self)
         else:
-            self._button = None
+            self._hold(None)
+
+    def _hold(self, button: QAbstractButton | None) -> None:
+        """Remember (or forget) the Tab-reached button. While one is held, an APPLICATION-level
+        filter watches for a mouse press: the map, the charts, the video and every panel background
+        take no focus, so a click there changes no focus and nothing else would tell this object
+        the user had moved on (N1 of the #739 re-review: Tab onto Brake/Throttle, click the map,
+        Space pressed the toggle). Installed only while a button is held, so the app pays a Python
+        call per event only in that state, never during ordinary playback."""
+        app = QApplication.instance()
+        if (button is None) != (self._button is None):
+            if button is None:
+                app.removeEventFilter(self)
+            else:
+                app.installEventFilter(self)
+        self._button = button
+
+    def _mouse_pressed(self, obj) -> None:
+        """A press anywhere forgets the button. When the press lands where no widget will take the
+        focus (Qt gives it to the clicked widget or the first ancestor with ClickFocus), the button
+        gives its focus up as well: a ring left on a button Space no longer presses would say the
+        opposite of what the key does. A press on the button itself is just a click."""
+        held = self._current()
+        self._hold(None)
+        if held is None or obj is held or held.isAncestorOf(obj):
+            return
+        w = obj
+        while w is not None:
+            if w.isEnabled() and w.focusPolicy() & Qt.ClickFocus:
+                return                       # Qt moves the focus there itself
+            if w.isWindow():
+                break
+            w = w.parentWidget()
+        held.clearFocus()
 
     def _current(self) -> QAbstractButton | None:
         b = self._button
@@ -446,6 +479,12 @@ class KeyboardPress(QObject):
         return self._current() if _plain_press(event) else None
 
     def eventFilter(self, obj, event):
+        # A QWidget only: the platform delivers a press to the window's QWindow first, and only
+        # the widget it is then routed to says where the click landed.
+        if (event.type() == QEvent.MouseButtonPress and self._button is not None
+                and isinstance(obj, QWidget)):
+            self._mouse_pressed(obj)
+            return False
         if (event.type() == QEvent.KeyPress and event.key() != Qt.Key_Space
                 and _plain_press(event) and obj is self._current()):
             if not event.isAutoRepeat():

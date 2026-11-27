@@ -3002,6 +3002,7 @@ class CornerTable(QWidget):
         self._speed_unit = units.DEFAULT_UNIT
         self._hover_row = -1         # the row under the pointer (L3-07), -1 for none
         self.table = QTableWidget(0, len(CORNER_COLUMNS))
+        self.table.setTabKeyNavigation(False)   # Tab leaves the grid (see LapTable): no cell trap
         self.table.setHorizontalHeaderLabels(CORNER_COLUMNS)
         # Once: this table never re-labels its headers (see _apply_corner_tips, which rewrites the
         # Δ column's TEXT on the existing item precisely to keep the tooltips), so the alignment
@@ -3915,6 +3916,7 @@ class QuickestPassTable(QWidget):
                                             GRID_TEXT_INSET, theme.SPACE_XXS)
         self.not_counted.setVisible(False)
         self.table = QTableWidget(0, len(QUICKEST_COLUMNS))
+        self.table.setTabKeyNavigation(False)   # Tab leaves the grid (see LapTable): no cell trap
         self.table.setHorizontalHeaderLabels(QUICKEST_COLUMNS)
         for c, tip in enumerate(QUICKEST_COL_TIPS):
             self.table.horizontalHeaderItem(c).setToolTip(tip)

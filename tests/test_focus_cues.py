@@ -605,6 +605,102 @@ def test_space_never_presses_a_button_qt_moved_the_focus_to():
     print("test_space_never_presses_a_button_qt_moved_the_focus_to OK")
 
 
+def test_a_mouse_press_anywhere_forgets_the_tabbed_button():
+    """N1 of the #739 re-review: Tab onto Brake/Throttle, click the middle of the map or the
+    charts, press Space — the button was pressed and nothing played. Those surfaces take no focus,
+    so no focus change ever told KeyboardPress the user had moved on. Now any mouse press in the
+    window forgets the Tab-reached button; and when the press lands where no widget takes the
+    focus, the button gives its focus (and ring) up too, so what is drawn and what Space does
+    agree. A click on the Tab-reached button itself is just a click, and forgets it as well."""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QAbstractButton
+    win = _window_with_view()
+    v = win.view
+    b = v.plots.brake_throttle_btn
+    targets = [("map", v.map), ("charts", v.plots), ("video", v.video), ("scrubber", v.video.slider),
+               ("hero readout", v.diff_box), ("map header", v._map_header),
+               ("lap panel header", v._table_header), ("the button itself", b)]
+    log = []
+    # ...and a no-focus surface once more THROUGH THE WINDOW: a real click reaches the QWindow first and is
+    # routed to the widget under it, which is the delivery the app sees (QTest on a widget skips it).
+    targets.append(("hero readout, via the window", v.diff_box))
+    for what, target in targets:
+        assert _tab_to(win, b), "Tab never reaches Brake/Throttle"
+        was = b.isChecked()
+        if what.endswith("via the window"):
+            QTest.mouseClick(win.windowHandle(), Qt.LeftButton, Qt.NoModifier,
+                             target.mapTo(win, target.rect().center()))
+        else:
+            QTest.mouseClick(target, Qt.LeftButton, Qt.NoModifier, target.rect().center())
+        _settle(3)
+        if b.isChecked() != was:
+            b.click()                          # the click on the button toggled it: put it back
+            _settle(2)
+        fw = _APP.focusWidget()
+        _PLAYED.clear()
+        QTest.keyPress(fw or win, Qt.Key_Space)
+        down = isinstance(fw, QAbstractButton) and fw.isDown()
+        if down:
+            fw.blockSignals(True)
+        QTest.keyRelease(fw or win, Qt.Key_Space)
+        if down:
+            fw.blockSignals(False)
+        _settle(2)
+        ring_left = fw is b and target is not b   # the ring stayed on a button Space no longer presses
+        if down or _PLAYED != [1] or ring_left:
+            log.append(f"click {what}: focus={_label(fw) if fw else None} pressed={down} "
+                       f"played={len(_PLAYED)}")
+    assert not log, log
+    print(f"test_a_mouse_press_anywhere_forgets_the_tabbed_button OK ({len(targets)} targets)")
+
+
+def test_no_table_keeps_tab_and_every_text_field_tabs_on_to_a_button():
+    """N2 of the #739 re-review: Tab out of the Marks search went into the marks table and stayed
+    there — Qt's cell-wise Tab navigation is on by default, and the Coaching, Corners and Marks
+    grids all kept every Tab press, so the controls after them (and every button reached only by
+    Tab) were out of the keyboard's reach. On every lap-panel page of the demo, one Tab from each
+    focusable table must leave it, and Tab from each text field must reach a button."""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QAbstractButton, QAbstractItemView, QLineEdit, QPlainTextEdit
+    win = _demo_window()
+    tb = win.view.tab_bar
+    traps, dead_ends, tables, fields = [], [], 0, 0
+    try:
+        for page in range(tb.count()):
+            tb.setCurrentIndex(page)
+            _settle(4)
+            for t in win.view.findChildren(QAbstractItemView):
+                if not (t.isVisible() and t.focusPolicy() & Qt.TabFocus):
+                    continue
+                tables += 1
+                win.activateWindow()
+                t.setFocus(Qt.MouseFocusReason)
+                QTest.keyClick(t, Qt.Key_Tab)
+                if _APP.focusWidget() is t:
+                    traps.append(f"{tb.tabText(page)}: {type(t.parentWidget()).__name__}>{_label(t)}")
+            for f in win.view.findChildren(QLineEdit) + win.view.findChildren(QPlainTextEdit):
+                if not f.isVisible() or f.parentWidget() is None or isinstance(
+                        f.parentWidget(), QAbstractItemView):
+                    continue
+                fields += 1
+                win.activateWindow()
+                f.setFocus(Qt.MouseFocusReason)
+                for _ in range(40):
+                    QTest.keyClick(_APP.focusWidget() or win, Qt.Key_Tab)
+                    if isinstance(_APP.focusWidget(), QAbstractButton):
+                        break
+                else:
+                    dead_ends.append(f"{tb.tabText(page)}: {_label(f)}")
+    finally:
+        tb.setCurrentIndex(0)
+        _settle(3)
+    assert tables >= 4 and fields >= 1, (tables, fields)
+    assert not traps, f"tables that keep Tab: {traps}"
+    assert not dead_ends, f"text fields Tab never leads on from to a button: {dead_ends}"
+    print(f"test_no_table_keeps_tab_and_every_text_field_tabs_on_to_a_button OK ({tables} tables, "
+          f"{fields} text fields)")
+
+
 def test_a_held_return_presses_once():
     """F2 of the #739 review: a held Return pressed a Tab-focused toggle once per auto-repeat (six
     repeats, six clicks). The first press clicks; the repeats are swallowed."""
@@ -743,6 +839,8 @@ def _run_all():
     test_taking_focus_never_moves_or_resizes_a_control()
     test_every_button_on_every_page_presses_from_the_keyboard()
     test_space_never_presses_a_button_qt_moved_the_focus_to()
+    test_a_mouse_press_anywhere_forgets_the_tabbed_button()
+    test_no_table_keeps_tab_and_every_text_field_tabs_on_to_a_button()
     test_a_held_return_presses_once()
     test_return_on_a_button_in_a_table_cell_fires_it_once()
     test_a_mouse_click_leaves_space_as_play_pause()
