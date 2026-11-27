@@ -428,6 +428,156 @@ def test_typing_focus_finds_the_focus_list():
     print(f"test_typing_focus_finds_the_focus_list OK ({titles})")
 
 
+# ------------------------------------- w26: the toolbar controls that had no way in but the pointer
+_CONTROL_RUNS = {
+    # run name -> (path to the button on a view, the words its tooltip names it by)
+    "toggle_ideal_overlay": (("plots", "ideal_btn"), "Ideal lap"),
+    "toggle_brake_throttle": (("plots", "brake_throttle_btn"), "Brake/Throttle"),
+    "toggle_ideal_readout": (("ideal_readout_btn",), "vs ideal"),
+    "toggle_snap_to_track": (("map", "snap_btn"), "Snap to track"),
+    "add_sector": (("map", "add_sector_btn"), "Add sector"),
+    "reset_sectors": (("map", "reset_sectors_btn"), "Reset sectors"),
+    "maximize_video_panel": (("_video_max_btn",), "Maximize panel"),
+    "maximize_map_panel": (("_map_max_btn",), "Maximize panel"),
+    "maximize_charts_panel": (("_plots_max_btn",), "Maximize panel"),
+    "maximize_lap_panel": (("_table_max_btn",), "Maximize panel"),
+    "next_slow_lap": (("table", "_slow_finder_next"), "Next slow lap"),
+}
+
+
+def _stub_view():
+    """A view-shaped namespace holding one REAL QPushButton per control, the next-slow-lap one
+    inside a bar of its own (its gate is that bar being hidden), so a test can gate each exactly
+    as the real view does: setEnabled(False) plus a reason on the tooltip."""
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QPushButton, QWidget
+    box = QWidget()
+    bar = QWidget(box)   # a child: not hidden until hidden, as the real finder bar
+    v = SimpleNamespace(plots=SimpleNamespace(), map=SimpleNamespace(), table=SimpleNamespace(),
+                        _keep=[box])
+    for _run, (path, _words) in _CONTROL_RUNS.items():
+        b = QPushButton(path[-1], bar if path[-1] == "_slow_finder_next" else None)
+        if b.parent() is None:
+            v._keep.append(b)
+        owner = v
+        for part in path[:-1]:
+            owner = getattr(owner, part)
+        setattr(owner, path[-1], b)
+    return v
+
+
+def _button(view, run):
+    owner = view
+    for part in _CONTROL_RUNS[run][0]:
+        owner = getattr(owner, part)
+    return owner
+
+
+def test_every_pointer_only_control_is_a_named_command():
+    """Seven controls had no way in but the pointer — Ideal lap, Brake/Throttle, "vs ideal", Snap to
+    track, Add sector, Reset sectors, the panels' maximize buttons and "next ›" — and on a Mac with
+    Full Keyboard Access off Tab skips buttons, so ⌘K is the keyboard's door. Each is a registry row
+    with a `run`, titled by the words its tooltip uses, listed by the palette, and RUNNING it clicks
+    exactly that button once."""
+    from studio import app as A
+    registry = {c.run: c for c in COMMANDS if c.run}
+    missing = [r for r in _CONTROL_RUNS if r not in registry]
+    assert not missing, f"controls with no registry row: {missing}"
+    assert set(A.StudioWindow._BUTTON_COMMANDS) == set(_CONTROL_RUNS), (
+        sorted(set(A.StudioWindow._BUTTON_COMMANDS) ^ set(_CONTROL_RUNS)))
+    for run, (_path, words) in _CONTROL_RUNS.items():
+        assert words in registry[run].title, (run, registry[run].title)
+    win = _window()
+    try:
+        win.view = _stub_view()
+        win.show_laps_tab = lambda: None          # the finder's command shows the Laps page first
+        rows = {e.title: e for e in entries(win)}
+        for run in _CONTROL_RUNS:
+            row = rows[registry[run].title]
+            assert row.enabled and row.reason == "", (run, row)
+            clicks = []
+            _button(win.view, run).clicked.connect(lambda *_a, _c=clicks: _c.append(1))
+            row.run()
+            assert clicks == [1], f"⌘K {registry[run].title!r} clicked its button {len(clicks)}x"
+    finally:
+        win.deleteLater()
+    print(f"test_every_pointer_only_control_is_a_named_command OK ({len(_CONTROL_RUNS)} commands)")
+
+
+def test_a_gated_control_greys_its_row_with_the_buttons_own_reason():
+    """The palette row carries the button's gate: a disabled button greys its row, whose tooltip is
+    the button's own reason (what `_press_or_say` already put on the status line for G and C), and
+    running the command anyway clicks nothing and SAYS that reason. "next ›" is gated by its bar
+    being hidden (no cue row), which no tooltip can say, so its reason is the finder's sentence."""
+    from studio.lap_table import SLOW_FINDER_NONE
+    registry = {c.run: c for c in COMMANDS if c.run}
+    win = _window()
+    try:
+        win.view = _stub_view()
+        b = win.view.plots.ideal_btn
+        b.setToolTip("Ideal lap: overlay…\n\nThe best lap is drawn alone: the chart is the ideal.")
+        b.setEnabled(False)
+        win.view.table._slow_finder_next.parentWidget().hide()
+        rows = {e.title: e for e in entries(win)}
+        ideal = rows[registry["toggle_ideal_overlay"].title]
+        assert not ideal.enabled and ideal.reason == b.toolTip(), ideal
+        nxt = rows[registry["next_slow_lap"].title]
+        assert not nxt.enabled and nxt.reason == SLOW_FINDER_NONE, nxt
+        dialog = CommandPalette(win)
+        dialog.search.setText(registry["toggle_ideal_overlay"].title)
+        for _ in range(4):
+            _APP.processEvents()
+        assert dialog._shown and not dialog._shown[0].enabled and dialog.selected() is None
+        assert dialog.table.item(0, command_palette._COL_TITLE).toolTip() == b.toolTip()
+        dialog.close()
+        clicks = []
+        b.clicked.connect(lambda *_a: clicks.append(1))
+        win.toggle_ideal_overlay()                # the command itself, as a key would run it
+        assert clicks == [] and win.statusBar().currentMessage() == b.toolTip()
+        # ...and every OTHER method row keeps its old behaviour: listed enabled.
+        assert rows[registry["toggle_playback"].title].enabled
+    finally:
+        win.deleteLater()
+    print("test_a_gated_control_greys_its_row_with_the_buttons_own_reason OK")
+
+
+def test_cmd_l_opens_the_library_before_any_menu_has_been_opened():
+    """⌘L did nothing in a first-ever session until a menu had been opened: the Library item's
+    enabled state is a cache of "is there a library", refreshed only by the File menu's sync, and
+    Qt drops a disabled action's key. It is a `_ShortcutGate` now, like R and ⌘Z: the key re-asks
+    the gate when pressed and opens the Library, or says why it cannot."""
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtTest import QTest
+
+    from studio.library_controller import LibraryController
+    opened = []
+    orig = LibraryController.open_library
+    LibraryController.open_library = lambda self: opened.append(1)
+    try:
+        win = _window()
+    finally:
+        LibraryController.open_library = orig
+    try:
+        win._has_library = lambda: False
+        win.exports.sync_menu()                   # the gate as it stood: no library yet
+        assert not win._library_action.isEnabled()
+        win.show()
+        win.activateWindow()
+        for _ in range(4):
+            _APP.processEvents()
+        QTest.keyClick(win, _Qt.Key_L, _Qt.ControlModifier)
+        assert opened == [] and "no recordings analysed yet" in win.statusBar().currentMessage(), (
+            win.statusBar().currentMessage())
+        win._has_library = lambda: True           # the first load wrote the library; no menu opened
+        QTest.keyClick(win, _Qt.Key_L, _Qt.ControlModifier)
+        assert opened == [1], "⌘L did nothing until a menu had been opened"
+    finally:
+        win.hide()
+        win.deleteLater()
+    print("test_cmd_l_opens_the_library_before_any_menu_has_been_opened OK")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

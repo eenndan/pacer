@@ -200,6 +200,10 @@ def _registry_entries(window, taken: set[int]) -> list[Entry]:
     does, its greyed state is honest rather than assumed.)
     """
     out: list[Entry] = []
+    # A command that runs THROUGH A BUTTON (the toolbar controls) carries that button's gate:
+    # `command_gate` answers "" when it can run, or the button's own reason, which greys the row and
+    # becomes its tooltip exactly as a gated menu item's does.
+    gate = getattr(window, "command_gate", None)
     for cmd in COMMANDS:
         if cmd.run is None:
             continue
@@ -212,7 +216,8 @@ def _registry_entries(window, taken: set[int]) -> list[Entry]:
                 continue
             out.append(Entry(cmd.title, cmd.group, key, target.isEnabled(), action=target))
         elif callable(target):
-            out.append(Entry(cmd.title, cmd.group, key, True, call=target))
+            reason = gate(cmd.run) if callable(gate) else ""
+            out.append(Entry(cmd.title, cmd.group, key, not reason, call=target, reason=reason))
     return out
 
 

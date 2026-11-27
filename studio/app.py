@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import shiboken6
@@ -79,6 +80,7 @@ from .command_palette import CommandPalette
 # returns it, and `studio.app.ExportChoice` is the name the export tests already reach for.
 from .export_controller import ExportChoice, ExportController  # noqa: F401
 from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
+from .lap_table import SLOW_FINDER_NONE
 from .library_controller import (
     LibraryController,
     corner_list_text,
@@ -97,7 +99,7 @@ from .overlays import (
 from .race_controller import NO_RACE_REASON
 from .stats import is_level, with_luck
 from .video_view import PLAYBACK_RATES
-from .widgets import chip, set_tone
+from .widgets import KeyboardPress, chip, set_tone
 from .workers import DemoResolveWorker, SessionLoadWorker, start_worker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
@@ -2453,6 +2455,10 @@ class StudioWindow(QMainWindow):
             "Browse your analyzed recordings (date / track / laps / best lap / ideal lap / "
             "conditions / tyres), re-open any of them, and see per-track PB progression")
         self._library_action.triggered.connect(self.library_ctl.open_library)
+        # Its gate (a library exists) is read by the File menu's sync (ExportController.sync_menu), so
+        # in a first-ever session ⌘L stayed dead after the first load until a menu was opened. The
+        # key re-gates itself when pressed and says why when it stays off, as R and ⌘Z do.
+        _ShortcutGate(self, self._library_action, self.exports.sync_menu)
         # THE OTHER HALF OF THE LIBRARY: what the app cannot know about a session. The index holds
         # the result (track, date, laps, best); this holds the conditions it was set in and the
         # kart it was set on, typed by the driver — the thing that decides whether two rows of that
@@ -2967,6 +2973,9 @@ class StudioWindow(QMainWindow):
             sc.setContext(Qt.WindowShortcut)
             sc.activated.connect(handler)
 
+        # ...except while the keyboard has put the focus on a button: then Space presses it
+        # (`KeyboardPress`, asked by `event` and `focusNextPrevChild`).
+        self._keyboard_press = KeyboardPress(self)
         shortcut(Qt.Key_Space, self.toggle_playback)
         shortcut(Qt.Key_M, self.toggle_mute)
         shortcut(Qt.Key_G, self.toggle_gmeter)
@@ -3109,6 +3118,108 @@ class StudioWindow(QMainWindow):
         """Enter / leave two-lap compare mode (C) — through the button, which is disabled below
         two valid laps; then its reason is what C says."""
         self._video_do(lambda v: self._press_or_say(v.compare_btn))
+
+    # ------------------------------------------- the toolbar controls, as named commands
+    # SEVEN CONTROLS HAD NO WAY IN BUT THE POINTER: the charts' Ideal lap / Brake/Throttle toggles,
+    # the hero readout's "vs ideal" chip, the map's Snap to track / Add sector / Reset sectors, the
+    # panels' maximize buttons and the Laps table's "next ›". No menu item, no key, no ⌘K row —
+    # and on a Mac whose Full Keyboard Access is off (the default), Tab skips buttons altogether.
+    # Each is now a registry command (help_dialog.COMMANDS `run=`), so ⌘K offers it by the name its
+    # tooltip uses. Every one runs THROUGH ITS BUTTON, so the button's own gate is the command's:
+    # `command_gate` is the reason the palette greys a row with, and `_press_command` says it on the
+    # status line instead of doing nothing (`_press_or_say`'s contract).
+    _BUTTON_COMMANDS: dict[str, Callable[[Any], Any]] = {
+        "toggle_ideal_overlay": lambda v: v.plots.ideal_btn,
+        "toggle_brake_throttle": lambda v: v.plots.brake_throttle_btn,
+        "toggle_ideal_readout": lambda v: v.ideal_readout_btn,
+        "toggle_snap_to_track": lambda v: v.map.snap_btn,
+        "add_sector": lambda v: v.map.add_sector_btn,
+        "reset_sectors": lambda v: v.map.reset_sectors_btn,
+        "maximize_video_panel": lambda v: v._video_max_btn,
+        "maximize_map_panel": lambda v: v._map_max_btn,
+        "maximize_charts_panel": lambda v: v._plots_max_btn,
+        "maximize_lap_panel": lambda v: v._table_max_btn,
+        "next_slow_lap": lambda v: v.table._slow_finder_next,
+    }
+
+    def _command_button(self, name: str):
+        view = getattr(self, "view", None)
+        get = self._BUTTON_COMMANDS.get(name)
+        if view is None or get is None:
+            return None
+        try:
+            return get(view)
+        except AttributeError:   # a lifecycle test's stand-in view
+            return None
+
+    def command_gate(self, name: str) -> str:
+        """Why the registry command `name` cannot run right now — its button's own reason — or ""
+        when it can (and for every command that is not a button's: those keep their behaviour).
+        Read by the ⌘K palette (`command_palette._registry_entries`) when it lists the row."""
+        button = self._command_button(name)
+        if button is None:
+            return ""
+        if name == "next_slow_lap" and button.parentWidget().isHidden():
+            return SLOW_FINDER_NONE      # the finder bar hides with no cue row to walk to
+        if not button.isEnabled():
+            return button.toolTip()
+        return ""
+
+    def _press_command(self, name: str) -> None:
+        button = self._command_button(name)
+        if button is None:
+            return                       # no recording yet: a no-op, as every command here
+        reason = self.command_gate(name)
+        if reason:
+            self.statusBar().showMessage(reason, STATUS_MS)
+            return
+        if name == "next_slow_lap":
+            self.show_laps_tab()         # the walk lands on a Laps row: show the page it is on
+        button.click()
+
+    def toggle_ideal_overlay(self):
+        """The charts' Ideal lap toggle: overlay the synthetic ideal lap's Δ."""
+        self._press_command("toggle_ideal_overlay")
+
+    def toggle_brake_throttle(self):
+        """The charts' Brake/Throttle band (estimated), on / off."""
+        self._press_command("toggle_brake_throttle")
+
+    def toggle_ideal_readout(self):
+        """The hero readout's "vs ideal" chip: Δ to the ideal lap, or to the best lap."""
+        self._press_command("toggle_ideal_readout")
+
+    def toggle_snap_to_track(self):
+        """The map's Snap to track: a released timing-line handle jumps to the trace."""
+        self._press_command("toggle_snap_to_track")
+
+    def add_sector(self):
+        """The map's Add sector: drop another sector line on the map."""
+        self._press_command("add_sector")
+
+    def reset_sectors(self):
+        """The map's Reset sectors: remove every sector line placed on this recording (⌘Z undoes)."""
+        self._press_command("reset_sectors")
+
+    def maximize_video_panel(self):
+        """Maximize the video panel, or restore the grid (its header button)."""
+        self._press_command("maximize_video_panel")
+
+    def maximize_map_panel(self):
+        """Maximize the map panel, or restore the grid (its header button)."""
+        self._press_command("maximize_map_panel")
+
+    def maximize_charts_panel(self):
+        """Maximize the charts panel, or restore the grid (its header button)."""
+        self._press_command("maximize_charts_panel")
+
+    def maximize_lap_panel(self):
+        """Maximize the lap panel, or restore the grid (its header button)."""
+        self._press_command("maximize_lap_panel")
+
+    def next_slow_lap(self):
+        """The Laps table's "next ›": walk to the next slow lap that names where its time went."""
+        self._press_command("next_slow_lap")
 
     def toggle_datum(self):
         """Drop or clear the charts' datum (second) cursor (D) — the interval between the two
@@ -3338,6 +3449,31 @@ class StudioWindow(QMainWindow):
             self.showNormal()
             return True
         return False
+
+    def event(self, event):
+        """A button the KEYBOARD focused owns Space / Return / Enter (`widgets.KeyboardPress`).
+
+        The window's Space is a QShortcut, matched BEFORE the key reaches the focused widget — so a
+        Tab-focused button showing its ring was pressed by nothing, on every tab stop of the window.
+        A ShortcutOverride the focused button leaves alone climbs the parent chain to here; claiming
+        it hands the key to the button (Space presses it through Qt's own press / release; Return /
+        Enter are taken by KeyboardPress's filter on the button). A button that got the focus any
+        other way — a click, Qt moving the focus off a widget it hid — never qualifies, so a mouse
+        user's Space is play/pause exactly as before."""
+        press = getattr(self, "_keyboard_press", None)
+        if (event.type() == QEvent.ShortcutOverride and press is not None
+                and press.target(event) is not None):
+            event.accept()
+            return True
+        return super().event(event)
+
+    def focusNextPrevChild(self, next):
+        """Every Tab / ⇧Tab move in the window ends here (QWidget forwards it up the parents), and
+        so do the moves Qt makes off a widget it hides or disables — `KeyboardPress.tab` tells the
+        two apart, which is how a button learns the keyboard put the focus on it."""
+        press = getattr(self, "_keyboard_press", None)
+        move = lambda: super(StudioWindow, self).focusNextPrevChild(next)  # noqa: E731
+        return press.tab(move, QApplication.focusWidget()) if press is not None else move()
 
     def keyPressEvent(self, event):
         """←/→ step the video ±1 s (Shift ±5 s). Esc backs out of every "one thing fills the frame"

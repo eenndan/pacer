@@ -150,6 +150,9 @@ class MarksPanel(QWidget):
             leading=(self.add_btn, self.filter_combo, self.search))
 
         self.table = QTableWidget(0, len(_HEADERS))
+        # Tab must LEAVE the grid: Qt's cell-wise Tab navigation kept every press inside it, so
+        # nothing after the Marks search was reachable by keyboard (#739 re-review, N2).
+        self.table.setTabKeyNavigation(False)
         self.table.setHorizontalHeaderLabels(_HEADERS)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
