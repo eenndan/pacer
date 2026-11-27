@@ -2705,6 +2705,10 @@ CORNER_DELTA_REF_HEADER = "Δref"
 # What the Δ column's colour means, on its header tooltip (both baselines), and what the step covers.
 CORNER_DELTA_LEVEL_NOTE = (f"A gap under {PB_PRECISION_S:.2f} s is inside timing precision, so it "
                            f"is not coloured as a difference. {stats_service.STEP_COVERS_PASS}")
+# The two Δ columns (Δbest/Δref, Δapex) whose past-the-step cells are bold (`mark_gap_past_step`),
+# and what the weight means — said on both Δ headers, before the step it is drawn from.
+CORNER_GAP_COLS = (CORNER_DELTA_COL, 4)
+CORNER_GAP_MARK_NOTE = "A bold figure is a gap past the step; a regular one is level."
 # ...and against another recording's lap, whose step is `stats.corner_delta_step(True)` (the same
 # step at the one reference: one lap's corner time against another recording's reads less apart).
 # The bound is said ONCE, by STEP_COVERS_REFERENCE (0.21.0 QA: a second "reads up to that far
@@ -2792,6 +2796,22 @@ def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
     return theme.delta_colour(-delta_kmh)
 
 
+def mark_gap_past_step(item) -> None:
+    """Set a coloured (past-its-step) Δ cell's figure BOLD, so "measurable" vs "level" is not hue
+    alone (cool/corners-gap-beyond-hue).
+
+    Both Δ columns print a signed figure either side of their step, and the sign already says which
+    way; what only the hue said was whether the gap is past the step at all — and under simulated
+    deuteranopia / protanopia (Machado 2009) the ahead green sits 1.46 / 1.28:1 from the neutral
+    ink. So "bold" = "past the step" in any colour vision. WEIGHT, NOT A ▲/▼ PREFIX: Inter's tabular
+    figures keep their advance in bold (+0.42: 37.17 px regular, 37.11 bold), while a "▼ " prefix
+    is 16.6 px a column and this grid's cell floors have no slack (tests/test_corner_grid_budget.py
+    measured 462 px against its 446). Called with the hue, so a muted cell loses both together."""
+    font = item.font()
+    font.setBold(True)
+    item.setFont(font)
+
+
 def reference_from_another_recording(session) -> bool:
     """Is the Δ baseline a lap of ANOTHER recording — a reference loaded, and not this recording's
     own? getattr-guarded for the lighter test doubles (no reference seam: no reference)."""
@@ -2814,13 +2834,14 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
     # wording stays exactly what it has always been, and the reference wording reads as English.
     if ref_label:
         delta_tip = (f"Δ vs the same corner on the reference recording's lap — {ref_label} "
-                     f"(seconds; − is faster). {CORNER_DELTA_REF_LEVEL_NOTE}")
+                     f"(seconds; − is faster). {CORNER_GAP_MARK_NOTE} {CORNER_DELTA_REF_LEVEL_NOTE}")
         apex_tip = (f"Δ apex speed vs the reference recording's lap — {ref_label} "
-                    f"({u}; + is faster). {apex_level_note(unit)}")
+                    f"({u}; + is faster). {CORNER_GAP_MARK_NOTE} {apex_level_note(unit)}")
     else:
         delta_tip = ("Δ vs the best lap's same corner (seconds; − is faster). "
-                     f"{CORNER_DELTA_LEVEL_NOTE}")
-        apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster). {apex_level_note(unit)}"
+                     f"{CORNER_GAP_MARK_NOTE} {CORNER_DELTA_LEVEL_NOTE}")
+        apex_tip = (f"Δ apex speed vs the best lap ({u}; + is faster). {CORNER_GAP_MARK_NOTE} "
+                    f"{apex_level_note(unit)}")
     return [
         "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
         "left-hander, clockwise a right. Click a row to play this lap's pass through that corner "
@@ -3337,6 +3358,10 @@ class CornerTable(QWidget):
                     item.setToolTip(unmatched)
                 elif colour:
                     item.setForeground(QColor(colour))
+                    # A Δ past its step is also bold, so the hue is never its only cue — set
+                    # here, with the hue, so a muted (unmatched) cell loses both together.
+                    if col in CORNER_GAP_COLS and not baseline:
+                        mark_gap_past_step(item)
                 else:
                     item.setForeground(BASE_COLOR)
                 self.table.setItem(r, col, item)
