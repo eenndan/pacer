@@ -66,7 +66,13 @@ for _mod in (demo, focus, library, logsetup, marks, prefs, session_record, track
     _mod._app_support_dir = lambda d=_SEAMS.name: d
 os.environ.pop("PACER_DEMO_MP4", None)
 
-from studio.library_dialog import _COL_DATE, _COL_THEO, FP_ROLE, LibraryDialog  # noqa: E402
+from studio.library_dialog import (  # noqa: E402
+    _COL_BEST,
+    _COL_DATE,
+    _COL_THEO,
+    FP_ROLE,
+    LibraryDialog,
+)
 
 # The build's ideal-lap version. getattr so that a tree without the stamp FAILS these tests by
 # assertion, with the defect in the message, rather than by an ImportError.
@@ -144,6 +150,55 @@ def test_a_row_measured_by_another_ideal_version_shows_its_number_muted_and_says
         assert fresh.foreground().color().name() != muted, "a current ideal must not be muted"
         assert "older Pacer" not in fresh.toolTip(), fresh.toolTip()
         assert fresh.text() == fmt_time(46.196)
+        dlg.deleteLater()
+
+
+def _ink(dlg, row, col) -> tuple[int, int]:
+    """(pixels in C.text's band, pixels in C.text_dim's band) in a cell of the rendered table:
+    what the eye gets, which the item's ForegroundRole does not say on a selected row."""
+    dlg.table.viewport().repaint()
+    img = dlg.table.viewport().grab().toImage()
+    rect = dlg.table.visualItemRect(dlg.table.item(row, col))
+    dpr = img.devicePixelRatio()
+    full = dim = 0
+    for y in range(int(rect.top() * dpr), int(rect.bottom() * dpr)):
+        for x in range(int(rect.left() * dpr), int(rect.right() * dpr)):
+            c = img.pixelColor(x, y)
+            lum = (c.red() + c.green() + c.blue()) / 3
+            full += lum > 200          # C.text #DDE1E8 ≈ 225; text_dim #9AA1AD ≈ 161
+            dim += 140 < lum < 185
+    return full, dim
+
+
+def test_a_selected_row_keeps_its_stale_ideal_muted():
+    """Qt paints a SELECTED item's text in the selection's own ink and ignores its foreground, so
+    the one row the user is looking at drew its stale ideal in full colour (DECISIONS §28): the
+    item said muted, the screen did not. Measured on the rendered pixels, selected and not, with
+    a current row's ideal as the control; the selected ink is C.text_dim, legible on the band."""
+    with tempfile.TemporaryDirectory() as d:
+        clip = os.path.join(d, "GX010068.MP4")
+        open(clip, "wb").close()
+        rows = [_entry("GX010068", [clip], theo=46.196),
+                _entry("GX010064", [clip], theo=45.805, ideal_version=_CURRENT - 1)]
+        dlg = LibraryDialog({"version": library.VERSION, "entries": rows}, _OpenSpy())
+        dlg.resize(900, 500)
+        dlg.show()
+        _APP.processEvents()
+        stale, fresh = _row(dlg, "GX0064"), _row(dlg, "GX0068")
+        dlg.table.selectRow(fresh)
+        _APP.processEvents()
+        assert _ink(dlg, fresh, _COL_THEO)[0] > 20, "the control: a current ideal in full ink"
+        assert _ink(dlg, stale, _COL_THEO)[0] == 0, "an unselected stale ideal is not muted"
+        dlg.table.selectRow(stale)
+        _APP.processEvents()
+        full, dim = _ink(dlg, stale, _COL_THEO)
+        assert full == 0 and dim > 20, (
+            f"the selected row's stale ideal is drawn in full ink ({full} px), {dim} px muted")
+        assert _ink(dlg, stale, _COL_BEST)[0] > 20, "the row's other cells keep the band's ink"
+        lum = [0.2126 * f(c.redF()) + 0.7152 * f(c.greenF()) + 0.0722 * f(c.blueF())
+               for c in (QColor(C.text_dim), QColor(C.sel_bg))
+               for f in [lambda v: v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4]]
+        assert (lum[0] + 0.05) / (lum[1] + 0.05) >= 4.5, "the muted ink is not legible on the band"
         dlg.deleteLater()
 
 

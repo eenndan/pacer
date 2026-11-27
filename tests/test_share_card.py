@@ -162,6 +162,31 @@ def test_card_data_stamps_degraded_timing():
     print("test_card_data_stamps_degraded_timing OK")
 
 
+def test_a_best_lap_that_is_itself_a_warned_lap_carries_its_cue():
+    """When every lap wears the ⚠ the bests fall back to a ⚠ lap, and the card printed it as
+    "BEST LAP" with nothing the lap table gives that row (DECISIONS §28). The card carries the
+    lap's ⚠ and "not counted" on the label row, in the ⚠ kinds' own words; a clean best, none."""
+    from studio import data_quality
+
+    class _AllDropouts(FakeSession):
+        def valid_lap_ids(self):
+            return [1, 2, 3]
+
+        def dropout_lap_ids(self):
+            return {1, 2, 3}
+
+    warned = share_card.card_data(_AllDropouts(degraded=True), unit="kmh")
+    assert warned.best_warn == f"⚠ GPS dropout · {data_quality.NOT_COUNTED}", warned.best_warn
+    assert share_card.card_data(FakeSession(), unit="kmh").best_warn == ""
+    # Drawn: caveat-amber ink on the label row, right of "BEST LAP", only for the warned best.
+    ink = {name: _row_ink(share_card.render_card(d), 205, 245, theme.C.accent)
+           for name, d in (("warned", warned), ("clean", share_card.card_data(FakeSession())))}
+    assert len(ink["warned"]) > 50 and min(ink["warned"]) > 72 + 100, ink["warned"][:5]
+    assert ink["clean"] == [], "a clean best lap's label row grew a cue"
+    assert max(ink["warned"]) < share_card.CARD_W - 72, "the cue runs past the content box"
+    print("test_a_best_lap_that_is_itself_a_warned_lap_carries_its_cue OK")
+
+
 def test_card_data_no_opportunity_when_too_few_laps():
     """Under MIN_LAPS clean laps the coaching model has no rows → the card's top opportunity is
     None (the card shows a gentle 'drive more laps' line instead of a fabricated tip)."""
@@ -1519,6 +1544,7 @@ if __name__ == "__main__":
     test_card_data_unknown_track_and_no_ideal()
     test_card_data_blocks_provisional_and_no_lap()
     test_card_data_stamps_degraded_timing()
+    test_a_best_lap_that_is_itself_a_warned_lap_carries_its_cue()
     test_card_data_no_opportunity_when_too_few_laps()
     test_card_data_survives_coaching_error()
     test_no_opportunity_when_every_ranked_loss_rounds_to_zero()

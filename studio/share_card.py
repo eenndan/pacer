@@ -41,7 +41,7 @@ import numpy as np
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap
 
-from . import coaching, export_data, library, theme, trace_paint, units
+from . import coaching, data_quality, export_data, library, theme, trace_paint, units
 from ._signal import fmt_signed, fmt_time
 
 # The card is a portrait-ish social image. 1080×1350 is Instagram's 4:5 portrait — the most
@@ -220,6 +220,8 @@ class CardData:
     #                       (`provenance_line`), or "" — the footer then keeps its tagline
     no_opp: str = ""      # the line in the opportunity's place when `top_opp` is None
     #                       (`no_opportunity_line`), or "" — the row is then left empty
+    best_warn: str = ""   # "⚠ GPS dropout · not counted in your bests" when the best shown is
+    #                       itself a ⚠ lap (`best_warning`), or ""
 
 
 def provenance_line(session) -> str:
@@ -239,6 +241,17 @@ def provenance_line(session) -> str:
         return export_data.timing_meta(session)
     except Exception:  # noqa: BLE001 — a card without a provenance line beats no card
         return ""
+
+
+def best_warning(session, best_id: int | None) -> str:
+    """The ⚠ cue for a best lap that is itself a ⚠ lap — "⚠ GPS dropout · not counted in your
+    bests" — or "". The bests fall back to a ⚠ lap only when every lap wears one (bests.py), and
+    the card printed it as "BEST LAP" with nothing the lap table gives that row (DECISIONS §28).
+    The words are the ⚠ kinds' own (`data_quality.WARN_REASON`, `NOT_COUNTED`)."""
+    kind = data_quality.lap_warning_kinds(session).get(best_id) if best_id is not None else None
+    if kind is None:
+        return ""
+    return f"⚠ {data_quality.WARN_REASON[kind]} · {data_quality.NOT_COUNTED}"
 
 
 def no_opportunity_line(session, opps) -> str:
@@ -386,6 +399,7 @@ def card_data(session, *, unit: str | None = None, pb_standing: dict | None = No
         pb=pb_mark(pb_standing, session.lap_time(best_id) if best_id is not None else None,
                    prior_date),
         provenance=provenance_line(session),
+        best_warn=best_warning(session, best_id),
     )
 
 
@@ -543,6 +557,10 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
 
     # --- hero: the best lap, big ---
     _draw_text(p, pad, 240, "BEST LAP", _font(28, theme.W_SEMIBOLD), theme.C.text_muted)
+    if data.best_warn:   # a ⚠ best (every lap flagged): its cue on the label row, in caveat amber
+        label_w = QFontMetrics(_font(28, theme.W_SEMIBOLD)).horizontalAdvance("BEST LAP")
+        _draw_text(p, pad + label_w + 20, 240, data.best_warn, _font(28, theme.W_SEMIBOLD),
+                   theme.C.accent)
     if data.pb:     # the PB standing, on the label row of the time it is about (JOURNEY-7)
         _draw_text(p, 0, 240, data.pb, _font(28, theme.W_SEMIBOLD), theme.ahead_colour(),
                    align_right_at=right)
