@@ -172,7 +172,10 @@ fix is smoothed exactly as before, so a recording with no missing fix is timed t
 On a synthetic matrix (10 laps × 5 seeds, at 10 and 18 Hz, against the generator's true crossings),
 rejecting 1–10 % of the fixes at random used to move laps by up to 84 ms and now moves them by at
 most 4 ms; a hole of up to 1.5 s near a crossing used to move the lap by up to 305 ms, and now by at
-most 5 ms unless it sits right at the line. What the fit cannot close still wears the GPS-dropout ⚠
+most 5 ms unless it sits right at the line. Removing that bias does not bring every single pass
+closer to the truth — one pass's own GPS noise can dominate, and one synthetic corner pass moved
+from 18 to 37 ms off when its bias went — so the evidence for the fit is that matrix, not any
+one lap. What the fit cannot close still wears the GPS-dropout ⚠
 and is kept out of the bests: two or more fixes missing in a row within 3 fixes of the start or
 finish crossing (such laps read up to 21 ms off), and a recording whose fixes start or stop within
 7 fixes of a crossing (up to a third of a second). At 1 / 2 / 5 / 10 % rejected at random that is
