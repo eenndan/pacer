@@ -70,6 +70,12 @@ of the thread whose stack runs through that test; a `Timeout (0:07:45)!` header 
 means the test held the GIL in a C call, and its `test_…` frame names it. For one by hand, give
 ctest a shorter ceiling: `pixi run ctest --test-dir build/Release -R '^test_x$' --timeout 60`.
 
+**A dialog nobody closed.** A `QDialog` that stays the active modal for 20 s
+(`PACER_MODAL_WATCHDOG_S`; 0 turns it off) prints `==== MODAL WATCHDOG`, the running test, the
+dialog's class, title and text, and every thread's stack, then is rejected, and the process exits
+1: the registration fails in ~20 s instead of timing out ([_modal_watchdog.py](_modal_watchdog.py),
+armed with the hang dump and by `_qtapp.themed_app()`).
+
 - **C++ Catch2 (5):** `test_ops`, `test_geometry`, `test_coordinate_system`, `test_laps`,
   `test_gps_source`.
 - **Python studio (the rest):** pure-Python and registered with CTest — offscreen Qt where they
