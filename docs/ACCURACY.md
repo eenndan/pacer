@@ -242,6 +242,7 @@ quickest row it leads saying so. No official timing has checked a split. (The tr
 C's per-lap σ as noise 2.1 and B's as 4.4; the 40-day grid below reproduces C's at noise 1.9 and
 B's at 4.0. Same recordings, two calibrations.)
 
+<a id="the-timing-step"></a>
 **What the 0.07 s step covers.** The app reads two of its timings as level when they are closer
 than one step, 0.07 s: twice the noise of a difference of two lap times (2√2σ) at recording C's
 per-lap σ — the cleanest recording measured, and the GPS9 camera the app is built around. Every

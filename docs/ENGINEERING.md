@@ -261,6 +261,31 @@ is deliberately not counted is neither "not available" nor "not applicable". Ado
 and saying why the rest do not fit is the point; a vocabulary forced onto the last two cases would
 be worse than the house style.
 
+## How the November work was run
+
+From 14 November 2026 the app changed in waves of agent pull requests, most waves ending in a
+release. [DECISIONS.md](DECISIONS.md) records each one, sections 8 to 30. The rules:
+
+- **One focused change per pull request**, each through CI's full suite, the synthetic golden gate
+  among it.
+- **A number that moves gets a second reader.** A change to a threshold or a published figure was
+  reviewed independently of its author, by a reviewer trying to break it; where none ran, the
+  release record says so. One review refused a 1.02 km/h speed gate that coloured 7.5–17 % of
+  truly level cells (section 26).
+- **Measure first, and a refusal is an outcome.** Three of the late waves' answers were written
+  refusals with their numbers: [§40 to §42](../studio/docs/refused-2026-09.md).
+- **Release QA on the merged tree, and it held releases.** At 0.24.0 and 0.25.0 it found defects
+  that existed only between green pull requests: a cut lap raced first, then a cut lap crowned
+  session best. Each tag waited for the fix (sections 27 and 28).
+- **One deliberate golden re-cut.** The time-aware smoother (#715) moved leaves of the synthetic
+  baseline; the re-cut was reviewed, no lap-time leaf moved, and a real recording's dump stayed
+  identical (section 29).
+
+What the record says went wrong: 0.25.0 flagged laps beside a missing GPS fix rather than fix the
+smoother, and at 2 % of fixes rejected that flagged 8 of 14 laps and read the session low; 0.26.0
+replaced it. And #715's own media check named four stills unchanged that had changed; the release
+QA rendered them and re-captured them (section 29).
+
 ## A 15-minute code tour
 
 Five files, in reading order. They carry the load, and everything else is built on them.

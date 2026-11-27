@@ -47,7 +47,9 @@ under docs/ resolves on disk. And check 7, the page's one clip: small, 720p, 20-
 reader who asked for reduced motion, and with no audio track in the file (with its own control).
 And check 8, reach without hue or mouse: a link inside a sentence is underlined, not told apart by
 hue alone, anything that scrolls takes keyboard focus, and the page has one <main> and nothing
-outside a landmark (axe's rules) with the bar a named <nav> (the page's own).
+outside a landmark (axe's rules) with the bar a named <nav> (the page's own). And check 9, each
+picture on README.md and the page described as what docs/media/CAPTURED.json says it is of, a waived
+real still saying its version; and check 10, a link to a doc's `#fragment` lands on one.
 
 Pure stdlib apart from importing `studio.theme` for the token values (Pacer-free, no QApplication,
 no telemetry file), so it needs neither the offscreen env nor the bindings PYTHONPATH.
@@ -1722,6 +1724,202 @@ def test_the_page_has_one_main_and_a_named_nav():
           f"{len(unrendered)} unrendered children passed)")
 
 
+# ------------------------------------------------------------------ 9. what each picture is of
+# THE BUG (wave 25, 2026-11-27). From 0.15.0 the hero and most stills were rendered on the
+# SYNTHETIC demo, its video pane the slate "SYNTHETIC DEMO SESSION. Generated, not filmed.", but the
+# landing page's footer still said every app shot was "the real window rendered offscreen on a real
+# recording" with "a real frame from the same recording" in the video pane, and the shared card's
+# alt promised "onboard kart video". The alt check above only counted characters. And the four
+# real-footage stills kept under a waiver (docs/media/CAPTURED.json) never said how old they were,
+# so a reader took a 0.5.0 screen for today's app. Each picture's words are now tied to its record.
+_MEDIA_DIR = os.path.join(_DOCS, "media")
+# Words that say a picture is of real footage, and words that say it is of the demo. A track name a
+# real record's `source` names ("Sandown 3h 2026 (GX010064)" → "Sandown") joins the first list.
+_REAL_WORDS = ("onboard", "real recording", "real frame", "real footage", "real export",
+               "real exported")
+_DEMO_WORDS = ("synthetic", "demo", "generated, not filmed")
+
+
+def _media_records() -> dict[str, dict]:
+    import json
+    with open(os.path.join(_MEDIA_DIR, "CAPTURED.json"), encoding="utf-8") as f:
+        return json.load(f)["files"]
+
+
+def _media_kind(name: str, records: dict[str, dict]) -> str | None:
+    """"demo", "real" or None (drawn from numbers, as accuracy.png is) for one docs/media file; a
+    record whose `source` is another file of the record (og.png ← hero.png) is that file's kind."""
+    source = records[name]["source"]
+    if source in records:
+        return _media_kind(source, records)
+    if "synthetic demo" in source:
+        return "demo"
+    return "real" if re.search(r"\(GX\d+\)", source) else None
+
+
+def _track_words(records: dict[str, dict]) -> set[str]:
+    return {records[n]["source"].split()[0] for n in records if _media_kind(n, records) == "real"
+            and records[n]["source"] not in records}
+
+
+def _flat(text: str) -> str:
+    return " ".join(_unescape(re.sub(r"<[^>]+>", " ", text)).split())
+
+
+def _readme_pictures(readme: str) -> list[tuple[str, str, str]]:
+    """(media file, what describes it, its caption) for README.md: an <img>'s alt with the italic
+    paragraph right under it as its caption; a link to a docs/media file with its paragraph as
+    both."""
+    paras = re.split(r"\n\s*\n", readme)
+    out = []
+    for i, para in enumerate(paras):
+        for tag in re.findall(r"<img\b[^>]*>", para):
+            src = re.search(r'src="docs/media/([^"]+)"', tag)
+            if not src:
+                continue
+            alt = re.search(r'alt="([^"]*)"', tag)
+            nxt = paras[i + 1].strip() if i + 1 < len(paras) else ""
+            caption = nxt if nxt.startswith("*") and not nxt.startswith("**") else ""
+            out.append((src.group(1), alt.group(1) if alt else "", _flat(caption)))
+        for target in re.findall(r"\]\(docs/media/([^)\s#]+)\)", para):
+            out.append((target, "", _flat(para)))
+    return out
+
+
+def _page_pictures(html: str) -> list[tuple[str, str, str]]:
+    """(media file, its alt or aria-label, its figcaption) for every file a <figure> of the landing
+    page shows (img, video poster, video source), plus og.png with each shared card's alt."""
+    out = []
+    body = _without_comments(html)
+    for fig in re.findall(r"<figure\b.*?</figure>", body, re.S):
+        caption = re.search(r"<figcaption>(.*?)</figcaption>", fig, re.S)
+        alts = re.findall(r'(?:alt|aria-label)="([^"]*)"', fig)
+        for name in re.findall(r'(?:src|poster)="media/([^"]+)"', fig):
+            out.append((name, " ".join(alts), _flat(caption.group(1)) if caption else ""))
+    for card in re.findall(r'<meta (?:property|name)="(?:og|twitter):image:alt" content="([^"]*)"',
+                           body):
+        out.append(("og.png", card, ""))
+    return out
+
+
+def _caption_problems(pages: dict[str, list[tuple[str, str, str]]],
+                      records: dict[str, dict]) -> list[str]:
+    """What each page says of a picture that its CAPTURED.json record contradicts. A function of
+    the parsed pages, so the planted copies below are held to exactly the rule the real ones are."""
+    real_words = _REAL_WORDS + tuple(sorted(_track_words(records)))
+    problems = []
+    for rel, pictures in pages.items():
+        for name, alt, caption in pictures:
+            if name not in records:
+                problems.append(f"{rel}: {name} has no record in docs/media/CAPTURED.json")
+                continue
+            kind, rec = _media_kind(name, records), records[name]
+            banned = {"demo": real_words, "real": _DEMO_WORDS}.get(kind or "", ())
+            for where, text in (("alt", alt), ("caption", caption)):
+                hits = [w for w in banned if re.search(rf"\b{re.escape(w)}\b", text, re.I)]
+                if hits:
+                    problems.append(f"{rel}: {name} is {rec['source']!r} by its record, but its "
+                                    f"{where} says {hits}: {text[:120]!r}")
+            if kind == "real" and rec["waiver"] and \
+                    f"captured at v{rec['version']}" not in caption.lower():
+                problems.append(f"{rel}: {name} is kept under a waiver at {rec['version']}, but its "
+                                f"caption does not say \"captured at v{rec['version']}\": "
+                                f"{caption[:120]!r}")
+    return problems
+
+
+def test_each_picture_is_described_as_what_its_record_says():
+    """Every picture on README.md and the landing page is described as what docs/media/CAPTURED.json
+    says it is of: a demo still is never called real footage, a real still never the demo, and a
+    real still kept under a waiver says in its caption which version it shows."""
+    records = _media_records()
+    with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
+        readme = f.read()
+    html = _page()
+    pages = {"README.md": _readme_pictures(readme), "docs/index.html": _page_pictures(html)}
+    problems = _caption_problems(pages, records)
+    assert not problems, "pictures described against their record:\n  " + "\n  ".join(problems)
+    seen = {n for pictures in pages.values() for n, _, _ in pictures}
+    waived = {n for n in records if records[n]["waiver"] and _media_kind(n, records) == "real"}
+    assert waived and waived <= seen, f"waived stills no page shows: {sorted(waived - seen)}"
+    assert {"hero.png", "og.png"} <= seen, f"the check found only {sorted(seen)}: gone vacuous"
+
+    # Teeth, on planted copies of the real pages: each violation fails, naming the file, the
+    # picture and the words.
+    tracks = sorted(_track_words(records))
+    assert tracks, "no real record names a track: the track-name half of the check is vacuous"
+    trust_age = f"aptured at v{records['data-trust.png']['version']}"
+    plants = {
+        "the shared card's old alt": (
+            "docs/index.html",
+            html.replace(re.search(r'og:image:alt" content="([^"]*)"', html).group(1),
+                         "the app's own window, with onboard kart video"),
+            ("og.png", "['onboard']")),
+        "the old footer's claim, in the hero's caption": (
+            "docs/index.html",
+            re.sub(r"(<img src=\"media/hero\.png\".*?<figcaption>)",
+                   r"\1The real window on a real recording. ", html, count=1, flags=re.S),
+            ("hero.png", "real recording")),
+        "the published track named under a demo still": (
+            "README.md",
+            readme.replace('alt="The map panel maximised on the synthetic demo',
+                           f'alt="The map panel maximised on {tracks[0]} 3h'),
+            ("map.png", tracks[0])),
+        "a real frame called the demo's": (
+            "docs/index.html",
+            html.replace('alt="A frame of a real exported overlay video on',
+                         'alt="A frame of the synthetic demo\'s overlay video on'),
+            ("overlay.jpg", "synthetic")),
+        "a waived still that does not say its age": (
+            "docs/index.html",
+            html.replace(trust_age, "aptured long ago"),
+            ("data-trust.png", "captured at v")),
+    }
+    for what, (rel, text, (name, words)) in plants.items():
+        assert text != (readme if rel == "README.md" else html), f"{what!r} planted nothing"
+        parsed = dict(pages, **{rel: (_readme_pictures if rel == "README.md" else
+                                      _page_pictures)(text)})
+        caught = _caption_problems(parsed, records)
+        assert caught and all(rel in p and name in p and words in p for p in caught), \
+            f"planted {what!r}: {caught}"
+        print(f"  planted {what}: {caught[0]}")
+    print(f"test_each_picture_is_described_as_what_its_record_says OK ({len(seen)} pictures on 2 "
+          f"pages, {len(waived)} waived, {len(plants)} plants caught)")
+
+
+# ------------------------------------------------------------------ 10. markdown anchors resolve
+def _md_anchors(text: str) -> set[str]:
+    """The fragments GitHub gives a Markdown file: each heading's slug and each explicit id."""
+    heads = {_github_anchor(h) for h in re.findall(r"^#+\s+(.+?)\s*$", text, re.M)}
+    return heads | set(re.findall(r'\bid="([^"]+)"', text))
+
+
+def test_links_into_the_docs_land_on_an_anchor():
+    """A README or landing-page link to `<doc>.md#fragment` lands on a heading or an explicit id of
+    that doc. The links check above drops the fragment, so a renamed heading left a link that opens
+    the page at its top, far from the paragraph it promised."""
+    with open(os.path.join(_REPO, "README.md"), encoding="utf-8") as f:
+        readme = f.read()
+    links = [(f"README.md → {p}#{a}", p, a)
+             for p, a in re.findall(r"\]\(((?:docs/)?[\w/.-]+\.md)#([^)\s]+)\)", readme)]
+    links += [(f"docs/index.html → {p}#{a}", p, a)
+              for p, a in re.findall(r"github\.com/eenndan/pacer/blob/main/([\w/.-]+\.md)#([^\"']+)",
+                                     _page())]
+    dangling = []
+    for what, path, anchor in links:
+        with open(os.path.join(_REPO, path), encoding="utf-8") as f:
+            if anchor not in _md_anchors(f.read()):
+                dangling.append(what)
+    assert not dangling, f"links to a fragment the doc does not have: {dangling}"
+    assert len(links) >= 2, f"only {len(links)} fragment links found: gone vacuous"
+    with open(os.path.join(_DOCS, "ACCURACY.md"), encoding="utf-8") as f:
+        accuracy = _md_anchors(f.read())
+    # Both kinds of fragment are read, and a near miss of either is not.
+    assert {"how-its-measured", "the-timing-step"} <= accuracy, accuracy
+    assert not {"how-it-is-measured", "timing-step"} & accuracy, accuracy
+    print(f"test_links_into_the_docs_land_on_an_anchor OK ({len(links)} links)")
+
+
 if __name__ == "__main__":
     test_stylesheet_parses()
     test_palette_is_derived_from_theme()
@@ -1744,4 +1942,6 @@ if __name__ == "__main__":
     test_links_in_running_text_are_more_than_a_hue()
     test_what_scrolls_is_reachable_by_keyboard()
     test_the_page_has_one_main_and_a_named_nav()
+    test_each_picture_is_described_as_what_its_record_says()
+    test_links_into_the_docs_land_on_an_anchor()
     print("ALL OK")
