@@ -34,6 +34,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def themed_app():
     """The process QApplication with the bundled fonts registered and the theme applied — the
     same pair, in the same order, that studio/app.py does before it builds the window."""
+    import _modal_watchdog
     from PySide6.QtWidgets import QApplication
 
     from studio import theme
@@ -41,4 +42,5 @@ def themed_app():
     app = QApplication.instance() or QApplication([])
     theme.register_fonts()       # idempotent; apply_theme calls it too, kept explicit here
     theme.apply_theme(app)
+    _modal_watchdog.arm(app)     # idempotent; a dialog nobody closes fails the test in ~20 s
     return app

@@ -20,7 +20,8 @@ export, so it is read off the command line of the nearest `ctest` among the proc
 when that finds none (`pixi run golden`, a bare `ctest -R x`): there is no timeout to beat, so
 nothing is armed. `PACER_HANG_DUMP_DEBUG=1` says on stderr what was armed, or why nothing was.
 The variable is removed once read, so only the registration's own process arms; the Pythons it
-spawns do not.
+spawns do not. The same call starts tests/_modal_watchdog.py (a modal dialog left open for 20 s
+names itself and fails the test), whatever the timeout.
 By hand: `pixi run ctest --test-dir build/Release -R '^test_x$' --timeout 60` arms at ~54 s. Under
 pytest, tests/conftest.py calls the same function: `PACER_HANG_DUMP=60 pixi run python -m pytest -s
 …` (`-s`, or pytest captures the dump into the test's report).
@@ -207,6 +208,26 @@ def arm(timeout: float, source: str) -> bool:
     return True
 
 
+def _start_modal_watchdog() -> None:
+    """The same registrations also get tests/_modal_watchdog.py, whatever their timeout: a dialog
+    left open names itself and is rejected long before any dump is due. Loaded by path, as
+    sitecustomize loads this file, and under its own name, so `tests/_qtapp.py` finds it armed."""
+    try:
+        mod = sys.modules.get("_modal_watchdog")
+        if mod is None:
+            import importlib.util
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_modal_watchdog.py")
+            spec = importlib.util.spec_from_file_location("_modal_watchdog", path)
+            if spec is None or spec.loader is None:
+                return
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["_modal_watchdog"] = mod
+            spec.loader.exec_module(mod)
+        mod.start()
+    except Exception as exc:  # noqa: BLE001  - a failure to arm costs the watchdog, never the run
+        os.write(2, f"tests/_hang_dump.py: modal watchdog not armed: {exc!r}\n".encode())
+
+
 def arm_from_environment() -> float | None:
     """Arm from `PACER_HANG_DUMP` (see the module docstring) and remove it from the environment.
     Returns the timeout armed against, or None when nothing was armed. With
@@ -214,6 +235,7 @@ def arm_from_environment() -> float | None:
     value = os.environ.pop(ENV, "").strip()
     if not value:
         return None
+    _start_modal_watchdog()
     timeout: float | None = None
     if value == CTEST:
         found = ctest_ancestor()

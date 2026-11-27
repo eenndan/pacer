@@ -37,6 +37,8 @@ nobody quits, and a C call holding the GIL (faulthandler's own thread then dumps
 finishes in time, which must print nothing extra; and they hold every Python registration to the
 arming, the ceiling to ctest's own `--timeout` (found on a grandparent too), and this very
 registration to being armed when ctest runs it — so a green CI run says the feature is on there.
+The same arming starts tests/_modal_watchdog.py: a child that leaves a QMessageBox open must fail
+in seconds with the box's text on stderr, and one that closes it must not hear from it.
 
 Stdlib (tomllib + ast) but for two things: the hang children import QtCore, and one check lists
 this build's registrations through ctest (PACER_CTEST_COMMAND, as test_app_support_jail does).
@@ -493,6 +495,68 @@ def test_this_registration_is_armed_against_its_own_ceiling():
           f"s from {got[1]}: dump at {_hang_dump.deadlines(got[0])[0]:g} s)")
 
 
+#: A child whose test opens a QMessageBox nothing closes (`left`), or closes it after 0.2 s.
+_MODAL_SRC = '''\
+import sys
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+app = QApplication([])
+
+
+def test_leaves_a_warning_open(close_after_ms):
+    box = QMessageBox(QMessageBox.Warning, "Export refused", "No start-line crossing.")
+    box.setInformativeText("Place a start line first.")
+    if close_after_ms:
+        QTimer.singleShot(close_after_ms, box.accept)
+    box.exec()  # MODAL
+
+
+if __name__ == "__main__":
+    test_leaves_a_warning_open(int(sys.argv[1]))
+    print("ok  test_leaves_a_warning_open")
+'''
+
+
+def test_a_modal_nobody_closes_names_itself_and_fails_fast():
+    """A DIALOG LEFT OPEN FAILS ITS TEST IN SECONDS, BY NAME (tests/_modal_watchdog.py). Armed as
+    a registration is (tests/_site + PACER_HANG_DUMP), with the limit at 1 s: the child that leaves
+    its QMessageBox open prints the running test, the box's class, text and informative text and
+    its stack, gets the box rejected and exits 1 long before its 60 s ceiling, where it used to
+    sit until the timeout. One that closes its box in 0.2 s is untouched: exit 0, nothing on
+    stderr from the watchdog."""
+    workdir = tempfile.mkdtemp(prefix="pacer-modal-watchdog-")
+    script = os.path.join(workdir, "test_modal_child.py")
+    try:
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(_MODAL_SRC)
+        env = dict(_child_env("60"), PACER_MODAL_WATCHDOG_S="1", QT_QPA_PLATFORM="offscreen")
+        runs = {}
+        for close_ms in (0, 200):
+            t0 = time.monotonic()
+            p = subprocess.run([sys.executable, script, str(close_ms)], env=env,
+                               capture_output=True, text=True, timeout=120)
+            runs[close_ms] = (p.returncode, p.stdout, p.stderr, time.monotonic() - t0)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    rc, _out, err, secs = runs[0]
+    line = _hang_line(_MODAL_SRC, "test_leaves_a_warning_open", "# MODAL")
+    want = ["==== MODAL WATCHDOG: a modal dialog has been open",
+            f"running test: test_leaves_a_warning_open ({script}:{line})",
+            "class: PySide6.QtWidgets.QMessageBox", "text: 'No start-line crossing.'",
+            "informativeText: 'Place a start line first.'", f"line {line} in test_leaves",
+            "1 dialog(s) rejected: exit status 1"]
+    missing = [w for w in want if w not in err]
+    assert rc == 1 and not missing and secs < 30, (
+        f"the open modal did not fail by name: exit {rc} after {secs:.1f} s, missing {missing}:"
+        f"\n{err[-3000:]}")
+    rc, out, err, _secs = runs[200]
+    assert rc == 0 and "MODAL WATCHDOG" not in err and out.rstrip().endswith("ok  test_leaves_a_"
+                                                                             "warning_open"), (
+        f"a modal closed in 0.2 s was touched: exit {rc}, stderr {err[-2000:]!r}")
+    print(f"test_a_modal_nobody_closes_names_itself_and_fails_fast OK (failed in {secs:.1f} s)")
+
+
 def test_every_python_registration_arms_the_hang_dump():
     """THE BUILD: every registration that runs a Python file has tests/_site first on PYTHONPATH
     and PACER_HANG_DUMP set to its own TIMEOUT, or to `ctest` where it has none — so a new test,
@@ -539,6 +603,7 @@ if __name__ == "__main__":
     test_a_hang_prints_the_running_test_and_every_thread_before_the_timeout()
     test_the_dump_beats_ctests_own_timeout()
     test_this_registration_is_armed_against_its_own_ceiling()
+    test_a_modal_nobody_closes_names_itself_and_fails_fast()
     test_every_python_registration_arms_the_hang_dump()
     print("\nOK: the suite runs in parallel by default, a run can still be made serial, every "
           "task's list names real registrations, and a hang prints where it is before its timeout")
