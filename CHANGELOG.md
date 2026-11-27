@@ -50,9 +50,9 @@ All notable changes to Pacer are documented here. The format is based on
 ### Fixed
 
 - With no corner ranked, Coaching's note under the table no longer says every corner is listed: a
-  corner that loses under 0.005 s is not a row.
+  corner that loses under 0.005 s is not a row. (#741)
 - The first-open debrief says "from <day>'s top corner" when one corner is ranked, not "top
-  corners".
+  corners". (#741)
 - The lap panel's width no longer follows the Coaching headline's wording, and Quickest passes asks
   for the width its "Level with" words need whole. (#740)
 - A button you reach with Tab or ⇧Tab presses on Space, Return or Enter (once, even held); after a

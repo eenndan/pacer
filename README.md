@@ -102,7 +102,7 @@ lowers the ideal too, so part of the gap is timing luck.*
   recording's first open, once its timing is trusted, lands on it as a **debrief** and puts its top
   corners on the track's **focus list**, for the next session there to re-measure.
 
-<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, led by the best lap's time, large, beside its speed-coloured line with the focus corners ringed; under it a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, and the ranked corners with their reasons and a Jump to the video">
+<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, led by the best lap's time, large, beside its speed-coloured line with its focus corner ringed; under it a first line saying nothing is saved, C1, the one corner Pacer put on the focus list, with its baseline and a Remove, and the one ranked corner with its reason and a Jump to the video">
 
 - **Your quickest pass through each corner, one click from the video.** Corners ▸ **Quickest
   passes** lists each corner's quickest time and the lap it was on; a click plays that pass from

@@ -58,7 +58,9 @@ track run the other way round keeps a record of its own), and Pacer has already 
 session's top corners (three at most) on that track's **focus list**, each with a baseline measured
 on this session and a **Remove** beside it: a default, not a decision. **Esc** returns to your usual
 layout. On timing Pacer calls estimated (a GPS5 camera's video clock, for one) it gives neither the
-line nor the list, because neither could be compared honestly.
+line nor the list, because neither could be compared honestly. A session where no corner loses more
+than the 0.07 s timing step has nothing to rank, so it opens on the four panels instead, with its
+personal-best card.
 
 That list is the loop. The next session you open at that track re-measures the same stretches and
 says, corner by corner, whether each got faster, got slower or stayed inside its own lap-to-lap
@@ -68,7 +70,7 @@ saying the two days were alike.
 The demo lands here on every open, and keeps nothing: no Library row, no personal best, and a focus
 list that lasts only while the demo is open.
 
-![The synthetic demo's debrief: the Coaching page full-window, led by the best lap's time beside its speed-coloured line with the focus corners ringed; under it a first line saying nothing is saved, the three corners Pacer put on the focus list with their baselines and a Remove for each, and the ranked corners with their reasons and a Jump to the video](media/debrief.png)
+![The synthetic demo's debrief: the Coaching page full-window, led by the best lap's time beside its speed-coloured line with its focus corner ringed; under it a first line saying nothing is saved, C1, the one corner Pacer put on the focus list, with its baseline and a Remove, and the one ranked corner with its reason and a Jump to the video](media/debrief.png)
 
 ## 4 · Read the lap
 
