@@ -18,6 +18,11 @@ spun (DeferredDelete + processEvents + gc) the census must be exactly the warm o
 their REAL `exec()`: a timer closes whatever modal or popup is up, and each open must have been
 closed by it, so a door that stopped being modal (and so stopped being exercised) fails too.
 
+THE KEYBOARD (cool/dialogs-work-from-the-keyboard): the same doors, and the rest of the app's
+dialogs, driven with real keys — a default button that is never destructive, Esc that closes,
+Tab that reaches everything in reading order and leaves every table and text box. See the
+section at the bottom; its own planted dialogs prove each rule can fail.
+
 Real offscreen widgets over the bare-StudioWindow seam tests/test_command_palette.py uses (no
 session, no media) and the synthetic recording tests/test_provenance_panel.py uses for the tables.
 The library + prefs stores are diverted to a temp dir for the whole module.
@@ -45,8 +50,10 @@ from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
     QMainWindow,
+    QMessageBox,
     QProgressDialog,
 )
+from shiboken6 import isValid  # noqa: E402
 
 from studio import library, prefs, units  # noqa: E402
 
@@ -430,6 +437,369 @@ def test_the_video_export_gives_back_its_progress_dialog():
     finally:
         export_controller.VideoExportWorker = real
         _dispose(win)
+
+
+# ------------------------------------------------------------------ every dialog, from the keyboard
+# THE SECOND CENSUS: what the keys do. File ▸ Library… shipped with "Clear library" as its DEFAULT
+# button — Qt makes the first auto-default push button in the focus chain the default of a dialog
+# that names none — so Return in the search field or on a selected row offered to wipe the
+# library, and its table kept every Tab for itself (40 presses, Shift+Tab too: Open, Use as
+# reference and Close unreachable). The session record's Notes box ate Tab the same way ("wet" then
+# Tab x3 gave "wet\t\t\t", Save unreachable). So every dialog the app opens is driven here with
+# REAL key events to the focused widget, inside its real `exec()`, and must pass four rules:
+#   1. it has a default button, or a reason in its door's `no_default` for having none;
+#   2. at no Tab stop does Return press a destructive button (`_DESTRUCTIVE`) — neither the
+#      dialog's default nor an auto-default button the focus has landed on;
+#   3. Tab from where it opens visits every enabled tab stop and comes back: it never stays put
+#      (a text box or a table keeping the key) and never leaves the window — and it walks the
+#      dialog as it reads, top to bottom and left to right, climbing back only once a round;
+#   4. Esc closes it, rejected.
+_DESTRUCTIVE = ("clear", "forget", "delete", "remove", "reset", "discard", "overwrite", "replace",
+                "erase", "wipe", "restore", "trash")
+_TAB_LIMIT = 80
+
+
+def _destructive(text: str) -> bool:
+    words = "".join(c if c.isalnum() else " " for c in text.replace("&", "").lower()).split()
+    return any(w in _DESTRUCTIVE for w in words)
+
+
+def _label(w) -> str:
+    from PySide6.QtWidgets import QAbstractButton
+    if w is None:
+        return "nothing"
+    text = w.text() if isinstance(w, QAbstractButton) else ""
+    return f"{type(w).__name__}{f' {text!r}' if text else ''}"
+
+
+def _tab_stops(dlg) -> list:
+    """The controls Tab should reach: shown, enabled, accepting tab focus, in this window (a combo's
+    popup is another), and not standing in for another widget."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QWidget
+    return [w for w in dlg.findChildren(QWidget)
+            if w.isVisibleTo(dlg) and w.isEnabled() and w.window() is dlg
+            and (w.focusPolicy() & Qt.TabFocus) == Qt.TabFocus and w.focusProxy() is None]
+
+
+def _scrolled_by(w, dlg) -> list:
+    """The scroll areas `w` sits inside, outermost first."""
+    from PySide6.QtWidgets import QAbstractScrollArea
+    out, p = [], w.parentWidget()
+    while p is not None and p is not dlg:
+        if isinstance(p, QAbstractScrollArea):
+            out.insert(0, p)
+        p = p.parentWidget()
+    return out
+
+
+def _reads_after(dlg, a, b) -> bool:
+    """True when `b` comes after `a` in reading order: lower down the dialog, or on the same line
+    (their heights overlap) and to its right. Into a scroll area from the area itself reads on;
+    otherwise what a scroll area holds is read where the area is, whatever its scrolled offset."""
+    from PySide6.QtCore import QPoint
+    sa, sb = _scrolled_by(a, dlg), _scrolled_by(b, dlg)
+    if a in sb:
+        return True
+    shared = 0
+    while shared < min(len(sa), len(sb)) and sa[shared] is sb[shared]:
+        shared += 1
+    a = sa[shared] if shared < len(sa) else a
+    b = sb[shared] if shared < len(sb) else b
+    ra = a.rect().translated(a.mapTo(dlg, QPoint(0, 0)))
+    rb = b.rect().translated(b.mapTo(dlg, QPoint(0, 0)))
+    if rb.top() >= ra.bottom() - 2:
+        return True
+    same_line = rb.top() < ra.bottom() and rb.bottom() > ra.top()
+    return same_line and rb.left() > ra.left()
+
+
+def _return_presses(dlg):
+    """The push button Return would press now: a focused auto-default one, else the default."""
+    from PySide6.QtWidgets import QPushButton
+    fw = QApplication.focusWidget()
+    if isinstance(fw, QPushButton) and fw.window() is dlg and fw.autoDefault():
+        return fw
+    return next((b for b in dlg.findChildren(QPushButton)
+                 if b.isDefault() and b.isVisibleTo(dlg) and b.window() is dlg), None)
+
+
+def keyboard_defects(dlg, no_default: str | None = None) -> list[str]:
+    """Drive `dlg` (shown, focused) with real keys and list what breaks the four rules above. Ends
+    by pressing Esc, so the dialog is closed when this returns."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QPushButton
+    _APP.processEvents()
+    out: list[str] = []
+    if not any(b.isDefault() for b in dlg.findChildren(QPushButton)) and not no_default:
+        out.append("no default button")
+    start = QApplication.focusWidget()
+    if start is None or start.window() is not dlg:
+        out.append(f"opens with the focus on {_label(start)}, outside the dialog")
+    else:
+        stops, seen, cur, climbs = _tab_stops(dlg), [start], start, []
+        for _ in range(_TAB_LIMIT):
+            target = _return_presses(dlg)
+            if target is not None and _destructive(target.text()):
+                say = f"Return on {_label(cur)} presses {target.text()!r}"
+                if say not in out:
+                    out.append(say)
+            QTest.keyClick(cur, Qt.Key_Tab)
+            nxt = QApplication.focusWidget()
+            if nxt is None or nxt.window() is not dlg:
+                out.append(f"Tab from {_label(cur)} leaves the dialog ({_label(nxt)})")
+                break
+            if nxt is cur:
+                out.append(f"Tab is kept by {_label(cur)}")
+                break
+            if not _reads_after(dlg, cur, nxt):
+                climbs.append(f"from {_label(cur)} to {_label(nxt)}")
+            if nxt is start:
+                missed = sorted({_label(w) for w in stops if w not in seen})
+                if missed:
+                    out.append(f"Tab never reaches {', '.join(missed)}")
+                # A round in reading order climbs back exactly once: last control to first.
+                if len(climbs) > 1:
+                    out.append(f"Tab goes back up the dialog {len(climbs)} times in one round "
+                               f"({'; '.join(climbs)})")
+                break
+            seen.append(nxt)
+            cur = nxt
+        else:
+            out.append(f"Tab did not come back to {_label(start)} in {_TAB_LIMIT} presses")
+    QTest.keyClick(QApplication.focusWidget() or dlg, Qt.Key_Escape)
+    for _ in range(100):           # a QMessageBox answers Esc with an ANIMATED click on macOS
+        _APP.processEvents()
+        if not isValid(dlg) or not dlg.isVisible():
+            break
+        QThread.msleep(10)
+    if not isValid(dlg):
+        return out                                       # closed, and freed on close
+    if dlg.isVisible():
+        out.append("Esc does not close it")
+        QDialog.reject(dlg)                              # past an override that ignores it
+    elif isinstance(dlg, QMessageBox):                   # its result is the button's code
+        if dlg.buttonRole(dlg.clickedButton()) not in (QMessageBox.RejectRole, QMessageBox.NoRole):
+            out.append(f"Esc answers {dlg.clickedButton().text()!r}")
+    elif dlg.result() != QDialog.Rejected:
+        out.append("Esc closes it ACCEPTED")
+    return out
+
+
+def _audit_modal(name: str, open_modal, no_default: str | None = None) -> list[str]:
+    """`open_modal()` runs a real `exec()`; the first modal it puts up is audited from inside its
+    own event loop (where a user's keys land) and closed by the audit's Esc."""
+    got: dict = {}
+    timer = QTimer()
+    timer.setInterval(20)
+
+    def tick():
+        dlg = QApplication.activeModalWidget()
+        if dlg is None or "defects" in got:
+            return
+        timer.stop()
+        got["defects"] = keyboard_defects(dlg, no_default)
+
+    timer.timeout.connect(tick)
+    timer.start()
+    try:
+        open_modal()
+    finally:
+        timer.stop()
+    assert "defects" in got, f"{name}: nothing modal opened, so nothing was audited"
+    return got["defects"]
+
+
+def _library_dialog(clip: str, **extra):
+    """File ▸ Library… with every control it can build: two present rows, every callback wired
+    (none of them is ever pressed), a session open (so Use as reference is shown)."""
+    from studio.library_dialog import LibraryDialog
+    rows = [{"fingerprint": library.fingerprint(stem), "stem": stem,
+             "track": "Synthetic demo circuit", "date": date, "lap_count": 8, "best": 45.1,
+             "theoretical": 44.8, "verified": True, "degraded": False, "dropout": False,
+             "paths": [clip]} for stem, date in (("GX010001", "2026-11-01"),
+                                                 ("GX010002", "2026-11-02"))]
+    index = {"version": library.VERSION, "entries": rows}
+    return LibraryDialog(
+        index, extra.pop("open_recording", lambda _p: None),
+        forget_recording=lambda e: index, clear_library=lambda: index,
+        reveal_library=lambda: None, backup_library=lambda: None,
+        restore_library=lambda: index,
+        backup_info=lambda: {"entries": 2, "mtime": 0.0, "path": clip},
+        edit_record=lambda e: None, manage_tracks=lambda *_a: None, show_privacy=lambda: None,
+        use_as_reference=lambda e: None, reference_refusal=lambda e: None, **extra)
+
+
+def _keyboard_doors(clip: str):
+    """(name, open_modal, no_default) for every dialog the app opens. The pickers Qt owns (the save
+    and folder panels, QInputDialog) and the export progress modal (its one button is Cancel, which
+    Esc presses) are not repeated here."""
+    from test_provenance import _session
+
+    from studio import help_dialog
+    from studio.marks_panel import MarkDialog
+    from studio.session_record_dialog import SessionRecordDialog
+    from studio.track_dialog import TrackManagerDialog
+
+    def run(build):
+        def go():
+            dlg = build()
+            try:
+                dlg.exec()
+            finally:
+                dlg.deleteLater()
+        return go
+
+    def clear_confirmation():
+        dlg = _library_dialog(clip)
+        try:
+            dlg._on_clear_library()                   # its QMessageBox.question is audited
+        finally:
+            dlg.deleteLater()
+
+    def recalled_export():
+        # The row "Opened on your last export's resolution: Source  [Use defaults]" above the form.
+        key, source = win.exports._PREF_EXPORT_RES, win.exports._EXPORT_RES_SOURCE
+        prefs.set(key, source)
+        try:
+            win.exports._ask_export_options(win.session.best_lap_id())
+        finally:
+            prefs.set(key, win.exports._EXPORT_DEFAULT_INDEX[key])
+
+    win = _window()
+    win.session, win._paths = _session(), []
+    rows = [{"name": "Daytona Milton Keynes", "builtin": True, "editable": True, "sectors": 0},
+            {"name": "Whilton Mill", "builtin": False, "editable": True, "sectors": 2}]
+    return win, [
+        ("⌘K command palette", win.show_command_palette,
+         "a search box over a list: Return runs the highlighted row"),
+        ("File ▸ Library…", run(lambda: _library_dialog(clip)), None),
+        ("Library ▸ Clear library confirmation", clear_confirmation, None),
+        ("Saved tracks…", run(lambda: TrackManagerDialog(
+            rows, rename_track=lambda *_a: rows, delete_track=lambda _n: rows,
+            restore_tracks=lambda: rows, backup_info=lambda: {"tracks": 2, "mtime": 0.0})), None),
+        ("Session record… (a new one)", run(lambda: SessionRecordDialog({}, name="GX010001")),
+         None),
+        ("Session record… (editing one)", run(lambda: SessionRecordDialog(
+            {"conditions": "dry", "notes": "wet"}, name="GX010001", is_new=False)), None),
+        ("Marks ▸ add a mark", run(lambda: MarkDialog({"type": "note", "note": ""})), None),
+        ("Export overlay video…", lambda: win.exports._ask_export_options(
+            win.session.best_lap_id()), None),
+        ("Export overlay video… (opened on a remembered Source resolution)",
+         recalled_export, None),
+        ("Help ▸ keyboard shortcuts", run(lambda: help_dialog.ShortcutsDialog(win)), None),
+        ("Help ▸ About", run(lambda: help_dialog.AboutDialog(win)), None),
+        ("Help ▸ Your data & privacy", run(lambda: help_dialog.PrivacyDialog(win)), None),
+    ]
+
+
+def test_every_dialog_works_from_the_keyboard():
+    """The four rules above, on every door, in one table (printed whole, so a failure shows every
+    dialog's state and not just the first). Inspect this number…'s panel is not modal and is
+    audited as it opens beside the window."""
+    from test_provenance import _session
+
+    from studio import provenance_panel
+    from studio.lap_table import LapTable
+
+    table: dict[str, list[str]] = {}
+    with tempfile.TemporaryDirectory() as d:
+        clip = os.path.join(d, "GX010001.MP4")
+        open(clip, "wb").close()
+        win, doors = _keyboard_doors(clip)
+        try:
+            for name, door, no_default in doors:
+                table[name] = _audit_modal(name, door, no_default)
+        finally:
+            _dispose(win)
+    laps = LapTable(_session())
+    try:
+        prov = laps.session.lap_time_provenance(laps.session.best_lap_id())
+        panel = provenance_panel.open_for(prov, laps)
+        panel.activateWindow()
+        _APP.processEvents()
+        table["Inspect this number…"] = keyboard_defects(panel)
+    finally:
+        _dispose(laps)
+    for name, defects in table.items():
+        print(f"  {'ok ' if not defects else 'BAD'} {name}: {'; '.join(defects) or 'fine'}")
+    bad = {k: v for k, v in table.items() if v}
+    assert not bad, f"{len(bad)} dialogs fail the keyboard rules: {bad}"
+    print(f"ok every dialog works from the keyboard ({len(table)} dialogs)")
+
+
+def test_the_keyboard_audit_has_teeth():
+    """Each rule, planted alone in a dialog of this test's own, is caught; the same dialog with
+    nothing planted passes — so the table above is clean because the dialogs are, not because
+    the audit cannot see."""
+    from PySide6.QtWidgets import (
+        QDialogButtonBox,
+        QLineEdit,
+        QPlainTextEdit,
+        QPushButton,
+        QTableWidget,
+        QVBoxLayout,
+    )
+
+    class _NoEsc(QDialog):
+        def reject(self):                                # planted: Esc does nothing
+            pass
+
+    def build(plant: str):
+        dlg = (_NoEsc if plant == "esc ignored" else QDialog)()
+        col = QVBoxLayout(dlg)
+        col.addWidget(QLineEdit())
+        if plant == "Tab goes back up":
+            lower, upper = QLineEdit(dlg), QLineEdit(dlg)  # made bottom-first: Tab climbs
+            col.insertWidget(0, upper)
+            col.addWidget(lower)
+        if plant == "text box keeps Tab":
+            col.addWidget(QPlainTextEdit())             # tabChangesFocus False: Tab types a tab
+        if plant == "table keeps Tab":
+            grid = QTableWidget(2, 2)                   # tabKeyNavigation on: Tab walks the cells
+            col.addWidget(grid)
+        if plant == "focused Clear is auto-default":
+            col.addWidget(QPushButton("Clear library"))  # auto-default: Return on it wipes
+        if plant == "no default":                       # (a button box always makes OK one)
+            for text, slot in (("OK", dlg.accept), ("Cancel", dlg.reject)):
+                b = QPushButton(text)
+                b.setAutoDefault(False)
+                b.clicked.connect(slot)
+                col.addWidget(b)
+            return dlg
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        if plant == "Delete is the default":
+            box.button(QDialogButtonBox.Ok).setText("Delete")
+        box.accepted.connect(dlg.accept)
+        box.rejected.connect(dlg.reject)
+        col.addWidget(box)
+        return dlg
+
+    expect = {"nothing": None,
+              "Delete is the default": "presses 'Delete'",
+              "focused Clear is auto-default": "presses 'Clear library'",
+              "no default": "no default button",
+              "text box keeps Tab": "Tab is kept by QPlainTextEdit",
+              "table keeps Tab": "Tab is kept by QTableWidget",
+              "Tab goes back up": "Tab goes back up the dialog",
+              "esc ignored": "Esc does not close it"}
+    for plant, needle in expect.items():
+        def go(plant=plant):
+            dlg = build(plant)
+            try:
+                dlg.exec()
+            finally:
+                if dlg.isVisible():
+                    QDialog.reject(dlg)
+                dlg.deleteLater()
+        defects = _audit_modal(plant, go)
+        if needle is None:
+            assert defects == [], f"a clean dialog was flagged: {defects}"
+        else:
+            assert any(needle in d for d in defects), f"{plant}: not caught, got {defects}"
+    _spin()
+    print(f"ok the keyboard audit catches each of {len(expect) - 1} planted defects")
 
 
 if __name__ == "__main__":

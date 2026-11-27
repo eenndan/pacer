@@ -1458,6 +1458,16 @@ class ExportController:
         src = self.win._paths[0] if getattr(self.win, "_paths", None) else ""
         probe_poll = self._redraw_once_probed(dlg, src, _update_hint)
         _update_hint()
+        if recalled:
+            # "Use defaults" is drawn ABOVE the form, yet Tab reached it last, climbing back up
+            # from Extras. Tab reads the dialog as it is drawn — set here, with the tree complete:
+            # set where the form is built, the chain was still re-ordered after it. The caret still
+            # opens on the Export row.
+            order = (use_defaults, scope_combo, lead_combo, aspect_combo, fit_combo, content_combo,
+                     res_combo, q_combo, style_combo, ghost_box, cards_box)
+            for first, then in zip(order, order[1:], strict=False):
+                QWidget.setTabOrder(first, then)
+            scope_combo.setFocus()
 
         accepted = dlg.exec() == QDialog.Accepted
         if probe_poll is not None:

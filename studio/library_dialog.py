@@ -989,6 +989,9 @@ class LibraryDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # Tab LEAVES the table (its arrows already move the row): with Qt's default it walked the
+        # cells forever, and Open, Use as reference and Close were out of the keyboard's reach.
+        self.table.setTabKeyNavigation(False)
         self.table.setAlternatingRowColors(True)
         # theme.GRID_ROW_H, not Qt's default 30. This grid's ROW is the click target (SelectRows +
         # SingleSelection, and a double-click OPENS the recording), so its height is the app's
@@ -1265,6 +1268,14 @@ class LibraryDialog(QDialog):
         buttons.addWidget(self.open_btn)
         buttons.addWidget(close_btn)
         root.addLayout(buttons)
+        # RETURN OPENS THE SELECTED RECORDING, and nothing else here ever answers it. A dialog that
+        # names no default gets Qt's — the first auto-default button in the focus chain, which was
+        # "Clear library" — so Return in the search box or on a row offered to wipe the library.
+        # Every other button is pressed by click or Space only (Open is greyed with no openable
+        # row, and then Return does nothing at all).
+        for btn in self.findChildren(QPushButton):
+            btn.setAutoDefault(False)
+        self.open_btn.setDefault(True)
 
         # Auto-select the most recent usable recording (none if all quarantined), then apply the
         # (initially empty) filter so the summary line + row visibility are in sync from the start.
