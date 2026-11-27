@@ -18,6 +18,7 @@ Run: python tests/test_share_lapstrip.py
 import os
 import sys
 import tempfile
+from dataclasses import replace
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -385,6 +386,28 @@ def test_a_lap_that_left_the_line_is_not_a_clean_lap_and_says_why():
         "left the line the other laps drive: not counted"
     ls.render_lapstrip(ls.lapstrip_data(s))             # paints (hatched) without raising
     print("test_a_lap_that_left_the_line_is_not_a_clean_lap_and_says_why OK")
+
+
+def test_a_best_lap_that_is_itself_a_warning_lap_says_so_in_the_headline():
+    """Every lap ⚠, so the bests fall back to a ⚠ lap: the strip's "★ lap N" headline carries the
+    lap card's own cue (`data_quality.not_counted_line`) on its BEST LAP row, in caveat amber, and
+    a session with a clean best draws nothing there."""
+    s = FakeSession({0: 60.0, 1: 60.4, 2: 60.9}, dropouts={0, 1, 2})
+    d = ls.lapstrip_data(s)
+    assert d.best_lap_id == 0
+    assert d.best_warning == data_quality.not_counted_line(s, 0) != "", d.best_warning
+    assert d.best_warning == share_card.card_data(s).best_warn
+    assert ls.lapstrip_data(FakeSession({0: 60.0, 1: 60.4}, dropouts={1})).best_warning == ""
+    marked, plain = ls.render_lapstrip(d), ls.render_lapstrip(replace(d, best_warning=""))
+    row = [(x, y) for x in range(ls.PAD + 200, ls.RIGHT) for y in range(212, 256)
+           if marked.pixel(x, y) != plain.pixel(x, y)]
+    assert row, "the ⚠ cue was not drawn on the BEST LAP row"
+    amber = QColor(theme.C.accent)
+    assert any(_hue_close(marked.pixelColor(x, y), amber) for x, y in row), "not in caveat amber"
+    elsewhere = [(x, y) for x in range(0, ls.CARD_W, 3) for y in range(0, ls.CARD_H, 3)
+                 if not 212 <= y < 256 and marked.pixel(x, y) != plain.pixel(x, y)]
+    assert not elsewhere, f"the cue moved something else on the card: {elsewhere[:5]}"
+    print("test_a_best_lap_that_is_itself_a_warning_lap_says_so_in_the_headline OK")
 
 
 def test_a_lap_timed_across_a_missing_chapter_is_hatched_with_its_own_words():
