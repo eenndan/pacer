@@ -115,6 +115,7 @@ def _table_widget(table) -> QTableWidget:
     grid.setAlternatingRowColors(True)
     grid.setSelectionBehavior(QAbstractItemView.SelectRows)
     grid.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    grid.setTabKeyNavigation(False)     # Tab moves on to the next grid and the buttons, not cell to cell
     grid.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
     mono = theme.mono_font(theme.TABLE)
     for r in range(shown):

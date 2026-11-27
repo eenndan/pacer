@@ -463,6 +463,48 @@ def test_the_form_offers_delete_only_when_there_is_a_record_to_delete():
     print("test_the_form_offers_delete_only_when_there_is_a_record_to_delete OK")
 
 
+def test_the_notes_box_gives_tab_back_and_return_saves():
+    """Real keys, inside the real `exec()`. The Notes box kept every Tab: "wet" then Tab x3 typed
+    "wet\\t\\t\\t" and Save was out of the keyboard's reach. Now Tab leaves it, and from wherever
+    the focus lands Return saves — never Delete record, which an auto-default button would have
+    taken the key for the moment Tab landed on it."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+
+    for is_new in (True, False):
+        dlg = SessionRecordDialog(sr.blank_record() if is_new else _record(), entry=_entry(),
+                                  is_new=is_new)
+        seen = {}
+
+        def keys(dlg=dlg, seen=seen):
+            dlg.notes.setFocus()
+            dlg.notes.selectAll()
+            QTest.keyClicks(dlg.notes, "wet")
+            stops = []
+            for _ in range(3):
+                QTest.keyClick(QApplication.focusWidget(), Qt.Key_Tab)
+                stops.append(QApplication.focusWidget())
+            seen["notes"], seen["stops"] = dlg.notes.toPlainText(), stops
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_Return)
+            QApplication.processEvents()
+            if dlg.isVisible():                         # Return did nothing: close it anyway
+                dlg.reject()
+        QTimer.singleShot(50, keys)
+        result = dlg.exec()
+        assert seen["notes"] == "wet", f"Tab typed into the notes: {seen['notes']!r}"
+        assert dlg.notes not in seen["stops"], "Tab stayed in the Notes box"
+        assert result == QDialog.Accepted, "Return after Tab did not save"
+        assert dlg.save_btn.isDefault()
+        assert dlg.deleted() is False
+        delete = getattr(dlg, "delete_btn", None)
+        assert delete is None or not (delete.autoDefault() or delete.isDefault())
+        assert all(not b.autoDefault() for b in dlg.findChildren(QPushButton)
+                   if b.text().startswith("Delete"))
+        dlg.deleteLater()
+    print("test_the_notes_box_gives_tab_back_and_return_saves OK")
+
+
 def test_the_form_states_its_context_and_what_it_carried_over():
     """Two lines that are not fields. The first is what pacer already knows (so the driver never
     types it); the second names what ``prefill`` answered on his behalf, because an unannounced

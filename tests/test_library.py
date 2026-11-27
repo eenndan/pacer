@@ -2457,6 +2457,174 @@ def test_dialog_header_and_clear_confirm_use_the_module_pluralizer():
     dlg.deleteLater()
 
 
+def _keyboard_library(clip, opened, cleared):
+    """The Library with every control it can build (a session open, so Use as reference shows):
+    two present rows, open + clear recorded, nothing else ever pressed."""
+    idx = library.empty_index()
+    for stem, date in (("GX010001", "2024-05-01"), ("GX010002", "2024-05-02")):
+        library.upsert(idx, _entry(stem, track="MK", date=date, best=70.0, paths=[clip]))
+    return LibraryDialog(
+        idx, lambda p: opened.append(list(p)), forget_recording=lambda e: idx,
+        clear_library=lambda: cleared.append(1) or library.empty_index(),
+        reveal_library=lambda: None, backup_library=lambda: None, restore_library=lambda: idx,
+        backup_info=lambda: {"entries": 2, "mtime": 0.0, "path": clip},
+        edit_record=lambda e: None, manage_tracks=lambda *_a: None, show_privacy=lambda: None,
+        use_as_reference=lambda e: None, reference_refusal=lambda e: None)
+
+
+def _with_keys(dlg, keys):
+    """Run `keys(dlg)` from inside the dialog's real `exec()` (where a user's keys land), then
+    close it if the keys did not."""
+    from PySide6.QtCore import QTimer
+
+    def go():
+        try:
+            keys(dlg)
+        finally:
+            if dlg.isVisible():
+                dlg.reject()
+    QTimer.singleShot(50, go)
+    return dlg.exec()
+
+
+def test_return_in_the_library_opens_the_recording_and_never_offers_to_clear_it():
+    """Real keys. The Library named no default button, so Qt made the first auto-default one its
+    default — "Clear library" — and Return in the search box or on a selected row opened the
+    "Forget all N recordings?" confirmation. Return now opens the selected recording; no other
+    button ever answers it."""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMessageBox, QPushButton
+
+    asked = []
+    orig = QMessageBox.question
+    QMessageBox.question = staticmethod(lambda *a, **k: (asked.append(a[1]), QMessageBox.No)[1])
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+            # (a) a filter typed in the search box, then Return
+            opened, cleared = [], []
+            dlg = _keyboard_library(real.name, opened, cleared)
+
+            def search_then_return(d):
+                d.search.setFocus()
+                QTest.keyClicks(d.search, "05-01")
+                QTest.keyClick(d.search, Qt.Key_Return)
+            _with_keys(dlg, search_then_return)
+            assert asked == [] and cleared == [], f"Return offered to clear the library: {asked}"
+            assert opened == [[real.name]], opened
+            assert [b.text() for b in dlg.findChildren(QPushButton) if b.isDefault()] == ["Open"]
+            assert [b.text() for b in dlg.findChildren(QPushButton) if b.autoDefault()] == []
+            dlg.deleteLater()
+
+            # (b) a row chosen with the arrows, then Return
+            opened, cleared = [], []
+            dlg = _keyboard_library(real.name, opened, cleared)
+
+            def row_then_return(d):
+                d.table.setFocus()
+                QTest.keyClick(d.table, Qt.Key_Down)
+                QTest.keyClick(d.table, Qt.Key_Return)
+            _with_keys(dlg, row_then_return)
+            assert asked == [] and cleared == [], asked
+            assert opened == [[real.name]], opened
+            dlg.deleteLater()
+
+            # (c) a search matching nothing: Open is greyed, and Return does nothing at all
+            opened, cleared = [], []
+            dlg = _keyboard_library(real.name, opened, cleared)
+            still = []
+
+            def nothing_then_return(d):
+                d.search.setFocus()
+                QTest.keyClicks(d.search, "no such track")
+                QTest.keyClick(d.search, Qt.Key_Return)
+                still.append(d.isVisible() and not d.open_btn.isEnabled())
+            _with_keys(dlg, nothing_then_return)
+            assert still == [True] and asked == [] and cleared == [] and opened == []
+            dlg.deleteLater()
+    finally:
+        QMessageBox.question = orig
+
+
+def test_tab_walks_the_library_in_the_order_it_is_drawn_and_esc_closes_it():
+    """The table kept every Tab (40 presses, Shift+Tab too), so the buttons under it were out of
+    the keyboard's reach. Tab now leaves it and walks the dialog as it reads — search, filters,
+    table, chart, then the bottom row left to right — back to the search box; Shift+Tab walks it
+    backwards; Esc closes it without opening anything."""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QLineEdit, QTableWidget
+
+    def name(w):
+        return w.text() if hasattr(w, "text") and not isinstance(w, QLineEdit) else type(w).__name__
+
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        opened = []
+        dlg = _keyboard_library(real.name, opened, [])
+        got = {}
+
+        def walk(d):
+            start = QApplication.focusWidget()
+            got["start"] = start
+            fwd, cur = [], start
+            for _ in range(40):
+                QTest.keyClick(cur, Qt.Key_Tab)
+                cur = QApplication.focusWidget()
+                fwd.append(cur)
+                if cur is start:
+                    break
+            back, cur = [], start
+            for _ in range(40):
+                QTest.keyClick(cur, Qt.Key_Backtab, Qt.ShiftModifier)
+                cur = QApplication.focusWidget()
+                back.append(cur)
+                if cur is start:
+                    break
+            got["fwd"], got["back"] = fwd, back
+            QTest.keyClick(QApplication.focusWidget(), Qt.Key_Escape)
+        result = _with_keys(dlg, walk)
+        assert got["start"] is dlg.search
+        fwd = [name(w) for w in got["fwd"]]
+        assert fwd == ["QComboBox", "QComboBox", "QTableWidget", "PlotWidget",
+                       "Your data && privacy…", "Clear library", "Restore…", "Reveal in Finder",
+                       "Back up…", "Saved tracks…", "Session record…", "Use as reference", "Open",
+                       "Close", "QLineEdit"], fwd
+        assert isinstance(got["fwd"][0], QComboBox) and isinstance(got["fwd"][2], QTableWidget)
+        assert got["back"][:-1] == list(reversed(got["fwd"][:-1])), [name(w) for w in got["back"]]
+        assert result == QDialog.Rejected and opened == []
+        dlg.deleteLater()
+
+
+def test_the_clear_confirmation_answers_no_to_return_and_to_esc():
+    """The wipe's own confirmation, its real box: No is the default (Return), and Esc answers No
+    too. Neither clears anything."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from shiboken6 import isValid
+
+    with tempfile.NamedTemporaryFile(suffix=".MP4") as real:
+        for key in (Qt.Key_Return, Qt.Key_Escape):
+            cleared = []
+            dlg = _keyboard_library(real.name, [], cleared)
+            seen = {}
+
+            def answer(key=key, seen=seen):
+                box = QApplication.activeModalWidget()
+                if not isinstance(box, QMessageBox):
+                    QTimer.singleShot(20, lambda: answer(key, seen))
+                    return
+                seen["default"] = box.defaultButton().text().replace("&", "")
+                QTest.keyClick(QApplication.focusWidget() or box, key)
+                # (macOS answers Esc with an animated click; a key that did nothing at all is
+                # recorded and the box closed, so the failure is an assertion, not a hang)
+                QTimer.singleShot(1000, lambda: isValid(box) and box.isVisible() and (
+                    seen.setdefault("stuck", True), box.done(QMessageBox.No)))
+            QTimer.singleShot(20, answer)
+            dlg._on_clear_library()
+            assert seen["default"] == "No" and "stuck" not in seen, seen
+            assert cleared == [], f"{key} cleared the library"
+            dlg.deleteLater()
+
+
 def test_dialog_progress_summary_line_for_selected_track():
     """Selecting a track shows the compact progress summary (session count + trustworthy best +
     PB count) — and a provisional 'best' never inflates it."""
