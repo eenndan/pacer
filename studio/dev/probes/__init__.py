@@ -287,4 +287,12 @@ re-timing or split flag fits, is `studio/docs/refused-2026-09.md` §42.
 
     pixi run python -m studio.dev.probes.sector_split_holes run --out /tmp/x.jsonl
     pixi run python -m studio.dev.probes.sector_split_holes summary /tmp/x.jsonl
+
+`dropout_in_periods` measures what an interior hole of 2 to 8 fixes does to a lap's sector splits,
+corner times, apex speeds and brake onsets at 10 and 18 Hz, with the interior-gap rule switched off
+so every holed lap stays trusted, and how many laps each fix-period rule would flag at 1, 2 and 5 %
+rejected. Its verdict, that the rule stays in seconds, is `studio/docs/refused-2026-09.md` §43.
+
+    pixi run python -m studio.dev.probes.dropout_in_periods run --out /tmp/a.jsonl --noflag
+    pixi run python -m studio.dev.probes.dropout_in_periods summary /tmp/a.jsonl
 """
