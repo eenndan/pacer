@@ -15,14 +15,18 @@ cloud, no extra hardware.
 It is a real, working app — and it is a **portfolio piece**, so this page is written as a case
 study: what it claims, how each claim was measured, and the gates that keep it true. **Source is
 the only distribution** — no download, no `.dmg`, no signed build (see [Non-goals](#non-goals)).
+An idea is built far enough to measure before it ships, and
+[**40+** features were built far enough to measure](studio/docs/refused-2026-09.md), then refused
+with the number that said no.
 
 <img src="docs/media/hero.png" width="880" alt="Pacer's four-panel window on the synthetic demo: the demo's generated picture in the video pane, the speed-coloured track map with violet brake points, seven named corners and a Lap race button, the speed and Δ-to-ideal charts reading Δideal +0.04 s at 93 km/h, and the Laps · Corners · Stats · Coaching · Marks panel with lap 13 starred as the best at 0:44.950">
 
 *The window, the map, the debrief, the Stats moments, the lap-strip card and the report are the
-synthetic demo's, the session anyone can open; the ideal-lap, data-trust and overlay pictures
-are Pacer on Sandown 3h, three hours at Sandown Park. All are captured by one command,
-[`studio/dev/media_capture.py`](studio/dev/media_capture.py). In motion:
-[20 seconds of the best lap as the app exports it](docs/media/best-lap.mp4).*
+synthetic demo's, the session anyone can open; the pictures that are not say so under them. All
+are captured by one command, [`studio/dev/media_capture.py`](studio/dev/media_capture.py).*
+
+*In motion: [20 seconds of the best lap of Sandown 3h as the app
+exports it](docs/media/best-lap.mp4), captured at v0.2.0.*
 
 **Try it** on an Apple Silicon Mac with [pixi](https://pixi.sh) — the demo needs no GoPro:
 
@@ -82,11 +86,14 @@ official timing measures the noise floor.
 
 <img src="docs/media/ideal-lap.png" width="610" alt="Stats ▸ IDEAL LAP on Sandown 3h: an ideal lap of 0:45.809 over 62 laps, 1.27 s on the table vs your best, stitched from 13 of your 62 clean laps across 7 corners and 8 straights, with a per-segment table of the gain, how many laps were already that fast there and which lap set the mark, whose nine rows hold 1.13 s of the 1.27 s">
 
+*Sandown 3h, three hours at Sandown Park, captured at v0.6.0. Today's tile adds that GPS noise
+lowers the ideal too, so part of the gap is timing luck.*
+
 - **A racing line that is a data channel.** Colour it by speed, Δ to best, grip or elevation;
   scrub the chart and the footage follows, or play two laps side by side — including the best lap
   of *another* recording of the same track. **Lap race** (R) sets every clean lap off from the
-  start line together on the map, each on its own lap clock, in packs the timing cannot split.
-  ⇧R follows the pack.
+  start line together on the map, each on its own lap clock, in packs of laps too close for GPS
+  timing to tell apart. ⇧R follows the pack.
 
 <img src="docs/media/map.png" width="620" alt="The map panel maximised on the synthetic demo: the racing line coloured by speed from 48 to 98 km/h over every lap's trace, seven named corner apexes, violet brake-point markers, the chequered start/finish line, the Lap race button, and the map key naming every glyph">
 
@@ -99,12 +106,13 @@ official timing measures the noise floor.
 
 - **Your quickest pass through each corner, one click from the video.** Corners ▸ **Quickest
   passes** lists each corner's quickest time and the lap it was on; a click plays that pass from
-  just before the corner and pauses just after it. Where other laps are level within the 0.07 s
-  timing step it says how many, with no ★, and the next click plays the next of them. The
-  charts and the map zoom onto the corner while it plays; L loops it, Slow plays it at 0.25×, and a
-  right-click sets it beside your typical pass through the same corner.
+  just before the corner and pauses just after it. Where other laps are level within the
+  [0.07 s timing step](docs/ACCURACY.md#the-timing-step) it says how many, with no ★, and the
+  next click plays the next of them. The charts and the map zoom onto the corner while it plays;
+  L loops it, Slow plays it at 0.25×, and a right-click sets it beside your typical pass through
+  the same corner.
 
-<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, no ★ on any row (C5's 3.52 is 0.071 s clear of the next pass, inside the step plus what the quickest of 14 passes reads quick by luck), the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass">
+<img src="docs/media/quickest.png" width="880" alt="The window on the synthetic demo with Corners ▸ Quickest passes on: per corner the quickest time, its lap, how many laps are level with it and an Every lap strip of every lap's time through it, C3's row reading playing lap 13 (2.32) · 1 of 6, no ★ on any row (C5's 3.52 is 0.071 s clear of the next pass, still within timing noise: the step, plus the margin the quickest of 14 passes gains by luck alone), the speed chart and the map zoomed onto C3 with the marker and cursor in it, Loop and Slow beside the video's transport, and a status line saying 5 more laps are level there, to click C3 again for the next, Esc for the whole lap and ⌘K to export this pass">
 
 - **Session statistics.** A full page, down to **DATA TRUST**, which states what the timing was
   derived from, how many fixes were rejected, and the IMU↔GPS cross-check with its **gain**
@@ -116,6 +124,9 @@ official timing measures the noise floor.
 
 <img src="docs/media/data-trust.png" width="660" alt="Stats ▸ DATA TRUST on Sandown 3h: 62 of the 69 laps found used, GPS9 true clock with 0% of moving fixes rejected, video sync corrected for a measured 0.46 s GPS lag and 26.2 ppm of clock drift, g-meter from IMU lateral and GPS-derived longitudinal, an IMU↔GPS cross-check that agrees, the g-meter's cornering force matching the GPS path's within 9 %, and a gyroscope rotation cross-check that agrees within 2.7 % over 62 closed laps — above the friction circle, with a 1.50 g grip envelope">
 
+*Sandown 3h, captured at v0.5.0. Today's app says "0% of fixes inside your laps rejected" where
+this still says "0% of moving fixes rejected".*
+
 - **Exports.** Lap times and per-lap channels as CSV, a session report as one self-contained HTML
   page (it opens on the lap card and the Coaching page's answer, then the Stats page's story: pace,
   moments, corners, slow laps, the lap strip), a shareable lap
@@ -126,6 +137,9 @@ official timing measures the noise floor.
 <img src="docs/media/report.png" width="660" alt="The first screen of the synthetic demo's session report, as File ▸ Export ▸ Session report (HTML)… writes it: the recording, track, date, 14 laps, best lap 0:44.950 (lap 13) and verified timing; the lap card with its +0.30 s to the ideal lap and C1 +0.36 s as the biggest opportunity; and COACHING: 0.43 s across your top 3 corners, apex speed the common thread with 84% of that time in C1, and the ranked corners with their reasons">
 
 <img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
+
+*Sandown 3h, captured at v0.6.0. Today's export draws this Δ +0.05 white, as level: it is inside
+the 0.07 s step.*
 
 <img src="docs/media/lapstrip.png" width="440" alt="The lap-strip card of the synthetic demo, as File ▸ Export ▸ Lap-strip card… saves it: the 14 laps as bars in the order driven, each as tall as its time off the best lap, lap 13's 0:44.950 marked with a star on the zero line, a dashed median 0.68 s off the best, and lap 6, 6.18 s off, clipped at the +1.26 s line and named in the legend">
 
@@ -192,8 +206,10 @@ than it is. So that is a rule with an owner in the code:
 ## Built with LLM coding agents
 
 Pacer is developed solo, with the implementation handed to LLM coding agents under a strict
-discipline: one focused pull request per change, gated by the golden-equivalence check on real
-footage and the full suite before it merges. The rigour above is what makes that workflow safe —
+discipline: one focused pull request per change, gated by CI's full suite, the golden-equivalence
+check on a synthetic session among it, before it merges. A core-maths change is also checked for
+equivalence on real footage on the development Mac, and a release runs the full gate locally. The
+rigour above is what makes that workflow safe —
 the guardrails do the trusting so the agents can do the typing.
 
 What that looks like in practice, as eight times a measurement overturned the plan, is in

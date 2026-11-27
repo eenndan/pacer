@@ -154,6 +154,7 @@ class LapStripData:
     stamp: str                   # the lap card's own honesty stamp ("estimated timing") or ""
     provenance: str              # the lap card's footer provenance, when it has one, or ""
     blocked: bool                # the lap card's verdict: no shareable image at all
+    best_warning: str = ""       # the lap card's ⚠ cue when the best lap is itself a ⚠ lap, or ""
 
     @property
     def offered(self) -> bool:
@@ -239,7 +240,9 @@ def lapstrip_data(session, *, unit: str | None = None) -> LapStripData:
         clean_laps=sum(1 for lid in times if lid not in dropouts),
         excluded_note=(exclusion_summary(reasons) or f"{len(excluded)} left out") if excluded else "",
         too_brief=too_brief_note(too_brief_count(session, len(times) + len(excluded))),
-        stamp=card.stamp, provenance=card.provenance, blocked=card.blocked)
+        stamp=card.stamp, provenance=card.provenance, blocked=card.blocked,
+        # Every lap ⚠ (the bests fell back to one): the headline says so, as the lap card does.
+        best_warning=share_card.best_warning(session, best_id))
 
 
 # --------------------------------------------------------------------------- Qt rendering
@@ -458,6 +461,15 @@ def _paint(data: LapStripData) -> QImage:
 
     # --- hero row: the best lap and, when there is one, the clean laps' median gap
     _draw_text(p, PAD, 248, "BEST LAP", _font(28, theme.W_SEMIBOLD), theme.C.text_muted)
+    if data.best_warning:   # a ⚠ best (every lap flagged): the lap card's cue, on the same row
+        x = PAD + QFontMetrics(_font(28, theme.W_SEMIBOLD)).horizontalAdvance("BEST LAP") + 20
+        right = RIGHT
+        if data.median_gap_s is not None:   # never under the median's label on the right
+            right -= QFontMetrics(_font(28, theme.W_SEMIBOLD)).horizontalAdvance(
+                f"MEDIAN OF {plural(data.clean_laps, 'clean lap').upper()}") + 24
+        warn, warn_font = _fit_line(p, data.best_warning, right - x, (28, 24, 21),
+                                    theme.W_SEMIBOLD)
+        _draw_text(p, x, 248, warn, warn_font, theme.C.accent)
     _draw_text(p, PAD, 348, data.best_time, _font(96, theme.W_SEMIBOLD), theme.C.text)
     p.setFont(_font(96, theme.W_SEMIBOLD))
     time_w = p.fontMetrics().horizontalAdvance(data.best_time)

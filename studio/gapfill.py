@@ -38,6 +38,9 @@ import numpy as np
 # A gap is an interior jump where the time delta between consecutive kept points exceeds a
 # few sample intervals. At ~10 Hz a normal step is ~0.1 s; >0.35 s (~3+ missing samples) is a
 # real dropout, not jitter. The lap's natural open start/finish ends are NOT gaps.
+# It stays in SECONDS at 18 Hz too (six missing fixes there): what breaks a figure's step is the
+# hole's length in time, past the GPS9 clock-run break at 0.40 s (`load.GPS9_MAX_DT_S`), and under
+# 0.35 s an 18 Hz lap stays inside its steps (studio/docs/refused-2026-09.md §43).
 GAP_TIME_S = 0.35
 # Below this many missing samples a gap is "short" → spline through neighbours, no borrow.
 SHORT_GAP_MISSING = 3

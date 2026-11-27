@@ -4482,7 +4482,7 @@ class StudioWindow(QMainWindow):
         worker.loaded.connect(self._on_reference_loaded)
         worker.failed.connect(self._on_reference_load_failed)
         worker.finished.connect(lambda w=worker: self._on_reference_worker_finished(w))
-        worker.start()
+        start_load(worker)      # the GUI-thread gc.collect() every loading worker starts behind
 
     def _on_reference_worker_finished(self, worker):
         """A reference load worker's QThread finished: drop it from the shared in-flight set and

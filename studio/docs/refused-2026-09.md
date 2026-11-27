@@ -1,6 +1,6 @@
 # Features measured and refused — 2026-09
 
-Forty-two features were built far enough to **measure**, and the measurement said not to ship
+Forty-three features were built far enough to **measure**, and the measurement said not to ship
 them. The work was real; the evidence lived only in a pull-request body, where nobody re-proposing
 the idea would ever look. It is written down here so the next person to suggest one of these starts
 from the numbers instead of from the idea.
@@ -3220,10 +3220,80 @@ own crossings. No lap time moved.
 interior-gap threshold, and away from the start/finish line. Beside the hairpin line it moved
 one split by up to 56 ms at the reference noise. At 10 Hz, the GPS9 cameras' rate, the same hole
 is 3 fixes and a 0.4 s gap, and that lap wears the ⚠. An 18 Hz GPS5 recording's durations are
-already muted as estimated.
+already muted as estimated. §43 measured it and closed it: the rule stays in seconds.
 
 **What would be new evidence:** a recording whose hole-adjacent splits carry a bias rather than
 a re-drawn noise, or a split σ measured above 0.053 s with holes in it, at the reference noise.
+
+---
+
+## 43. Counting the in-lap dropout ⚠ in fix periods — refused (cool/dropout-in-periods)
+
+**The idea.** A lap wears the GPS-dropout ⚠ for a gap inside it when two kept fixes are more than
+0.35 s apart (`gapfill.GAP_TIME_S`). That is three missing fixes at 10 Hz, the GPS9 cameras' rate,
+but six at 18 Hz, the older GPS5 cameras' rate. So at 18 Hz a hole of five fixes in a row (0.33 s)
+leaves its lap in the bests, and §42 saw one move a hairpin split by up to 56 ms. The proposal was
+to count the rule in fix periods, or in whichever of periods and seconds is stricter, so both
+camera generations are judged alike.
+
+**Where 0.35 s came from.** It was written for the map in June 2026: "~3+ missing samples" at
+10 Hz is a real dropout, not jitter, and the map should not draw a straight line across it. That is
+a sampling reason, and it assumed 10 Hz. Two time-domain mechanisms sit just above it. The core's
+odometer measures a step over 0.35 s by the speed integral instead of the chord
+(`PointTrack::kGapSeconds`). And the loader breaks a GPS9 clock run at a step over 0.40 s
+(`load.GPS9_MAX_DT_S`), so the fixes after the hole are re-anchored to the media clock.
+
+**How it was measured**
+([`studio/dev/probes/dropout_in_periods.py`](../dev/probes/dropout_in_periods.py)). The synthetic
+GoPro, 10 laps × 8 seeds, at 10 and 18 Hz, at GPS noise 1 and 1.9 (the reference recording's),
+with §42's five sector lines. On every other lap, a hole of 2 to 8 fixes in a row sits at one of
+four places: the fastest point of a straight, the hardest braking, the hairpin apex, or just past
+the hairpin's sector line. The interior-gap rule is switched off, so every holed lap stays in the
+bests: the matrix reads what a hole does to a lap the app trusts. Each figure is compared with the
+same lap on the clean trace. Corners are read with the clean session's corner list and best lap
+pinned, and each change has the median change of the unholed laps in its column taken off, which
+removes the frame every lap shares (§42).
+
+| worst over the four places, both noises | 10 Hz, 2 fixes (today: in the bests) | 10 Hz, 3 (today: ⚠) | 10 Hz, 4 (⚠) | 18 Hz, 5 (today: in the bests) | 18 Hz, 6 (⚠) | 18 Hz, 8 (⚠) | step |
+|---|---|---|---|---|---|---|---|
+| sector split, ms | 18.5 | 64.4 | 153.8 | 57.4 | 56.1 | 74.3 | 150 |
+| corner time, ms | 10.8 | 68.6 | 103.1 | 29.9 | 26.3 | 73.6 | 70 |
+| apex speed, km/h | 0.6 | 0.6 | 0.8 | 0.7 | 0.7 | 0.7 | 1.75 |
+| brake onset, m | 6.2 | 9.1 | 10.5 | 9.8 | 10.3 | 11.7 | 2.0 (noise floor) |
+| map chord off the true path, m | 0.17 | 0.34 | 0.50 | 0.23 | 0.31 | 0.52 | — |
+
+What the numbers say:
+- **The harm follows the hole's length in seconds, not in fixes.** Splits and corner times jump
+  when the hole passes 0.40 s: from 4 fixes at 10 Hz and from 7 at 18 Hz. With `load.GPS9_MAX_DT_S`
+  widened, the jump went on a straight at both rates, so it is the clock run breaking. It moved
+  splits on straights, far from any line, by up to 90 ms. Today's 0.35 s puts the ⚠ on every such hole at both rates. A rule in periods with a
+  wider bound would let some through.
+- **Under 0.35 s, nothing an unflagged 18 Hz lap shows passes its step.** Five fixes at the hairpin
+  line move a split by up to 57.4 ms and add 15.2 ms to the split σ against the generator's truth.
+  §42's arithmetic puts that at a 0.141 s rule, still inside the 0.15 s step. Corner times move by
+  at most 29.9 ms against the 0.07 s step, and apex speeds by 0.7 km/h against 1.75 km/h. The map's
+  straight line across the hole runs at most 0.23 m off the true path.
+- **Brake onsets are not separated by any rule that spares two missing fixes.** A two-fix hole in
+  a braking zone moves the onset by 3.8 m at 18 Hz and 6.2 m at 10 Hz. Both are over the 2.0 m
+  floor `coaching_panel.BRAKE_HINT_MIN_M` states, so the rate makes no difference. 0.26.0 decided
+  that one and two scattered rejected fixes must not put the ⚠ on a lap. No Coaching row prints
+  braking metres, and the BRAKING table's brake points are marked estimated.
+- **What a period rule would cost.** A gap over 3.5 periods is today's rule at 10 Hz to the fix.
+  At 18 Hz it would add the ⚠ to 0, 2 and 12 of 160 laps at 1, 2 and 5 % of fixes rejected at
+  random. Today's rule flags 0, 0 and 2, all at the line. A rule at 2.5 periods would flag two
+  missing fixes: 10, 26 and 112 of 160 laps at 10 Hz.
+
+**Why it is refused.** The ⚠ is there to keep a lap out of the bests when its figures cannot be
+trusted. The harm that breaks a step is set by seconds, through the clock run and the odometer, and
+0.35 s already catches all of it at both rates, with one fix to spare at 10 Hz and two at 18 Hz.
+Below 0.35 s an 18 Hz lap's figures stay inside their steps. Counting periods would put the ⚠ on
+12 of 160 laps at 5 % rejected, and no figure printed on them would change. A real GPS5 recording
+has no per-fix GPS9 time, so its clock cannot break this way, and its durations are already marked
+estimated. The synthetic 18 Hz stream in this matrix carries GPS9 times, so it is the harder case.
+
+**What would be new evidence:** an unflagged lap with a hole under 0.35 s whose split moves by
+more than 0.15 s, or whose corner time moves by more than 0.07 s, at the reference noise; or a
+camera whose GPS runs slower than 10 Hz, where 0.35 s is less than three missing fixes.
 
 ---
 
