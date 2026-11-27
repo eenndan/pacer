@@ -4364,7 +4364,7 @@ def test_the_theme_share_is_the_ratio_of_the_printed_cells():
     c1 = [r for r in short if r.cid == 1]
     assert (round(K.shown_total(c1), 2), round(K.shown_total(short), 2)) == (0.36, 0.43), \
         [r.time_lost for r in short]
-    assert round(demo.theme.cause_share, 4) == 0.8370, demo.theme
+    assert round(demo.theme.cause_share, 4) == 0.8369, demo.theme   # 0.8370 before the time-aware smoother
     line = K.theme_actions(demo.theme, demo.rows)[0]
     assert line == "Apex speed is the common thread — 84% of that time is in C1.", line
     for name, s in _level_sessions().items():
