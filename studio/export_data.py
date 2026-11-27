@@ -951,6 +951,8 @@ table.laps th, table.laps td { padding: 3px 4px; }
 table.laps th { vertical-align: bottom; word-break: normal; overflow-wrap: normal;
                 hyphens: manual; }
 table.laps th.grp { text-align: center; }
+/* A flag is one word: "gps-dropout" wrapped at its hyphen when the table was squeezed. */
+table.laps td.flag { white-space: nowrap; }
 table.meta th, table.meta td, table.kv th, table.moments th, table.moments td { text-align: left; }
 td.mark { color: var(--behind); font-weight: 600; }
 p.note { margin: 6px 0 0; max-width: 46em; color: var(--text-dim); font-size: 0.9em; }
@@ -1370,6 +1372,7 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
         f'<td style="text-align: left" colspan="{max(len(headers) - 3, 1)}">'
         f"{esc('excluded' + (': ' + r['why'] if r.get('why') else ''))}</td>")
         for r in excluded}
+    flag_col = headers.index("flag") if "flag" in headers else -1
     merged = (sorted([*rows, *((i, None) for i in muted)], key=lambda x: x[0]) if muted
               else rows)   # no excluded lap: the rows exactly as `laps_table` ordered them
     for lap_id, cells in merged:
@@ -1379,7 +1382,9 @@ def _laps_section(session, headers, rows, cue_lap) -> list[str]:
         # the best lap reads green, like the app's table — and, like the app's table, not while
         # provisional
         cls = ' class="best"' if lap_id == cue_lap else ""
-        out.append(f"<tr{cls}>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
+        out.append(f"<tr{cls}>" + "".join(
+            f'<td class="flag">{esc(c)}</td>' if k == flag_col else f"<td>{esc(c)}</td>"
+            for k, c in enumerate(cells)) + "</tr>")
     out.append("</table>")
     # The distance column's note, as laps.csv's trailer carries it: the odometer reads short.
     if rows:
