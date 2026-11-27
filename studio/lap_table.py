@@ -31,6 +31,7 @@ from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
     QLineF,
+    QModelIndex,
     QPointF,
     QRect,
     QRectF,
@@ -91,7 +92,15 @@ from ._signal import (
 # The ONE "level with your best" rule (DOMAIN-6): two laps closer than the best instrument can
 # separate at 2σ. The PB sentences say "level" under it; the Δ bar refuses to colour under it.
 from .library import PB_PRECISION_S, within_timing_precision
-from .widgets import NUM_ROLE, EmptyState, NumItem, ToggleButton, icon_button, set_tone
+from .widgets import (
+    NUM_ROLE,
+    EmptyState,
+    NumItem,
+    ToggleButton,
+    icon_button,
+    pass_step_arrows,
+    set_tone,
+)
 
 if TYPE_CHECKING:  # the injected session — typed for readers, not imported at runtime
     from .session import Session
@@ -1362,6 +1371,8 @@ class LapTable(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        # ← / → are the window's video step, not a cell walk along a row (widgets.pass_step_arrows).
+        pass_step_arrows(self.table)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # P5: no stretched last section — the data columns are content-tight and the blank trailing
         # spacer column takes the slack (see SPACER_HEADER / _apply_column_sizing). The Lap column's
@@ -2598,8 +2609,32 @@ class LapTable(QWidget):
         sm.clearSelection()
         if not sel.isEmpty():
             sm.select(sel, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        self._sync_cursor(first)
         self.table.blockSignals(False)
         self._keep_selection_visible()
+
+    def _sync_cursor(self, first) -> None:
+        """Put the table's keyboard CURRENT index on the first selected row, so ↑ / ↓ move from the
+        lap the user is looking at.
+
+        Selection and current are two different things in a QTableView, and every programmatic
+        road here (the best lap at load, ⌘K, a map or lap-strip click, the compare partner) set
+        only the selection: measured from a cold start with lap 13 selected, the current index was
+        −1 and ↓ landed on lap 2. A current row that is ALREADY selected is left alone — the user
+        put it there (⌘↓ then ⌘Space builds a non-adjacent pair from it). NoUpdate, so the selection
+        just built is not touched; the column and the horizontal scroll are kept, because moving the
+        cursor scrolls to it and the row's identity is the only thing that changed."""
+        if first is None:
+            return
+        tb = self.table
+        cur = tb.currentIndex()
+        if cur.isValid() and tb.selectionModel().isRowSelected(cur.row(), QModelIndex()):
+            return
+        col = cur.column() if cur.isValid() else 0
+        h = tb.horizontalScrollBar().value()
+        tb.selectionModel().setCurrentIndex(tb.model().index(first.row(), col),
+                                            QItemSelectionModel.NoUpdate)
+        tb.horizontalScrollBar().setValue(h)
 
     def _reveal_last_split(self):
         """L3-04: the map's "Add sector" button silently created columns that landed ENTIRELY off
@@ -2705,6 +2740,10 @@ CORNER_DELTA_REF_HEADER = "Δref"
 # What the Δ column's colour means, on its header tooltip (both baselines), and what the step covers.
 CORNER_DELTA_LEVEL_NOTE = (f"A gap under {PB_PRECISION_S:.2f} s is inside timing precision, so it "
                            f"is not coloured as a difference. {stats_service.STEP_COVERS_PASS}")
+# The two Δ columns (Δbest/Δref, Δapex) whose past-the-step cells are bold (`mark_gap_past_step`),
+# and what the weight means — said on both Δ headers, before the step it is drawn from.
+CORNER_GAP_COLS = (CORNER_DELTA_COL, 4)
+CORNER_GAP_MARK_NOTE = "A bold figure is a gap past the step; a regular one is level."
 # ...and against another recording's lap, whose step is `stats.corner_delta_step(True)` (the same
 # step at the one reference: one lap's corner time against another recording's reads less apart).
 # The bound is said ONCE, by STEP_COVERS_REFERENCE (0.21.0 QA: a second "reads up to that far
@@ -2792,6 +2831,22 @@ def apex_delta_colour(delta_kmh: float, unit: str | None) -> str | None:
     return theme.delta_colour(-delta_kmh)
 
 
+def mark_gap_past_step(item) -> None:
+    """Set a coloured (past-its-step) Δ cell's figure BOLD, so "measurable" vs "level" is not hue
+    alone (cool/corners-gap-beyond-hue).
+
+    Both Δ columns print a signed figure either side of their step, and the sign already says which
+    way; what only the hue said was whether the gap is past the step at all — and under simulated
+    deuteranopia / protanopia (Machado 2009) the ahead green sits 1.46 / 1.28:1 from the neutral
+    ink. So "bold" = "past the step" in any colour vision. WEIGHT, NOT A ▲/▼ PREFIX: Inter's tabular
+    figures keep their advance in bold (+0.42: 37.17 px regular, 37.11 bold), while a "▼ " prefix
+    is 16.6 px a column and this grid's cell floors have no slack (tests/test_corner_grid_budget.py
+    measured 462 px against its 446). Called with the hue, so a muted cell loses both together."""
+    font = item.font()
+    font.setBold(True)
+    item.setFont(font)
+
+
 def reference_from_another_recording(session) -> bool:
     """Is the Δ baseline a lap of ANOTHER recording — a reference loaded, and not this recording's
     own? getattr-guarded for the lighter test doubles (no reference seam: no reference)."""
@@ -2814,13 +2869,14 @@ def _corner_col_tips(unit: str | None, ref_label: str | None = None) -> list[str
     # wording stays exactly what it has always been, and the reference wording reads as English.
     if ref_label:
         delta_tip = (f"Δ vs the same corner on the reference recording's lap — {ref_label} "
-                     f"(seconds; − is faster). {CORNER_DELTA_REF_LEVEL_NOTE}")
+                     f"(seconds; − is faster). {CORNER_GAP_MARK_NOTE} {CORNER_DELTA_REF_LEVEL_NOTE}")
         apex_tip = (f"Δ apex speed vs the reference recording's lap — {ref_label} "
-                    f"({u}; + is faster). {apex_level_note(unit)}")
+                    f"({u}; + is faster). {CORNER_GAP_MARK_NOTE} {apex_level_note(unit)}")
     else:
         delta_tip = ("Δ vs the best lap's same corner (seconds; − is faster). "
-                     f"{CORNER_DELTA_LEVEL_NOTE}")
-        apex_tip = f"Δ apex speed vs the best lap ({u}; + is faster). {apex_level_note(unit)}"
+                     f"{CORNER_GAP_MARK_NOTE} {CORNER_DELTA_LEVEL_NOTE}")
+        apex_tip = (f"Δ apex speed vs the best lap ({u}; + is faster). {CORNER_GAP_MARK_NOTE} "
+                    f"{apex_level_note(unit)}")
     return [
         "Detected corner in track order, with an arrow for its direction — anticlockwise is a "
         "left-hander, clockwise a right. Click a row to play this lap's pass through that corner "
@@ -3337,6 +3393,10 @@ class CornerTable(QWidget):
                     item.setToolTip(unmatched)
                 elif colour:
                     item.setForeground(QColor(colour))
+                    # A Δ past its step is also bold, so the hue is never its only cue — set
+                    # here, with the hue, so a muted (unmatched) cell loses both together.
+                    if col in CORNER_GAP_COLS and not baseline:
+                        mark_gap_past_step(item)
                 else:
                     item.setForeground(BASE_COLOR)
                 self.table.setItem(r, col, item)
@@ -3863,6 +3923,7 @@ class QuickestPassTable(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(theme.GRID_ROW_H)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        pass_step_arrows(self.table)   # ← / → step the video (widgets.pass_step_arrows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setIconSize(QSize(theme.ICON_PX, theme.ICON_PX))
         self.table.setAlternatingRowColors(True)

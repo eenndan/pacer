@@ -77,6 +77,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QDialog,
@@ -246,6 +247,10 @@ UPDATE_CANCEL = "Cancel"
 UPDATE_LINE_TIP = (
     "The ideal-lap maths changed in this version of Pacer, so these ideals are muted until their "
     "recordings are measured again.")
+# ...and once a run has left nothing it could measure, "muted until" would be about nothing: the
+# rows still muted (not on this Mac, another recording at the path, could not be read) are named
+# after it, each with its reason.
+UPDATE_DONE_TIP = "Nothing is left to update: every ideal lap Update could measure is measured now."
 UPDATE_BUTTON_TIP = (
     "Measure these recordings again with this version, one at a time, exactly as opening each "
     "would — their rows are all that is written; the open session, Open Recent and the files "
@@ -281,7 +286,9 @@ def _update_summary_text(summary: dict) -> tuple[str, str]:
         parts.append(f"{len(failed)} could not be measured")
     text = " · ".join(parts)
     if summary.get("cancelled"):
-        text = f"Stopped: {text}"
+        # A run stopped before it wrote anything (a Clear library stops it, and takes the rows it
+        # wrote with it) has nothing to count.
+        text = f"Stopped: {text}" if parts != ["0 updated"] else "Stopped."
     lines = []
     for a, d in diffs:
         what = []
@@ -300,7 +307,44 @@ def _update_summary_text(summary: dict) -> tuple[str, str]:
     if failed:
         lines.append("Not updated, left as they were:")
         lines.extend(f"{_library.entry_name(r)}: {why}" for r, why in failed)
-    return text, "\n".join(lines) or UPDATE_LINE_TIP
+    return text, "\n".join(lines)
+
+
+def _summary_left(summary: dict, index: dict) -> dict:
+    """`summary` (an Update run's) counting only the rows `index` still holds: a Forget or a Clear
+    after the run ended (or that stopped it) takes its rows out of the line, never into "could not
+    be measured". A personal best the run moved is kept only while the track's best still is it."""
+    # A row counts as updated only while the library holds it at the version the run wrote: a
+    # Restore that set it back to an older one undid that update.
+    held = {e.get("fingerprint"): e.get("ideal_version") for e in index.get("entries", [])}
+
+    def stands(row: dict) -> bool:
+        fp = row.get("fingerprint")
+        return fp in held and held[fp] == row.get("ideal_version")
+
+    pbs = []
+    for track, way, best in summary.get("pbs") or []:
+        now = (_library.track_summary(_library.one_way(index, way), track) or {}).get("best")
+        if now is not None and abs(float(now) - float(best)) < 5e-4:
+            pbs.append((track, way, best))
+    return {**summary,
+            "updated": [r for r in summary.get("updated") or [] if stands(r)],
+            "changed": [(b, a) for b, a in summary.get("changed") or [] if stands(a)],
+            "failed": [(r, why) for r, why in summary.get("failed") or []
+                       if r.get("fingerprint") in held],
+            "pbs": pbs}
+
+
+def _ideal_elsewhere_tip(theo: float | None) -> str:
+    """The Ideal cell's hover for a row this window's Update found another recording at the path
+    of (`IdealUpdater.another_recording`): its number stays muted, and re-opening the file there
+    would open that other outing, so the hover says what the Update line's hover says of it."""
+    if theo is None:
+        return (f"Ideal lap: not stored for this recording.\nIt was analyzed by an older Pacer, "
+                f"and {_library.REMEASURE_OTHER}, so it cannot be measured again from it.")
+    return (f"Ideal lap measured by an older Pacer — {_library.REMEASURE_OTHER}, so this ideal "
+            "cannot be updated from it.\nThe ideal-lap maths has changed between versions of "
+            "Pacer, so this number may not compare with the ideals measured today.")
 
 # NUM_ROLE is studio.widgets' (it owns the shared numeric-sort cell `_NumItem` reads); the two
 # files each declared their own `Qt.UserRole` literal for the same job. `_NumItem` keeps its local
@@ -1375,9 +1419,19 @@ class LibraryDialog(QDialog):
         elsewhere = [e for e in present if other is not None and other(e)]
         present = [e for e in present if e not in elsewhere]
         self._update_rows = present
-        if summary is not None:
-            text, tip = _update_summary_text(summary)
-            text += f" · {len(present)} left" if present else ""
+        left = _summary_left(summary, self._index) if summary is not None else None
+        # A run whose every written row a Clear or a Restore took back has nothing true left to
+        # say, and neither has any run over an empty library: the line is the plain count again.
+        if left is not None and (not self._index.get("entries") or (
+                summary.get("updated") and not left["updated"] and not left["failed"])):
+            summary = left = self._update_summary = None
+        if left is not None:
+            text, tip = _update_summary_text(left)
+            if present:
+                text = (f"Stopped: {len(present)} left" if text == "Stopped."
+                        else f"{text} · {len(present)} left")
+            done = UPDATE_DONE_TIP if left["updated"] else ""
+            tip = tip or (UPDATE_LINE_TIP if present else done)
         elif present:
             n = len(present)
             text = f"{_plural(n, 'ideal lap')} {'was' if n == 1 else 'were'} measured by an older Pacer."
@@ -1439,7 +1493,16 @@ class LibraryDialog(QDialog):
     def _on_update_finished(self, summary: dict) -> None:
         self._update_summary = summary
         self._index = summary.get("index") or self._index
-        self._rerender()          # re-runs `_sync_update_line`, which shows the summary
+        # Re-runs `_sync_update_line`, which shows the summary — with his sort, selection and
+        # scroll kept, as each row written during the run kept them.
+        self._rerender(keep_place=True)
+
+    def _stop_update(self) -> None:
+        """Forget and Clear library stop a running Update first (the 0.28.0 ruling), and so does
+        Restore, which replaces the rows as a Clear does: the run's token already keeps a stale
+        write out, and its line then counts only the rows still there (`_summary_left`)."""
+        if self._updater is not None and self._updater.running():
+            self._updater.cancel()
 
     def _select_first_usable_row(self):
         """Select the first row (in the current sort order) whose DATE cell is NOT flagged disabled
@@ -1588,6 +1651,7 @@ class LibraryDialog(QDialog):
         here (re-enabled by the caller) so insertion order is preserved while filling."""
         dim = QBrush(QColor(C.text_muted))
         both = _library.tracks_both_ways(self._index)
+        other = getattr(self._updater, "another_recording", None)
         for r, e in enumerate(self._entries) if rows is None else rows:
             missing = _entry_missing(e)
             junk = _entry_junk(e)
@@ -1595,6 +1659,10 @@ class LibraryDialog(QDialog):
             track = e.get("track")
             best = e.get("best")
             theo, theo_reason, theo_stale = _ideal_cell(e)
+            # "Re-open the recording to update it" would open the other outing now at its path.
+            if (theo_stale == "older" and theo_reason != _IDEAL_ONE_DONOR_TIP
+                    and other is not None and other(e)):
+                theo_reason = _ideal_elsewhere_tip(theo)
 
             # The date and the start time (a race day is several rows on one date), sorted on
             # both: `library.when_text` / `library.recency_key`, which the welcome screen reads.
@@ -2155,6 +2223,7 @@ class LibraryDialog(QDialog):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
+        self._stop_update()
         self._index = self._forget_recording(entry)
         self._reload_records_guarded()
         self._rerender()
@@ -2229,6 +2298,7 @@ class LibraryDialog(QDialog):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
+        self._stop_update()
         self._index = self._clear_library()
         self._backup = self._read_backup_info()   # the wipe just created one
         self._reload_records_guarded()            # …and it wiped the session records too
@@ -2253,14 +2323,23 @@ class LibraryDialog(QDialog):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ok != QMessageBox.Yes:
             return
+        self._stop_update()
         self._index = self._restore_library()
         self._backup = self._read_backup_info()   # the swap replaced it with what we just left
         self._reload_records_guarded()            # …and the records were swapped back with it
         self._rerender()
 
-    def _rerender(self):
+    def _rerender(self, keep_place: bool = False):
         """Rebuild the table + chart from ``self._index`` after a forget/clear. Rebuilds rather than
-        surgically deleting one QTableWidget row so the sort keys / role data stay consistent."""
+        surgically deleting one QTableWidget row so the sort keys / role data stay consistent.
+        `keep_place` (the end of an Update run, which changed no row's presence): the sort column
+        and order, the selected row — by its fingerprint, not its index — and the scroll stay."""
+        hdr = self.table.horizontalHeader()
+        sort = (hdr.sortIndicatorSection(), hdr.sortIndicatorOrder()) if keep_place else (
+            _COL_DATE, Qt.DescendingOrder)
+        current = self._selected_date_item() if keep_place else None
+        keep_fp = current.data(FP_ROLE) if current is not None else None
+        scroll = self.table.verticalScrollBar().value()
         self._entries = list(self._index.get("entries", []))
         self._update_title()                         # re-run with the visible count by _apply_filter
         self.table.setSortingEnabled(False)
@@ -2268,7 +2347,7 @@ class LibraryDialog(QDialog):
         self.table.setRowCount(len(self._entries))
         self._fill_rows()
         self.table.setSortingEnabled(True)
-        self.table.sortItems(_COL_DATE, Qt.DescendingOrder)
+        self.table.sortItems(*sort)
         # Rebuild the track-filter combo (a forget/clear can change the distinct-track set); keep the
         # current pick if it still exists, else fall back to "All tracks". Block the change signal so
         # the rebuild doesn't re-trigger _apply_filter mid-render.
@@ -2285,8 +2364,21 @@ class LibraryDialog(QDialog):
             self.clear_btn.setEnabled(bool(self._entries))
         self._sync_restore_btn()
         self._sync_update_line()                  # a forget or a clear changes what is left to do
-        self._select_first_usable_row()
+        kept = next((r for r in range(self.table.rowCount()) if keep_fp is not None
+                     and self.table.item(r, _COL_DATE).data(FP_ROLE) == keep_fp), None)
+        if kept is not None:
+            self.table.selectRow(kept)
+        else:
+            self._select_first_usable_row()
         self._apply_filter()
+        if keep_place:
+            self.table.verticalScrollBar().setValue(scroll)
+            # ...unless his selected row's own new value moved it off screen: then it is brought
+            # back into view (a row still partly in view leaves the scroll exactly as it was).
+            current = self._selected_date_item() if kept is not None else None
+            if current is not None and not self.table.visualItemRect(current).intersects(
+                    self.table.viewport().rect()):
+                self.table.scrollToItem(current, QAbstractItemView.EnsureVisible)
 
     # ------------------------------------------------------------------ open
     def _open_selected(self):

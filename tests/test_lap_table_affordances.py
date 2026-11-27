@@ -1220,6 +1220,129 @@ class _NoRead:
         return getattr(self._s, name)
 
 
+# ============================================== w26: ← / → step the video from the lap table
+class _StepHost(QWidget):
+    """A stand-in for StudioWindow at the top of the parent chain: its keyPressEvent is where the
+    window's ← / → step lives, and it only runs for a key the focused widget did not use."""
+
+    def __init__(self):
+        super().__init__()
+        self.got: list[str] = []
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Left, Qt.Key_Right):
+            shift = "Shift+" if event.modifiers() & Qt.ShiftModifier else ""
+            self.got.append(shift + ("Right" if event.key() == Qt.Key_Right else "Left"))
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+def _hosted_lap_table():
+    host = _keep(_StepHost())
+    lay = QVBoxLayout(host)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lt = LT.LapTable(_FakeLapSession())
+    lay.addWidget(lt)
+    host.resize(520, 400)
+    host.show()
+    host.activateWindow()
+    _settle()
+    return host, lt
+
+
+def test_left_and_right_leave_the_lap_table_for_the_video_step():
+    """← / → (⇧ for ±5 s) step the video everywhere — and in the lap table they walked an
+    INVISIBLE cell cursor along the row instead: measured on the real window, after clicking a lap
+    in column 2 the first two → presses vanished (the third stepped), and ← stepped only from
+    column 0. Every press now reaches the window on the FIRST press, from any column, and moves
+    neither the selection nor the cursor; ↑ / ↓ still walk the laps. Real mouse click, real keys
+    to the focused grid."""
+    from PySide6.QtTest import QTest
+    host, lt = _hosted_lap_table()
+    tb = lt.table
+    row = lt._row_for_lap(1)
+    QTest.mouseClick(tb.viewport(), Qt.LeftButton, Qt.NoModifier,
+                     tb.visualRect(tb.model().index(row, 2)).center())
+    _settle()
+    assert _APP.focusWidget() is tb and lt.selected_lap_ids() == [1], (_APP.focusWidget(),
+                                                                       lt.selected_lap_ids())
+    cur = (tb.currentIndex().row(), tb.currentIndex().column())
+    presses = [(Qt.Key_Right, Qt.NoModifier, "Right"), (Qt.Key_Right, Qt.NoModifier, "Right"),
+               (Qt.Key_Left, Qt.NoModifier, "Left"), (Qt.Key_Right, Qt.ShiftModifier, "Shift+Right"),
+               (Qt.Key_Left, Qt.ShiftModifier, "Shift+Left")]
+    for key, mod, name in presses:
+        before = list(host.got)
+        QTest.keyClick(_APP.focusWidget(), key, mod)
+        _settle(2)
+        assert host.got == before + [name], f"{name} never reached the window: {host.got}"
+        assert lt.selected_lap_ids() == [1], f"{name} changed the selection: {lt.selected_lap_ids()}"
+        assert (tb.currentIndex().row(), tb.currentIndex().column()) == cur, f"{name} moved the cursor"
+    QTest.keyClick(tb, Qt.Key_Down)
+    _settle(2)
+    assert lt.selected_lap_ids() == [lt._lap_id(row + 1)], "↓ no longer walks the laps"
+    print("test_left_and_right_leave_the_lap_table_for_the_video_step OK")
+
+
+def test_the_multi_select_keys_still_build_a_pair():
+    """The keys the ? card documents for a second lap keep working beside the pass-through: ⌘↓
+    moves the cursor without selecting, ⌘Space adds that lap, ⇧↓ extends a range. (Ctrl here is
+    ⌘ on a Mac: Qt swaps the two.)"""
+    from PySide6.QtTest import QTest
+    _host, lt = _hosted_lap_table()
+    tb = lt.table
+    lt.select([lt._lap_id(0)])
+    tb.setFocus(Qt.TabFocusReason)
+    _settle()
+    QTest.keyClick(tb, Qt.Key_Down, Qt.ControlModifier)
+    QTest.keyClick(tb, Qt.Key_Down, Qt.ControlModifier)
+    QTest.keyClick(tb, Qt.Key_Space, Qt.ControlModifier)
+    _settle(2)
+    assert lt.selected_lap_ids() == [lt._lap_id(0), lt._lap_id(2)], lt.selected_lap_ids()
+    lt.select([lt._lap_id(0)])
+    QTest.keyClick(tb, Qt.Key_Down, Qt.ShiftModifier)
+    _settle(2)
+    assert lt.selected_lap_ids() == [lt._lap_id(0), lt._lap_id(1)], lt.selected_lap_ids()
+    # ...and the ? card names the keys this just pressed, in the menu bar's own glyphs.
+    from PySide6.QtGui import QKeySequence
+
+    from studio import help_dialog
+    keys = {help_dialog._key_text(c.key) for c in help_dialog.COMMANDS}
+    native = [QKeySequence(k).toString(QKeySequence.NativeText)
+              for k in ("Ctrl+Space", "Shift+Down")]
+    assert native[0] in keys and any(native[1] in k for k in keys), (native, sorted(keys))
+    print("test_the_multi_select_keys_still_build_a_pair OK")
+
+
+def test_a_programmatic_select_moves_the_keyboard_cursor_with_it():
+    """Selection and the CURRENT index are two things in a QTableView, and every programmatic road
+    (best lap at load, ⌘K, a map or lap-strip click, the compare partner) goes through
+    `LapTable.select`, which set only the first. Measured from a cold start with the best lap
+    selected: current row −1, and ↓ landed on the SECOND row instead of the lap after the best.
+    Now ↑ / ↓ move from the lap on screen. A current row the selection already holds is kept —
+    the user's ⌘↓ cursor is theirs."""
+    from PySide6.QtTest import QTest
+    _host, lt = _hosted_lap_table()
+    tb = lt.table
+    best = lt._row_for_lap(1)
+    lt.select([1])                               # what StudioWindow does for the best lap
+    _settle()
+    assert tb.currentIndex().row() == best, f"current row {tb.currentIndex().row()}, selected {best}"
+    tb.setFocus(Qt.TabFocusReason)
+    _settle()
+    QTest.keyClick(tb, Qt.Key_Down)
+    _settle(2)
+    assert lt.selected_lap_ids() == [lt._lap_id(best + 1)], lt.selected_lap_ids()
+    QTest.keyClick(tb, Qt.Key_Up)
+    _settle(2)
+    assert lt.selected_lap_ids() == [1], lt.selected_lap_ids()
+    # a multi-select that already holds the current row keeps it there
+    tb.setCurrentIndex(tb.model().index(lt._row_for_lap(2), 0))
+    lt.select([lt._lap_id(0), 2])
+    assert tb.currentIndex().row() == lt._row_for_lap(2), tb.currentIndex().row()
+    print("test_a_programmatic_select_moves_the_keyboard_cursor_with_it OK")
+
+
 def _run_all():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

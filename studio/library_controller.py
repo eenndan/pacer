@@ -71,7 +71,7 @@ from .library_dialog import LibraryDialog
 from .overlays import PBToast
 from .session import DEFAULT_SAMPLE, fmt_time
 from .session_record_dialog import SessionRecordDialog
-from .workers import RemeasureWorker, start_load
+from .workers import RemeasureWorker, start_worker
 
 _log = logging.getLogger("studio.app")
 
@@ -273,7 +273,7 @@ class IdealUpdater(QObject):
             workers.add(worker)
         worker.measured.connect(self._on_measured)
         worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
-        start_load(worker)         # after the GUI-thread gc.collect() every loading worker gets
+        start_worker(worker)       # after the GUI-thread gc.collect() every worker gets
 
     def _on_measured(self, token: int, fingerprint: str, entry, error: str) -> None:
         if token != self._token or not self._running:

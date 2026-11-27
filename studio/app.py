@@ -98,7 +98,7 @@ from .race_controller import NO_RACE_REASON
 from .stats import is_level, with_luck
 from .video_view import PLAYBACK_RATES
 from .widgets import chip, set_tone
-from .workers import DemoResolveWorker, SessionLoadWorker, start_load
+from .workers import DemoResolveWorker, SessionLoadWorker, start_worker
 
 # Help ▸ Report a problem… opens this GitHub new-issue page (the only support channel; no crash
 # reporting / telemetry — nothing is sent without the user opening this).
@@ -1014,7 +1014,7 @@ class StudioWindow(QMainWindow):
         self._load_workers.add(worker)  # hold it so the QThread isn't GC'd mid-fetch; drained on close
         worker.resolved.connect(self._on_demo_resolved)
         worker.finished.connect(lambda w=worker: self._on_demo_worker_finished(w))
-        worker.start()
+        start_worker(worker)    # the GUI-thread gc.collect() every worker starts behind
 
     def _set_demo_busy(self, busy: bool):
         """Reflect an in-flight demo fetch on the welcome screen: the button says what it is doing
@@ -1236,9 +1236,9 @@ class StudioWindow(QMainWindow):
         worker.failed.connect(self._on_load_failed_async)
         # On finish, drop the worker + launch any queued pending load (single-flight serialization).
         worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
-        # After a GUI-thread gc.collect(): the guard every loading worker starts behind
-        # (`workers.start_load`, pinned by tests/test_load_worker_gc.py).
-        start_load(worker)
+        # After a GUI-thread gc.collect(): the guard every worker starts behind
+        # (`workers.start_worker`, pinned by tests/test_load_worker_gc.py).
+        start_worker(worker)
 
     def _on_worker_finished(self, worker):
         """A load worker's QThread finished: drop it from the in-flight set and release it (see
@@ -4482,7 +4482,7 @@ class StudioWindow(QMainWindow):
         worker.loaded.connect(self._on_reference_loaded)
         worker.failed.connect(self._on_reference_load_failed)
         worker.finished.connect(lambda w=worker: self._on_reference_worker_finished(w))
-        start_load(worker)      # the GUI-thread gc.collect() every loading worker starts behind
+        start_worker(worker)    # the GUI-thread gc.collect() every worker starts behind
 
     def _on_reference_worker_finished(self, worker):
         """A reference load worker's QThread finished: drop it from the shared in-flight set and
