@@ -302,15 +302,18 @@ def legend_entries(data: LapStripData, *, short: bool = False) -> list[tuple[str
         out.append((KIND_OFF_LINE, "left the line the other laps drive: not counted"))
     if any(b.kind == KIND_GAP and b.tone != TONE_QUICKER for b in timed):
         out.append((KIND_GAP, "timed across a missing chapter: not counted"))
+    # One entry per ⚠ reason among the quicker laps. Two reasons on one line ("…: quicker, GPS
+    # dropout or left the line (not counted)") never said which lap was which, and ran past the
+    # row: the fit elided it to "(not co…". Each kind's line names its own laps; the legend's flow
+    # gives each its own row when they do not share one.
     quick = [b for b in timed if b.tone == TONE_QUICKER]
-    if quick:
-        who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in quick)
-               if len(quick) <= 3 else plural(len(quick), "lap"))
-        why = " or ".join(w for k, w in ((KIND_DROPOUT, "GPS dropout"),
-                                         (KIND_OFF_LINE, "left the line"),
-                                         (KIND_GAP, "across a missing chapter"))
-                          if any(b.kind == k for b in quick))
-        out.append((TONE_QUICKER, f"{who}: quicker, {why} (not counted)"))
+    for kind, why in ((KIND_DROPOUT, "GPS dropout"), (KIND_OFF_LINE, "left the line"),
+                      (KIND_GAP, "across a missing chapter")):
+        laps = [b for b in quick if b.kind == kind]
+        if laps:
+            who = (", ".join(f"lap {b.label} {fmt_signed(b.gap_s or 0.0, 2, 's')}" for b in laps)
+                   if len(laps) <= 3 else plural(len(laps), "lap"))
+            out.append((TONE_QUICKER, f"{who}: quicker, {why} (not counted)"))
     clipped = [b for b in timed if b.clipped]
     if clipped and data.scale_s:
         # The clipped laps BY NAME with their real gap, up to three: the bar no longer says it.

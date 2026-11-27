@@ -279,4 +279,12 @@ the same grid with planted-habit days for power: the fit `stats.quickest_luck_s`
 typical offer on a Quickest row and the ★ must clear on top of the level step.
 
     pixi run python -m studio.dev.probes.quickest_bias
+
+`sector_split_holes` measures how far a missing GPS fix moves a sector split on an unflagged lap,
+against the generator's true sector-line crossings and the clean trace, and separates the trace at
+the line from the de-drift frame by pinning the frame at the clean session's. Its verdict, that no
+re-timing or split flag fits, is `studio/docs/refused-2026-09.md` §42.
+
+    pixi run python -m studio.dev.probes.sector_split_holes run --out /tmp/x.jsonl
+    pixi run python -m studio.dev.probes.sector_split_holes summary /tmp/x.jsonl
 """
