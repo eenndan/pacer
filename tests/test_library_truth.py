@@ -787,9 +787,11 @@ def test_the_end_of_an_update_keeps_the_sort_the_selection_and_the_scroll():
     from studio.app import StudioWindow
     from studio.library_dialog import _COL_THEO
     world = _update_world()
-    # Enough rows this version measured that the table scrolls; their drive is not here.
+    t = world["measured"]["9103"]["theoretical"]
+    # Enough rows this version measured that the table scrolls; their drive is not here. Their
+    # ideals straddle the recordings' own, so a row re-measured from far away lands mid-table.
     filler = [_entry(f"GX01{8000 + i}", [f"/Volumes/pacer-test-gone-drive/GX01{8000 + i}.MP4"],
-                     theo=43.0 + 0.05 * i, best=45.0 + 0.05 * i,
+                     theo=t - 1.0 + 0.05 * i, best=t + 1.0 + 0.05 * i,
                      date=f"2026-0{1 + i % 9}-{10 + i % 18}") for i in range(40)]
     library.save({"entries": [_v1(world, "9101"), _v1(world, "9102")] + filler})
     pick = library.fingerprint("GX018039")      # the slowest ideal: last when sorted by Ideal lap
@@ -808,8 +810,7 @@ def test_the_end_of_an_update_keeps_the_sort_the_selection_and_the_scroll():
         QApplication.processEvents()
         # As a click on the header sorts it: ascending by Ideal lap, then his row selected.
         dlg.table.horizontalHeader().setSortIndicator(_COL_THEO, Qt.AscendingOrder)
-        dlg.table.selectRow(_row(dlg, pick))
-        dlg.table.verticalScrollBar().setValue(dlg.table.verticalScrollBar().maximum() - 2)
+        dlg.table.selectRow(_row(dlg, pick))      # which scrolls it into view, near the end
         QApplication.processEvents()
         seen["before"] = place(dlg)
         dlg.update_btn.click()
@@ -817,8 +818,30 @@ def test_the_end_of_an_update_keeps_the_sort_the_selection_and_the_scroll():
         QApplication.processEvents()
         seen["after"] = place(dlg)
         seen["line"] = dlg.update_line.text()
+
+    def moved(dlg):
+        # His row's own ideal moves it: 9103 stored far slower (last, scrolled to the bottom)
+        # re-measures into the middle of the table, which the bottom's scroll value does not show.
+        dlg.resize(900, 520)
+        QApplication.processEvents()
+        dlg.table.horizontalHeader().setSortIndicator(_COL_THEO, Qt.AscendingOrder)
+        dlg.table.selectRow(_row(dlg, "GX9103"))
+        dlg.table.verticalScrollBar().setValue(dlg.table.verticalScrollBar().maximum())
+        QApplication.processEvents()
+        seen["moved before"] = place(dlg)
+        dlg.update_btn.click()
+        _spin_until(lambda: not win.library_ctl.ideal_updater().running())
+        QApplication.processEvents()
+        item = dlg.table.item(_row(dlg, "GX9103"), _COL_THEO)
+        seen["moved after"] = place(dlg)
+        seen["moved visible"] = dlg.table.visualItemRect(item).intersects(
+            dlg.table.viewport().rect())
     try:
         _in_library(win, drive)
+        _spin_until(lambda: not win._load_workers)
+        library.save({"entries": library.load()["entries"]
+                      + [dict(world["measured"]["9103"], ideal_version=1, theoretical=t + 5.0)]})
+        _in_library(win, moved)
         _spin_until(lambda: not win._load_workers)
     finally:
         win.close()
@@ -829,6 +852,10 @@ def test_the_end_of_an_update_keeps_the_sort_the_selection_and_the_scroll():
     assert before[:3] == (_COL_THEO, Qt.AscendingOrder, pick) and before[3] > 0, before
     assert seen["line"] == "2 updated", seen["line"]
     assert after == before, f"the end of the run moved his place: {before} -> {after}"
+    before, after = seen["moved before"], seen["moved after"]
+    assert before[2] == after[2] == "GX9103" and after[:2] == before[:2], (before, after)
+    assert after[3] < before[3], (before, after)
+    assert seen["moved visible"], f"his selected row moved off screen: {before} -> {after}"
 
 
 def test_forget_or_clear_during_an_update_stops_it_and_counts_only_what_is_left():
@@ -857,10 +884,21 @@ def test_forget_or_clear_during_an_update_stops_it_and_counts_only_what_is_left(
                             dlg.table.item(_row(dlg, last), _COL_DATE)))
                     else:
                         QTimer.singleShot(0, dlg._on_clear_library)
-            updater.progress.connect(mid)
-            dlg.update_btn.click()
+            if act == "cancel":       # Cancel before the first row is written
+                dlg.update_btn.click()
+                QTimer.singleShot(0, dlg.update_btn.click)
+            elif act == "restore":    # a whole run, then Restore puts the older rows back
+                dlg._backup = dlg._read_backup_info()
+                dlg.update_btn.click()
+                _spin_until(lambda: not updater.running() and not win._load_workers)
+                seen["restore end"] = dlg.update_line.text()
+                dlg._on_restore_library()
+            else:
+                updater.progress.connect(mid)
+                dlg.update_btn.click()
             _spin_until(lambda: not updater.running() and not win._load_workers)
-            updater.progress.disconnect(mid)
+            if act in ("forget", "clear"):
+                updater.progress.disconnect(mid)
             QApplication.processEvents()
             seen[f"{act} line"] = (dlg.update_line.isVisible(), dlg.update_line.text(),
                                    dlg.update_line.toolTip(), dlg.table.rowCount())
@@ -876,11 +914,17 @@ def test_forget_or_clear_during_an_update_stops_it_and_counts_only_what_is_left(
     QMessageBox.question = staticmethod(lambda *_a, **_k: QMessageBox.Yes)
     win = StudioWindow([])
     try:
-        for act in ("forget", "clear"):
+        for act in ("forget", "clear", "cancel", "restore"):
             library.save({"entries": [_v1(world, n) for n in ("9101", "9102", "9103")]})
+            if act == "restore":
+                library.save({"entries": [_v1(world, n) for n in ("9101", "9102", "9103")]},
+                             library.backup_path())
             _in_library(win, during(act))
             _spin_until(lambda: not win._load_workers)
             seen[f"{act} rows"] = sorted(e["fingerprint"] for e in library.load()["entries"])
+            for n, side in sides.items():      # Forget took one; the next act needs it back
+                with open(side, "wb") as f:
+                    f.write(kept[n])
     finally:
         QMessageBox.question = saved_q
         win.close()
@@ -890,16 +934,26 @@ def test_forget_or_clear_during_an_update_stops_it_and_counts_only_what_is_left(
             with open(p, "wb") as f:
                 f.write(kept[n])
         library.save(library.empty_index())
-    print("the finish lines:", repr(seen["forget line"][1]), repr(seen["clear line"][1]))
+    print("the finish lines:", *(repr(seen[f"{a} line"][1:3])
+                                  for a in ("forget", "clear", "cancel", "restore")))
     shown, text, tip, count = seen["forget line"]
     # The row being read when Forget stopped the run is left for the next run; the forgotten one
     # is not counted at all.
     assert text == "Stopped: 1 updated · 1 left", (text, tip)
     assert seen["forget"] not in seen["forget rows"] and len(seen["forget rows"]) == 2, seen
     assert count == 2
+    # An empty library has nothing to update and nothing to say: no line, no hover.
     shown, text, tip, count = seen["clear line"]
-    assert "could not be measured" not in text and "updated" not in text, (text, tip)
+    assert not shown and "Nothing is left to update" not in tip, (shown, text, tip)
     assert seen["clear rows"] == [] and count == 0, seen
+    # Cancelled before anything was written: one well-formed line, never "Stopped. · 3 left".
+    shown, text, tip, count = seen["cancel line"]
+    assert text == "Stopped: 3 left", (text, tip)
+    # Restore set every row back to the older version: nothing the run wrote stands, so the line
+    # is the plain count again, not "3 updated · 3 left".
+    assert seen["restore end"] == "3 updated", seen["restore end"]
+    shown, text, tip, count = seen["restore line"]
+    assert text == "3 ideal laps were measured by an older Pacer.", (text, tip)
 
 
 def test_cancelling_an_update_mid_read_leaves_every_row_whole():

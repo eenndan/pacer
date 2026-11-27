@@ -77,6 +77,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QDialog,
@@ -313,16 +314,22 @@ def _summary_left(summary: dict, index: dict) -> dict:
     """`summary` (an Update run's) counting only the rows `index` still holds: a Forget or a Clear
     after the run ended (or that stopped it) takes its rows out of the line, never into "could not
     be measured". A personal best the run moved is kept only while the track's best still is it."""
-    held = {e.get("fingerprint") for e in index.get("entries", [])}
+    # A row counts as updated only while the library holds it at the version the run wrote: a
+    # Restore that set it back to an older one undid that update.
+    held = {e.get("fingerprint"): e.get("ideal_version") for e in index.get("entries", [])}
+
+    def stands(row: dict) -> bool:
+        fp = row.get("fingerprint")
+        return fp in held and held[fp] == row.get("ideal_version")
+
     pbs = []
     for track, way, best in summary.get("pbs") or []:
         now = (_library.track_summary(_library.one_way(index, way), track) or {}).get("best")
         if now is not None and abs(float(now) - float(best)) < 5e-4:
             pbs.append((track, way, best))
     return {**summary,
-            "updated": [r for r in summary.get("updated") or [] if r.get("fingerprint") in held],
-            "changed": [(b, a) for b, a in summary.get("changed") or []
-                        if a.get("fingerprint") in held],
+            "updated": [r for r in summary.get("updated") or [] if stands(r)],
+            "changed": [(b, a) for b, a in summary.get("changed") or [] if stands(a)],
             "failed": [(r, why) for r, why in summary.get("failed") or []
                        if r.get("fingerprint") in held],
             "pbs": pbs}
@@ -1412,10 +1419,19 @@ class LibraryDialog(QDialog):
         elsewhere = [e for e in present if other is not None and other(e)]
         present = [e for e in present if e not in elsewhere]
         self._update_rows = present
-        if summary is not None:
-            text, tip = _update_summary_text(_summary_left(summary, self._index))
-            text += f" · {len(present)} left" if present else ""
-            tip = tip or (UPDATE_LINE_TIP if present else UPDATE_DONE_TIP)
+        left = _summary_left(summary, self._index) if summary is not None else None
+        # A run whose every written row a Clear or a Restore took back has nothing true left to
+        # say, and neither has any run over an empty library: the line is the plain count again.
+        if left is not None and (not self._index.get("entries") or (
+                summary.get("updated") and not left["updated"] and not left["failed"])):
+            summary = left = self._update_summary = None
+        if left is not None:
+            text, tip = _update_summary_text(left)
+            if present:
+                text = (f"Stopped: {len(present)} left" if text == "Stopped."
+                        else f"{text} · {len(present)} left")
+            done = UPDATE_DONE_TIP if left["updated"] else ""
+            tip = tip or (UPDATE_LINE_TIP if present else done)
         elif present:
             n = len(present)
             text = f"{_plural(n, 'ideal lap')} {'was' if n == 1 else 'were'} measured by an older Pacer."
@@ -2357,6 +2373,12 @@ class LibraryDialog(QDialog):
         self._apply_filter()
         if keep_place:
             self.table.verticalScrollBar().setValue(scroll)
+            # ...unless his selected row's own new value moved it off screen: then it is brought
+            # back into view (a row still partly in view leaves the scroll exactly as it was).
+            current = self._selected_date_item() if kept is not None else None
+            if current is not None and not self.table.visualItemRect(current).intersects(
+                    self.table.viewport().rect()):
+                self.table.scrollToItem(current, QAbstractItemView.EnsureVisible)
 
     # ------------------------------------------------------------------ open
     def _open_selected(self):
