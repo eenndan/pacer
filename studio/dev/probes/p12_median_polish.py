@@ -29,7 +29,7 @@ probe tests exactly that half:
     shuffled-order null) with the seconds it is worth, since the product claim is a split of one
     number into two.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
+    pixi run python -m studio.dev.probes.p12_median_polish
 
 SAFETY: as `_m5_cache` — read-only footage snapshotted around every load, app-support seams
 diverted before any studio import resolves one, nothing written.

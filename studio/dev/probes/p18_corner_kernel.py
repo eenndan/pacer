@@ -21,9 +21,9 @@ else that reads `lap_curvature` changes. Every number it computes is printed.
 
 Its verdict is `studio/docs/refused-2026-09.md` §17.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel synthetic
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel real
+    pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
+    pixi run python -m studio.dev.probes.p18_corner_kernel synthetic
+    pixi run python -m studio.dev.probes.p18_corner_kernel real
 """
 from __future__ import annotations
 

@@ -6,7 +6,7 @@ dimensions. They went stale through 458 commits, and one of them — `plots.png`
 page — was a picture of the flat zero-Δ line the ideal-lap wave had since fixed. A marketing image
 nobody can regenerate is a marketing image that eventually lies. So: one script, one command.
 
-    QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer \\
+    QT_QPA_PLATFORM=offscreen \\
         pixi run python -m studio.dev.media_capture "$HOME/Desktop/Sandown 3h 2026/GX010064.MP4" \\
         --out docs/media --only hero,ideal,trust,map,overlay,clip,og
 

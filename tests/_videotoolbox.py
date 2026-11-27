@@ -2,8 +2,9 @@
 
 THE PROBLEM THIS FIXES (HEALTH-4, 2026-09-25). The owner's exports run h264_videotoolbox, the
 `-hwaccel videotoolbox` decode and, since #412, the decode relay that switches itself on over that
-hardware decode. CI's runner opens no H.264 VideoToolbox session (a ProRes one, yes: the two
-ProRes checks run there). The checks of those paths each opened with
+hardware decode. CI's runner then opened no H.264 VideoToolbox session (a ProRes one, yes: the
+two ProRes checks ran there; its macos-15 runner since 2026-11-12 opens both and runs 5 of the 6,
+tests/README.md). The checks of those paths each opened with
 `if not ev.videotoolbox_usable(): print("skip …"); return`, so in CI they reported PASSED having
 run nothing; the relay tests forced `_relay_ok` on over a SOFTWARE decode; and `pixi run test-fast`
 leaves the whole of `test_export_video` out. So the path he exports through was checked only by a

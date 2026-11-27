@@ -3,14 +3,16 @@
 Every test here is a CTest registration in [CMakeLists.txt](CMakeLists.txt); the pixi tasks that
 run them, and the measurements behind their levels, exclusions and timeouts, are in
 [pyproject.toml](../pyproject.toml). [AGENTS.md](../AGENTS.md) has the everyday commands; their
-timings are kept here, each with its date, on the M1 Pro dev Mac: `test` 281.3 s with all 16
-footage checks and the 6 VideoToolbox checks running (2026-09-25, 165 registrations, load ~3;
-206.0 s on 2026-09-24 with 14 footage checks and 157 registrations, load ~5), `test-fast`
+timings are kept here, each with its date, on the M1 Pro dev Mac: `test` 510.6 s wall with 5 of
+the 16 footage checks and all 6 VideoToolbox checks running, 11 footage checks and the soak
+Skipped (2026-11-27, the v0.26.0 release gate, 206 registrations, load not recorded; 281.3 s on
+2026-09-25 with all 16 footage checks and 165 registrations, load ~3), `test-fast`
 183–215 s on quiet gate runs (2026-09-26/27, 167–180 registrations; up to 488 s under load;
 408 s at -j2 and load 7–10 on 2026-09-30, 182 of 184),
 `test-footage` 139.1 s (2026-09-23, warm page cache;
 `footage.test_real_render_quality_levels_if_media` is the slowest, at 67 s), `test-soak`
-92.0–100.3 s (2026-09-27, the two release gates; 116.6 s at load ~10 on 2026-09-30), `golden`
+92.0–100.3 s (2026-09-27, the two release gates; 116.6 s at load ~10 on 2026-09-30; 98.7 s at
+the v0.26.0 gate, 2026-11-27), `golden`
 8–14 s (2026-09-27, README.md's figure; 11.9 s at load ~11 on 2026-09-30) and `typecheck`
 6.7–9.2 s (2026-09-29, 40 modules, load ~6; 12.5 s for 43 at load ~11 on 2026-09-30).
 The six slowest plain suites were trimmed on 2026-11-18 to do the same checking in less time,
@@ -25,7 +27,8 @@ same suite 1.5× apart between runner VMs), with 3.9 of 4 lanes busy: the floor 
 test-seconds over four, not the slowest test. The same day `test_coaching` (302–342 → 187 s) and
 `test_export_broadcast` (234–240 → 152 s) were cut in CI, each with the same checks, and a
 cost-first start order was measured and dropped: it started the four heaviest window suites
-together, which then ran 33 % slower.
+together, which then ran 33 % slower. On 2026-11-27 (206 registrations) three green runs' ctest
+wall time was 865–1135 s, two of them pushes carrying the soak (225 and 380 s of it).
 
 **Inner loops, not gates.** `pixi run test-core`, between edits to the core math, runs the 11
 registrations that kill every one of the 34 core defects the 2026-09-28 review planted (re-run
@@ -229,7 +232,10 @@ because their rows are named recordings (and chapter selections sibling discover
 not "a recording". A default that is absent is a skip — for a table, if ANY of its recordings is
 absent — and **a variable you set that names something absent is a failure.** Until G2
 (2026-09-23) every default still named D24, deliberately, so all fourteen skipped until T16b had
-re-measured the published tables on the working set; now all of them run and pass on this Mac.
+re-measured the published tables on the working set. Which run depends on what is on disk: at the
+v0.26.0 gate (2026-11-27) one working-set recording was, and with `PACER_GOLDEN_MP4` pointing at
+it the five checks that take one recording ran and passed while the other eleven were reported
+Skipped; without the variable, each check missed a default recording and all sixteen skip.
 
 Where they run: `pixi run test-footage` runs just these (by their `footage` CTest label);
 `pixi run test` runs them with everything else, one at a time under a shared `RESOURCE_LOCK`;
@@ -238,7 +244,7 @@ reason naming `test-footage`, rather than excluding them — an excluded test va
 report. A footage variable you set still runs its checks there. The recordings are the owner's and strictly read-only: record sizes and mtimes around a run.
 
 ```bash
-pixi run test-footage                                           # all sixteen, on the working set
+pixi run test-footage                                           # the sixteen; those without their recording skip
 PACER_GOLDEN_MP4="$HOME/Desktop/SD_30_08_26/GX010065.MP4" \
   pixi run ctest --test-dir build/Release -R '^footage\.test_real_render' --output-on-failure
 ```
@@ -271,7 +277,8 @@ return early and read as a pass. 4 of them need an H.264 VideoToolbox session (t
 among them), which CI's macos-14 runner could not open (CI run 36680230363, 2026-09-30: 2 Passed, 4
 Skipped); its macos-15 runner opens it and ran all six (CI run 43304033240, 2026-11-12: 6 Passed), but as
 a VM its concurrent decode sessions do not always hold, so the hardware-relay check is reported
-Skipped there and runs on the dev Mac (test_export_pipeline.py; #538's run 43348339477). On the dev Mac
+Skipped there and runs on the dev Mac (test_export_pipeline.py; #538's run 43348339477; the same
+5 Passed and 1 Skipped in the three green runs of 2026-11-27). On the dev Mac
 all six run, in `test-fast` and `test`; a file lists them in its `VIDEOTOOLBOX_CHECKS` and leaves
 them out of its ordinary run, and a check with a software half keeps that half there.
 [_videotoolbox.py](_videotoolbox.py) is the mechanism; `test_videotoolbox_checks` holds the

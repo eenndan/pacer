@@ -30,7 +30,7 @@ to a true clock with 12 % of fixes rejected, which no real recording reaches. Ea
 QShortcut outranks a focused QPushButton: a chip that is a tab stop but cannot be activated from
 the keyboard would be exactly the "button that does nothing" the old comment warned about.
 
-Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer python tests/test_quality_chip_trust.py
+Run: QT_QPA_PLATFORM=offscreen python tests/test_quality_chip_trust.py
 """
 import os
 import sys

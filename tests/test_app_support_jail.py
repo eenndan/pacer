@@ -205,7 +205,7 @@ def _probe():
 
 
 def test_a_test_file_run_by_hand_outside_ctest_is_jailed():
-    """`PYTHONPATH=bindings/pacer python tests/test_x.py` is how most agents run one file, and no
+    """`python tests/test_x.py` is how most agents run one file, and no
     CMake environment reaches that. A script in this checkout's tests/ is jailed by where it lives,
     and passes the jail on to its own children. The jail dir it made is gone after it exits."""
     home = tempfile.mkdtemp(prefix="pacer-h8-home-")

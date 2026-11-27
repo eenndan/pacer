@@ -14,8 +14,8 @@ on 0060 fails the distance gate, and two things compound — a rigid whole-lap r
   3. interior-boundary match rate for each half and for both, against the shipped gate;
   4. how far a boundary that ALREADY matched moves, and what that does to its corner time.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor 0060
+    pixi run python -m studio.dev.probes.p8_corner_anchor
+    pixi run python -m studio.dev.probes.p8_corner_anchor 0060
 
 TWO SAFETY PROPERTIES, both enforced rather than promised (as `p4` and `p6` enforce them):
   * `~/Desktop/D24` IS READ-ONLY. No path under it is ever passed as an output argument, and every

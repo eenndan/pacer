@@ -13,8 +13,8 @@ asks what that table's order is worth, over EXACTLY the rows the page ranks
   * the REFUSED alternative: zones grown from where the laps coast (coverage threshold x merge
     gap) — which leader each knob setting crowns.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_coast_places
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_coast_places 0060 Sandown
+    pixi run python -m studio.dev.probes.p6_coast_places
+    pixi run python -m studio.dev.probes.p6_coast_places 0060 Sandown
 
 SAFETY, enforced rather than promised:
   * EVERY FOOTAGE FOLDER IS READ-ONLY. Paths under ~/Desktop are only ever opened for reading, and

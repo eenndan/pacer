@@ -18,7 +18,7 @@ verdict is `studio/docs/refused-2026-09.md` §8.
      `focus.verdict` applies — and against the standard error of the two medians (the normal
      approximation `focus.verdict`'s own comment uses, 1.2533 × IQR / 1.349 / √laps).
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_heat_to_heat
+    pixi run python -m studio.dev.probes.p10_heat_to_heat
 
 SAFETY, enforced rather than promised (as p4/p6/p8/p9 enforce it):
   * EVERY FOOTAGE FOLDER IS READ-ONLY. Paths under ~/Desktop are only opened for reading, and every

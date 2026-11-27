@@ -21,8 +21,8 @@ Whether #300, #322 or #325 changed any of this is not re-run here (it needs the 
 method and result are in `studio/docs/corner-match-0060-2026-09.md`, which is where every number this
 probe prints is written up.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause 0060
+    pixi run python -m studio.dev.probes.p6_corner_match_cause
+    pixi run python -m studio.dev.probes.p6_corner_match_cause 0060
 
 TWO SAFETY PROPERTIES, both enforced rather than promised, exactly as `p4` enforces them:
   * `~/Desktop/D24` IS READ-ONLY. No path under it is ever passed as an output argument, and every

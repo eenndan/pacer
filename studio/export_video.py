@@ -1452,7 +1452,7 @@ def build_decode_cmd(spec: ExportSpec, out_w: int, out_h: int, fps: float,
     `_DecodeRelay`). Its seek is the plan's own `-ss` plus exactly `start_frame / fps`, added in
     whole microseconds (the unit ffmpeg parses `-ss` into) rather than re-derived from a float, so
     both decodes see the same timestamps shifted by a whole number of frames; the relay only asks
-    for a `start_frame` that makes that sum exact (`_relay_step`)."""
+    for a `start_frame` that makes that sum exact (`Renderer._relay_ok`)."""
     hw = ["-hwaccel", "videotoolbox"] if hwaccel else []
     scale = scale_filter or f"scale={out_w}:{out_h}"
     n = frame_count(spec.t0, spec.t1, fps)
@@ -1585,8 +1585,7 @@ def _video_codec_args(encoder: str, out_w: int, out_h: int, fps: float,
 # and nothing about the file would say so. Apple's encoder keeps the alpha straight on both its
 # paths here (white@128 -> 255,255,255,129; grey 96@128 -> 96,96,96,129 on the software one).
 VT_PRORES = "prores_videotoolbox"
-SW_PRORES = "prores_ks"
-_PRORES_ENCODER = SW_PRORES        # the portable encoder, and what `alpha_codec_args` defaults to
+SW_PRORES = "prores_ks"           # the portable encoder, and what `alpha_codec_args` defaults to
 # What we ASK prores_ks for. What comes back out reads as `yuva444p12le`, and that is not a
 # mismatch to chase: the ProRes 4444 bitstream stores 12 bits, so ffmpeg's decoder advertises the
 # 12-bit format for every 4444 stream whatever it was encoded from. The `yuva` prefix — the part
