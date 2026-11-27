@@ -146,15 +146,21 @@ def test_the_auto_fitted_line_is_off_the_braking_point():
         f"docs/ACCURACY.md quote {PUBLISHED_AUTO_LINE_MS} ms — re-measure and update them together")
 
 
-# A MISSING FIX NEAR THE LINE (`studio/_signal.py` MISSING_FIX_PERIODS). The load-time boxcar counts
-# fixes, not seconds, so a fix the gate rejects within its reach of a crossing moves that crossing —
-# and the 0.2 s it leaves is far under the 0.35 s an interior dropout needs to raise the ⚠. Each case
-# loads this recording with some fixes reported 2D (rejected by the gate, exactly as a receiver that
-# loses its 3D lock is) and times it at the CLEAN load's line, so the only difference is the fixes.
+# A MISSING FIX NEAR THE LINE (`studio/_signal.py` SMOOTH_WINDOW's block). The old load-time boxcar
+# counted fixes, not seconds, so a fix the gate rejects within its reach of a crossing moved that
+# crossing — and the 0.2 s it leaves is far under the 0.35 s an interior dropout needs to raise the
+# ⚠. The time-aware smoother (`_signal._smooth_timed`) keeps such a lap on its clean-trace time.
+# Each case loads this recording with some fixes reported 2D (rejected by the gate, exactly as a
+# receiver that loses its 3D lock is) and times it at the CLEAN load's line, so the only difference
+# is the fixes.
 REJECT_SHARE = 0.05    # of all fixes, at random: inside the dropped-fix share that raises no concern
 REJECT_SEED = 3
 MOVED_S = 0.020        # a lap this far off its clean-trace time was moved by the missing fixes
+# An unflagged lap is within this of its clean-trace time: the synthetic matrix (10 laps, 5 seeds,
+# 10 and 18 Hz, native noise) measured at most 4.5 ms over every hole the ⚠ leaves in the bests.
+TIMED_ACROSS_HOLE_S = 0.010
 EDGE_GAP_S = (2.0, 0.5)   # a 1.5 s hole (it splits the smoothing run) ending 0.5 s before a crossing
+LINE_GAP_S = (1.65, 0.15)  # …and the same hole ending 0.15 s before it: AT the line (LINE_HOLE_PERIODS)
 
 
 def _load_rejecting(rec, bad, chord=None):
@@ -205,31 +211,64 @@ def _moved_by_rejection(bad) -> tuple[dict, set]:
     return moved, holed.dropout_lap_ids()
 
 
-def test_scattered_missing_fixes_never_move_a_lap_that_stays_in_the_bests():
-    """5 % of fixes rejected at random, each alone: on main this recording read an unflagged lap
-    tens of ms off its clean time, some of them FAST — a false best the size of the timing step.
-    Now every lap a missing fix moved carries the dropout ⚠, and every lap without one is timed to
-    the bit as on the clean trace."""
+def test_scattered_missing_fixes_leave_every_lap_on_its_clean_time():
+    """5 % of fixes rejected at random, each alone. The counting boxcar moved 13 of 14 laps by up to
+    49 ms, as often FAST as slow — a false best the size of the timing step — and v0.25.0 then put
+    the dropout ⚠ on nearly every lap and read the whole session low. The time-aware smoother keeps
+    every lap within TIMED_ACROSS_HOLE_S of its clean-trace time, so no lap needs the ⚠ for it: the
+    session is not low, and its best lap is the clean session's, to within that."""
+    rec, clean = _load()
     keep = np.random.default_rng(REJECT_SEED).random(1_000_000) >= REJECT_SHARE
-    moved, dropout = _moved_by_rejection(lambda t: not keep[int(round(t * 10))])
-    off = {i: round(d * 1e3, 1) for i, d in moved.items() if abs(d) > 1e-9}
-    print(f"  {len(moved)} laps, {len(dropout)} ⚠; moved (ms): {off}")
-    assert max(abs(d) for d in moved.values()) > MOVED_S, "no lap moved: the case has no teeth"
-    unflagged = {i: ms for i, ms in off.items() if i not in dropout}
-    assert not unflagged, f"laps moved by missing fixes yet still in the bests (ms): {unflagged}"
+    bad = lambda t: not keep[int(round(t * 10))]  # noqa: E731
+    moved, dropout = _moved_by_rejection(bad)
+    print(f"  {len(moved)} laps, {len(dropout)} ⚠; moved (ms): "
+          f"{ {i: round(d * 1e3, 1) for i, d in moved.items()} }")
+    assert not dropout, f"laps wear the ⚠ for scattered single fixes: {sorted(dropout)}"
+    worst = max(abs(d) for d in moved.values())
+    assert worst <= TIMED_ACROSS_HOLE_S, f"a lap moved {worst * 1e3:.1f} ms by scattered fixes"
+    holed = _load_rejecting(rec, bad)
+    assert holed.timing_quality.line_dropouts is None and not holed.timing_quality.degraded
+    best = holed.lap_time(holed.best_lap_id())
+    assert abs(best - clean.lap_time(clean.best_lap_id())) <= TIMED_ACROSS_HOLE_S, best
 
 
-def test_a_gap_ending_just_before_the_line_flags_the_lap_after_it():
-    """A 1.5 s hole ending 0.5 s before a crossing splits the smoothing run, so the fixes after it
-    are averaged one-sidedly, toward the run's interior: the crossing moves. The lap holding the gap
-    always had the ⚠; the lap STARTING at that crossing has no gap inside it and read clean."""
+ONE_FIX_PERIODS = range(1, 9)   # one fix rejected 1..8 periods from a crossing (the old reach is 7)
+
+
+def test_one_missing_fix_near_the_line_moves_no_lap():
+    """THE DEFECT of the counting boxcar: one fix rejected 1-8 periods before or after a crossing
+    moved that lap by up to ~46 ms (6/13 of a period), and v0.25.0 flagged it instead of timing it.
+    Now each such lap is within TIMED_ACROSS_HOLE_S of its clean-trace time and wears no ⚠."""
+    rec, s = _load()
+    ids = s.valid_lap_ids()
+    at = []
+    for n, i in enumerate(ids):
+        side = 1 if n % 2 else -1
+        at.append(s.laps.start_timestamp(i) + side * 0.1 * ONE_FIX_PERIODS[n % len(ONE_FIX_PERIODS)])
+    at = np.array(at)
+    moved, dropout = _moved_by_rejection(lambda t: bool(np.min(np.abs(at - t)) < 0.05))
+    print(f"  one fix 1-8 periods from {len(at)} crossings: moved (ms) "
+          f"{ {i: round(d * 1e3, 1) for i, d in moved.items()} }; ⚠ {sorted(dropout)}")
+    assert not dropout, f"a single missing fix flagged laps {sorted(dropout)}"
+    worst = max(abs(d) for d in moved.values())
+    assert worst <= TIMED_ACROSS_HOLE_S, f"a lap moved {worst * 1e3:.1f} ms by one missing fix"
+
+
+def test_a_gap_ending_before_the_line_leaves_the_lap_after_it_on_time():
+    """A 1.5 s hole ending 0.5 s before a crossing splits the smoothing run. The counting boxcar
+    averaged the fixes after it one-sidedly and moved the next lap +125 ms; the line fit reads each
+    fix at its own time, so that lap is on its clean time and wears no ⚠ (the lap HOLDING the gap
+    keeps its own). The same hole ending 0.15 s before the line leaves the crossing's fixes fitted
+    from one side (`_signal.LINE_HOLE_PERIODS`): that lap wears the ⚠."""
     rec, s = _load()
     k = s.valid_lap_ids()[3]
     c = s.laps.start_timestamp(k)
     moved, dropout = _moved_by_rejection(lambda t: c - EDGE_GAP_S[0] < t < c - EDGE_GAP_S[1])
-    print(f"  lap {k} starts at the moved crossing: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
-    assert abs(moved[k]) > MOVED_S, f"the crossing did not move ({moved[k] * 1e3:+.1f} ms): no teeth"
-    assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by a gap at its start, unflagged"
+    print(f"  lap {k} starts 0.5 s after a 1.5 s gap: {moved[k] * 1e3:+.1f} ms; ⚠ {sorted(dropout)}")
+    assert k not in dropout and k - 1 in dropout, sorted(dropout)
+    assert abs(moved[k]) <= TIMED_ACROSS_HOLE_S, f"lap {k} moved {moved[k] * 1e3:+.1f} ms"
+    _, dropout = _moved_by_rejection(lambda t: c - LINE_GAP_S[0] < t < c - LINE_GAP_S[1])
+    assert k in dropout, f"a 1.5 s gap ending 0.15 s before lap {k}'s line left it unflagged"
 
 
 TRACE_END_MARGIN_S = 0.4   # the kept trace starts (or ends) this close to a lap's crossing
@@ -259,16 +298,28 @@ def test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap():
     assert k in dropout, f"lap {k} moved {moved[k] * 1e3:+.1f} ms by the trace's end, unflagged"
 
 
+LINE_HOLE_S = (0.25, 0.05)   # two fixes rejected from 0.25 to 0.05 s before a crossing: AT its line
+
+
+def _line_holes(crossings):
+    """Reject the two fixes just before each of `crossings` (`LINE_HOLE_S`): a 0.3 s step, under the
+    0.35 s interior gap, so the lap's trace is whole, but at the line (`_signal.LINE_HOLE_PERIODS`)."""
+    at = np.asarray(crossings, float)
+    return lambda t: bool(np.any((t > at - LINE_HOLE_S[0]) & (t < at - LINE_HOLE_S[1])))
+
+
 def test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb():
-    """The cost side (`data_quality.LINE_DROPOUT_MAJORITY`): 5 % of fixes rejected at random leave
-    the rejected-fix share far under its concern line, but most laps ⚠ — and their one clean lap
-    is no best to judge a PB by. The session reads low in plain words, keeps its PB out
-    (`untrusted`) and writes its Library row degraded. One ⚠ lap of 14 does not, and the clean
-    recording is untouched."""
+    """The cost side (`data_quality.LINE_DROPOUT_MAJORITY`): two fixes rejected at every crossing
+    leave the rejected-fix share far under its concern line, but every lap ⚠ — and a clean lap
+    among them would be no best to judge a PB by. The session reads low in plain words, keeps its
+    PB out (`untrusted`) and writes its Library row degraded. One ⚠ lap of 14 does not, and the
+    clean recording is untouched."""
     rec, clean = _load()
     assert clean.timing_quality.line_dropouts is None and not clean.timing_quality.degraded
-    keep = np.random.default_rng(REJECT_SEED).random(1_000_000) >= REJECT_SHARE
-    holed = _load_rejecting(rec, lambda t: not keep[int(round(t * 10))])
+    ids = clean.valid_lap_ids()
+    holed = _load_rejecting(rec, _line_holes(
+        [clean.laps.start_timestamp(i) for i in ids]
+        + [clean.laps.start_timestamp(ids[-1]) + clean.lap_time(ids[-1])]))
     q = holed.timing_quality
     flagged, laps = len(holed.dropout_lap_ids()), len(holed.valid_lap_ids())
     print(f"  {flagged} of {laps} laps ⚠, {q.dropped_pct()}% rejected: {q.concerns()}")
@@ -289,13 +340,13 @@ def test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb():
 
 CUT_INTO_LAP_S = 22.5   # the chord starts this far into the cut lap…
 CUT_S = 5.0             # …and lasts this long: ~32 m inside the corner it skips (measured)
-HOLE_AFTER_S = 0.25     # one fix rejected this long after a crossing: inside the smoother's reach
+HOLE_AFTER_S = 0.25     # two fixes rejected around this long after a crossing: AT its line
 
 
 def test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line():
     """THE DEFECT (release QA, wave 22; #712 × #698). The off-the-line rule measured only laps with
-    no GPS dropout, and needs four. A single fix missing beside a crossing puts the dropout ⚠ on
-    both laps that share it, so holes at most crossings left three laps to measure: none, and the
+    no GPS dropout, and needs four. A hole at a crossing (then one fix, now two: one alone no longer
+    flags) puts the dropout ⚠ on both laps that share it, so holes at most crossings left three laps to measure: none, and the
     quickest lap — a cut across the infield, `CUT_S` of chord — was crowned best lap. A lap whose
     only dropout is beside its line has a whole trace, so it is measured; the cut is off the line
     and the best is the quickest lap that drove the circuit. With the cut lap holed too it still
@@ -309,12 +360,20 @@ def test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line():
     chord = (cross[k] + CUT_INTO_LAP_S, cross[k] + CUT_INTO_LAP_S + CUT_S)
 
     def holed(whole):
-        """Reject the fix nearest `HOLE_AFTER_S` after every crossing but those in `whole`."""
+        """Reject the two fixes around `HOLE_AFTER_S` after every crossing but those in `whole`:
+        a 0.3 s step at the line (`_signal.LINE_HOLE_PERIODS`), under the 0.35 s interior gap."""
         at = np.array([c + HOLE_AFTER_S for j, c in enumerate(cross) if j not in whole])
-        return lambda t: bool(np.min(np.abs(at - t)) < 0.05)
+        return lambda t: bool(np.min(np.abs(at - t)) < 0.1)
+
+    def load(bad, chord=None):
+        """Loaded and timed at the CLEAN load's line: holes move the line the loader fits itself
+        (~0.28 s up the straight here), and these holes are placed against the clean crossings."""
+        out = _load_rejecting(rec, bad, chord)
+        assert out.apply_timing_lines_latlon(clean.timing_lines_latlon()[0], [], confirmed=True)
+        return out
 
     # Crossings k-1 .. k+2 whole: laps k-1, k, k+1 clean, every other lap ⚠ (QA: 11 of 14).
-    s = _load_rejecting(rec, holed({k - 1, k, k + 1, k + 2}), chord)
+    s = load(holed({k - 1, k, k + 1, k + 2}), chord)
     assert len(s.dropout_lap_ids()) == len(ids) - 3 and s.timing_quality.low_gps_quality
     off = s.off_line_metres()
     print(f"  cut lap {k} ({times[k]:.3f} s): off the line {off}; best {s.best_lap_id()}")
@@ -332,13 +391,13 @@ def test_a_cut_lap_is_off_the_line_though_most_laps_miss_a_fix_at_the_line():
             if (m["t"], m["t_end"]) in s.lap_dropout_spans(i)} == s.dropout_lap_ids()
     # A hole at every crossing, the cut lap's too: every lap ⚠, the cut still reads off the line,
     # and the all-⚠ fallback crowns the quickest lap of the circuit, never the cut.
-    s = _load_rejecting(rec, holed(set()), chord)
+    s = load(holed(set()), chord)
     assert s.dropout_lap_ids() == set(ids) and list(s.off_line_metres()) == [k], s.off_line_metres()
     assert data_quality.lap_warning_kinds(s)[k] == data_quality.WARN_OFF_LINE
     assert "left the line" in s.lap_warnings()[k]
     assert s.best_lap_id() == min((i for i in ids if i != k), key=s.lap_time), s.best_lap_id()
     # The holes alone (no cut): no lap off the line.
-    assert _load_rejecting(rec, holed({k - 1, k, k + 1, k + 2})).off_line_metres() == {}
+    assert load(holed({k - 1, k, k + 1, k + 2})).off_line_metres() == {}
 
 
 def test_the_lap_table_entry_speed_is_km_h_at_the_true_crossing():
@@ -512,8 +571,9 @@ def _run_all():
     for fn in (test_the_real_loader_times_every_lap_on_the_gps9_clock,
                test_noise_free_laps_are_exact_to_the_millisecond,
                test_the_auto_fitted_line_is_off_the_braking_point,
-               test_scattered_missing_fixes_never_move_a_lap_that_stays_in_the_bests,
-               test_a_gap_ending_just_before_the_line_flags_the_lap_after_it,
+               test_scattered_missing_fixes_leave_every_lap_on_its_clean_time,
+               test_one_missing_fix_near_the_line_moves_no_lap,
+               test_a_gap_ending_before_the_line_leaves_the_lap_after_it_on_time,
                test_a_trace_that_starts_just_before_the_first_line_flags_the_first_lap,
                test_a_trace_that_ends_just_after_the_last_line_flags_the_last_lap,
                test_most_laps_missing_a_fix_at_the_line_read_low_and_claim_no_pb,

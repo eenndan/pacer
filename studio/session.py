@@ -61,6 +61,8 @@ from ._signal import (
     EXCLUDED_OPEN,
     LAP_DIST_BAND_HI,
     LAP_DIST_BAND_LO,
+    LINE_HOLE_PERIODS,
+    LINE_HOLE_REACH_FIXES,
     MISSING_FIX_PERIODS,
     SMOOTH_REACH_FIXES,
     SMOOTH_WINDOW,
@@ -1554,8 +1556,8 @@ class Session:
         see ``_ref``.
 
         THE LAPS VOTE TOO: the loader's verdict is handed the share of valid laps wearing the GPS
-        dropout ⚠ (`data_quality.TimingQuality.with_lap_dropouts`), because scattered missing fixes
-        can leave most laps ⚠ while the rejected-fix share stays under its concern line. Laps
+        dropout ⚠ (`data_quality.TimingQuality.with_lap_dropouts`), because holes at the line can
+        leave most laps ⚠ while the rejected-fix share stays under its concern line. Laps
         timed across a missing chapter wear a ⚠ for another reason and do not vote. Memoized on
         the loader's verdict object and cleared on re-segment; a bare Session has no laps to ask."""
         base = getattr(self, "_timing_quality", None) or data_quality.TimingQuality()
@@ -2176,22 +2178,26 @@ class Session:
     def lap_dropout_kinds(self, lap_id: int) -> list[tuple[float, float, str]]:
         """The ``(t0, t1, kind)`` TELEMETRY spans that make a lap a GPS-dropout lap, in time order:
         `DROPOUT_IN_LAP` for every INTERIOR gap of its kept points longer than gapfill.GAP_TIME_S
-        (0.35 s, the gap-aware draw logic's threshold), and `DROPOUT_AT_LINE` for every missing fix
-        within the smoother's reach of its start or finish crossing (`_signal.SMOOTH_REACH_FIXES`
-        periods, however short the gap — see `_signal.MISSING_FIX_PERIODS` for why a single missing
-        fix there moves the lap time) — the trace's first and last fix included, each as the edge
-        of a gap. A span at a trace end runs to the smoother's reach: the part of the window with no
-        fix in it. A gap that is both is `DROPOUT_IN_LAP`. The ONE detector behind
+        (0.35 s, the gap-aware draw logic's threshold), and `DROPOUT_AT_LINE` for what the
+        time-aware smoother cannot close at its start or finish crossing (`_signal.LINE_HOLE_PERIODS`):
+        two or more fixes missing in a row within `_signal.LINE_HOLE_REACH_FIXES` periods of it, or
+        the trace's first or last fix within the smoother's reach (`_signal.SMOOTH_REACH_FIXES`
+        periods), where it still averages one-sidedly. A single missing fix, or a longer hole further
+        from the line, no longer counts: the smoother times that lap within a few ms of its
+        clean-trace time. A span at a trace end runs to the smoother's reach: the part of the window
+        with no fix in it. A gap that is both is `DROPOUT_IN_LAP`. The ONE detector behind
         `lap_has_dropout`, the dropout marks (`auto_marks`) and `lap_has_gap_inside`."""
         times = self._lap_point_times(lap_id)
         kinds: dict[tuple[float, float], str] = {}
         t0, t1, period = self._missing_fix_steps()
         if len(t0) and len(times) >= 2:
-            reach = SMOOTH_REACH_FIXES * period
+            end = np.isinf(t0) | np.isinf(t1)
+            reach = np.where(end, SMOOTH_REACH_FIXES, LINE_HOLE_REACH_FIXES) * period
+            closes = ~end & (t1 - t0 < LINE_HOLE_PERIODS * period)   # the smoother times these
             for crossing in (float(times[0]), float(times[-1])):
-                near = (t1 > crossing - reach) & (t0 < crossing + reach)
-                lo = np.where(np.isinf(t0[near]), crossing - reach, t0[near])
-                hi = np.where(np.isinf(t1[near]), crossing + reach, t1[near])
+                near = (t1 > crossing - reach) & (t0 < crossing + reach) & ~closes
+                lo = np.where(np.isinf(t0[near]), crossing - reach[near], t0[near])
+                hi = np.where(np.isinf(t1[near]), crossing + reach[near], t1[near])
                 kinds.update(dict.fromkeys(zip(lo.tolist(), hi.tolist(), strict=True),
                                            DROPOUT_AT_LINE))
         for g in gapfill.find_gaps(times):
@@ -2211,8 +2217,8 @@ class Session:
 
     def lap_has_dropout(self, lap_id: int) -> bool:
         """True if a lap had a GPS dropout that its time can feel (`lap_dropout_spans`): a gap
-        inside it, or a missing fix close enough to its start or finish line to move where the
-        smoothed trace crosses it. Its time / distance / map are less reliable, so it is ⚠ and out
+        inside it, or a hole at its start or finish line that the smoother cannot close (or the
+        trace's own end there). Its time / distance / map are less reliable, so it is ⚠ and out
         of the bests. Read-only; alters no analysis value."""
         return bool(self.lap_dropout_spans(lap_id))
 
@@ -2232,8 +2238,8 @@ class Session:
         The consensus is fitted over those laps, against the one whose length is the median (never
         the best lap: which lap is best is what this decides). A lap with a gap INSIDE it
         (`lap_has_gap_inside`) neither votes nor is measured: its gap is a straight line drawn
-        across the hole. A lap whose only dropout is a fix missing beside its line IS measured and
-        votes: its trace is whole, and leaving it out let scattered missing fixes empty the vote
+        across the hole. A lap whose only dropout is a hole beside its line IS measured and
+        votes: its trace is whole, and leaving it out let holes at the line empty the vote
         until a cut lap won (wave 22: 11 of 14 laps ⚠, three left to vote, the cut crowned).
         Fewer than `corners.CORRIDOR_MIN_LAPS` measured laps: none. Memoized against the
         `valid_lap_ids` list it was computed from (held by identity), so a re-segment, which

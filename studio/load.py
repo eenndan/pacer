@@ -23,7 +23,7 @@ from ._signal import (
     _gap_segments,
     _gate_quality,
     _quality_ok,
-    _smooth_segments,
+    _smooth_timed,
 )
 from .ingest import read_recording  # the single-pass GPS+IMU load reader (pacer IO layer)
 
@@ -366,8 +366,9 @@ def _clean(samples, spans, naive):
 
 def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
     """Return NEW GPSSamples with lat/lon/altitude boxcar-smoothed (speeds untouched) so all
-    C++ geometry uses the same track. Smoothed per gap-free run (never bridges a time gap).
-    O(n), run once at load.
+    C++ geometry uses the same track. Smoothed per gap-free run (never bridges a time gap), each
+    value at its own fix's time across a missing fix (`_signal._smooth_timed`). O(n), run once
+    at load.
 
     IT CARRIES `dop`/`fix` ACROSS. This rebuilds each sample field by field, and the two GPS9
     QUALITY fields were the two it did not name — so every point that reached `pacer.Laps` had
@@ -383,9 +384,9 @@ def _smooth_track(samples, times, w: int = SMOOTH_WINDOW):
     if w < 2 or len(samples) < w:
         return samples
     segs = _gap_segments(times)
-    lat = _smooth_segments([s.lat for s in samples], segs, w)
-    lon = _smooth_segments([s.lon for s in samples], segs, w)
-    alt = _smooth_segments([s.altitude for s in samples], segs, w)
+    lat = _smooth_timed([s.lat for s in samples], times, segs, w)
+    lon = _smooth_timed([s.lon for s in samples], times, segs, w)
+    alt = _smooth_timed([s.altitude for s in samples], times, segs, w)
     out = []
     for i, s in enumerate(samples):
         out.append(pacer.GPSSample(
