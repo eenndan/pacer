@@ -20,20 +20,20 @@ the GPS-quality signal can support a PER-CORNER coaching abstain, which is a que
 channel rather than two, so it loads each recording itself and reads the strip the loader already
 built. Its verdict is `studio/docs/refused-2026-09.md` §4.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p4_corner_gps_quality
+    pixi run python -m studio.dev.probes.p4_corner_gps_quality
 
 `p5_clock_crossing_scale` measures the clock crossing p4 asks about at every window length rather
 than one: the strip's naive-second cells indexed by telemetry windows, each join checked per kept fix
 against the stamps the strip binned. Its rule is written in `Session.quality_timeline`.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p5_clock_crossing_scale
+    pixi run python -m studio.dev.probes.p5_clock_crossing_scale
 
 `p6_corner_match_cause` also loads each recording itself. It asks why 0060's corner boundaries fail
 the spatial match far more often than 0062's. It relaxes one gate of the real
 `corners._spatial_matches` at a time, and tests GNSS scatter, the reference lap, the threshold and
 chapter seams against each other. Its verdict is `studio/docs/corner-match-0060-2026-09.md`.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_corner_match_cause
+    pixi run python -m studio.dev.probes.p6_corner_match_cause
 
 `p6_coast_places` prints the Stats page's COASTING table (`Session.coast_report`) for each
 recording and asks what its order is worth, over exactly the rows the page ranks
@@ -41,7 +41,7 @@ recording and asks what its order is worth, over exactly the rows the page ranks
 a planted positive control, and the normalized projection beside the warp. Its verdict is the
 comment above `stats.COAST_LEAD_ALPHA`: the order is claimed only where the laps separate it.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p6_coast_places
+    pixi run python -m studio.dev.probes.p6_coast_places
 
 `p7_overdrive` builds the overdriving detector F4 proposed (per corner, entry speed against the time
 in the corner, under a within-lap permutation null) and asks what it is worth: shuffled and planted
@@ -49,7 +49,7 @@ controls, a covariate cross-check, replication across halves and recordings, and
 entry and exit speed was read at a boundary matched on track. Its verdict is
 `studio/docs/refused-2026-09.md` §6.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p7_overdrive
+    pixi run python -m studio.dev.probes.p7_overdrive
 
 `p8_corner_anchor` measures a SHIPPED change rather than a channel the app does not have: it
 drives `corners.session_geometry` and the real `_spatial_matches` on both D24 recordings, prints
@@ -57,7 +57,7 @@ the fitted receiver drift, plants a translation and a wider racing line on the s
 fit separates them, and scores the result against a CURVATURE witness that a rigid translation
 cannot move. Its numbers are the evidence for M7.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p8_corner_anchor
+    pixi run python -m studio.dev.probes.p8_corner_anchor
 
 `p9_interpolated_consumers` measures, through the real accessors on both D24 recordings, what
 #331's rule (a corner time needs both its edges matched on track) does to the consumers that still
@@ -66,7 +66,7 @@ the evidence for #339, which applied the rule to coaching, the ideal lap and bra
 CSV a disclosure column; the note under `CornerModel.lap_corner_resolved` gives the measurement
 that kept coasting counting every cell.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p9_interpolated_consumers
+    pixi run python -m studio.dev.probes.p9_interpolated_consumers
 
 `p6_coast_places`, `p7_overdrive` and `p9_interpolated_consumers` skip a recording whose footage is
 missing. D24 and Sandown 09-05 are no longer on the development machine, so p6 and p7 run on two
@@ -79,7 +79,7 @@ It asks whether a session-level "better than last time" would ever be allowed, a
 change it would print is bigger than the spread inside one session. Its verdict is
 `studio/docs/refused-2026-09.md` §8.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p10_heat_to_heat
+    pixi run python -m studio.dev.probes.p10_heat_to_heat
 
 `p11_hesitation`, `p12_median_polish` and `p13_grip_regrounding` are the M5 set: the three LATER
 analytics ideas, each with a null it has to beat and a planted effect that says what its silence is
@@ -91,10 +91,10 @@ decomposition — the corner-specific half never beats a shuffled lap order), an
 `grip-regrounding-2026-09.md` (the one that passed: Grip % is not pace-blind within a corner,
 and still cannot rank corners against each other).
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p11_hesitation
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p12_median_polish
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
+    pixi run python -m studio.dev.probes._m5_cache
+    pixi run python -m studio.dev.probes.p11_hesitation
+    pixi run python -m studio.dev.probes.p12_median_polish
+    pixi run python -m studio.dev.probes.p13_grip_regrounding
 
 `p14_rpm_audio` asks whether the audio track carries the engine (M3). It checks its pitch estimator
 against a KNOWN signal first: an engine-like tone in speed-dependent wind, through an automatic gain
@@ -104,8 +104,8 @@ lock-up: the tone is proportional to road speed. `studio.gearing`, the arithmeti
 would have to agree with, reads the measured constant as sprocket pairs. Its verdict is
 `refused-2026-09.md` §11. The tone is real and wind does not drown it, but it is not an RPM.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p14_rpm_audio real
+    pixi run python -m studio.dev.probes.p14_rpm_audio synthetic
+    pixi run python -m studio.dev.probes.p14_rpm_audio real
 
 `p15_gps_gap_census` loads all four present recordings itself and asks whether any of them has a
 GPS dropout for the map's gap bridge to fill (L2, a gyro-yaw bridge). It wraps the loader's own
@@ -113,7 +113,7 @@ read, quality gate and clean stages to attribute every hole, counts the gaps the
 with the app's own `gapfill.find_gaps`, and then PLANTS gaps in memory to score today's bridge
 against the fixes it replaced. Its verdict is `studio/docs/refused-2026-09.md` §13.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p15_gps_gap_census
+    pixi run python -m studio.dev.probes.p15_gps_gap_census
 
 `p16_slow_clean_laps` loads every working-set recording itself, each Sandown 3h chapter alone and
 every recording whole, and asks what the 61–90 s laps #358 found among chapter 1's clean laps are:
@@ -122,7 +122,7 @@ from the best lap's line, stop and time under 40 km/h, then reloads with the val
 measure what each pace surface does without them. Its verdict is `studio/docs/refused-2026-09.md`
 §14.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p16_slow_clean_laps --surfaces
+    pixi run python -m studio.dev.probes.p16_slow_clean_laps --surfaces
 
 `p17_braking_room` loads the four working-set recordings and asks whether a RELATIVE braking-room
 figure can replace the absolute "brake ~N m later", which is positive at every corner. It rebuilds
@@ -130,7 +130,7 @@ the per-lap list Stats ▸ BRAKING medianizes, asserts it equal to the app's, an
 candidate to its own noise bar and to the lap outcome (do later onsets go with quicker passes?). Its
 verdict is `studio/docs/refused-2026-09.md` §16.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p17_braking_room
+    pixi run python -m studio.dev.probes.p17_braking_room
 
 `p18_corner_kernel` asks whether the corner model's curvature window should be centred, as #383
 centred the GPS-lag reference's. It swaps the kernel only inside `corners.pooled_curvature` and
@@ -139,9 +139,9 @@ geometry through the real loader (with an odd-window, a constant-speed and a no-
 and the four working-set recordings, jailed and tripwired. Its verdict is
 `studio/docs/refused-2026-09.md` §17.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel synthetic --controls
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p18_corner_kernel real
+    pixi run python -m studio.dev.probes.p18_corner_kernel symmetric
+    pixi run python -m studio.dev.probes.p18_corner_kernel synthetic --controls
+    pixi run python -m studio.dev.probes.p18_corner_kernel real
 
 `p19_truth_real` asks what would prove the four headline numbers wrong. Its `synthetic` mode holds
 a per-recording estimate of the ideal lap's noise bias (the negative covariance of adjacent

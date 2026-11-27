@@ -38,8 +38,8 @@ service's memo).
 
 Its verdict is `studio/docs/refused-2026-09.md` §16.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p17_braking_room
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p17_braking_room 0068 0064
+    pixi run python -m studio.dev.probes.p17_braking_room
+    pixi run python -m studio.dev.probes.p17_braking_room 0068 0064
 
 SAFETY, enforced rather than promised (as p15/p16 enforce it):
   * EVERY FOOTAGE FOLDER IS READ-ONLY. Paths under ~/Desktop are only opened for reading, and every

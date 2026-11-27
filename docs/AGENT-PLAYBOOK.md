@@ -54,8 +54,9 @@ or not. The measured stories behind several of them are in [ENGINEERING.md](ENGI
 - **Headless means themed.** Use `QT_QPA_PLATFORM=offscreen PACER_NO_MEDIA=1`, and call
   `theme.apply_theme` before the first widget. Without it everything renders in Qt's default light
   palette, which is a harness artefact, not a product bug.
-- **Exports depend on the machine.** CI's runner opens a ProRes VideoToolbox session but no H.264
-  one, so it runs 2 of the `videotoolbox.*` checks and skips 4; a Mac usually opens both. Pin the
+- **Exports depend on the machine.** CI's macos-15 runner opens both VideoToolbox sessions, H.264
+  and ProRes, so it runs 5 of the 6 `videotoolbox.*` checks; the hardware-relay check is reported
+  Skipped there, as its VM's concurrent decode sessions do not always hold. Pin the
   encoder in any test whose expected value depends on it, and cover both paths. Before pushing, run
   `test_export_video` once with `PACER_FFMPEG` pointing at a wrapper that hides VideoToolbox.
   Playback depends on it too: `pixi run test-ciworld` runs the real-player tests in CI's

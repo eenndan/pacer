@@ -18,8 +18,8 @@ here rather than quoted:
 (A seventh section measured the brake hint's T15 geometry gate; L7 took the hint off the Coaching
 rows and L8 retired the braking habit it read, so the gate has nothing left to gate.)
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p9_interpolated_consumers
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p9_interpolated_consumers 0060
+    pixi run python -m studio.dev.probes.p9_interpolated_consumers
+    pixi run python -m studio.dev.probes.p9_interpolated_consumers 0060
 
 SAFETY, enforced rather than promised (as p4/p6/p8 enforce it):
   * EVERY FOOTAGE FOLDER IS READ-ONLY. Paths under ~/Desktop are only ever opened for reading, and

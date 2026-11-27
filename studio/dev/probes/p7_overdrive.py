@@ -29,8 +29,8 @@ This probe builds exactly that and then asks what it is worth:
 The verdict is written up in `studio/docs/refused-2026-09.md` §6. Every number there comes from
 here.
 
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p7_overdrive
-    PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p7_overdrive 0060 0062
+    pixi run python -m studio.dev.probes.p7_overdrive
+    pixi run python -m studio.dev.probes.p7_overdrive 0060 0062
 
 SAFETY, enforced rather than promised:
   * EVERY FOOTAGE FOLDER IS READ-ONLY. Paths under ~/Desktop are only ever opened for reading, and

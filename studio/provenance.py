@@ -127,7 +127,7 @@ GATE_NOTE = (f"Fixes with a known 2D-or-worse lock (fix < {MIN_FIX}) or a known 
 def _absent(v) -> bool:
     """Is this cell's value ABSENT — in either of the two spellings that reach these tables?
 
-    `None` is how the row builders spell "this table has no such column" (`_fix_table` passes
+    `None` is how the row builders spell "this table has no such column" (`fix_table` passes
     `None` for `elapsed`/`dists` when a caller has neither). NaN is how NUMPY spells the same
     fact one column at a time, and the fix tables are built straight off numpy arrays that use
     it deliberately: `d (m)` is the lap's own odometer, which does not exist outside the lap, so

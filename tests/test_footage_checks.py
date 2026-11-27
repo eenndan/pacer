@@ -26,7 +26,7 @@ gate prints it under "The following tests did not run: … (Skipped)". This file
   * `pixi run test-fast` reports each check SKIPPED by name even with its footage PRESENT, towards
     `pixi run test-footage`, which runs them by label — and a variable the operator set still runs.
 
-Run:  QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer python tests/test_footage_checks.py
+Run:  QT_QPA_PLATFORM=offscreen python tests/test_footage_checks.py
 """
 from __future__ import annotations
 

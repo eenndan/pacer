@@ -102,6 +102,6 @@ is as strong on the anticlockwise track as on the clockwise ones.
 ## Re-running it
 
 ```
-PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes._m5_cache          # load once
-PYTHONPATH=bindings/pacer pixi run python -m studio.dev.probes.p13_grip_regrounding
+pixi run python -m studio.dev.probes._m5_cache          # load once
+pixi run python -m studio.dev.probes.p13_grip_regrounding
 ```
