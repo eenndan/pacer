@@ -24,7 +24,7 @@ WHAT THIS FILE HOLDS `studio.logsetup` TO:
   * bounded: three files of at most 512 KB each, however long or multi-byte the records are;
   * the crash dialog names the file it is writing, and names nothing when there is none.
 
-Run: QT_QPA_PLATFORM=offscreen PYTHONPATH=bindings/pacer python tests/test_session_log.py
+Run: pixi run python -m pytest tests/test_session_log.py (or under CTest, as AGENTS.md says)
 """
 import faulthandler
 import io

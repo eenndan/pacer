@@ -90,7 +90,7 @@ def _real_media(label: str) -> str:
     except (ImportError, AttributeError) as exc:
         raise _footage.FootageMissing(
             f"the pacer bindings are not importable in this run ({exc}) — this says nothing about "
-            f"{path}. Run under CTest, or with PYTHONPATH=bindings/pacer") from None
+            f"{path}. Run `pixi run build`, which deploys them into the env (no PYTHONPATH)") from None
     try:
         open_gpmf(path)
     except Exception as exc:  # noqa: BLE001 — any parser failure = "not usable"

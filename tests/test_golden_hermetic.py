@@ -278,8 +278,51 @@ def test_preflight_blames_the_environment_when_the_bindings_are_missing():
             f"the missing-bindings message accuses the recording ({guess!r}): {msg!r}. An import "
             f"problem must never present as data loss — this is the one message whose false "
             f"positive tells the owner a tool ate their footage.")
-    assert "bindings" in low and "pythonpath=bindings/pacer" in low, (
+    _names_the_fix_that_is_true_now(msg)
+
+
+def _names_the_fix_that_is_true_now(msg: str) -> None:
+    """The fix the message gives is the one that works today: build (which deploys the whole
+    bindings package into the env). `PYTHONPATH=bindings/pacer` is no longer advice: in an unbuilt
+    tree it shadows the env's working copy with a package that has no `_pacer` (tests/README.md)."""
+    low = msg.lower()
+    assert "bindings" in low and "pixi run build" in low, (
         f"the missing-bindings message must name the real cause and the fix: {msg!r}")
+    assert "pythonpath=bindings/pacer" not in low, (
+        f"the message still advises PYTHONPATH=bindings/pacer, which reds an unbuilt tree: {msg!r}")
+
+
+def test_preflight_refuses_a_planted_namespace_only_pacer():
+    """The real opener (`gpmf_opener`), not a stub, against a `pacer` that is only a PEP 420
+    namespace portion — what the repo's C++ `pacer/` directory looked like to a run without the
+    bindings: the gate still FAILS, blames the environment, never the recording, and names the fix."""
+    import importlib.machinery
+    import importlib.util
+    import tempfile
+
+    from studio.dev import golden_session_dump as dump
+
+    with tempfile.TemporaryDirectory(prefix="pacer-preflight-") as tmp:
+        os.makedirs(os.path.join(tmp, "pacer"))           # a directory, no __init__.py
+        spec = importlib.machinery.PathFinder.find_spec("pacer", [tmp])
+        assert spec is not None and spec.origin is None, spec   # a namespace package
+        planted = importlib.util.module_from_spec(spec)
+        assert not hasattr(planted, "GPMFSource")
+        path = _fake_recording(tmp)
+        saved = sys.modules.get("pacer")
+        sys.modules["pacer"] = planted
+        try:
+            msg = dump.preflight(path)
+        finally:
+            if saved is None:
+                sys.modules.pop("pacer", None)
+            else:
+                sys.modules["pacer"] = saved
+    assert msg, "a namespace-only pacer must fail the gate, not fingerprint whatever loads"
+    assert "namespace package" in msg and "environment" in msg.lower(), msg
+    for guess in _GUESSES:
+        assert guess not in msg.lower(), f"blamed the recording ({guess!r}): {msg!r}"
+    _names_the_fix_that_is_true_now(msg)
 
 
 def test_preflight_states_a_parse_failure_without_guessing_why():
