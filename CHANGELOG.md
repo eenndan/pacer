@@ -16,8 +16,8 @@ All notable changes to Pacer are documented here. The format is based on
   is offered again if the files at its path change (#727)
 - **Ideal laps un-mute one row at a time as Update writes them**, instead of all at once when the
   run ends (#727)
-- **The lap-strip card marks a ⚠ best lap**, with the lap card's own words: "⚠ GPS dropout — not
-  counted in your bests" (#729)
+- **The lap-strip card can mark a ⚠ best lap** in the lap card's words, "⚠ GPS dropout — not
+  counted in your bests"; File ▸ Export still offers the strip only with two clean laps (#729)
 - **The public pages say what each picture is**: the demo's stills are called the demo's, and each
   real-footage still names its recording and the version it was captured at (#728)
 - **The in-lap dropout rule stays in seconds**, measured and refused as a rule counted in fix
