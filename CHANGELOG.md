@@ -6,6 +6,47 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-11-27
+
+### Highlights
+
+- **File ▸ Library… ▸ Update re-measures the ideal laps an older Pacer measured**, one recording
+  at a time, only when you press it, and writes each row exactly as re-opening it would (#720)
+- **The Update touches nothing else.** The open session, Open Recent and the files beside your
+  videos are left alone; a recording not on this Mac is named and left as it is (#720)
+- **It raises no PB card and names every change instead**: a best lap or trust tag that moved,
+  a row it could not measure, and "your <track> best is now …" when a best moved (#720)
+- **A low session says where its laps lost GPS**: at the line, inside the laps, or both, on the
+  banner, DATA TRUST, the report and the burned stamp alike (#717)
+- **A ⚠ best lap carries its ⚠ on the lap card**, with "not counted in your bests", and a muted
+  ideal lap stays muted on the selected Library row (#718)
+- **The report keeps each flag on one line**, and the lap-strip card names quicker ⚠ laps of
+  each kind on a line of their own instead of one cut-short line (#721)
+
+### Added
+
+- File ▸ Library… offers "Update" when ideal laps were measured by an older Pacer: it re-measures
+  those recordings one at a time in the background, as re-opening each would, and says what changed.
+  (#720)
+
+### Fixed
+
+- The session report's Laps table keeps "gps-dropout" (and every flag) on one line. (#721)
+- The lap-strip card names quicker ⚠ laps of different kinds on a line each, with each lap's own
+  reason, instead of one "…GPS dropout or left the line (not co…" line cut short. (#721)
+- File ▸ Library…: an ideal lap measured by an older Pacer stays muted on the selected row too.
+  (#718)
+- The lap card marks a best lap that is itself a ⚠ lap (every lap flagged) with its ⚠ and "not
+  counted in your bests", as the lap table does. (#718)
+- A session made low by GPS dropouts now says where they were: at the line, inside the laps, or
+  both, instead of "missing at the line" for gaps inside the laps; the burned stamp says it too.
+  (#717)
+- DATA TRUST's Timing row reads as one sentence when the rejected share is clean but laps lost
+  fixes. (#717)
+- A dropout mark's hover no longer reads "GPS dropout — GPS dropout — …". (#717)
+- The export ghost's refusal for a lap with a short hole at its line says its time is in doubt, not
+  that its place on track is a guess. (#717)
+
 ## [0.26.0] — 2026-11-27
 
 ### Highlights
@@ -2922,7 +2963,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/eenndan/pacer/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/eenndan/pacer/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/eenndan/pacer/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/eenndan/pacer/compare/v0.23.0...v0.24.0
