@@ -84,9 +84,10 @@ are under four milliseconds, as point estimates.
   first start/finish crossing to the last, were rejected. The stationary lead-in, the out-lap and
   the in-lap time no lap, so they are left out: a receiver still acquiring on the grid does not
   downgrade the laps it then timed. A recording with fewer than two crossings is judged over all
-  its driving, and so is one with a rejected fix within 14 fixes (1.4 s at 10 Hz) of its first or
-  last crossing, twice the 7 fixes through which the 13-fix position smoother can still move that
-  crossing (measured: up to +282 ms at 0.4 s, exact from 0.65 s). On a synthetic recording with a
+  its driving, and so is one with a rejected fix within 8 fixes (0.8 s at 10 Hz) of its first or
+  last crossing: the 7 fixes through which the 13-fix position smoother can still move that
+  crossing from the first fix it keeps, plus that fix (measured: up to +308 ms with the last
+  rejected fix 0.35 s out, exact from 0.8 s). On a synthetic recording with a
   2D fix for its first 164 s (20% of its moving fixes) all 11 timed laps equal a clean control's to
   the millisecond; the three laps with no fix at their start are lost, and the status bar names the
   driving that was left out.
@@ -161,20 +162,26 @@ the dropouts don't sit where the error would have to be for fusion to help. (Wha
 *does* corrupt is the lap *distance* on the map, which Pacer already reconstructs with a gap-aware
 speed integral.)
 
-**A missing fix *near* the line is another matter, even a single one.** The load-time position
-smoother averages 13 fixes, not 1.3 s, so a fix missing inside its window — one the quality gate
-rejected leaves a 0.2 s hole, far under the 0.35 s an interior dropout needs — shifts the averaged
-position's instant by up to ~46 ms, and the crossing moves with it; a hole of over a second ending
-just before the line leaves the next fixes averaged from one side only. On the synthetic recording
-in `tests/test_synth_gopro.py`, rejecting 5 % of its fixes at random moved 13 of its 14 laps by up
-to 49 ms, faster as often as slower, and a 1.5 s hole ending 0.5 s before a crossing moved the next
-lap by 125 ms, and a recording whose fixes start or stop 0.4 s from a crossing moved that lap by
-over a quarter of a second. So a lap with a missing fix within the smoother's reach of its start
-or finish crossing (7 fixes; the recording's first and last fix count as the edge of a gap) wears
-the GPS-dropout ⚠ and is kept out of the bests, and every other lap is timed to the bit as before.
-A receiver that drops scattered fixes leaves most laps ⚠, and the few clean ones are no fair best:
-when more than half the valid laps wear the ⚠, the session is judged low GPS quality, says why, and
-claims no PB.
+**A missing fix *near* the line is another matter.** The load-time position smoother averages 13
+fixes, and it used to count fixes, not seconds: a fix missing inside its window — one the quality
+gate rejected leaves a 0.2 s hole, far under the 0.35 s an interior dropout needs — shifted the
+averaged position's instant by up to ~46 ms, and the crossing moved with it; next to a hole of over
+a second it averaged from one side only. Now a fix whose window holds a hole takes the value of a
+straight line fitted through the fixes within ±0.65 s of it, read at its own time, and every other
+fix is smoothed exactly as before, so a recording with no missing fix is timed to the bit as it was.
+On a synthetic matrix (10 laps × 5 seeds, at 10 and 18 Hz, against the generator's true crossings),
+rejecting 1–10 % of the fixes at random used to move laps by up to 84 ms and now moves them by at
+most 4 ms; a hole of up to 1.5 s near a crossing used to move the lap by up to 305 ms, and now by at
+most 5 ms unless it sits right at the line. Removing that bias does not bring every single pass
+closer to the truth — one pass's own GPS noise can dominate, and one synthetic corner pass moved
+from 18 to 37 ms off when its bias went — so the evidence for the fit is that matrix, not any
+one lap. What the fit cannot close still wears the GPS-dropout ⚠
+and is kept out of the bests: two or more fixes missing in a row within 3 fixes of the start or
+finish crossing (such laps read up to 21 ms off), and a recording whose fixes start or stop within
+7 fixes of a crossing (up to a third of a second). At 1 / 2 / 5 / 10 % rejected at random that is
+0 / 0 / 1 / 27 % of laps, most of the 27 % gaps over 0.35 s inside the lap; it was 37 / 50 / 78 /
+99 %. When more than half the valid laps wear the ⚠, the session is judged low GPS quality, says
+why, and claims no PB.
 
 **3. Sub-tick "refine the millisecond at the line" tricks buy nothing at 10 Hz.** Phone lap-timers
 that run on 1 Hz GPS use IMU acceleration to interpolate the exact instant the car crossed the line,

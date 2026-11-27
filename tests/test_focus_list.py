@@ -760,11 +760,15 @@ def test_a_window_with_one_edge_on_a_boundary_is_timed_on_every_clean_lap():
 
 
 # main (f80f9a4)'s samples on the demo's windows measured on DEMO_SEED + 6, which holds all three
-# kinds: C1/C6 neither edge on a boundary, C2/C4 both, C3/C5/C7 one (None on main).
-_MAIN_DEMO_ON_S6 = {1: (3.034518341222463, 0.029242716256802748),
-                    2: (2.6650932584884295, 0.045809000825011825),
-                    4: (3.0765045337356263, 0.020535470394976052),
-                    6: (2.8190525979986276, 0.0421673931264408)}
+# kinds: C1/C6 neither edge on a boundary, C2/C4 both, C3/C5/C7 one (None on main). Re-measured
+# under the time-aware smoother as the recording's two cleaner-removed teleports are re-smoothed
+# (one sits in lap 11's C2 pass, which moved -19.5 ms, the other in lap 5's C6 pass, +6.2 ms): C1's
+# median 3.034518 -> 3.034354 s, C2's IQR 0.045809 -> 0.048092 s, C4's IQR 0.020535 -> 0.020727 s,
+# C6's median 2.819053 -> 2.823592 s.
+_MAIN_DEMO_ON_S6 = {1: (3.034354447930373, 0.029242716256802748),
+                    2: (2.6650932584884295, 0.04809191566101889),
+                    4: (3.0765045337356263, 0.020727479885896294),
+                    6: (2.8235920321488805, 0.0421673931264408)}
 
 
 def test_windows_with_both_or_neither_edge_on_a_boundary_read_what_they_read_before():

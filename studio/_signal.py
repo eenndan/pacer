@@ -36,25 +36,35 @@ SMOOTH_GAP_S = 1.0  # s — a jump larger than ~10x the 10 Hz period starts a ne
 # far under SMOOTH_GAP_S and the 0.35 s dropout ⚠) and every window that spans the hole reaches one
 # fix further on one side: its time centre moves up to 6/13 of a period (~46 ms) off its own fix's.
 # Within reach of a run's EDGE (a gap over SMOOTH_GAP_S) the window is all one side, up to 0.3 s off.
-# The crossing moves with them. MEASURED through the real loader on the synthetic GoPro
-# (tests/test_synth_gopro.py, 14 laps): 5 % of fixes rejected at random moved 13 laps by up to 49 ms
-# off their clean-trace time, as often FAST as slow; a 1.5 s gap ending 0.5 s before a crossing moved
-# the next lap +125 ms. Neither raised the ⚠. So a lap whose start or finish crossing has a missing
-# fix within SMOOTH_REACH_FIXES carries the GPS-dropout ⚠ and leaves the bests
-# (`Session.lap_dropout_spans`); every other lap is timed exactly as on the clean trace. The price,
-# over a 10-lap synthetic matrix (5 seeds): 1 / 2 / 5 / 10 % of fixes rejected at random puts the ⚠
-# on 18 / 42 / 80 / 100 % of laps, and past half of them the whole session reads low GPS quality
-# (`data_quality.LINE_DROPOUT_MAJORITY`). The trace's own first and last fix are run edges too
-# (`Session._missing_fix_steps`). Re-centring the window in time instead keeps those laps within
-# 6 ms of their clean time at native noise, and was measured too: it also moves every position
-# beside ANY missing fix in a trace — 25,665 leaves of the synthetic golden, which carries two
-# cleaner-removed teleports — so it is not what this does.
+# The crossing moved with them: on a 10-lap synthetic matrix (5 seeds, 10 and 18 Hz, against the
+# generator's true crossings) a lap read up to 84 ms off its clean-trace time with 1-10 % of fixes
+# rejected at random, and up to 305 ms beside a hole near its line. So the load-time smoother is
+# TIME-AWARE (`_smooth_timed`): a fix whose window holds a hole, or is cut by an interior run edge,
+# takes the value of a straight line fitted through the fixes within half a window of it IN TIME,
+# read at its own time; every other fix keeps the boxcar's value to the bit, so a recording with no
+# missing fix loads exactly as before (held by tests/test_load_internals.py). Over the same matrix
+# that keeps every lap within 4.1 ms of its clean-trace time at 1-10 % rejected, and beside a hole
+# of up to 1.5 s within 4.5 ms unless the hole is AT the line (below), at native noise.
 # A step has a fix missing inside it when it is nearer two median fix periods than one: halfway, so
 # a step's clock jitter never reads as a hole and one missing fix always does.
 MISSING_FIX_PERIODS = 1.5
-# How far a crossing feels a missing fix: it is interpolated between two fixes, and each is the mean
-# of SMOOTH_WINDOW // 2 fixes either side of it — so a hole up to one more period away is inside.
+# How far a crossing feels the trace's own first or last fix: it is interpolated between two fixes,
+# and each is the mean of SMOOTH_WINDOW // 2 fixes either side of it — so an end up to one more
+# period away is inside. The trace's two ends keep the boxcar's one-sided average (the line fit has
+# nothing on their far side to fit), so a lap with a crossing that close wears the GPS-dropout ⚠
+# (`Session.lap_dropout_kinds`): measured up to +284 ms at 0.35 s, exact from 0.8 s.
 SMOOTH_REACH_FIXES = SMOOTH_WINDOW // 2 + 1
+# WHAT THE LINE FIT CANNOT CLOSE: a hole AT the line. With two or more fixes missing in a row (a step
+# of LINE_HOLE_PERIODS median periods: halfway between two and three, as MISSING_FIX_PERIODS is
+# between one and two) within LINE_HOLE_REACH_FIXES periods of a crossing, the fixes the crossing is
+# interpolated between are fitted from one side, and their noise grows: on the matrix such laps
+# read up to 21 ms off at native noise, 48 ms at 3x and 111 ms at 6x. That lap wears the ⚠ too.
+# Every other lap with any hole stays in the bests, within 4.5 ms of its clean time at native noise
+# (14.5 ms at 3x, 28.2 ms at 6x: the fit's own noise), and the ⚠ costs 0 / 0 / 1 / 27 % of laps
+# at 1 / 2 / 5 / 10 % rejected at random (it was 37 / 50 / 78 / 99 %) — 15 points of the 27 are
+# interior gaps over 0.35 s, which wore it before anyway.
+LINE_HOLE_PERIODS = 2.5
+LINE_HOLE_REACH_FIXES = 3
 
 # --- GPS quality gating (uses the GPS9 DOP / fix fields exposed by the C++ core) ---
 MIN_FIX = 3  # GPS9 fix: 0=none, 2=2D, 3=3D. Require a 3D lock when the field is present.
@@ -437,6 +447,48 @@ def _smooth_segments(a, seg_bounds, w: int = SMOOTH_WINDOW):
     for lo, hi in seg_bounds:
         if hi - lo >= 2:
             out[lo:hi] = _smooth(a[lo:hi], w)
+    return out
+
+
+def _smooth_timed(a, times, seg_bounds, w: int = SMOOTH_WINDOW):
+    """`_smooth_segments`, except that a smoothed value sits at its OWN fix's time whatever the
+    spacing of the fixes around it (see SMOOTH_WINDOW's block). Wherever a fix's SMOOTH_WINDOW
+    window is complete and holds no missing fix (no step of MISSING_FIX_PERIODS median periods or
+    more) it is the boxcar's own value, computed by the very same call; only the fixes whose window
+    holds a hole, or is cut by the edge of an INTERIOR run (a gap over SMOOTH_GAP_S), are
+    recomputed, as a straight line fitted through the fixes within half a window, in TIME, of the
+    fix and read at its time. On evenly spaced fixes that line's value IS the boxcar mean (a
+    symmetric window's mean time is the fix's own), so the two agree where they meet; on uneven
+    ones it stays on the fix's instant instead of the window's mean time. The trace's own first and
+    last fixes keep the boxcar's one-sided average: they are where the GPS-dropout ⚠ still looks
+    (`Session.lap_dropout_kinds`)."""
+    a = np.asarray(a, float)
+    out = _smooth_segments(a, seg_bounds, w)
+    t = np.asarray(times, float)
+    if w < 2 or len(t) < 2:
+        return out
+    dt = np.diff(t)
+    period = float(np.median(dt))
+    if period <= 0:
+        return out
+    h = w // 2
+    reach = (h + 0.5) * period            # half a window in time, with half a period for jitter
+    holes = np.concatenate([[0], np.cumsum(dt >= MISSING_FIX_PERIODS * period)])
+    n = len(t)
+    for lo, hi in seg_bounds:
+        if hi - lo < w:                   # `_smooth` leaves a run shorter than the window raw
+            continue
+        idx = np.arange(lo, hi)
+        a_lo, a_hi = np.maximum(idx - h, lo), np.minimum(idx + h, hi - 1)
+        cut = ((idx - h < lo) & (lo > 0)) | ((idx + h > hi - 1) & (hi < n))
+        for i in idx[cut | (holes[a_hi] > holes[a_lo])]:
+            j = slice(a_lo[i - lo], a_hi[i - lo] + 1)
+            x = t[j] - t[i]
+            keep = np.abs(x) <= reach
+            x, y = x[keep], a[j][keep]
+            xm, ym = x.mean(), y.mean()
+            vx = ((x - xm) ** 2).sum()
+            out[i] = ym - xm * ((x - xm) * (y - ym)).sum() / vx if vx > 0 else ym
     return out
 
 

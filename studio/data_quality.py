@@ -78,22 +78,25 @@ DROPPED_FIX_CONCERN_FRAC = 0.08
 
 
 # The guard band, in fixes, beyond either edge of the timed laps inside which a rejected fix keeps
-# the WHOLE-DRIVE verdict (`TimingQuality.over_laps`). Load-time smoothing (`_signal._smooth`, a
-# SMOOTH_WINDOW-fix boxcar) averages one-sidedly at the edge of a run, so a rejected stretch that
-# ends just before the first crossing, or starts just after the last, still moves that crossing:
-# measured on the demo circuit (review of #709), the first timed lap read +282 ms at 0.35-0.40 s
-# of margin, +180 ms at 0.45-0.50 s and +80 ms at 0.55-0.60 s, and was exact from 0.65 s; the
-# last read +216 ms at 0.40-0.45 s and +12 ms at 0.60 s. The smoother reaches SMOOTH_WINDOW // 2
-# + 1 fixes (`_signal.SMOOTH_REACH_FIXES`: 0.7 s at 10 Hz, past every measured error); the band is
-# twice that, 1.4 s at 10 Hz, and moves with the window.
-EDGE_GUARD_FIXES = 2 * SMOOTH_REACH_FIXES
+# the WHOLE-DRIVE verdict (`TimingQuality.over_laps`). Load-time smoothing (`_signal._smooth_timed`)
+# times a crossing beside an interior hole within a few ms, but the trace's own first and last fix
+# keep the boxcar's one-sided average, so rejected fixes from the start of the recording up to just
+# before the first crossing (or from just after the last to the end) still move it. Measured on the
+# synthetic matrix (10 laps, 5 seeds, 10 and 18 Hz, against the generator's true crossings): with
+# the last rejected fix 0.35-0.75 s before the crossing that lap moved up to +308 ms (13-34 ms at
+# 0.65-0.75 s), and from 0.8 s it was exact. The smoother reaches SMOOTH_REACH_FIXES fixes from the
+# first fix it keeps, and that fix is one past the last rejected one: the band is that, one fix
+# more (0.8 s at 10 Hz), and moves with the window. It was twice the reach (1.4 s) while every
+# hole moved the crossing; that re-judged recordings over the whole drive whose laps were exact
+# (a 2D fix until 1.24 s before the first crossing).
+EDGE_GUARD_FIXES = SMOOTH_REACH_FIXES + 1
 
-# MOST LAPS ⚠ IS A LOW-QUALITY RECORDING, whatever the rejected-fix share says. A fix missing
-# within the smoother's reach of a crossing moves that lap and puts the GPS-dropout ⚠ on it
-# (`Session.lap_dropout_spans`), and scattered rejections do that to most laps long before the
-# share reaches DROPPED_FIX_CONCERN_FRAC: on the synthetic GoPro, 5 % of fixes rejected at random
-# left 13 of 14 laps ⚠, and the "best" was then the one slow lap that happened to be clean, judged
-# for a PB against the library. So when STRICTLY MORE than this share of the valid laps wear the
+# MOST LAPS ⚠ IS A LOW-QUALITY RECORDING, whatever the rejected-fix share says. A hole at a crossing
+# that the smoother cannot close (`_signal.LINE_HOLE_PERIODS`) puts the GPS-dropout ⚠ on that lap
+# (`Session.lap_dropout_spans`), and a receiver that loses fixes in runs can do that to most laps
+# before the share reaches DROPPED_FIX_CONCERN_FRAC; then the "best" is whichever lap happened to
+# be clean, judged for a PB against the library. (Scattered single rejections no longer do it: at
+# 5 % rejected at random 1 % of laps wear the ⚠, at 10 % 27 %.) So when STRICTLY MORE than this share of the valid laps wear the
 # dropout ⚠ (chapter-gap laps do not vote), the verdict is `low_gps_quality` and the degraded path
 # takes over: no PB, no focus list or debrief, the Library row flagged, the banner up.
 LINE_DROPOUT_MAJORITY = 0.5

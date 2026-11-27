@@ -187,9 +187,10 @@ def test_the_share_is_judged_over_the_timed_laps():
 def test_rejections_at_the_edge_of_the_laps_keep_the_whole_drive_verdict():
     """A rejected fix within the guard band beyond either edge reaches that crossing through the
     smoother, so the laps are not clear of it and the whole drive decides; just past the band the
-    laps decide. The band is the smoother's own reach, doubled, so a change of window moves it."""
+    laps decide. The band is the smoother's reach from the first fix it keeps, plus that fix, so a
+    change of window moves it."""
     from studio._signal import SMOOTH_WINDOW
-    assert dq.EDGE_GUARD_FIXES == 2 * (SMOOTH_WINDOW // 2 + 1)
+    assert dq.EDGE_GUARD_FIXES == SMOOTH_WINDOW // 2 + 2
     band = dq.EDGE_GUARD_FIXES * 0.1
     for rejected in (lambda t: t < 30.0 - 0.5, lambda t: t > 90.0 + 0.4,
                      lambda t: t < 30.0 - band + 0.05):
@@ -198,6 +199,10 @@ def test_rejections_at_the_edge_of_the_laps_keep_the_whole_drive_verdict():
         assert q.untrusted().endswith("% of fixes rejected)"), q.untrusted()
     clear = TimingQuality(_census=_census(lambda t: t < 30.0 - band - 0.15)).over_laps((30.0, 90.0))
     assert clear.in_laps and not clear.degraded, clear
+    # Discovery's case (wave 22): no 3D lock until 1.24 s before the first crossing, laps exact. The
+    # band twice the reach (1.4 s) re-judged it over the whole drive; it is clear of the smoother.
+    lock = TimingQuality(_census=_census(lambda t: t < 30.0 - 1.24)).over_laps((30.0, 90.0))
+    assert lock.in_laps and not lock.degraded, lock
     print("test_rejections_at_the_edge_of_the_laps_keep_the_whole_drive_verdict OK")
 
 

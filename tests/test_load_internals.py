@@ -11,9 +11,16 @@ import os
 import sys
 from types import SimpleNamespace
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from studio._signal import SMOOTH_GAP_S, _gap_segments, _smooth_segments  # noqa: E402
+from studio._signal import (  # noqa: E402
+    SMOOTH_GAP_S,
+    _gap_segments,
+    _smooth_segments,
+    _smooth_timed,
+)
 from studio.load import _used_gps9_trueclock  # noqa: E402
 
 
@@ -82,8 +89,76 @@ def test_smooth_segments_never_averages_across_a_gap():
     print("ok _smooth_segments: no cross-gap averaging; sub-window run passthrough")
 
 
+# ----------------------------------------- the time-aware smoother (studio._signal._smooth_timed)
+def _frozen_boxcar_segments(a, seg_bounds, w):
+    """A FROZEN COPY of the load-time smoother as it stood before `_smooth_timed` (v0.25.0:
+    `_smooth_segments` over `_boxcar_core`), kept here so the bit-identity below is checked against
+    the old operations themselves, not against whatever `_smooth_segments` becomes."""
+    a = np.asarray(a, float)
+    out = a.copy()
+    for lo, hi in seg_bounds:
+        seg = a[lo:hi]
+        if hi - lo >= 2 and w >= 2 and len(seg) >= w:
+            kernel = np.ones(w)
+            out[lo:hi] = (np.convolve(seg, kernel, "same")
+                          / np.convolve(np.ones(len(seg)), kernel, "same"))
+    return out
+
+
+def _gps9_like(n, period, start=100.0):
+    """`n` fix times on a GPS9-like clock: whole milliseconds, `period` apart (18 Hz rounds to
+    55/56 ms steps), as `load._gps9_times` builds them."""
+    return start + np.round(1000.0 * period * np.arange(n)) / 1000.0 
+
+
+def test_time_aware_smoother_is_the_boxcar_bit_for_bit_on_a_regular_trace():
+    """THE HARD CONSTRAINT of the time-aware smoother: on a trace with no missing fix and no
+    interior run edge, every output is the old boxcar's, to the byte — at 10 Hz and at 18 Hz (its
+    55/56 ms steps are jitter, not holes), through a chapter-sized run break too (two runs whose
+    edges are the trace's own ends and the seam: the seam's fixes take the new path, every other
+    one the old). A real recording with no missing fix therefore loads exactly as before."""
+    rng = np.random.default_rng(7)
+    for period in (0.1, 1.0 / 18.0):
+        t = _gps9_like(3000, period)
+        for a in (47.0 + 1e-4 * np.cumsum(rng.normal(0, 1, len(t))), rng.normal(0, 5, len(t))):
+            segs = _gap_segments(t)
+            assert segs == [(0, len(t))]
+            assert _smooth_timed(a, t, segs).tobytes() == _frozen_boxcar_segments(a, segs, 13).tobytes()
+    t = np.concatenate([_gps9_like(400, 0.1), _gps9_like(400, 0.1, start=150.0)])
+    a = rng.normal(0, 5, len(t))
+    segs = _gap_segments(t)
+    new, old = _smooth_timed(a, t, segs), _frozen_boxcar_segments(a, segs, 13)
+    same = new == old
+    assert same[:394].all() and same[406:].all() and not same[394:406].all(), np.flatnonzero(~same)
+    print("ok _smooth_timed: the boxcar to the byte wherever the window is whole")
+
+
+def test_time_aware_smoother_keeps_each_value_at_its_own_fix_time():
+    """THE DEFECT the old boxcar had (`_signal.SMOOTH_WINDOW`'s block): it counts fixes, so with a
+    fix missing in its window the averaged position belongs to the window's mean TIME, not its own
+    fix's — and a lap is timed where that position crosses the line. On a kart moving at constant
+    speed (position linear in time) every smoothed value must sit exactly on the line at its own
+    time, beside one missing fix, a 0.5 s hole and a 1.6 s gap that splits the run alike. The old
+    boxcar is off by up to 6/13 of a period beside the single fix, and by most of a window at the
+    run edge."""
+    t = _gps9_like(1000, 0.1)
+    t = np.delete(t, [200] + list(range(500, 505)) + list(range(800, 816)))
+    x = 3.0 + 27.0 * (t - t[0])                      # 27 m/s, metres
+    segs = _gap_segments(t)
+    assert len(segs) == 2, segs
+    inner = slice(6, len(t) - 6)                     # the trace's own ends stay one-sided (⚠)
+    new = _smooth_timed(x, t, segs)[inner] - x[inner]
+    old = _frozen_boxcar_segments(x, segs, 13)[inner] - x[inner]
+    assert np.abs(new).max() < 1e-9, np.abs(new).max()
+    assert np.abs(old).max() > 27.0 * 0.04, np.abs(old).max()   # > 40 ms worth of travel
+    print(f"ok _smooth_timed: at its own time beside holes (old boxcar off by "
+          f"{np.abs(old).max() / 27.0 * 1e3:.0f} ms of travel)")
+
+
 if __name__ == "__main__":
     test_used_gps9_trueclock_decision()
     test_gap_segments_splits_at_time_discontinuities()
     test_smooth_segments_never_averages_across_a_gap()
-    print("\n3 load-internals tests passed")
+    test_time_aware_smoother_is_the_boxcar_bit_for_bit_on_a_regular_trace()
+    test_time_aware_smoother_keeps_each_value_at_its_own_fix_time()
+    print("\n5 load-internals tests passed")

@@ -309,7 +309,7 @@ def test_the_corners_note_reconciles_the_answers_in_the_reports_words():
                             "best lap: its headline totals 0.43 s over 3 corners"), coach
     gap = coaching.ideal_gap_s(s)
     assert f"{coach} {coaching.ideal_gap_sentence(gap)} {coaching.BASELINES_SENTENCE}" in first
-    assert "Your ideal lap is 0.32 s under your best." in first, first
+    assert "Your ideal lap is 0.30 s under your best." in first, first
     assert stats_service.corner_mark_rule(hover=False) in notes
     assert "the COACHING section's list of what to work on" in notes[1], notes[1]
     assert "Coaching tab" not in text, re.findall(r"[^.]*Coaching tab[^.]*", text)
@@ -420,10 +420,10 @@ def test_coachings_total_and_the_ideal_gap_are_told_apart_on_the_first_screen():
     head = _coaching_strings(_section(root, "COACHING"))["lead"][0]
     ideal = dict((tr.findtext("th"), tr.findtext("td"))
                  for tr in _section(root, "IDEAL LAP").iter("tr"))[export_data.IDEAL_GAP_ROW]
-    assert "0.43 s across your top 3 corners" in head and ideal == "0.32 s", (head, ideal)
+    assert "0.43 s across your top 3 corners" in head and ideal == "0.30 s", (head, ideal)
     assert _pointer(s) == (
         "0.43 s is how far your typical pass through these 3 corners sits from your best lap's — "
-        "it is not time under your best lap. Time under your best lap is the ideal lap's 0.32 s "
+        "it is not time under your best lap. Time under your best lap is the ideal lap's 0.30 s "
         "(IDEAL LAP below); the note under CORNERS ties the two together."), _pointer(s)
     # Counted right for one, two, three corners; the CORNERS clause only when that note is printed.
     one = coaching.totals_pointer(0.36, 1, "0.32 s", corners_note=False)
