@@ -1,7 +1,8 @@
 """The first-open debrief (board review R10 / PS-B1): a recording opened for the first time lands on
 the Coaching page full-window — its personal-best standing, one ranked total with its top corners
 and their Jumps, and those corners already on the focus list: an explicit default, each one click
-from gone. Leaving it (Esc) is the grid the driver left, on the tab he left it on.
+from gone. Leaving it (Esc) is the grid the driver left, on the Coaching page he was reading
+(his remembered tab untouched).
 
 WHY. The loop the app is built around — load, see where the time went, pick one to three corners,
 next session, did they move? — had never run for its one real user: no focus.json after two race
@@ -503,13 +504,14 @@ def test_the_journey_on_the_real_window():
             assert edit.startswith("INFO focus list for GX9001"), edit
             assert f"removed C{gone} by hand -> {_corners(short[:-1])}" in edit, edit
 
-            # Esc: the grid he left, on the tab he left it on; the estimate is the page's again.
+            # Esc: the grid he left, on the Coaching page he was reading (the debrief ranked
+            # corners: wave 27), his remembered tab untouched; the estimate is the page's again.
             saved = view._saved_splitter_sizes
             assert saved[0] == grid[0], ("Esc would not return to his grid", saved)
             QTest.keyClick(win, Qt.Key_Escape)
             _settle(0.2)
             assert not view.is_debrief() and view._maximized_panel is None
-            assert view.tab_bar.currentIndex() == 1 and prefs.lap_panel_tab() == 1
+            assert view.tab_bar.currentIndex() == 3 and prefs.lap_panel_tab() == 1
             assert [view._main_splitter.sizes(), view._left_splitter.sizes(),
                     view._right_splitter.sizes()] == list(saved)
 
@@ -557,7 +559,7 @@ def test_the_journey_on_the_real_window():
             _APP.processEvents()
             for k, fn in boxes.items():
                 setattr(QMessageBox, k, fn)
-    print(f"ok journey: {short} promoted, C{gone} dropped in one click, Esc to Corners, the "
+    print(f"ok journey: {short} promoted, C{gone} dropped in one click, Esc to Coaching, the "
           f"second open filled the slot with C{gone} and reached a verdict in one click")
 
 
@@ -869,7 +871,7 @@ def test_esc_returns_a_driver_who_never_dragged_a_splitter_to_the_default_grid()
             view = win.view
             after_esc = [s.sizes() for s in (view._main_splitter, view._left_splitter,
                                              view._right_splitter)]
-            assert view.tab_bar.currentIndex() == 0, "Laps is the default remembered tab"
+            assert view.tab_bar.currentIndex() == 3, "Esc leaves a ranked debrief on Coaching"
             _open(win, a)
             view = win.view
             assert not view.is_debrief()

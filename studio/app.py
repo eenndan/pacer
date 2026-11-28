@@ -79,7 +79,7 @@ from .command_palette import CommandPalette
 # ExportChoice is RE-EXPORTED, not used here: it moved to the controller with the picker that
 # returns it, and `studio.app.ExportChoice` is the name the export tests already reach for.
 from .export_controller import ExportChoice, ExportController  # noqa: F401
-from .help_dialog import AboutDialog, PrivacyDialog, ShortcutsDialog
+from .help_dialog import COLOURBLIND_MENU_ITEM, AboutDialog, PrivacyDialog, ShortcutsDialog
 from .lap_table import SLOW_FINDER_NONE
 from .library_controller import (
     LibraryController,
@@ -2714,7 +2714,7 @@ class StudioWindow(QMainWindow):
         # View ▸ Colour-blind-safe cues: swap the red/green delta + best colours for a blue/orange
         # deuteranopia-safe pair across the delta readout, lap table and rainbow map. Off by default
         # (no change for existing users); the choice persists across relaunches (prefs).
-        self._colorblind_action = view_menu.addAction("Colour-blind-safe cues")
+        self._colorblind_action = view_menu.addAction(COLOURBLIND_MENU_ITEM)
         self._colorblind_action.setCheckable(True)
         self._colorblind_action.setChecked(self._colorblind)
         self._colorblind_action.setToolTip(
