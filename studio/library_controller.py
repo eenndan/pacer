@@ -354,6 +354,12 @@ class LibraryController:
         # (`library.pb_standing_for`), set once the row is written.
         self.verdict = library.Verdict.EXCLUDED
         self.pb_standing: dict | None = None
+        # Whether that standing was left for the session notice to say (`leave_standing`): no
+        # debrief and no card stated it. Reset on every call.
+        self.standing_unsaid = False
+        # Whether that standing was withheld because the best lap is not counted in the bests
+        # (`_pb_decision`, review F1). Reset on every call.
+        self.best_withheld = False
         # The library row the last `update_library`'s NEW personal best beat (`library.previous_pb`)
         # — what "Compare with your previous PB" loads as the reference (board review PS-B4). None
         # unless that load celebrated a beat. Reset on every call.
@@ -370,6 +376,8 @@ class LibraryController:
     # them readable on a controller built without __init__ (a `__new__` fixture) as "nothing
     # decided", which is what `getattr(..., False)` read before.
     verdict: library.Verdict = library.Verdict.EXCLUDED
+    standing_unsaid = False
+    best_withheld = False
 
     @property
     def opened_new(self) -> bool:
@@ -477,6 +485,7 @@ class LibraryController:
         decided (the lead says so instead: `debrief_pb_line`), and its focus list lives in memory
         (`_save_focus`)."""
         self.verdict, self.pb_standing, self.previous_pb = library.Verdict.EXCLUDED, None, None
+        self.standing_unsaid = self.best_withheld = False
         self.demo_preview = self._is_demo(paths)
         if self.demo_preview:
             self.verdict = library.first_open_verdict(
@@ -552,6 +561,14 @@ class LibraryController:
         # (`library.other_way`, cool/pb-per-direction).
         when = {"date": entry.get("date"), "start_ms": entry.get("start_ms"),
                 "rotation": entry.get("rotation")}
+        # A BEST LAP NOT COUNTED IN THE BESTS CLAIMS NOTHING (review F1). With every valid lap
+        # flagged the best falls back to a ⚠ dropout lap (`bests.best_candidate_ids`), and its row
+        # is stored `dropout: true` — out of the PB set (`library.is_trustworthy`). Compared anyway,
+        # it read "New personal best! … 0.45 s faster than your previous best". So no moment and no
+        # standing; the notice says the lap card's own words for that lap (`standing_notice`).
+        self.best_withheld = self._best_not_counted(entry)
+        if self.best_withheld:
+            return None, None
         trust = (self.win.session.timing_verified, index, entry.get("track"), entry.get("best"))
         degraded = self.win.session.timing_quality.degraded
         moment = library.pb_moment_for(*trust, degraded=degraded, fingerprint_key=key, **when)
@@ -559,6 +576,17 @@ class LibraryController:
         if (moment or {}).get("kind") == "beat":
             self.previous_pb = library.previous_pb(index, entry.get("track"), key, **when)
         return moment, standing
+
+    def _best_not_counted(self, entry: dict) -> bool:
+        """Whether this session's best lap is kept out of the bests: its row's ⚠ flag (a dropout
+        best, the axis `library.is_trustworthy` reads beyond the two timing gates), or the lap in
+        the session's ⚠ set (`data_quality.not_counted_ids`) — the test `standing_notice` uses."""
+        if bool(entry.get("dropout")):
+            return True
+        session = self.win.session
+        ask = getattr(session, "best_lap_id", None)
+        best_id = ask() if callable(ask) else None
+        return best_id is not None and best_id in data_quality.not_counted_ids(session)
 
     def _land_deferred_verdict(self, paths: list[str]) -> None:
         """The first-open verdict `update_library` deferred for an untrusted start line, decided
@@ -572,12 +600,15 @@ class LibraryController:
         `_card_owed` told a load's shown card from a retry's withheld one; with no card at the
         load there is nothing left to tell apart.)"""
         moment = self.update_library(paths)
-        self.win._apply_session_notice()
         if self.verdict is library.Verdict.WRITE_FAILED:
+            self.win._apply_session_notice()
             self.update_focus_list()
             return
-        if not self.win._land_on_debrief() and moment is not None:
+        landed = self.win._land_on_debrief()
+        if not landed and moment is not None:
             self.show_pb_moment(moment)
+        self.leave_standing(said=landed or moment is not None)
+        self.win._apply_session_notice()
         self.update_focus_list()
 
     def _land_named_verdict(self, entry: dict) -> None:
@@ -604,6 +635,8 @@ class LibraryController:
                 saved=not self.demo_preview)
             if not landed and moment is not None:
                 self.show_pb_moment(moment)
+            self.leave_standing(said=landed or moment is not None)
+            self.win._apply_session_notice()
         except Exception:  # noqa: BLE001 — a landing must never break the gesture it ends
             _log.warning("named first-open verdict not shown", exc_info=True)
 
@@ -616,6 +649,43 @@ class LibraryController:
         if self.pb_standing:
             return library.pb_standing_text(self.pb_standing, fmt_time)
         return NAME_WAIT_LINE if self.waiting_for_name else None
+
+    def leave_standing(self, said: bool) -> None:
+        """Record whether this first open's PB standing was STATED by its landing — the debrief's
+        lead or the celebration card (`said`) — and so whether the session notice says it instead
+        (`standing_notice`). Called once the landing is decided, by the load's tail and by the two
+        landings decided later (`_land_deferred_verdict`, `_land_named_verdict`)."""
+        self.standing_unsaid = bool(self.pb_standing) and not said
+
+    def standing_notice(self) -> str | None:
+        """The session notice's PB clause (`library.pb_standing_notice`), or None: only for a
+        standing no debrief and no card stated (`leave_standing`), so it is never said twice and
+        is never the celebration. The standing itself carries every trust rule the card and the
+        debrief obey — none on part of a recording, an untrusted line, estimated timing or a
+        re-open (`library.pb_standing_for`). Two more, because this line is re-decided on every
+        timing edit while the standing was decided once, at the load:
+
+          * the best lap it quotes is still the session's best — a start-line drag since re-times
+            every lap, and a sentence about the old number would be a claim about no lap on screen
+            (the card's mark keeps the same rule, `share_card.pb_mark`);
+          * that best lap is not a ⚠ lap kept out of the bests (`data_quality.not_counted_ids`):
+            when every valid lap is flagged the best falls back to a lap whose time is in doubt
+            (`bests.best_candidate_ids`), and that lap stands against nothing."""
+        standing = self.pb_standing
+        session = self.win.session
+        if standing is None and self.best_withheld and self.opened_new:
+            # No standing because the best lap is a ⚠ lap: the lap card's own words for it, so
+            # the first open is not silent about why (`share_card.best_warning`'s line).
+            best_id = session.best_lap_id()
+            return data_quality.not_counted_line(session, best_id) or None
+        if not standing or not self.standing_unsaid:
+            return None
+        best_id = session.best_lap_id()
+        if best_id is None or best_id in data_quality.not_counted_ids(session):
+            return None
+        if abs(float(session.lap_time(best_id)) - float(standing["best"])) > 5e-4:
+            return None
+        return library.pb_standing_notice(standing, fmt_time)
 
     def degraded_notice(self) -> str | None:
         """The session notice's clause for a first open on degraded timing (QA REG-2): what rules
