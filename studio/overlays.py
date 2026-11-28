@@ -777,6 +777,7 @@ class PBToast(QWidget):
         parent = self._host
         if parent is None:
             return False
+        self._fit_body(self._anchor_state(parent)[0])
         self.adjustSize()
         region, settled = self._anchor_state(parent)
         x = region.left() + max(0, (region.width() - self.width()) // 2)
@@ -786,6 +787,37 @@ class PBToast(QWidget):
         self.move(max(0, min(x, max(0, parent.width() - self.width()))),
                   max(0, min(y, max(0, parent.height() - self.height()))))
         return settled
+
+    # The body's line budget: the two lines a PB sentence has always taken on this card.
+    BODY_LINES = 2
+
+    def _fit_body(self, region: QRect) -> None:
+        """Widen the body, within `region`, just enough to keep it to ``BODY_LINES`` lines.
+
+        The card is as wide as its widest row of actions, and a PB sentence fills two lines of
+        that. A longer one (the previous session's clause, cool/quicker-than-last-heat) wrapped to
+        a third and the card grew 14 px up into the lap rows it sits over (review F5, measured at
+        1280x800 and 1440x900: 298x122 → 298x136). Wider costs nothing the card does not already
+        cover sideways, so the body takes the width — never past the region — and the height
+        stays. A body that fits keeps the card exactly as it was."""
+        lab = self.body_label
+        lab.setMinimumWidth(0)
+        self.adjustSize()
+        fm, text = lab.fontMetrics(), lab.text()
+
+        def lines(width: int) -> int:
+            box = fm.boundingRect(QRect(0, 0, max(1, width), 1 << 20), Qt.TextWordWrap, text)
+            return -(-box.height() // max(1, fm.lineSpacing()))
+
+        width = lab.width()
+        if lines(width) <= self.BODY_LINES:
+            return
+        margins = self.layout().contentsMargins()
+        cap = region.width() - 2 * theme.SPACE_M - margins.left() - margins.right()
+        for candidate in range(width, cap + 1, 4):
+            if lines(candidate) <= self.BODY_LINES:
+                lab.setMinimumWidth(candidate)
+                return
 
     def _clear_of_keepout(self, region: QRect, x: int, y: int) -> int:
         """`y`, raised to sit SPACE_M above each of the caller's keep-out rectangles the card at
