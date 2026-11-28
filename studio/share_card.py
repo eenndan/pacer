@@ -176,7 +176,7 @@ def opp_loss(opp: TopOpp) -> str:
     return f"{hi} s each" if lo == hi else f"{hi} to {lo} s"
 
 
-def opp_baseline(opp: "TopOpp | None" = None) -> str:
+def opp_baseline(opp: TopOpp | None = None) -> str:
     """What the opportunity's figure is measured against, printed over it:
     "typical pass vs your best lap's" — or, for a figure measured to the second-quickest pass
     (`TopOpp.sized`, #750 re-review B), "typical pass vs your second-quickest pass", and over a
