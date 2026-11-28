@@ -219,8 +219,8 @@ def _assert_page_text_on_page(s, unit=None) -> dict:
 def test_every_coaching_string_is_page_texts_in_the_pages_order():
     """The demo: the headline, the theme, both actions, and all six shown rows — the planted C1 with
     its braking line, then five "Not ranked" rows muted (three level with the best lap inside the
-    timing step, two with no second lap at the target) — exactly as `page_text` says them, under the
-    panel's four column words. The planted tie session: a three-way tie at the top."""
+    timing step, two whose target only the best lap reached) — exactly as `page_text` says them,
+    under the panel's four column words. The planted tie session: a three-way tie at the top."""
     assert export_data.REPORT_COACHING_COLUMNS == tuple(
         coaching_panel.OpportunitiesPanel._COLUMNS[:4])
     got = _assert_page_text_on_page(_sessions()["demo"])

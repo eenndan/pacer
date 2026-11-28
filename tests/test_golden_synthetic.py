@@ -57,7 +57,9 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       Session: no GPMF, no ``pacer.Laps`` crossing interpolation, no valid-lap band,
                       2-4 laps against lap-count gates of 5-8 (`MATRIX_MIN_LAPS`, `TREND_MIN_LAPS`,
                       `MIN_SPLIT_LAPS`, `corners.ANCHOR_MIN_LAPS`), so 116 of their leaves were the
-                      placeholder and coaching was fingerprinted as two abstaining rows. This phase
+                      placeholder and coaching was fingerprinted as two abstaining rows (in
+                      ``drift_band`` two ranked ones since cool/coaching-reach-within-the-step,
+                      each lost past the step to its next-quickest pass too). This phase
                       writes the synthetic GoPro recording (studio/dev/synth_gopro.py: a HERO13-shaped
                       two-chapter .MP4, GPS9 with noise/glitches/an acquisition period, IMU, the
                       measured clock offsets; fixed seed) into a temp dir and loads it through
@@ -545,7 +547,8 @@ def test_gopro_phases_reach_what_the_seeded_phases_cannot():
          (`MIN_SPLIT_LAPS`) and the consensus-line anchor (`corners.ANCHOR_MIN_LAPS`);
       3. coaching LISTS corners and holds the level ones back (every one loses under the timing
          step or fails another test), while the planted-habit phase RANKS its corner past the step
-         (the seeded phases' two rows both abstain); the ideal lap is stitched from more than one
+         (the seeded phases' two rows abstain, but in ``drift_band``, where both rank as pace work
+         since cool/coaching-reach-within-the-step); the ideal lap is stitched from more than one
          lap and beats the best one;
       4. `gopro_sectors` has three sectors on every valid lap, each split finite and summing to
          its lap time, and a SPLITS grid;

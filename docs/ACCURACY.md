@@ -297,6 +297,17 @@ On 188 synthetic race days at recording C's noise (habit-free, and with one corn
 with the step, 1 of the 102 it names. It drops 11 % of the corners that truly lose 0.07 s or more,
 and never a corner planted 0.10 or 0.20 s slower.
 
+**A target your best lap alone has reached counts when the claim clears the step against your
+next-quickest pass too.** Coaching ranks a corner only if a target is repeatable, and that used to
+mean a second lap at least as quick as the best lap's pass, to the millisecond. A corner whose
+next-quickest pass was 0.001 s slower was held back however far the typical pass sat behind both.
+It now ranks when the typical pass loses 0.07 s against the next-quickest pass as well. On 336
+synthetic race days at recording C's noise (120 habit-free, 72 each with one corner planted 0.05,
+0.10 or 0.20 s slower a lap), the corner planted 0.20 s slower is ranked on 72 of 72 days instead
+of 46, and the one planted 0.10 s slower on 66 instead of 40. Of the corners ranked, 6 of 368 truly
+lose under 0.03 s, against 2 of 200 under the strict match. A plain 0.07 s tolerance on the second
+lap would have ranked 16 of 457 such corners.
+
 **Two speeds.** The Corners table's Δapex column differences two laps' apex speeds, km/h. An apex
 speed is the lowest GPS fix in the corner, so its noise is at most one fix's, and one fix's speed
 noise is measured on a real recording: σ 0.62 km/h per sample (recording A's 10 Hz speed against
