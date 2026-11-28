@@ -40,6 +40,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtGui import QKeySequence  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
@@ -490,6 +491,152 @@ def test_dialog_forget_declined_leaves_index(monkeypatch):
     dlg._forget_row(dlg.table.item(0, _COL_DATE))
     assert forgotten == []
     assert dlg.table.rowCount() == 1
+
+
+def _answer_modal(press, act) -> dict:
+    """Run `press()` (a real key) and, if it puts up a modal QMessageBox, record it and let `act`
+    answer it from inside its own event loop, where a user's keys land. {} when nothing opened."""
+    from PySide6.QtCore import QTimer
+    got: dict = {}
+
+    def tick():
+        m = QApplication.activeModalWidget()
+        if isinstance(m, QMessageBox) and "title" not in got:
+            got.update(title=m.windowTitle(), text=m.text(),
+                       default_no=m.defaultButton() is m.button(QMessageBox.No))
+            act(m)
+    timer = QTimer()
+    timer.setInterval(10)
+    timer.timeout.connect(tick)
+    timer.start()
+    try:
+        press()
+    finally:
+        timer.stop()
+    _APP.processEvents()
+    return got
+
+
+def test_backspace_and_delete_forget_the_selected_row_from_the_keyboard(monkeypatch):
+    """cool/library-forget-from-the-keyboard: "Forget this recording" lived only on the table's
+    right-click menu, so a Mac keyboard had no way to it. With a row selected and the focus in the
+    table, ⌫ and Delete ask the menu's own confirmation (default No: Return answers No) and Yes
+    forgets that row through the injected callback, against a library saved in the jail. ⌫ in the
+    search field edits the text, nothing selected does nothing, and during a running Update the key
+    stops it first, as the menu item does (#733). The menu item names ⌫ beside itself."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMenu
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        library.save({"version": library.VERSION,
+                      "entries": [_entry("GX010001", date="2024-05-01"),
+                                  _entry("GX010002", date="2024-05-02"),
+                                  _entry("GX010003", date="2024-05-03")]})
+        order: list[str] = []
+
+        def forget(entry):
+            order.append(f"forget {entry['stem']}")
+            idx = library.load()
+            library.remove(idx, entry["fingerprint"])
+            library.save(idx)
+            return idx
+
+        class _Updater:                       # a running Update: the seam the menu item stops
+            on = False
+
+            def running(self):
+                return self.on
+
+            def cancel(self):
+                order.append("cancel")
+                self.on = False
+
+        updater = _Updater()
+        dlg = LibraryDialog(library.load(), open_recording=lambda _p: None,
+                            forget_recording=forget, clear_library=library.empty_index)
+        dlg._updater = updater
+        dlg.show()
+        dlg.activateWindow()
+        try:
+            t = dlg.table
+
+            def fp(r):
+                return t.item(r, _COL_DATE).data(FP_ROLE)
+
+            def focus(w):
+                # Offscreen, a closed modal hands the focus back to nobody (on a Mac it returns to
+                # the table): put it where the user's is, and prove it is there, so a key that does
+                # nothing because nothing had the focus can never pass for "asks nothing".
+                dlg.activateWindow()
+                w.setFocus()
+                _APP.processEvents()
+                assert QApplication.focusWidget() is w, QApplication.focusWidget()
+            t.selectRow(0)                    # newest first: GX010003
+            focus(t)
+            first = fp(0)
+            # ⌫, then Return on the confirmation: No, the default. Nothing forgotten.
+            got = _answer_modal(lambda: QTest.keyClick(t, Qt.Key_Backspace),
+                                lambda m: QTest.keyClick(m, Qt.Key_Return))
+            # The menu item's own question (its title is not shown on a Mac: the text is the tell).
+            assert got.get("text", "").startswith("Forget “GX010003"), got
+            assert got["default_no"], got
+            assert order == [] and t.rowCount() == 3, (order, t.rowCount())
+            # Delete, Yes: that row goes, from the table and from the saved library.
+            focus(t)
+            got = _answer_modal(lambda: QTest.keyClick(t, Qt.Key_Delete),
+                                lambda m: m.button(QMessageBox.Yes).click())
+            assert got.get("text", "").startswith("Forget “GX010003"), got
+            assert order == ["forget GX010003"], order
+            assert t.rowCount() == 2 and first not in {fp(r) for r in range(2)}
+            assert first not in {e["fingerprint"] for e in library.load()["entries"]}
+            # ⌫ in the search field edits the text and asks nothing.
+            focus(dlg.search)
+            QTest.keyClicks(dlg.search, "GX")
+            got = _answer_modal(lambda: QTest.keyClick(dlg.search, Qt.Key_Backspace),
+                                lambda m: m.button(QMessageBox.No).click())
+            assert got == {} and dlg.search.text() == "G", (got, dlg.search.text())
+            dlg.search.clear()
+            # Nothing selected: nothing asked.
+            t.clearSelection()
+            focus(t)
+            got = _answer_modal(lambda: QTest.keyClick(t, Qt.Key_Backspace),
+                                lambda m: m.button(QMessageBox.No).click())
+            assert got == {} and order == ["forget GX010003"], (got, order)
+            # During an Update: Yes stops it first, then forgets — the menu item's order.
+            t.selectRow(0)
+            focus(t)
+            updater.on = True
+            order.clear()
+            _answer_modal(lambda: QTest.keyClick(t, Qt.Key_Backspace),
+                          lambda m: m.button(QMessageBox.Yes).click())
+            assert order == ["cancel", "forget GX010002"], order
+            # The menu item names its key: ⌫ painted beside "Forget this recording…".
+            from PySide6.QtCore import QTimer
+            shown = {}
+
+            def capture():
+                menu = QApplication.activePopupWidget()
+                if isinstance(menu, QMenu) and not shown:
+                    shown.update({a.text(): (a.shortcut(), a.isShortcutVisibleInContextMenu())
+                                  for a in menu.actions()})
+                    menu.close()
+            timer = QTimer()
+            timer.setInterval(10)
+            timer.timeout.connect(capture)
+            timer.start()
+            try:
+                dlg._on_context_menu(t.visualItemRect(t.item(0, 1)).center())
+            finally:
+                timer.stop()
+            seq, visible = shown["Forget this recording…"]
+            assert seq.matches(QKeySequence(Qt.Key_Backspace)) == QKeySequence.ExactMatch \
+                and visible, shown
+        finally:
+            dlg._updater = None               # the stub has no signals for done() to disconnect
+            dlg.close()
+            dlg.deleteLater()
+            _APP.processEvents()
 
 
 def test_dialog_clear_routes_through_callback_and_empties(monkeypatch):

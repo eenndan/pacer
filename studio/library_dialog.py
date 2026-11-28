@@ -75,7 +75,7 @@ from collections.abc import Callable
 
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -1069,6 +1069,15 @@ class LibraryDialog(QDialog):
         if self._forget_recording is not None or self._use_as_reference is not None:
             self.table.setContextMenuPolicy(Qt.CustomContextMenu)
             self.table.customContextMenuRequested.connect(self._on_context_menu)
+        # ⌫ / Delete on the selected row: the menu's Forget, from the keyboard (a Mac keyboard has
+        # no menu key, so the right-click menu was the only way in). Bound on the TABLE alone, so
+        # ⌫ in the search box still edits its text, and through `_forget_row`, so the key asks the
+        # menu's own confirmation (default No) and stops a running Update exactly as the item does.
+        if self._forget_recording is not None:
+            for sc in (QShortcut(QKeySequence(Qt.Key_Backspace), self.table),
+                       QShortcut(QKeySequence(Qt.Key_Delete), self.table)):
+                sc.setContext(Qt.WidgetShortcut)
+                sc.activated.connect(self._forget_selected)
         root.addWidget(self.table, 3)
 
         # THE ONE "there is nothing in this table" SURFACE, for both of the ways that happens.
@@ -2184,6 +2193,10 @@ class LibraryDialog(QDialog):
         act = None
         if self._forget_recording is not None:
             act = menu.addAction("Forget this recording…")
+            # Painted beside the item (a Mac context menu hides shortcuts unless asked): the key
+            # that does the same from the table (`_forget_selected`).
+            act.setShortcut(QKeySequence(Qt.Key_Backspace))
+            act.setShortcutVisibleInContextMenu(True)
             act.setToolTip(
                 "Remove this recording from the library index and delete its .pacer.json "
                 "timing-line sidecar and its session record. Your video file is not touched.")
@@ -2198,6 +2211,16 @@ class LibraryDialog(QDialog):
         elif record_act is not None and chosen is record_act:
             self.table.selectRow(date_item.row())
             self._edit_selected_record()
+
+    def _forget_selected(self):
+        """⌫ / Delete in the table: forget the selected row as the menu item does. Nothing selected,
+        or a selection a filter has hidden, does nothing — the key never acts on a row off screen."""
+        rows = self.table.selectionModel().selectedRows()
+        if not rows or self.table.isRowHidden(rows[0].row()):
+            return
+        date_item = self.table.item(rows[0].row(), _COL_DATE)
+        if date_item is not None:
+            self._forget_row(date_item)
 
     def _forget_row(self, date_item: QTableWidgetItem):
         """Confirm, then forget the row: the injected callback removes the index entry + deletes its

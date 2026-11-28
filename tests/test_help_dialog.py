@@ -177,8 +177,9 @@ def test_every_group_shares_one_key_column():
     # the live readout over the fullscreen video (cool/fullscreen-readout); 37-38: + ⌘Space and
     # ⇧↓ · ⇧↑, the Laps table's multi-select keys (cool/arrows-and-table-cursor); 39-50: + the
     # Controls group, the press rule and the eleven pointer-only commands
-    # (cool/buttons-press-from-the-keyboard)
-    assert len(want) == 50, len(want)
+    # (cool/buttons-press-from-the-keyboard); 51: + ⌫ · ⌦, forget the selected Library row
+    # (cool/library-forget-from-the-keyboard)
+    assert len(want) == 51, len(want)
     for size in (None, "minimum"):
         d = _shown(ShortcutsDialog())
         if size:

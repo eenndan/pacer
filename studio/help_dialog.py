@@ -131,6 +131,12 @@ COMMANDS: list[Command] = [
     # for the same reason the row above it does: the palette harvests the menu action itself, with
     # the accelerator Qt paints for it, so a `run` here would list the Library twice.
     Command("File", QKeySequence("Ctrl+L"), "Open the session library"),
+    # The Library table's own keys (library_dialog: a QShortcut on the table, so no `run`): the
+    # right-click menu's "Forget this recording…", asking its confirmation. Qt's NativeText, so
+    # the cell reads ⌫ · ⌦ on a Mac and the source sweep finds each key.
+    Command("File", "  ·  ".join(QKeySequence(k).toString(QKeySequence.NativeText)
+                                 for k in ("Backspace", "Delete")),
+            "Library: forget the selected recording (asks first)"),
     Command("Playback", "Space", "Play / pause the video", run="toggle_playback"),
     Command("Playback", "M", "Mute / unmute", run="toggle_mute"),
     # Slow motion, the most-asked-for thing this transport did not do: inputs happen faster than
