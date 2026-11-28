@@ -567,8 +567,10 @@ def test_a_first_open_with_no_corner_past_the_step_opens_the_normal_view():
     """cool/coaching-ranks-past-the-step (review S5): a first open whose corners all lose under the
     timing step lands on no debrief — the existing rule, nothing ranked — and opens the ordinary
     grid on the driver's tab, with the personal-best card the debrief would otherwise carry. The
-    Coaching tab says no corner stands out, and its sentence points elsewhere. The habit-free demo
-    circuit is that session (its corners lose +0.04 s and less)."""
+    Coaching tab says no corner is ranked, and its sentence points elsewhere. The habit-free demo
+    circuit is that session (its ranked-length corners lose +0.04 s and less; its C3, +0.08 s, is
+    held back as a one-off, and the headline names it: cool/coaching-headline-names-the-held-back-
+    corner)."""
     from PySide6.QtWidgets import QLabel
 
     from studio import coaching
@@ -596,13 +598,14 @@ def test_a_first_open_with_no_corner_past_the_step_opens_the_normal_view():
             assert "First session logged" in words, words
             page = win.view.opportunities
             assert page.summary_label.text() == coaching.headline(opps)
-            assert "no corner stands out" in page.summary_label.text()
+            assert "C3 +0.08 s: only your best lap was that quick" in page.summary_label.text()
+            assert "stands out" not in page.summary_label.text()
             assert page.theme_block.headline.text() == coaching.no_focus_sentence(opps) != ""
         finally:
             win.close()
             win.deleteLater()
             _APP.processEvents()
-    print("ok level first open: no debrief, the grid, the PB card, 'no corner stands out'")
+    print("ok level first open: no debrief, the grid, the PB card, the held-back C3 named")
 
 
 def _way_recordings(folder: str) -> list[str]:

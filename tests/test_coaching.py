@@ -1713,7 +1713,10 @@ def test_panel_is_a_full_uncapped_page_with_headline():
     assert not hasattr(panel, "collapse_btn"), "no chevron — a tab you leave costs nothing"
     txt = panel.summary_label.text()
     assert txt and not txt.startswith("Coaching · "), txt
-    assert "corner" in txt, "the headline reads the summary sentence"
+    # The summary sentence itself (`coaching.headline`). It said "corner" in every form until the
+    # held-back one ("C2 +1.92 s: only your best lap was that quick", this 4-lap stadium session),
+    # which names the corner by its label instead.
+    assert txt == K.headline(s.coaching_opportunities()), "the headline reads the summary sentence"
     print("ok panel: full uncapped page, plain headline, no collapse machinery")
 
 
@@ -3709,26 +3712,38 @@ def test_a_level_session_says_so_in_one_sentence():
     """A session where nothing ranks and the losses are inside the step is a real answer, not an
     empty panel: the headline and the theme block say so, in `coaching`'s words, the page shows
     the held-back rows, and no row's Jump is the amber CTA (nothing is recommended). The synthetic
-    GoPro seed 20260924 (the golden gate's recording) holds its three corners back as level and the
-    rest fail other tests; a session of level rows alone reads the same."""
+    GoPro seed 20260924 (the golden gate's recording) holds its three corners back as level, its C3
+    (+0.08 s) as a one-off and the rest on their spread; a session of level rows alone reads "no
+    corner stands out", and so does one whose one-off is itself inside the step (seed 7).
+
+    cool/coaching-headline-names-the-held-back-corner: on seed 20260924 the headline said "no corner
+    stands out vs your best lap" over a top row reading "C3 +0.08 s — Not ranked: no second lap has
+    matched your best here". C3 does stand out; it lacks a second lap at its target, and the
+    headline and the sentence under it now say that."""
     import dataclasses
     _qapp()
     from studio.coaching_panel import _PANEL_COL_GO, OpportunitiesPanel
     s = _level_sessions()["seed 20260924, 14 laps"]
     opps = s.coaching_opportunities()
     assert not K.shortlist(opps) and opps.theme.kind == K.THEME_NONE
+    held = ("No corner is ranked: C3's typical pass is +0.08 s off your best lap's, but no other lap "
+            "has been as quick there, so there is no repeatable target yet. Look at your "
+            "consistency and your ideal lap instead.")
+    held_headline = ("Whole session · C3 +0.08 s: only your best lap was that quick (median of "
+                     "14 clean laps)")
+    assert K.theme_lines(opps) == (held, []), K.theme_lines(opps)
+    assert K.headline(opps) == held_headline, K.headline(opps)
+    assert "stands out" not in K.headline(opps)
     sentence = ("No corner is ranked: each is within timing precision (0.07 s) of your best lap, "
                 "or its row says why. Look at your consistency and your ideal lap instead.")
     headline = ("Whole session · no corner stands out vs your best lap (median of 14 clean laps)")
-    assert K.theme_lines(opps) == (sentence, []), K.theme_lines(opps)
-    assert K.headline(opps) == headline, K.headline(opps)
     panel = OpportunitiesPanel(s)
     panel.resize(1400, 900)
     panel.show()
     for _ in range(6):
         _APP.processEvents()
-    assert panel.theme_block.headline.text() == sentence and not panel.theme_block.isHidden()
-    assert panel.summary_label.text() == headline
+    assert panel.theme_block.headline.text() == held and not panel.theme_block.isHidden()
+    assert panel.summary_label.text() == held_headline
     t = panel.table
     assert t.rowCount() >= 3 and panel.shortlist_cids() == []
     variants = [t.cellWidget(r, _PANEL_COL_GO).jump.property("variant") for r in range(t.rowCount())]
@@ -3737,12 +3752,72 @@ def test_a_level_session_says_so_in_one_sentence():
     level = [r for r in opps.rows if r.evidence.abstain == K.ABSTAIN_LEVEL]
     only = dataclasses.replace(opps, rows=level)
     assert K.no_focus_sentence(only) == sentence and K.headline(only) == headline
+    # A one-off inside the step stands out no more than a level row: seed 7 at 12 laps (C1 +0.04 s,
+    # one lap at its target) keeps "no corner stands out".
+    o7 = _level_sessions()["seed 7, 12 laps"].coaching_opportunities()
+    assert any(r.evidence.abstain == K.ABSTAIN_ONE_OFF for r in o7.rows), o7.rows
+    assert K.held_back_one_off(o7) is None and "no corner stands out" in K.headline(o7)
+    assert K.no_focus_sentence(o7) == sentence
     # A session whose corners fail only the spread test keeps the words it always had.
     spread = dataclasses.replace(opps, rows=[dataclasses.replace(r, evidence=dataclasses.replace(
         r.evidence, abstain=K.ABSTAIN_SPREAD)) for r in opps.rows])
     assert K.no_focus_sentence(spread) == "" and K.theme_lines(spread) == ("", [])
     assert "no corner clears its own lap-to-lap spread" in K.headline(spread)
     print(f"ok level session: {sentence!r}")
+
+
+def test_the_held_back_headline_fits_the_strip_and_the_card():
+    """The held-back headline ("C4 +0.22 s: only your best lap was that quick") must not widen
+    the headline strip, whose width is reserved for `widest_headline` so that no other page moves
+    with a Coaching wording, and it must print whole on the share card at its smallest size. Both
+    measured at the worst case: a two-digit corner and the widest digits, at a three-digit lap
+    count. And it names the BIGGEST one-off past the step, only when nothing is ranked."""
+    import dataclasses
+
+    from PySide6.QtGui import QFontMetricsF, QImage, QPainter
+
+    from studio import share_card
+    _qapp()
+
+    def row(cid, lost, abstain, reach=1):
+        return K.Opportunity(cid=cid, direction=1, time_lost=lost, entry_dist=0.0,
+                             reason=K.Reason(K.REASON_LEVEL, 0.0, 0.0, 0.0, 0.0, 0.0),
+                             evidence=K.Evidence(n_laps=14, reach_laps=reach, reach=K.REACH_RARE,
+                                                 iqr=0.02, abstain=abstain))
+
+    rows = [row(4, 0.22, K.ABSTAIN_ONE_OFF), row(6, 0.15, K.ABSTAIN_ONE_OFF),
+            row(2, 0.04, K.ABSTAIN_LEVEL, 2)]
+    opps = K.Opportunities(enough=True, n_laps=14, median_lap_id=3, rows=rows)
+    assert K.held_back_one_off(opps).cid == 4
+    assert K.headline(opps) == ("Whole session · C4 +0.22 s: only your best lap was that quick "
+                                "(median of 14 clean laps)"), K.headline(opps)
+    # Something ranked: the headline is the total, as ever.
+    ranked = dataclasses.replace(opps, rows=[dataclasses.replace(rows[1], evidence=dataclasses.replace(
+        rows[1].evidence, abstain=K.ABSTAIN_NONE, reach_laps=3)), rows[0], rows[2]])
+    assert K.held_back_one_off(ranked) is None and "in your worst corner" in K.headline(ranked)
+
+    worst = K.Opportunities(enough=True, n_laps=148, median_lap_id=3,
+                            rows=[row(88, 8.88, K.ABSTAIN_ONE_OFF)])
+    page = _full_window_page(worst)
+    label = page.summary_label
+    assert label.text() == K.headline(worst), label.text()
+    fm = QFontMetricsF(label.font())
+    digit = max("0123456789", key=fm.horizontalAdvance)
+    text = label.text().replace("8.88 s", f"{digit}.{digit}{digit} s").replace("C88", f"C{digit}{digit}")
+    widest = K.widest_headline(148).replace("0.00 s", f"{digit}.{digit}{digit} s")
+    assert fm.horizontalAdvance(text) <= fm.horizontalAdvance(widest), (text, widest)
+    # The card prints the headline itself (`share_card.no_opportunity_line`): whole at its smallest.
+    probe = QImage(10, 10, QImage.Format_ARGB32)
+    p = QPainter(probe)
+    try:
+        pad, right = 72, share_card.CARD_W - 72
+        line, font = share_card._fit_line(p, text, right - pad, share_card._NO_OPP_PX_STEPS[-1:])
+        assert line == text, (font.pixelSize(), line)
+    finally:
+        p.end()
+    print(f"ok held-back headline: {fm.horizontalAdvance(text):.0f} px against the reserved "
+          f"{fm.horizontalAdvance(widest):.0f} px; whole on the card at "
+          f"{share_card._NO_OPP_PX_STEPS[-1]} px")
 
 
 def _level_fixture(plan, spread):
