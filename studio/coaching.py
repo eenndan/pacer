@@ -1682,8 +1682,8 @@ def abstain_sentence(opp: Opportunity) -> str:
         if SECOND_PASS_STEP_S is None:     # the strict match (the switch off): its own words
             return ("Not ranked: no second lap has matched your best here, so there is no "
                     "repeatable target to aim at.")
-        return ("Not ranked: only your best lap has been this quick here, and your typical pass is "
-                f"within {SECOND_PASS_STEP_S:.2f} s of your next-quickest, so there is no "
+        return ("Not ranked: only your best lap has been this quick here, and your "
+                f"{stats_service.TYPICAL_PASS} is within {SECOND_PASS_STEP_S:.2f} s of your next-quickest, so there is no "
                 "repeatable target to aim at.")
     if ev.abstain == ABSTAIN_SPREAD:
         return (f"Not ranked: the {opp.time_lost:.2f} s on offer is inside your own lap-to-lap "
