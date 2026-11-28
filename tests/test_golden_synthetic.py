@@ -927,9 +927,12 @@ def test_the_reach_switch_off_restores_the_strict_gate():
     """`coaching.SECOND_PASS_STEP_S` is the one switch cool/coaching-reach-within-the-step added,
     and it amends an owner ruling (COACHING-4 amendment (1)) by the coordinator's: set to None it
     must give back the strict "matched or beat" gate EXACTLY. On every golden phase the switched-off
-    fingerprint equals the committed baseline but in the 12 coaching leaves the re-cut moved, which
-    read as they did before it (drift_band's two rows one-offs, its theme none) — and those leaves
-    do move, so the check is not vacuous."""
+    fingerprint equals the committed baseline but in drift_band's coaching, the one phase with a
+    corner ranked only through the next-pass step, which reads as the strict gate read it: its two
+    rows one-offs, each sized against the best lap's pass (the baseline's printed loss plus its
+    `one_off_s`, which is 0), in that loss's order, and its theme none — and those leaves do move,
+    so the check is not vacuous. A row's reason contribution is read off its printed loss, so that
+    one leaf is left out of the drift_band rows."""
     import copy
 
     with open(BASELINE) as f:
@@ -942,10 +945,18 @@ def test_the_reach_switch_off_restores_the_strict_gate():
         coaching.SECOND_PASS_STEP_S = saved
     strict = copy.deepcopy(baseline)
     band = strict["drift_band"]["coaching_opportunities"]
+    assert any(row["evidence"]["one_off_s"] > 0 for row in band["rows"]), band["rows"]
     for row in band["rows"]:
+        row["time_lost"] += row["evidence"]["one_off_s"]
+        row["evidence"]["one_off_s"] = 0.0
         row["evidence"]["abstain"] = coaching.ABSTAIN_ONE_OFF
+    band["rows"].sort(key=lambda row: -row["time_lost"])
     band["theme"] = dict(_STRICT_DRIFT_BAND_THEME)
-    diffs, _stats = _compare(strict, fp)
+    got = copy.deepcopy(fp)
+    for tree in (strict, got):
+        for row in tree["drift_band"]["coaching_opportunities"]["rows"]:
+            row["reason"].pop("contribution")
+    diffs, _stats = _compare(strict, got)
     assert not diffs, "the switch off is not the strict gate:\n  " + "\n  ".join(diffs[:20])
     moved, _ = _compare(baseline, fp)
     assert moved and all(".drift_band.coaching_opportunities." in d for d in moved), moved

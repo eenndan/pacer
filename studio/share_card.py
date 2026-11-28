@@ -325,7 +325,7 @@ def _top_opportunity(session, unit: str, opps=None) -> TopOpp | None:
         # the tail the card's one line cut mid-word ("4 of 36 laps match…"), and a shared image is
         # read by people for whom the lever is the news.
         return TopOpp(corner_label=label, time_lost_s=float(opp.time_lost),
-                      reason=coaching.reason_sentence(opp, unit, reach=False),
+                      reason=coaching.reason_sentence(opp, unit, reach=False, one_off=False),
                       cids=(int(opp.cid),))
     except Exception:  # noqa: BLE001 — the card degrades to "no opportunity", never crashes
         return None

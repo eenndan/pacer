@@ -1986,9 +1986,14 @@ def test_a_ranked_row_has_always_been_reached_so_never_is_only_ever_an_abstain()
         n = int(rng.integers(0, 12))
         times = rng.normal(5.0, 0.3, n).tolist()
         target = float(rng.normal(5.0, 0.6))
-        ev = K.corner_evidence(times, target, float(abs(rng.normal(0.2, 0.3))))
+        loss = float(abs(rng.normal(0.2, 0.3)))
+        ev = K.corner_evidence(times, target, loss)
         if ev.ranked:
-            assert ev.reach_laps >= 1 and ev.reach != K.REACH_NEVER, ev
+            # Exactly: two laps at the target, or one (the best lap's own) with the typical pass
+            # past the step against the next-quickest pass too.
+            assert ev.reach != K.REACH_NEVER, ev
+            assert ev.reach_laps >= K.MIN_REACH_LAPS or (
+                ev.reach_laps == 1 and not K.loss_to_next_is_level(times, target, loss)), ev
         if ev.reach == K.REACH_NEVER:
             nevers += 1
             assert not ev.ranked and ev.abstain in (K.ABSTAIN_FEW_LAPS, K.ABSTAIN_ONE_OFF), ev
@@ -2072,6 +2077,88 @@ def test_the_reach_switch_off_is_the_strict_match_exactly():
         K.SECOND_PASS_STEP_S = saved
     assert differs > 0, "the switch on moved no corner of the sweep"
     print(f"ok reach switch off == strict on 3000 corners (on, {differs} of them rank differently)")
+
+
+def test_a_one_lap_target_is_sized_from_the_next_quickest_pass():
+    """#750 review, M2 (the honesty rule: the number is what the evidence supports). Times
+    [10.0, 10.30, 10.5 x6] with the best lap's pass at 10.0: the strict match called it a one-off;
+    the next-pass step ranks it, but its time lost against the lone best pass is +0.50 s where the
+    pace two laps reached gives 0.20 s. A row ranked ONLY through that step prints, sums and is
+    ordered by its loss to the next-quickest pass, and its sentence says what the figure is
+    measured from; a row with two laps at its target is untouched; the switch off restores strict.
+    On the unfixed tree C1 printed +0.50 s and led the ranking."""
+    ev = K.corner_evidence([10.0, 10.30] + [10.5] * 6, 10.0, 0.5)
+    assert ev.ranked and (ev.reach_laps, round(ev.one_off_s, 6)) == (1, 0.30), ev
+    two = K.corner_evidence([10.0, 10.0] + [10.5] * 6, 10.0, 0.5)
+    assert two.ranked and two.one_off_s == 0.0, two
+    corners = _corners(2)
+    best = [10.0, 5.0]
+    times = ([[10.0, 5.0], [10.30, 5.0]] + [[10.5, 5.25] for _ in range(6)])
+    lap_times = [sum(t) for t in times]
+    opps = K.summarize(corners, list(range(len(times))), lap_times, times, best,
+                       sigmas_by_cid={1: 0.05, 2: 0.05}, **_levers(times, best, apex=95.0))
+    by = {r.cid: r for r in opps.rows}
+    assert by[1].evidence.ranked and round(by[1].time_lost, 6) == 0.20, by[1]
+    assert round(by[2].time_lost, 6) == 0.25 and by[2].evidence.one_off_s == 0.0, by[2]
+    # Ordered by the printed loss: C2's +0.25 s leads C1's +0.20 s (unsized, C1's +0.50 s led).
+    assert [r.cid for r in K.shortlist(opps)] == [2, 1], opps.rows
+    assert K.lost_text(by[1]) == "+0.20 s" and round(K.shown_total(K.shortlist(opps)), 2) == 0.45
+    said = K.reason_sentence(by[1])
+    assert said.endswith(" It is to your second-quickest pass here: your best lap was a one-off, "
+                         "0.30 s quicker still."), said
+    assert K.reason_text(by[1], reach=False).startswith(K.reason_sentence(by[1], reach=False))
+    assert "one-off" in K.reason_sentence(by[1], reach=False)          # beside "Done it?" too
+    assert "one-off" not in K.reason_sentence(by[1], reach=False, one_off=False)   # the card
+    assert "one-off" not in K.reason_sentence(by[2])
+    saved = K.SECOND_PASS_STEP_S
+    try:
+        K.SECOND_PASS_STEP_S = None
+        strict = K.summarize(corners, list(range(len(times))), lap_times, times, best,
+                             sigmas_by_cid={1: 0.05, 2: 0.05}, **_levers(times, best, apex=95.0))
+    finally:
+        K.SECOND_PASS_STEP_S = saved
+    sb = {r.cid: r for r in strict.rows}
+    assert sb[1].evidence.abstain == K.ABSTAIN_ONE_OFF and round(sb[1].time_lost, 6) == 0.50, sb[1]
+    print(f"ok one-off sizing: C1 +0.20 s (not +0.50 s), {said!r}")
+
+
+def test_the_step_to_the_next_pass_is_decided_on_the_printed_figure():
+    """#750 review, L3: a mutant comparing the UNROUNDED loss-to-next-pass with the step survived
+    test_coaching. On the printed figure, as `loss_is_level` decides: 0.0649 prints 0.06 (a one-off),
+    0.0651 prints 0.07 and ranks, and 0.07 ranks."""
+    for to_next, ranked in ((0.0649, False), (0.0651, True), (0.07, True)):
+        gap = 0.20 - to_next
+        times = [5.0, 5.0 + gap] + [5.2] * 5
+        ev = K.corner_evidence(times, 5.0, 0.20)
+        assert ev.ranked is ranked, (to_next, ev)
+        assert ranked or ev.abstain == K.ABSTAIN_ONE_OFF, (to_next, ev)
+    print("ok next-pass step on the printed figure: 0.0649 one-off, 0.0651 and 0.07 rank")
+
+
+def test_a_nan_loss_never_ranks_a_one_lap_target():
+    """#750 review, L4: a NaN time lost clears the spread and level tests (every comparison with NaN
+    is False), so under the next-pass step a one-lap target ranked on it where the strict match held
+    it back as a one-off."""
+    ev = K.corner_evidence([5.0, 5.3, 5.5, 5.5, 5.5], 5.0, float("nan"))
+    assert not ev.ranked and ev.abstain == K.ABSTAIN_ONE_OFF, ev
+    print("ok NaN loss: a one-lap target is a one-off")
+
+
+def test_a_one_sided_theme_never_reads_no_single_theme():
+    """#750 review, M1 (seed 8104, 14 laps, C4 planted): every ranked corner on the execution side,
+    and the page read "No single theme: 100% of the time on offer is in corners you have already
+    driven at this pace, 0% in corners you have rarely reached — C5 sits on the line between the
+    two." Since a one-lap target can rank, a corner on the two-lap line moves side instead of
+    dropping out, and the hedge fired on a 100 / 0 split. A theme whose halves print 100 % / 0 % says
+    the plain theme sentence."""
+    rows = [_corner(5, 0.25, 14, 2), _corner(1, 0.20, 14, 4), _corner(3, 0.10, 14, 5)]
+    theme = K.headline_theme(rows)
+    assert theme.kind == K.THEME_EXECUTION and round(theme.share, 2) == 1.0, theme
+    assert K.theme_tipping_row(theme, rows) is None
+    said = K.theme_sentence(theme, rows)
+    assert said.startswith("All of the time on offer is in corners you have already driven"), said
+    assert "No single theme" not in said and "sits on the line" not in said, said
+    print(f"ok one-sided theme: {said!r}")
 
 
 def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
@@ -2795,6 +2882,12 @@ def test_a_corner_on_the_two_lap_line_changes_sides_rather_than_dropping_out():
     said = K.theme_sentence(theme, rows)
     assert said.endswith("— C1 sits on the line between the two."), said
     assert "would not count" not in said, said
+    # The lead (the assert this test carried before the step): with C1 the bigger corner, dropping
+    # it made a SPLIT led by C2; moving it to the pace side makes a PACE theme it still leads.
+    rows = [_corner(1, 0.4, 19, 2), _corner(2, 0.3, 19, 6), _corner(3, 0.3, 19, 0)]
+    flipped = [dataclasses.replace(rows[0], evidence=K._one_lap_over(rows[0].evidence)), *rows[1:]]
+    assert (K.headline_theme(flipped).kind, K.headline_theme(flipped).lead_cid) == (K.THEME_PACE, 1)
+    assert K.theme_tipping_row(K.headline_theme(rows), rows).cid == 1
     # The other direction: a PACE theme decided by a pace corner one lap UNDER its line (3 of 36,
     # line 4). C1 gaining that lap moves 0.10 s to execution: pace 0.55 of 1.00, a SPLIT. C2 (2 of
     # 36) is two laps short and is not a candidate.
@@ -3748,15 +3841,17 @@ def test_the_scope_hover_counts_the_shortlist_the_headline_sums():
         main_scope + " " + K.medians_note())
     demo_tip = cp.OpportunitiesPanel(_level_sessions()["demo"]).summary_label.toolTip()
     assert "The total is your worst corner that cleared" in demo_tip, demo_tip
-    opp = _populated_opps()
-    # (Its rows past C1 are level, so the second is given a ranked loss of its own.)
-    second = dataclasses.replace(opp.rows[1], time_lost=0.30, evidence=dataclasses.replace(
-        opp.rows[1].evidence, abstain=K.ABSTAIN_NONE))
-    two = dataclasses.replace(opp, rows=[opp.rows[0], second] + [dataclasses.replace(
-        r, evidence=dataclasses.replace(r.evidence, abstain=K.ABSTAIN_SPREAD))
-        for r in opp.rows[2:]])
-    tip7 = _full_window_page(two).summary_label.toolTip()
+    # Two: a real session ranking two corners, synthetic seed 3 at 10 laps with two of the sweep's
+    # habits planted (C1, C3), as the report test's PROVISIONAL drive is.
+    import tempfile
+
+    from studio.session import Session
+    with tempfile.TemporaryDirectory(prefix="coach_two_") as tmp:
+        s2 = Session.load(_generate(os.path.join(tmp, "two"), 3, 10, _sweep_habits(10)[:2]).paths)
+        assert [r.cid for r in K.shortlist(s2.coaching_opportunities())] == [1, 3]
+        tip7 = cp.OpportunitiesPanel(s2).summary_label.toolTip()
     assert "The total is your top 2 corners that cleared" in tip7 and "top 3" not in tip7, tip7
+    opp = _populated_opps()
     one = dataclasses.replace(opp, rows=[opp.rows[0]] + [dataclasses.replace(
         r, evidence=dataclasses.replace(r.evidence, abstain=K.ABSTAIN_SPREAD))
         for r in opp.rows[1:]])
@@ -3910,20 +4005,22 @@ def test_the_theme_counts_the_headlines_corners():
     # The subject: more ranked corners than the shortlist's three. The demo was it (its C4 fourth)
     # until the timing step held its C2, C7 and C4 back (cool/coaching-ranks-past-the-step); then the
     # planted sweep's seed 1 at 10 laps (four ranked), until cool/coaching-reach-within-the-step
-    # ranked its planted C1 too and apex came to lead every row. Its seed 4 at 10 laps is it now: C1,
-    # C5, C3 summed, C7 and C6 listed under them (strict, it ranked only C3, C7 and C6).
-    s1 = _sweep_sessions()["seed 4, 10 laps"].coaching_opportunities()
-    assert K.headline(s1).startswith("Whole session · 0.60 s across your top 3 corners"), \
+    # ranked its planted C1 too and apex came to lead every row; then seed 4 at 10 laps, until the
+    # one-off sizing (`Evidence.one_off_s`, #750 review) shrank its C1 and C5 and apex led every row
+    # there too. Seed 3 at 6 laps is it now: C1, C5, C3 summed, C6 and C7 listed under them.
+    s1 = _sweep_sessions()["seed 3, 6 laps"].coaching_opportunities()
+    assert K.headline(s1).startswith("Whole session · 0.58 s across your top 3 corners"), \
         K.headline(s1)
     assert (len(s1.ranked_rows()), s1.theme.n_ranked, len(K.shortlist(s1))) == (5, 3, 3), \
         s1.theme
     sentence, acts = K.theme_lines(s1)
-    assert sentence == ("Most of the time in your top 3 corners is pace, not execution — 77% of it "
-                        "is in corners you have rarely been quick through."), sentence
+    assert sentence == ("No single theme: 78% of the time in your top 3 corners is in corners you "
+                        "have already driven at this pace, 22% in corners you have rarely reached — "
+                        "C1 sits on the line between the two."), sentence
     assert acts[0] == "Apex speed is the common thread — 62% of that time is in C1, C3.", acts[0]
-    # The printed percentage is the shortlist's printed cells' ratio, the headline's 0.60 s.
+    # The printed percentage is the shortlist's printed cells' ratio, the headline's 0.58 s.
     cause = [r for r in K.shortlist(s1) if r.cid in (1, 3)]
-    assert (round(K.shown_total(cause), 2), round(K.shown_total(K.shortlist(s1)), 2)) == (0.37, 0.60)
+    assert (round(K.shown_total(cause), 2), round(K.shown_total(K.shortlist(s1)), 2)) == (0.36, 0.58)
     assert f"{K.shown_total(cause) / K.shown_total(K.shortlist(s1)):.0%}" == "62%"
     # `session_theme` itself still clusters every row it is given (the THEME tables' verdict):
     # over all five ranked rows apex falls under THEME_SHARE and no cause is named.
@@ -4038,11 +4135,11 @@ def test_every_corner_the_theme_names_is_on_the_headlines_shortlist():
         fell += _check_printed_shares(rows)
     assert not off, off
     assert len(sweep) == 41 and longer >= 5, (len(sweep), longer)
-    # The classification is the shortlist's: the planted seed 4 at 10 laps names apex over its top 3
-    # (C1, C3) where all five ranked rows name no cause. (Seed 1 at 10 laps was this subject until
-    # cool/coaching-reach-within-the-step ranked its C1; habit-free seed 9 at 20 laps, the other
-    # way round, until the timing step held its corners back.)
-    s1 = _theme_sweep()["seed 4, 10 laps"]
+    # The classification is the shortlist's: the planted seed 3 at 6 laps names apex over its top 3
+    # (C1, C3) where all five ranked rows name no cause. (Seed 1 and then seed 4 at 10 laps were this
+    # subject until the reach rule and its one-off sizing moved them; habit-free seed 9 at 20 laps,
+    # the other way round, until the timing step held its corners back.)
+    s1 = _theme_sweep()["seed 3, 6 laps"]
     assert K.theme_actions(K.headline_theme(s1), s1)[0] == (
         "Apex speed is the common thread — 62% of that time is in C1, C3.")
     assert K.session_theme(s1).cause == K.REASON_NONE

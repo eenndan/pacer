@@ -323,7 +323,15 @@ def loss_is_level(time_lost: float) -> bool:
 # R was chosen on the first half of the days (S 1 false of 99, R 4 of 189, T70 9 of 231) and held
 # on the second, disjoint half (S 1 of 101, R 2 of 179, T70 7 of 226), and again on a third batch
 # whose seeds no other day and no other plant size shares (60 habit-free days, 36 per plant): S 4
-# false of 106, R 5 of 201; planted kept 8 / 14 / 22 of 36 strict, 14 / 35 / 36 with R. Against S its false share
+# false of 106, R 5 of 201; planted kept 8 / 14 / 22 of 36 strict, 14 / 35 / 36 with R.
+#
+# A ROW RANKED ONLY THROUGH THIS STEP IS SIZED FROM THE NEXT-QUICKEST PASS (#750 review, M2;
+# `Evidence.one_off_s`). Against the lone best pass, times [10.0, 10.30, 10.5 x6] ranked at
+# +0.50 s where the pace two laps reached gives 0.20 s. Measured on all three batches (569 ranked
+# rows, 263 of them such rows; the gate, and so the ranked set, false focus and planted corners
+# kept, are unchanged): printed minus true loss on those rows went from +0.0125 s on average (max
+# +0.084) to -0.0200 s (max +0.061), and the first ranked corner is the truly worst on 346 of 404
+# days either way (the 16 days whose first corner changed split 8 / 8). Against S its false share
 # is within noise (p 0.42; T70's is p 0.05, T35's 0.11), it keeps every planted 0.20 s corner (S:
 # 46 of 72) and 66 of 72 planted 0.10 s ones (S: 40), and a habit-free day ranks nothing on 53 of
 # 120 days instead of 86. A within-0.07 s tolerance alone ranks the most, but more than doubles the
@@ -363,6 +371,11 @@ class Evidence:
     reach: str           # REACH_* — the can't/didn't axis
     iqr: float           # interquartile range of time-in-corner (s); robust where sigma is not
     abstain: str         # ABSTAIN_* — "" when the row carries a ranked claim
+    # On a row ranked ONLY through the next-pass step (reach 1, `loss_to_next_is_level`): how much
+    # quicker the best lap's lone pass was than the next-quickest. The row's time lost is then
+    # measured from that next-quickest pass, not the one-off (`summarize`), and its sentence says so
+    # (`one_off_clause`). 0.0 on every other row.
+    one_off_s: float = 0.0
 
     @property
     def ranked(self) -> bool:
@@ -420,8 +433,9 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
     if n < MIN_CORNER_LAPS:
         abstain = ABSTAIN_FEW_LAPS
     elif reach_laps < MIN_REACH_LAPS and (
-            reach_laps == 0 or SECOND_PASS_STEP_S is None
+            reach_laps == 0 or SECOND_PASS_STEP_S is None or not math.isfinite(float(time_lost))
             or loss_to_next_is_level(t, float(target), float(time_lost))):
+        # (A NaN loss would clear every later test, so a one-lap target never ranks on one.)
         abstain = ABSTAIN_ONE_OFF
     elif float(time_lost) < SPREAD_MARGIN * iqr:
         abstain = ABSTAIN_SPREAD
@@ -429,7 +443,12 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
         abstain = ABSTAIN_LEVEL
     else:
         abstain = ABSTAIN_NONE
-    return Evidence(n_laps=n, reach_laps=reach_laps, reach=reach, iqr=iqr, abstain=abstain)
+    # A row ranked only through the next-pass step is sized from the next-quickest pass: the gain
+    # the evidence supports is what two laps reached, not the lone best pass (#750 review, M2).
+    one_off = (float(max(0.0, np.sort(t)[1] - float(target)))
+               if abstain == ABSTAIN_NONE and reach_laps == 1 else 0.0)
+    return Evidence(n_laps=n, reach_laps=reach_laps, reach=reach, iqr=iqr, abstain=abstain,
+                    one_off_s=one_off)
 
 
 # ------------------------------------------- the braking habit: ONE answer to "how much later?"
@@ -721,7 +740,7 @@ class Opportunity:
 # of the evidence table above is a one-off (3 laps or more at every target). Every chapter row held
 # a one-off when measured (the sentence above the evidence gate), so each may now rank one more
 # corner and move its ranked, abstained and theme cells, and the chapter verdicts in the caveat
-# below with them; none was re-measured (no footage on that machine), and their footage check
+# below with them; none was re-measured since this rule, and their footage check
 # will say.
 #
 # 0068 splits 71 % execution / 29 % pace and 0064 splits 0 % / 100 % — the same track two months
@@ -915,8 +934,16 @@ def theme_tipping_row(theme: Theme, rows: list[Opportunity]) -> Opportunity | No
     verdict is re-run through `headline_theme` itself on the rows with that one row's evidence moved
     (`_one_lap_over`), so the moved row's time changes side and the lead follows exactly as it
     would on the page. `theme` is `headline_theme(rows)`; a row off the shortlist can
-    never tip it, so the corner named is always one the headline counts."""
+    never tip it, so the corner named is always one the headline counts.
+
+    None, too, when the halves PRINT 100 % / 0 % (#750 review, M1): the split form would then read
+    "No single theme: 100% … 0% …", a contradiction in one sentence. With every counted corner on
+    one side the page says the plain theme ("All of the time on offer …"); since a one-lap target
+    can rank (`SECOND_PASS_STEP_S`), a corner on the two-lap line moves side instead of dropping
+    out, and every all-execution session with one there met this."""
     if theme.kind not in (THEME_EXECUTION, THEME_PACE):
+        return None
+    if int(f"{_printed_exec_pct(theme, rows):.0%}"[:-1]) in (0, 100):
         return None
     candidates = []
     for i, r in enumerate(rows):
@@ -1529,11 +1556,18 @@ def summarize(
         # D2: the corner's median thirds over the laps (COACHING-2), exactly as handed in.
         triple = (phases_by_cid or {}).get(c.cid)
         phases = PhaseLoss(*triple) if triple is not None else _NO_PHASES
+        # The per-corner evidence reads the SAME time matrix the loss came from and the SAME
+        # baseline (the best lap's own time through the corner), so a row's "you have matched
+        # this on 9 of 38 laps" is literally a count of the column the median above summarized.
+        evidence = corner_evidence(times[:, i], float(best[i]), float(losses[i]))
+        # A row ranked only through the next-pass step prints, sums and is ordered by its loss to
+        # the next-quickest pass (`Evidence.one_off_s`); every other row's is the median above.
+        lost = float(losses[i]) - evidence.one_off_s
         # L5-04: every ranked row is analysed unless a cap is asked for, so the "How to find it"
         # cell of a row below any cut is a MEASURED "nothing fired" rather than an un-run analysis.
         if top_n is None or rank < top_n:
             reason = _pick_reason(
-                time_lost=float(losses[i]),
+                time_lost=lost,
                 apex_gain=float(apex_gain[i]),
                 brake_extra=float(brake_extra[i]),
                 coast_extra=float(coast_extra[i]),
@@ -1545,26 +1579,23 @@ def summarize(
             half = stats_service.middle_half(times[:, i])
             if (reason.kind == REASON_CONSISTENCY and half is not None
                     and not stats_service.corner_spread_clears_level(half)):
-                reason = _reason_when_level(reason, float(losses[i]))
+                reason = _reason_when_level(reason, lost)
         else:
             reason = Reason(kind=REASON_NONE, contribution=0.0, apex_speed_deficit=0.0,
                             brake_extra_s=0.0, coast_extra_s=0.0,
                             sigma=float(sigmas_by_cid.get(c.cid, 0.0)))
         rows.append(Opportunity(
-            cid=c.cid, direction=c.direction, time_lost=float(losses[i]),
-            entry_dist=float(c.enter), reason=reason, phases=phases,
-            # The per-corner evidence reads the SAME time matrix the loss came from and the SAME
-            # baseline (the best lap's own time through the corner), so a row's "you have matched
-            # this on 9 of 38 laps" is literally a count of the column the median above summarized.
-            evidence=corner_evidence(times[:, i], float(best[i]), float(losses[i])),
+            cid=c.cid, direction=c.direction, time_lost=lost,
+            entry_dist=float(c.enter), reason=reason, phases=phases, evidence=evidence,
         ))
     # Abstained rows sink BELOW the ranked ones (each half keeps the loss ranking, which the
     # stable sort preserves). They are never dropped — the panel shows them with the reason they
     # are not ranked — but a row with no claim must not sit above rows that have one, and
     # everything downstream that reads `rows[0]` or `rows[:3]` (the share card's headline
     # opportunity, the panel's top-N total, the Stats digest) then gets a row that survived the
-    # gate instead of the biggest number.
-    rows.sort(key=lambda r: not r.evidence.ranked)
+    # gate instead of the biggest number. The ranked half is re-ordered by its printed loss, which a
+    # one-off-sized row (`Evidence.one_off_s`) can change; the rest keep the order they had.
+    rows.sort(key=lambda r: (not r.evidence.ranked, -r.time_lost if r.evidence.ranked else 0.0))
     return Opportunities(enough=True, n_laps=n_laps, median_lap_id=med_id, rows=rows,
                          theme=headline_theme(rows))
 
@@ -1719,7 +1750,8 @@ def _nothing_stands_out(opps: Opportunities) -> bool:
     return bool(shown) and ABSTAIN_NONE not in kinds and ABSTAIN_LEVEL in kinds
 
 
-def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = True) -> str:
+def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = True,
+                    one_off: bool = True) -> str:
     """The human, numbers-only coaching sentence for one opportunity's dominant reason. Kept
     here (next to the model) so the panel and any export read ONE phrasing and can't drift. When
     a clear dominant phase exists (D2) a reason-aware clause is appended (a fix-location "… — most
@@ -1736,7 +1768,9 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
     `reach` False returns the lever alone, for a surface that states the count itself or has no
     room for it: the Coaching row whose "Done it?" cell is on screen, and the lap card, which cut
     the clause mid-word (QA JOURNEY-7/8). The count is never dropped from a Coaching row: while
-    "Done it?" is hidden the sentence carries it again (`coaching_panel`)."""
+    "Done it?" is hidden the sentence carries it again (`coaching_panel`). `one_off` False leaves
+    off `one_off_clause` too, for the share card's one-line lever (its number is already the
+    one-off-sized loss)."""
     if not opp.evidence.ranked:
         return abstain_sentence(opp)
     r = opp.reason
@@ -1782,11 +1816,24 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
     else:
         base = "find time here"
     lever = base + dominant_phase_clause(opp)
-    count = reach_clause(opp) if reach else ""
+    count = (reach_clause(opp) if reach else "") + (one_off_clause(opp) if one_off else "")
     # The lever has never carried a terminator — it is a fragment read under a "How to find it"
     # header. The reach clause is a second SENTENCE, so it needs one in front of it, and only when
     # there is one: an unmeasured row (REACH_UNKNOWN) still prints byte-identically to before.
     return f"{lever}.{count}" if count else lever
+
+
+def one_off_clause(opp: Opportunity) -> str:
+    """" It is to your second-quickest pass here: your best lap was a one-off, 0.30 s quicker
+    still." on a row ranked only through the next-pass step (`Evidence.one_off_s`), whose time
+    lost is measured from that second-quickest pass — or "" on every other row. Printed beside the
+    count or without it: the "Done it?" cell says 1 of N, which does not say what the number is
+    measured from."""
+    gap = getattr(getattr(opp, "evidence", None), "one_off_s", 0.0)
+    if not gap or gap <= 0.0:
+        return ""
+    return (f" It is to your second-quickest pass here: your best lap was a one-off, {gap:.2f} s "
+            "quicker still.")
 
 
 # ------------------------------------------------------- the session theme, in words
