@@ -561,4 +561,5 @@ if __name__ == "__main__":
     test_the_toast_follows_its_anchor_when_the_window_resizes()
     test_the_toast_does_not_cover_the_row_it_is_announcing()
     test_an_unliftable_keepout_keeps_the_placement_that_shipped()
+    test_a_longer_body_widens_the_card_instead_of_growing_it()
     print("\nAll PB-toast hit-target + anchoring tests passed.")
