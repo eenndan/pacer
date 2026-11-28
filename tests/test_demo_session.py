@@ -144,7 +144,9 @@ def _assert_the_planted_call(s, ranked, shortlist):
     assert all(r.reason.kind == "level" and r.time_lost < 0.07 for r in held), held
     # As sharp as the old margin: C1 is at least 9x its best level row (0.361 against 0.036 s), and
     # the one row past the step that is not ranked is C3, held back for having no second lap at
-    # its target, at under a quarter of C1.
+    # its target, at under a quarter of C1. (Since cool/coaching-reach-within-the-step a one-lap
+    # target ranks when the typical pass loses the step to the next-quickest pass too: C3's +0.08 s
+    # is 0.05 s behind its next-quickest, so it stays held back.)
     assert top.time_lost >= 9 * max(r.time_lost for r in held), (top.time_lost, held)
     past = [r for r in rows if r.cid != top.cid and r.time_lost >= 0.07]
     assert [(r.cid, r.evidence.abstain) for r in past] == [(3, "one_off")], past

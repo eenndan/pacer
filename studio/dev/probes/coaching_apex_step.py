@@ -108,8 +108,8 @@ def _true_fastest(seed: int, laps: int) -> tuple[int, ...]:
 
 def _plant(seed: int, laps: int, kmh: float) -> sg.Habit | None:
     """An apex habit of `kmh` km/h at PLANT_CID on every timed lap but the CLEAN_LAPS true fastest
-    (one clean lap alone is a one-off the evidence gate abstains on: no second lap matches the
-    best): the corner limit is sqrt(grip / κ), so grip × (1 − kmh / v_apex)² takes kmh off it."""
+    (one clean lap alone could be a one-off the evidence gate abstains on, when no second lap
+    comes near the best): the corner limit is sqrt(grip / κ), so grip × (1 − kmh / v_apex)² takes kmh off it."""
     if kmh <= 0:
         return None
     t = sg.simulate(seed, laps, origin=make_demo.DEMO_ORIGIN)

@@ -545,7 +545,10 @@ def test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie
     # (median of N clean laps)" is unchanged.
     assert "over your {TYPICAL_PASS} (" in inspect.getsource(story)
     src = inspect.getsource(coaching.headline)
-    assert "{LOSS_BASELINE}" in src and '" vs your best lap"' not in src
+    # (Since #750 the headline picks between the two named baselines: "vs best passes" when a
+    # summed row is measured to the second-quickest pass. Both are constants, neither retyped.)
+    assert "SIZED_LOSS_BASELINE if sized else LOSS_BASELINE" in src, src
+    assert '" vs your best lap"' not in src and '"vs best passes"' not in src
     print("test_the_opportunity_names_its_baseline_in_the_apps_words_singular_for_a_tie_too OK")
 
 

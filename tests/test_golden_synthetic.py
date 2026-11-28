@@ -57,7 +57,9 @@ Session-math leaf in full — see golden_session_dump), across three phases mirr
                       Session: no GPMF, no ``pacer.Laps`` crossing interpolation, no valid-lap band,
                       2-4 laps against lap-count gates of 5-8 (`MATRIX_MIN_LAPS`, `TREND_MIN_LAPS`,
                       `MIN_SPLIT_LAPS`, `corners.ANCHOR_MIN_LAPS`), so 116 of their leaves were the
-                      placeholder and coaching was fingerprinted as two abstaining rows. This phase
+                      placeholder and coaching was fingerprinted as two abstaining rows (in
+                      ``drift_band`` two ranked ones since cool/coaching-reach-within-the-step,
+                      each lost past the step to its next-quickest pass too). This phase
                       writes the synthetic GoPro recording (studio/dev/synth_gopro.py: a HERO13-shaped
                       two-chapter .MP4, GPS9 with noise/glitches/an acquisition period, IMU, the
                       measured clock offsets; fixed seed) into a temp dir and loads it through
@@ -545,7 +547,8 @@ def test_gopro_phases_reach_what_the_seeded_phases_cannot():
          (`MIN_SPLIT_LAPS`) and the consensus-line anchor (`corners.ANCHOR_MIN_LAPS`);
       3. coaching LISTS corners and holds the level ones back (every one loses under the timing
          step or fails another test), while the planted-habit phase RANKS its corner past the step
-         (the seeded phases' two rows both abstain); the ideal lap is stitched from more than one
+         (the seeded phases' two rows abstain, but in ``drift_band``, where both rank as pace work
+         since cool/coaching-reach-within-the-step); the ideal lap is stitched from more than one
          lap and beats the best one;
       4. `gopro_sectors` has three sectors on every valid lap, each split finite and summing to
          its lap time, and a SPLITS grid;
@@ -913,6 +916,53 @@ def test_synthetic_fingerprint_matches_baseline():
           f"{_census_line(fp)}")
 
 
+# What `drift_band`'s coaching theme was under the strict reach match (the baseline before
+# cool/coaching-reach-within-the-step's re-cut): its two rows both one-offs, nothing ranked.
+_STRICT_DRIFT_BAND_THEME = {"cause": "none", "cause_cids": [], "cause_share": 0.0,
+                            "execution_s": 0.0, "kind": "none", "lead_cid": None,
+                            "n_abstained": 2, "n_ranked": 0, "pace_s": 0.0, "share": 0.0}
+
+
+def test_the_reach_switch_off_restores_the_strict_gate():
+    """`coaching.SECOND_PASS_STEP_S` is the one switch cool/coaching-reach-within-the-step added,
+    and it amends an owner ruling (COACHING-4 amendment (1)) by the coordinator's: set to None it
+    must give back the strict "matched or beat" gate EXACTLY. On every golden phase the switched-off
+    fingerprint equals the committed baseline but in drift_band's coaching, the one phase with a
+    corner ranked only through the next-pass step, which reads as the strict gate read it: its two
+    rows one-offs, each sized against the best lap's pass (the baseline's printed loss plus its
+    `one_off_s`, which is 0), in that loss's order, and its theme none — and those leaves do move,
+    so the check is not vacuous. A row's reason contribution is read off its printed loss, so that
+    one leaf is left out of the drift_band rows."""
+    import copy
+
+    with open(BASELINE) as f:
+        baseline = json.load(f)
+    saved = coaching.SECOND_PASS_STEP_S
+    coaching.SECOND_PASS_STEP_S = None
+    try:
+        fp = json.loads(json.dumps(synthetic_fingerprint()))
+    finally:
+        coaching.SECOND_PASS_STEP_S = saved
+    strict = copy.deepcopy(baseline)
+    band = strict["drift_band"]["coaching_opportunities"]
+    assert any(row["evidence"]["one_off_s"] > 0 for row in band["rows"]), band["rows"]
+    for row in band["rows"]:
+        row["time_lost"] += row["evidence"]["one_off_s"]
+        row["evidence"]["one_off_s"] = 0.0
+        row["evidence"]["abstain"] = coaching.ABSTAIN_ONE_OFF
+    band["rows"].sort(key=lambda row: -row["time_lost"])
+    band["theme"] = dict(_STRICT_DRIFT_BAND_THEME)
+    got = copy.deepcopy(fp)
+    for tree in (strict, got):
+        for row in tree["drift_band"]["coaching_opportunities"]["rows"]:
+            row["reason"].pop("contribution")
+    diffs, _stats = _compare(strict, got)
+    assert not diffs, "the switch off is not the strict gate:\n  " + "\n  ".join(diffs[:20])
+    moved, _ = _compare(baseline, fp)
+    assert moved and all(".drift_band.coaching_opportunities." in d for d in moved), moved
+    print(f"ok reach switch off: the strict gate on every phase ({len(moved)} leaves revert)")
+
+
 def _write_baseline():
     """Re-cut the baseline and say what moved. It used to rewrite silently, so a leaf that had
     turned NaN or fallen to a placeholder could be accepted by a re-cut without anyone seeing it."""
@@ -974,6 +1024,7 @@ if __name__ == "__main__":
         test_gopro_phases_reach_what_the_seeded_phases_cannot,
         test_coaching_thirds_are_the_phase_report_rows_in_every_phase,
         test_synthetic_fingerprint_matches_baseline,
+        test_the_reach_switch_off_restores_the_strict_gate,
     ]
     for t in tests:
         t()
