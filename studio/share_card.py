@@ -142,11 +142,16 @@ class TopOpp:
     which is what the Coaching page's "Start with C5, C2 or C8" names."""
 
     corner_label: str    # "C4 ⟳" — corner id + turn-direction glyph; a tie: "C5 · C2 · C8"
-    time_lost_s: float   # median s lost vs the best lap's same corner (> 0); a tie: the lead's
+    time_lost_s: float   # median s lost vs the best lap's same corner (> 0) — vs the second-
+    #                      quickest pass on a corner only the best lap reached (`sized`); a
+    #                      tie: the lead's
     reason: str          # the human, numbers-only reason sentence (unit-aware, ESTIMATED-safe);
     #                      "" for a tie — a reason is one corner's, and no corner leads
     tied_low_s: float | None = None  # a tie: the smallest tied loss; None when one corner leads
     cids: tuple[int, ...] = ()       # the corner(s) the label names — ringed on the card's map
+    # A figure measured to the second-quickest pass (`coaching.Evidence.one_off_s`): one corner, or
+    # any of a tie's. Its baseline line says so (`opp_baseline`).
+    sized: bool = False
 
 
 # The heading over a tie. The page's own reason for refusing the crown is "closer together than
@@ -171,9 +176,11 @@ def opp_loss(opp: TopOpp) -> str:
     return f"{hi} s each" if lo == hi else f"{hi} to {lo} s"
 
 
-def opp_baseline() -> str:
+def opp_baseline(opp: "TopOpp | None" = None) -> str:
     """What the opportunity's figure is measured against, printed over it:
-    "typical pass vs your best lap's".
+    "typical pass vs your best lap's" — or, for a figure measured to the second-quickest pass
+    (`TopOpp.sized`, #750 re-review B), "typical pass vs your second-quickest pass", and over a
+    tie with such a corner in it "typical pass vs your best passes".
 
     K2 (cool/card-and-keys): on the demo the card read "+0.32 s vs your ideal lap" and, lower down,
     "BIGGEST OPPORTUNITY C1 +0.36 s" — a part bigger than its whole, because the two gaps have
@@ -188,6 +195,9 @@ def opp_baseline() -> str:
     # Imported here, not at the top: the module's import line is being edited by another change.
     from .stats import TYPICAL_PASS
 
+    if opp is not None and opp.sized:
+        return (f"{TYPICAL_PASS} vs your best passes" if opp.tied_low_s is not None
+                else f"{TYPICAL_PASS} vs your second-quickest pass")
     return f"{TYPICAL_PASS} {coaching.LOSS_BASELINE}'s"
 
 
@@ -284,6 +294,11 @@ def _read_opportunities(session):
         return None
 
 
+def _sized(row) -> bool:
+    """Whether a Coaching row's figure is measured to the second-quickest pass, not the best lap's."""
+    return getattr(getattr(row, "evidence", None), "one_off_s", 0.0) > 0.0
+
+
 def _top_opportunity(session, unit: str, opps=None) -> TopOpp | None:
     """The biggest coaching opportunity as a display row — or the corners tied with it — or None
     when the session has too few clean laps or no corner is losing time. Reuses the CANONICAL
@@ -318,7 +333,8 @@ def _top_opportunity(session, unit: str, opps=None) -> TopOpp | None:
             label = " · ".join(f"C{r.cid}" for r in named) + (f" · {extra} more" if extra else "")
             return TopOpp(corner_label=label, time_lost_s=float(tied[0].time_lost), reason="",
                           tied_low_s=float(tied[-1].time_lost),
-                          cids=tuple(int(r.cid) for r in named))
+                          cids=tuple(int(r.cid) for r in named),
+                          sized=any(_sized(r) for r in tied))
         glyph = CORNER_DIR_GLYPH.get(opp.direction, "")
         label = f"C{opp.cid} {glyph}".strip()
         # The lever alone (QA JOURNEY-7): the "4 of 36 laps matched your best lap here" count was
@@ -326,7 +342,7 @@ def _top_opportunity(session, unit: str, opps=None) -> TopOpp | None:
         # read by people for whom the lever is the news.
         return TopOpp(corner_label=label, time_lost_s=float(opp.time_lost),
                       reason=coaching.reason_sentence(opp, unit, reach=False, one_off=False),
-                      cids=(int(opp.cid),))
+                      cids=(int(opp.cid),), sized=_sized(opp))
     except Exception:  # noqa: BLE001 — the card degrades to "no opportunity", never crashes
         return None
 
@@ -611,7 +627,7 @@ def _paint(data: CardData, map_png: bytes | None) -> QImage:
         # steps are a guard.
         p.setFont(heading_font)
         base_avail = right - pad - p.fontMetrics().horizontalAdvance(opp_heading(opp)) - _OPP_GAP
-        base, base_font = _fit_line(p, opp_baseline(), base_avail, _OPP_BASE_PX_STEPS)
+        base, base_font = _fit_line(p, opp_baseline(opp), base_avail, _OPP_BASE_PX_STEPS)
         _draw_text(p, 0, opp_top, base, base_font, theme.C.text_muted, align_right_at=right)
         loss, loss_font = opp_loss(opp), _font(46, theme.W_SEMIBOLD)
         p.setFont(loss_font)

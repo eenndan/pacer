@@ -2122,6 +2122,74 @@ def test_a_one_lap_target_is_sized_from_the_next_quickest_pass():
     print(f"ok one-off sizing: C1 +0.20 s (not +0.50 s), {said!r}")
 
 
+def test_the_one_off_clause_states_no_gap_under_the_step():
+    """#750 re-review, A (a claim must beat the step): 53 of 62 sized rows on the reviewer's grid
+    said "your best lap was a one-off, 0.0x s quicker still", 9 of them "0.00 s" (seed 8003, 9 laps,
+    C4 planted). Under the printed step the best pass and the second-quickest are level, and the
+    clause says so with no number; at or past it, the number. On the printed figure: 0.0649 prints
+    0.06 (level), 0.0651 and 0.07 print 0.07."""
+    def clause(gap):
+        ev = K.Evidence(n_laps=9, reach_laps=1, reach=K.REACH_RARE, iqr=0.02, abstain="",
+                        one_off_s=gap)
+        return K.one_off_clause(K.Opportunity(
+            cid=4, direction=1, time_lost=0.2, entry_dist=0.0,
+            reason=K.Reason(K.REASON_APEX, 0.1, 3.0, 0.0, 0.0, 0.1), evidence=ev))
+    level = " It is to your second-quickest pass here, level with your best lap (within 0.07 s)."
+    for gap in (0.001, 0.004, 0.0649):
+        assert clause(gap) == level, (gap, clause(gap))
+    for gap in (0.0651, 0.07):
+        assert clause(gap) == (" It is to your second-quickest pass here: your best lap was a "
+                               "one-off, 0.07 s quicker still."), (gap, clause(gap))
+    assert clause(0.0) == ""
+    print(f"ok one-off clause under the step: {level!r}")
+
+
+def test_a_sized_figure_is_labelled_against_the_second_quickest_pass():
+    """#750 re-review, B: a figure measured to the second-quickest pass was labelled "vs your best
+    lap" where no clause corrects it: the share card's baseline line over its opportunity (drawn
+    with the lever alone) and the Time-lost column's hover, which the report prints as its column
+    note. The card says "typical pass vs your second-quickest pass" over a sized corner and "vs your
+    best passes" over a tie holding one, printed whole at the first size under its heading; the
+    hover gains the sentence."""
+    from PySide6.QtGui import QImage, QPainter
+
+    from studio import share_card, theme
+    _qapp()
+    one = share_card.TopOpp(corner_label="C4 ⟳", time_lost_s=0.2, reason="", cids=(4,), sized=True)
+    tie = share_card.TopOpp(corner_label="C1 · C4", time_lost_s=0.2, reason="", tied_low_s=0.15,
+                            cids=(1, 4), sized=True)
+    plain = share_card.TopOpp(corner_label="C1", time_lost_s=0.2, reason="", cids=(1,))
+    assert share_card.opp_baseline(one) == "typical pass vs your second-quickest pass"
+    assert share_card.opp_baseline(tie) == "typical pass vs your best passes"
+    assert share_card.opp_baseline(plain) == share_card.opp_baseline() == (
+        "typical pass vs your best lap's")
+    pad, right = 72, share_card.CARD_W - 72
+    probe = QImage(10, 10, QImage.Format_ARGB32)
+    p = QPainter(probe)
+    try:
+        for top in (one, tie):
+            p.setFont(share_card._font(28, theme.W_SEMIBOLD))
+            avail = (right - pad - p.fontMetrics().horizontalAdvance(share_card.opp_heading(top))
+                     - share_card._OPP_GAP)
+            txt, font = share_card._fit_line(p, share_card.opp_baseline(top), avail,
+                                             share_card._OPP_BASE_PX_STEPS)
+            assert txt == share_card.opp_baseline(top) and font.pixelSize() == 24, (txt, avail)
+    finally:
+        p.end()
+    assert ("A corner only your best lap reached is measured to your second-quickest pass"
+            in K.COLUMN_TIPS["Time lost"]), K.COLUMN_TIPS["Time lost"]
+    # The card's own opportunity carries it: C1, reached once, leads at its loss to the
+    # second-quickest pass (0.45 s against C2's 0.25 s).
+    corners, best = _corners(2), [10.0, 5.0]
+    times = [[10.0, 5.0], [10.05, 5.0]] + [[10.5, 5.25] for _ in range(6)]
+    opps = K.summarize(corners, list(range(len(times))), [sum(t) for t in times], times, best,
+                       sigmas_by_cid={1: 0.05, 2: 0.05}, **_levers(times, best, apex=95.0))
+    top = share_card._top_opportunity(None, "kmh", opps)
+    assert top is not None and top.cids == (1,) and top.sized, top
+    assert share_card.opp_baseline(top) == "typical pass vs your second-quickest pass"
+    print("ok sized labels: card baseline and the Time-lost hover")
+
+
 def test_the_step_to_the_next_pass_is_decided_on_the_printed_figure():
     """#750 review, L3: a mutant comparing the UNROUNDED loss-to-next-pass with the step survived
     test_coaching. On the printed figure, as `loss_is_level` decides: 0.0649 prints 0.06 (a one-off),

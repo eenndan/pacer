@@ -1826,12 +1826,19 @@ def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = Tru
 def one_off_clause(opp: Opportunity) -> str:
     """" It is to your second-quickest pass here: your best lap was a one-off, 0.30 s quicker
     still." on a row ranked only through the next-pass step (`Evidence.one_off_s`), whose time
-    lost is measured from that second-quickest pass — or "" on every other row. Printed beside the
+    lost is measured from that second-quickest pass — or, when that gap prints under the 0.07 s
+    step, "… here, level with your best lap (within 0.07 s)." — or "" on every other row. Printed beside the
     count or without it: the "Done it?" cell says 1 of N, which does not say what the number is
     measured from."""
     gap = getattr(getattr(opp, "evidence", None), "one_off_s", 0.0)
     if not gap or gap <= 0.0:
         return ""
+    if loss_is_level(gap):
+        # A claim must beat the step (#750 re-review, A): 53 of 62 sized rows on the reviewer's
+        # grid printed "a one-off, 0.0x s quicker still", 9 of them "0.00 s". Under the printed
+        # step the two passes are level, and the clause says that instead of a number.
+        return (" It is to your second-quickest pass here, level with your best lap (within "
+                f"{LOSS_STEP_S:.2f} s).")
     return (f" It is to your second-quickest pass here: your best lap was a one-off, {gap:.2f} s "
             "quicker still.")
 
@@ -2499,7 +2506,9 @@ COLUMN_TIPS = {
     "Time lost": f"Your {stats_service.TYPICAL_PASS}: the median time lost through this corner "
                  "over your clean laps, versus your own best lap's same corner (seconds). One lap's "
                  "own gap is on the Corners tab. A lap counts at a corner only where it was "
-                 "matched to your best lap's line on track at the corner's entry and exit.",
+                 "matched to your best lap's line on track at the corner's entry and exit. A "
+                 "corner only your best lap reached is measured to your second-quickest pass "
+                 "there instead.",
     "Done it?": "How many of your clean laps already matched or beat your best lap's time "
                 "through this corner, out of the laps matched on track there. Many of them — "
                 "repeat what you have already driven. Few — this is pace you have not "
