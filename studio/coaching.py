@@ -1689,8 +1689,11 @@ def abstain_sentence(opp: Opportunity) -> str:
         return (f"Not ranked: the {opp.time_lost:.2f} s on offer is inside your own lap-to-lap "
                 f"spread here — the middle half of your laps spans {ev.iqr:.2f} s.")
     if ev.abstain == ABSTAIN_LEVEL:
-        return (f"Not ranked: level with your best lap here — the {opp.time_lost:.2f} s is "
-                f"within timing precision (under {LOSS_STEP_S:.2f} s).")
+        # The TYPICAL pass is what is level, and the sentence says so (0.29.0 QA): Corners ▸ Lap N
+        # is one lap against the best lap and can show this corner bold "+0.07" on one lap, which
+        # "level with your best lap here" read as contradicting. `time_lost` is the median.
+        return (f"Not ranked: your {stats_service.TYPICAL_PASS} here is level with your best lap "
+                f"— {opp.time_lost:.2f} s, within timing precision (under {LOSS_STEP_S:.2f} s).")
     return ""
 
 
@@ -2444,8 +2447,11 @@ PHASE_HEADER = "Median Δt"
 COLUMN_TIPS = {
     "Corner": "The corner's number in track order, with an arrow for its direction — "
               "anticlockwise is a left-hander, clockwise a right.",
-    "Time lost": "Median time lost through this corner versus your own best lap's same corner, "
-                 "over your clean laps (seconds). A lap counts at a corner only where it was "
+    # Names the TYPICAL pass, the words of the level row and the report's totals note: one lap's
+    # own gap at a corner is the Corners tab's, and can sit past the step where this one does not.
+    "Time lost": f"Your {stats_service.TYPICAL_PASS}: the median time lost through this corner "
+                 "over your clean laps, versus your own best lap's same corner (seconds). One lap's "
+                 "own gap is on the Corners tab. A lap counts at a corner only where it was "
                  "matched to your best lap's line on track at the corner's entry and exit.",
     "Done it?": "How many of your clean laps already matched or beat your best lap's time "
                 "through this corner, out of the laps matched on track there. Many of them — "

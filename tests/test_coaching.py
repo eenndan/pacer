@@ -3445,10 +3445,17 @@ def test_the_demo_ranks_only_past_the_timing_step():
     for c, printed in (("C2", "0.04"), ("C7", "0.03"), ("C4", "0.03")):
         lost, reason = cells[c]
         assert lost.foreground().color() == QColor(C.text_dim), (c, lost.foreground().color())
-        assert reason.text() == (f"Not ranked: level with your best lap here — the {printed} s is "
-                                 "within timing precision (under 0.07 s)."), (c, reason.text())
+        # The TYPICAL pass is what is level (0.29.0 QA): Corners ▸ Lap 5 shows C2 bold "+0.07"
+        # for one lap, and a row that said only "level with your best lap" read as contradicting it.
+        assert reason.text() == (f"Not ranked: your typical pass here is level with your best lap "
+                                 f"— {printed} s, within timing precision (under 0.07 s)."), \
+            (c, reason.text())
+    # The column's number is the same typical pass, and its hover says so and where one lap's is.
+    tip = t.horizontalHeaderItem(1).toolTip()
+    assert tip.startswith("Your typical pass: the median time lost through this corner") \
+        and "Corners tab" in tip, tip
     panel.close()
-    print("ok demo: C1 ranked alone; C2, C7, C4 muted and 'Not ranked: level …' in words")
+    print("ok demo: C1 ranked alone; C2, C7, C4 muted and 'Not ranked: your typical pass …' in words")
 
 
 def test_a_planted_corner_ranks_past_the_step_and_one_inside_it_does_not():
@@ -3799,8 +3806,8 @@ def test_a_level_row_takes_no_phase_tail():
     c7 = next(r for r in demo.rows if r.cid == 7)
     assert c7.reason.kind == K.REASON_LEVEL and c7.phases.dominant == K.PHASE_APEX, c7
     assert max(c7.phases.as_tuple()) < K.LEVEL_STEP_S, c7.phases
-    held = ("Not ranked: level with your best lap here — the 0.03 s is within timing precision "
-            "(under 0.07 s).")
+    held = ("Not ranked: your typical pass here is level with your best lap — 0.03 s, within "
+            "timing precision (under 0.07 s).")
     assert K.reason_sentence(c7, reach=False) == held, K.reason_sentence(c7, reach=False)
     for directions in (None, _level_sessions()["demo"].coaching_brake_direction()):
         row = next(r for r in K.page_text(demo, directions).rows if r.cid == 7)
@@ -4237,7 +4244,7 @@ def _land_compare_at_c1(v, s, button, typical: int = 3, status: str | None = Non
 
 
 def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corner():
-    """The published demo in the real window, offscreen: the debrief has no Compare (RUL-7); the C
+    """The published demo in the real window, offscreen: the debrief's row Compares too; the C
     key's pair is unchanged; a ranked row's Compare pins (lap 4, the typical C1 pass; lap 13, the
     best lap), seeks each pane to its own entry to C1, frames the charts on C1 as N frames a loss,
     rings C1 and names both passes; its figures reconcile with the row; it ends a race; a lap pick
@@ -4263,11 +4270,15 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             _open(win, path)
             v, s = win.view, win.session
             page, t = v.opportunities, v.opportunities.table
-            # THE DEBRIEF HAS NO COMPARE: a hidden column, not a narrow one (Jump is on screen).
+            # THE DEBRIEF'S RANKED ROW OFFERS THE SAME COMPARE (corner-first, so RUL-7 does not
+            # keep it off: coordinator ruling, wave 27): its own column beside Jump, and its click
+            # lands what the docked row's lands, on the docked Coaching page whose row says why.
             assert page.is_debrief() and t.rowCount() >= 1
-            assert t.isColumnHidden(cp._PANEL_COL_CMP) and not t.isColumnHidden(cp._PANEL_COL_GO)
-            assert not any(t.cellWidget(r, cp._PANEL_COL_GO).is_stacked()
-                           for r in range(t.rowCount())), "the debrief stacked a Compare"
+            assert not t.isColumnHidden(cp._PANEL_COL_CMP)
+            assert not t.isColumnHidden(cp._PANEL_COL_GO)
+            _land_compare_at_c1(v, s, t.cellWidget(0, cp._PANEL_COL_CMP))
+            assert not page.is_debrief() and v.tab_bar.currentIndex() == 3
+            win.toggle_compare()
             _open(win, path)
             win._escape_out()
             v, s = win.view, win.session                 # a load builds a new view

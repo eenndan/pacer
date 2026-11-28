@@ -230,7 +230,7 @@ def test_every_coaching_string_is_page_texts_in_the_pages_order():
     assert got["actions"][-1] == "Start with C1: +0.36 s, and you have matched it on 6 of 14 laps."
     reasons = [r[3] for r in got["rows"]]
     assert reasons[0].endswith("\nBraking later went with quicker passes here (14 laps)"), reasons
-    assert sum(r.startswith("Not ranked: level with your best lap here") for r in reasons) == 3
+    assert sum(r.startswith("Not ranked: your typical pass here is level with your best lap") for r in reasons) == 3
     muted = [r for r in got["rows"] if not r[4]]
     assert len(muted) == 5 and all(r[3].startswith("Not ranked: ") for r in muted), muted
     tie = _assert_page_text_on_page(_sessions()["tie"])
