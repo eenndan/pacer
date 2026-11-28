@@ -1713,7 +1713,10 @@ def test_panel_is_a_full_uncapped_page_with_headline():
     assert not hasattr(panel, "collapse_btn"), "no chevron — a tab you leave costs nothing"
     txt = panel.summary_label.text()
     assert txt and not txt.startswith("Coaching · "), txt
-    assert "corner" in txt, "the headline reads the summary sentence"
+    # The summary sentence itself (`coaching.headline`). It said "corner" in every form until the
+    # held-back one ("C2 +1.92 s: only your best lap was that quick", this 4-lap stadium session),
+    # which names the corner by its label instead.
+    assert txt == K.headline(s.coaching_opportunities()), "the headline reads the summary sentence"
     print("ok panel: full uncapped page, plain headline, no collapse machinery")
 
 
