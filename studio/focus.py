@@ -637,6 +637,8 @@ class Outcome:
     same_day: bool = False          # a BLOCK_NO_RECORD refusal between two sessions of ONE date:
                                     #   its words are "the two sessions", not "the two days"
     now_day: str = THIS_SESSION     # the open session's name in the line (`open_day`)
+    then: str = ""                  # the baseline's session in a verdict line, in place of its
+                                    #   day: "your 11:00 session" on that day (`_then_name`)
 
     @property
     def has_verdict(self) -> bool:
@@ -1006,7 +1008,8 @@ def verdict(items: list[FocusItem], now_ctx: dict, samples: list[CornerSample | 
         else:
             kind = OUTCOME_IMPROVED if delta < 0 else OUTCOME_SLOWER
         outcomes.append(Outcome(item=item, kind=kind, now=now, delta=float(delta),
-                                karts=session_record.kart_pair(rec_then, rec_now), now_day=day))
+                                karts=session_record.kart_pair(rec_then, rec_now), now_day=day,
+                                then=_then_name(item, now_ctx)))
     waiting = [o for o in outcomes if o.blocker == BLOCK_NO_RECORD]
     if waiting and now_fp and session_record.is_empty(rec_now):
         # Named as every line names it (`open_day`): "Mark today dry" on a 13 Sep session named a
@@ -1039,6 +1042,21 @@ def _when(date: str | None) -> str:
     if day is None:
         return "last time"
     return f"{day.day} {_MONTHS[day.month - 1]}"
+
+
+# A SAME-DAY BASELINE IS A SESSION, NOT A DAY (cool/same-day-verdict-names-the-session). Between
+# heats the list is set on one heat and read on the next: "C4 — 0.14 s faster than 1 Jun" on a 1 Jun
+# session named the day it was read on, and not which heat. On the same calendar day the verdict
+# names the baseline's session by its start clock — the local clock the Library rows print
+# (`library.clock_hhmm`) — and every other day reads exactly as before.
+def _then_name(item: FocusItem, now_ctx: dict) -> str:
+    """"your 11:00 session" when `item`'s baseline was recorded on the same calendar day as the
+    session `now_ctx` describes and carries its start clock, else "" (the line says `_when`'s day)."""
+    then = _day(item.date)
+    if then is None or then != _day(now_ctx.get("date")) or not item.start_ms:
+        return ""
+    clock = library.clock_hhmm(int(item.start_ms))
+    return f"your {clock} session" if clock else ""
 
 
 _BLOCK_SENTENCE = {
@@ -1162,7 +1180,7 @@ def outcome_sentence(o: Outcome) -> str:
         return (f"{label} — no change you can act on: {abs(o.delta):.2f} s apart, inside the "
                 f"corner's own {spread:.2f} s spread ({body}).")
     word = "faster" if o.kind == OUTCOME_IMPROVED else "slower"
-    return f"{label} — {abs(o.delta):.2f} s {word} than {when} ({body})."
+    return f"{label} — {abs(o.delta):.2f} s {word} than {o.then or when} ({body})."
 
 
 def mark_dry_prompt(report: Report | None) -> tuple[str, str, str] | None:
