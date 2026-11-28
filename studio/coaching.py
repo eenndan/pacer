@@ -1881,6 +1881,25 @@ def one_off_clause(opp: Opportunity) -> str:
             "quicker still.")
 
 
+def compare_lost_text(opp: Opportunity) -> str:
+    """The row's Time lost as its Compare's status line names it: `lost_text`, and on a row sized
+    to the second-quickest pass (`Evidence.one_off_s`) what that figure is measured from. The
+    Compare puts the BEST lap's pass beside the typical one, so its two printed passes and the
+    hero's "since C4 entry" count the one-off as well: on a synthetic session (seed 52, C4 planted
+    with one clean lap) "+0.12 s" sat beside passes 0.21 s apart, past the step, with no word
+    saying why (0.30.0 release QA). Every other row: `lost_text`, unchanged.
+
+    Three words, not the row's clause: the status line already holds the two passes and the
+    typical (1052 px of the bar's ~1263 at 1280x800 on that session); the row's whole clause made
+    it 1479 px and cut it, and "… to your second-quickest pass" is 1277 px at C12 / lap 148. The
+    row beside it says the rest ("your best lap was a one-off, 0.09 s quicker still")."""
+    lost = lost_text(opp)
+    gap = getattr(getattr(opp, "evidence", None), "one_off_s", 0.0)
+    if not gap or gap <= 0.0:
+        return lost
+    return f"{lost} to your second-quickest"
+
+
 # ------------------------------------------------------- the session theme, in words
 # The cause words, as a THEME headline says them (the per-row sentences keep their own imperative
 # phrasing — "brake later / shorter" is an instruction, "Braking" is a category).
@@ -2247,7 +2266,9 @@ def theme_actions(theme: Theme, rows: list[Opportunity]) -> list[str]:
             # `lead` is ranked, so it is never REACH_NEVER (see `reach_clause`).
             had = (f"you have matched it on {ev.reach_laps} of {ev.n_laps} laps"
                    if ev.reach == REACH_REPEAT else
-                   f"only {ev.reach_laps} of {ev.n_laps} laps have matched it"
+                   # One lap can lead since #750's next-pass step: it HAS matched it.
+                   f"only {ev.reach_laps} of {ev.n_laps} laps "
+                   f"{'has' if ev.reach_laps == 1 else 'have'} matched it"
                    if ev.reach == REACH_RARE else "")
             out.append(f"Start with C{lead.cid}: +{lead.time_lost:.2f} s"
                        + (f", and {had}." if had else "."))
@@ -2692,8 +2713,11 @@ def corners_reconciliation(opps: Opportunities | None, left_out: int, *, page: b
     def shown_sum(rs) -> str:
         return f"{shown_total(rs):.2f} s"
 
+    # A ranked row sized to its second-quickest pass (`Evidence.one_off_s`) is not measured from the
+    # best lap: name the baseline the headline names then ("vs best passes", 0.30.0 release QA).
+    sized = any(getattr(getattr(r, "evidence", None), "one_off_s", 0.0) > 0.0 for r in rows)
     coach = ("The Coaching tab" if page else "The COACHING section above") + (
-        f" measures the SAME corners against your best lap{same}: "
+        f" measures the SAME corners against your best {'passes' if sized else 'lap'}{same}: "
         f"its headline totals {shown_sum(top)} over {plural(len(top), 'corner')}")
     if more:
         coach += (f", {len(more)} more ranked "

@@ -2678,3 +2678,167 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   recording is offered on every Library open; the export ghost's reason for every lap of an all-⚠
   session; Update waits while the main window's own load runs; `tests/_stale.py` and
   `tests_for.py`'s timings; and section 30's carried list stands as written there.
+
+## 33. Recorded at the 0.30.0 release, 2026-11-28
+
+- **v0.30.0 is a minor release**: 11 pull requests, #742 to #751 and #753, Wave 27 of the campaign
+  section 8 records, its theme "the five minutes between heats", plus the release pull request's
+  QA fixes (#752).
+  - #742: a level Coaching row says it is the typical pass that is level with the best lap; the
+    Time lost header's hover says the number is that median, one lap's gap being on Corners.
+  - #743: a first open with no debrief and no personal-best card states its PB standing in the
+    status line; a ⚠ best lap never raises a PB card, a PB line or a standing.
+  - #744: the debrief's ranked rows offer Compare beside Jump; leaving a debrief that ranked a
+    corner (Esc, or that Compare) keeps the lap panel on Coaching.
+  - #745: ⌫ / Delete on a selected File ▸ Library… row asks the Forget confirmation (No the
+    default); a second confirmation cannot stack.
+  - #746: the ? card names View ▸ Colour-blind-safe cues.
+  - #747: the PB sentence adds how the best lap stands against the previous session ("· 0.21 s
+    quicker than your 12:20 session (0:45.395)"); the PB card keeps its height by widening.
+  - #748: during a Coaching row's Compare the hero counts the Δ from the corner's entry ("since C4
+    entry"), as the seam does.
+  - #749: a same-day focus verdict names the baseline's session ("than your 11:00 session").
+  - #750: Coaching's reach gate gains the next-pass step (the ruling below), with two golden
+    re-cuts, both under `drift_band.coaching_opportunities` plus the new `evidence.one_off_s`
+    schema field on every phase with rows; no timing leaf moved.
+  - #751: with nothing ranked and a corner past the step held back as a one-off, the headline names
+    it: "C3 +0.08 s: only your best lap was that quick".
+  - #753 (internal, test-only): `test_studio_features` forces both endings of a superseded load
+    instead of leaving them to the clock.
+- **The coordinator's amendment of an owner ruling: Coaching's reach gate.** RUL-8 builds
+  COACHING-4, and its amendment (1) has a corner that only one lap (the best lap) reached at its
+  target leave the ranking as a one-off. Under the owner's standing delegation ("continue and
+  decide yourself", section 32), the coordinator **amended it on new measurement**: a corner only
+  the best lap has reached **still ranks when its typical pass also loses the 0.07 s step against
+  the next-quickest pass**, so the claim holds against a pace two laps reached; such a row is
+  **printed, summed and ordered by its loss to that second-quickest pass**, and says so ("It is to
+  your second-quickest pass here: your best lap was a one-off, 0.09 s quicker still", or "…, level
+  with your best lap (within 0.07 s)" when the two passes print under the step apart); the headline
+  then says "vs best passes". This is an amendment of a ruling the owner made, recorded as such,
+  and the dated line under RUL-8 (section 1) points here.
+  - **The author's measurement** (#750, generator truth, the demo circuit at the reference GPS
+    noise, 9 / 14 / 20 laps; 120 habit-free days plus 72 per plant of C4 0.05 / 0.10 / 0.20 s,
+    336 days): strict (0.29.0) ranked 200 corners, 2 of them truly losing under 0.03 s (1.0 %),
+    and nothing on 165 days (86 of the 120 habit-free); the rule ranks 368, **6 false (1.6 %,
+    one-sided Fisher p 0.42 against strict)**, nothing on 78 days (53), and keeps the planted
+    corner on 21 / **66** / **72** of 72 days against strict's 14 / 40 / 46. It was chosen on the
+    first half of the days and held on the disjoint second half (strict 1 false of 101, the rule
+    2 of 179). A tolerance of 0.07 s on the second lap alone ranked 457 with 16 false (p 0.05); half
+    the step missed planted 0.20 s corners on 4 of 72 days. A confirmation batch of 168 days whose
+    seeds no other day shares: strict 106 ranked, 4 false (3.8 %), planted 8 / 14 / 22 of 36; the
+    rule 201 ranked, 5 false (2.5 %, p 0.84), planted 14 / **35** / **36** of 36; nothing ranked on
+    78 and 22 of 168 days.
+  - **The independent reviewer's measurement** (112 days of its own seeds on the same grid, plus
+    varied conditions), on the gate before the sizing below: strict 64 ranked, 2 false (3.1 %),
+    planted 5 / 15 / 12 of 24; the rule 126 ranked, 3 false (2.4 %), planted 10 / 24 / 24 of 24,
+    nothing ranked on 26 days instead of 62. Half the GPS noise: 43 ranked, 0 false, both plants
+    12 of 12. **Double the noise: 71 ranked, 9 false (12.7 %) against strict's 4 of 40 (10.0 %)**,
+    the one condition where both gates are poor. The planted corner moved to C6 or C2: 59 ranked,
+    1 false. Two corners planted: 60 ranked, 0 false. A pace trend across the session: 71 ranked,
+    1 false.
+  - **The sizing rule** (from the review): measured on 569 ranked rows of all three batches, 263 of them
+    sized, printed minus true loss on the sized rows went from **+0.0125 s on average (max
+    +0.084) to −0.0200 s (max +0.061)**: from over-stating to slightly under-stating. The first
+    ranked corner is the truly worst on 346 of 404 days either way.
+  - **The cost, plainly.** More corners are ranked, so more focus lists and debriefs: false focus
+    6 of 368 against 2 of 200, within noise but not zero. The 18 Hz camera is untested. The
+    real-footage chapter rows (THEME table of ACCURACY.md, 0068 chapters 1–2, 0064 chapters 1–3)
+    each held a one-off when measured and were not re-measured; they are marked so. The evidence
+    table's 12 full-recording rows cannot move (no one-off among them).
+  - **How to reverse it**: set `coaching.SECOND_PASS_STEP_S = None`. The strict gate is then back
+    exactly (`test_the_reach_switch_off_restores_the_strict_gate` on every golden phase,
+    `test_the_reach_switch_off_is_the_strict_match_exactly` on 3,000 random corners), its words
+    ("no second lap has matched your best here") return, and the golden baseline is re-cut back.
+    The release QA drove the switch off on the real window: the strict words and the strict
+    first open (a session that ranks only through the step lands on Laps) came back.
+- **A published claim corrected.** Section 32 and 0.29.0's notes said a corner planted 0.10 or
+  0.20 s slower is never dropped (40 of 40). What was true: the level rule dropped none of the
+  planted corners the strict gate had ranked; but strict's reach gate held the planted 0.20 s
+  corner back on 26 of 72 days (0.10 s: 27 of 72). Section 32 carries a dated correction line,
+  ACCURACY.md and coaching.py were corrected in #750, and CHANGELOG.md's 0.30.0 section says it.
+- **A defect that shipped in 0.29.0 and earlier, fixed** (#743): "New personal best!" could be
+  raised from a ⚠ dropout best lap. A ⚠ best lap now raises no PB card, PB line or standing; the
+  release QA opened an all-⚠ session quicker than the PB on a jailed library: the status line said
+  why nothing was judged, and no card.
+- **Rulings and defaults applied this wave**, each reversible:
+  - a CORNER-first Compare is allowed on the debrief (#744): RUL-7's "no" is read as covering the
+    lap-first buttons it names ("Export best lap", "Compare with your PB"), which stay off;
+  - leaving a debrief that ranked a corner lands on Coaching, its reason on screen (#744);
+  - the PB standing is said once: card, debrief line or status line, never two (#743);
+  - "previous session" is the latest trusted session at the track that STARTED before this one,
+    by recording start; a heat of the same recording start within 60 s is skipped, and no clause
+    is printed when that is ambiguous (#747);
+  - ⌫ / Delete forget a Library row, always through the confirmation, No the default (#745);
+  - the headline labels "vs best passes" (a summed row sized) and "only your best lap was that
+    quick" (a held-back one-off named) (#750, #751); "vs your best passes" would have moved the
+    docked lap column from 498 to 520 px and was not used.
+- **Process.** The release QA drove the merged tree offscreen and jailed, with the theme applied,
+  at 1280×800 and 1440×900, on synthetic recordings only (a 25 May session and four 1 Jun heats
+  of the demo circuit, each its own GoPro number and clock, plus planted-habit sessions built to
+  rank only through the step, to hold a true one-off back, and to rank nothing), with real QTest
+  keys and mouse clicks. The heats in one library: the first-ever open said "First session
+  logged"; heat 1 (previous session = the PB session) had no last-session clause; heat 2 "level
+  with your 11:00 session"; heat 3 (nothing ranked) said its standing in the status line only,
+  "0.34 s slower than your 11:40 session", no card; heat 4's debrief "0.21 s quicker than your
+  12:20 session (0:45.395)", status empty, no card. The debrief's Compare on a sized row (seed 52:
+  "+0.12 s", one-off 0.09 s) entered the pair, the hero read "Δbest +0.11 s" mid-corner and
+  "+0.21 s since C4 entry" at the exit; Esc landed on Coaching with the reason on screen; Space
+  then played. A best-lap Classic export of the demo through the real File ▸ Export flow is
+  byte-identical to v0.29.0's (9e6f987e…, 271,627 B).
+- **Found in this release's QA, and fixed before the tag** (#752):
+  - a row measured to the second-quickest pass, compared from the debrief or Coaching, showed the
+    best lap's pass beside it: the status said "typical loss through C4: +0.12 s" beside passes
+    0.21 s apart and the hero counted +0.21 s at the exit, 0.09 s past the step with no word why.
+    The status now says "+0.12 s to your second-quickest" (1205 px of the 1280 px bar; the row's
+    whole clause would have been 1479 px and cut). The Compare still shows the best lap's pass:
+    that is what the hero's "Δbest" names;
+  - Stats ▸ CORNERS and the report's CORNERS note said Coaching measures "against your best lap"
+    over a sized row whose headline says "vs best passes": now "against your best passes";
+  - the theme said "only 1 of 12 laps have matched it" (a one-lap lead could not rank before
+    #750); the plural guard's exemption that said such a lead needs two laps is removed.
+- **Found in this release's QA, not fixed** (nothing that would hold the release).
+  - **The docked lap column is 499 px, not 498, at 1280×800 on some sessions** (the sized seed-52
+    session, and a habit-free one, the latter on v0.29.0 too): `_HeadlineLabel` rounds its text's
+    advance and the widest wording's separately. The demo and a held-back session hold 498 / 515.
+  - **A one-off held back by the step still reads "no other lap has been as quick there"** in the
+    theme sentence. True, but it does not say the typical pass sits within 0.07 s of the
+    next-quickest, which is why it is held back; the row says that.
+- **The media.** Re-captured at 0.30.0 from the pinned demo: `debrief.png` changed (#744: Compare
+  beside Jump), `report.png` changed (#742's level-row words); `hero.png`, `og.png`, `map.png`,
+  `moments.png`, `accuracy.png`, `quickest.png` and `lapstrip.png` are byte-identical (one
+  `lapstrip.png` capture differed in the known 442 pixels, a second reproduced the committed file).
+  Captured inside the agent sandbox, `hero.png` and `og.png` came out with the Δ chart's left axis
+  7 px narrower, from v0.29.0's own `studio/` too; outside it they reproduce the committed bytes,
+  so the committed pixels are kept. The
+  waivers of `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4`
+  are renewed, their captions' capture versions unchanged: demo renders of the data-trust and
+  ideal-lap shots are byte-identical to v0.29.0's, and the demo export is byte-identical.
+- **What could not run for it.** No real footage was used, so every `footage.*` check reports
+  Skipped by name. The full gate, the soak and the smoke run on the release branch's CI. Full
+  Keyboard Access on a real Mac was not checked.
+- **Resolved from section 32**: Forget has a keyboard route (#745); the level row says it is the
+  typical pass (#742); the colour-blind-safe cues have a Shortcuts row (#746).
+- **Open for the owner** (new, most important first).
+  - **The reach-gate amendment is reversible by one constant**, `coaching.SECOND_PASS_STEP_S =
+    None`, with a golden re-cut back; it is his to overrule.
+  - **The real-footage coaching rows were not re-measured** under the 0.29.0 level rule or the
+    0.30.0 reach gate; they need his recordings.
+  - **Two cameras on one heat**: the new last-session clause skips the twin, but the PB comparison
+    still treats the other camera's recording as an earlier session.
+  - **Full Keyboard Access on a real Mac** was not checked.
+  - **The burned export Δ still has no non-hue cue** (refusal section 44).
+  - **One-off CI failures**: in two waves three different tests failed once each and passed on
+    re-run. The `test_studio_features` one ("both loads never settled") was a test-timing defect:
+    a cancelled superseded load reports through `failed` and the test listened only to `loaded`;
+    it reproduced 50 of 50 with the worker delayed 20 ms and was fixed test-only in #753.
+    `test_export_polish` (stalled at its own module import) and `test_export_pickers` (a 480 s
+    timeout, not investigated) remain unexplained, most likely CI machine stalls; a reliability
+    lane is still planned for them.
+  - **`og.png` is unchanged**, so the social preview needs no re-upload for this release.
+- **Open for the owner** (carried from section 32, re-checked against 0.30.0's diff, which touches
+  none of them): a brake point can move by several metres from a hole of two fixes at either rate
+  (section 43); the stuck-row memory is not persisted; the lap strip's ⚠ best cue is drawn by no
+  user route; a row whose file is not a readable recording is offered on every Library open; the
+  export ghost's reason for every lap of an all-⚠ session; Update waits while the main window's
+  own load runs; `tests/_stale.py` and `tests_for.py`'s timings; and section 30's carried list
+  stands as written there.

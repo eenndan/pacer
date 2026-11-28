@@ -6,6 +6,64 @@ All notable changes to Pacer are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-11-28
+
+### Highlights
+
+- **A ⚠ GPS-dropout best lap never raises "New personal best!"**, a PB line or a standing: 0.29.0
+  and earlier could crown a dropout lap (#743)
+- **Coaching ranks a corner only your best lap reached when your typical pass also loses 0.07 s to
+  your next-quickest**, and measures it to that pass; `SECOND_PASS_STEP_S = None` undoes it (#750)
+- **The personal-best sentence says how you did against your previous session** ("0.21 s quicker
+  than your 12:20 session"), once: in the card, the debrief or the status line (#743, #747)
+- **The debrief's ranked corners offer Compare beside Jump**, and its Δ readout counts from the
+  corner's entry ("since C4 entry"); Esc keeps you on Coaching, the reason on screen (#744, #748)
+- **With nothing ranked, Coaching names a held-back one-off** ("C3 +0.08 s: only your best lap was
+  that quick"), and a level row says it is your typical pass that is level (#742, #751)
+- **⌫ or Delete forgets the selected Library row**, asking first; the ? card names View ▸
+  Colour-blind-safe cues (#745, #746)
+
+### Added
+
+- The ? card names View ▸ Colour-blind-safe cues (blue/orange instead of red/green); ⌘K already runs
+  it. (#746)
+- File ▸ Library…: ⌫ or Delete on the selected row forgets it, asking first as the right-click menu
+  does; the menu item and the ? card name the key. (#745)
+- The debrief's ranked corners offer Compare beside Jump: your typical pass against your best lap's
+  at that corner, in one click, as the docked Coaching row does. (#744)
+
+### Changed
+
+- Coaching ranks a corner only your best lap has reached when your typical pass is also 0.07 s
+  behind your next-quickest pass there; its "Not ranked" row says when it is not. (#750)
+- A focus-list verdict against a corner set earlier the same day names that session, "faster than
+  your 11:00 session", instead of the day itself. (#749)
+- The personal-best line also says how your best lap stands against your previous session there:
+  "0.21 s quicker than your 12:20 session", slower, or level within timing precision. (#747)
+- Leaving a debrief that ranked a corner (Esc, or a row's Compare) keeps the lap panel on Coaching,
+  so the corner's reason stays on screen. (#744)
+- A first open with no debrief and no personal-best card now says in the status line where its best
+  lap stands against your personal best: "0.34 s off", or level within timing precision. (#743)
+- A level Coaching row says it is your typical pass that is level with your best lap, and the Time
+  lost header's hover says the number is that typical pass, with one lap's gap on the Corners tab.
+  (#742)
+
+### Fixed
+
+- With nothing ranked, Coaching no longer says "no corner stands out" over a corner past the step
+  that only your best lap reached: it names it ("C3 +0.08 s: only your best lap was that quick").
+  (#751)
+- During a Coaching row's Compare the big Δ readout counts from the corner's entry ("Δbest +0.14 s
+  since C4 entry"), so it agrees with the row and the seam, not the lap start. (#748)
+- A ⚠ GPS-dropout best lap no longer raises "New personal best!", a PB line or a standing; 0.29.0
+  and earlier could raise the card from a dropout lap. (#743)
+- 0.29.0's notes said a corner planted 0.10 or 0.20 s slower was never dropped: true of the level
+  rule, but the reach gate held the 0.20 s corner back on 26 of 72 synthetic days. (#750)
+- A Compare from a row measured to your second-quickest pass says so in the status line ("+0.12 s
+  to your second-quickest"), beside passes that count the one-off too. (#752)
+- Stats ▸ CORNERS and the report say Coaching measures against your best passes when a ranked row is
+  measured to the second-quickest; "only 1 of 12 laps has matched it", not "have". (#752)
+
 ## [0.29.0] — 2026-11-27
 
 ### Highlights
@@ -3057,7 +3115,8 @@ recording into a full telemetry workstation — no transponder, no extra hardwar
 - Crash-safety guards for degenerate input: a co-located reference pair no longer produces a
   NaN start line, and non-finite GPS coordinates are dropped at the quality gate.
 
-[Unreleased]: https://github.com/eenndan/pacer/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/eenndan/pacer/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/eenndan/pacer/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/eenndan/pacer/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/eenndan/pacer/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/eenndan/pacer/compare/v0.26.0...v0.27.0

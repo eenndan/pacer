@@ -2370,7 +2370,8 @@ class OpportunitiesPanel(QWidget):
             btn.setToolTip(tip)
             btn.setEnabled(tp is not None)
             if tp is not None:
-                lost = coaching.lost_text(opp)     # the row's own Time lost, as its cell prints it
+                # The row's own Time lost, as its cell prints it, and its baseline when sized.
+                lost = coaching.compare_lost_text(opp)
                 btn.clicked.connect(lambda _checked=False, t=tp, x=lost:
                                     self.compare_requested.emit(t, x))
         return btn
@@ -2436,7 +2437,7 @@ class OpportunitiesPanel(QWidget):
         opp = self._pair_opp()
         tp = self._compare_offer(opp)[0] if opp is not None else None
         if tp is not None:
-            self.compare_requested.emit(tp, coaching.lost_text(opp))
+            self.compare_requested.emit(tp, coaching.compare_lost_text(opp))
 
     def _tune_rows(self):
         """Show as many of the ranking as the viewport can actually hold (L5-08).

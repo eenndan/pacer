@@ -2458,6 +2458,42 @@ def test_t4_a_lead_that_clears_the_spread_still_reads_exactly_as_before():
     print(f"ok T4 clear lead: {acts[-1]!r}")
 
 
+def test_the_stats_reconciliation_names_best_passes_when_a_summed_row_is_sized():
+    """0.30.0 release QA: over a session whose ranked row is sized to the second-quickest pass
+    (#750), Coaching's headline says "… vs best passes" but Stats ▸ CORNERS (and the report's
+    CORNERS note) said "The Coaching tab measures the SAME corners against your best lap: its
+    headline totals 0.12 s" (synthetic seed 52, C4 planted with one clean lap). It now names the
+    baseline the headline names; with no sized row the sentence is unchanged."""
+    sized = plain = 0
+    for name, s in {**_sweep_sessions(), "demo": _level_sessions()["demo"]}.items():
+        opps = s.coaching_opportunities()
+        text = K.corners_reconciliation(opps, 0)
+        if not text:
+            continue
+        if any(r.evidence.one_off_s > 0.0 for r in K.ranked_shown(opps)):
+            sized += 1
+            assert "measures the SAME corners against your best passes:" in text, (name, text)
+        else:
+            plain += 1
+            assert "measures the SAME corners against your best lap:" in text, (name, text)
+    assert sized >= 1 and plain >= 1, (sized, plain)
+    print(f"ok reconciliation baseline: {sized} sized, {plain} plain sessions")
+
+
+def test_a_lead_only_one_lap_matched_reads_in_the_singular():
+    """0.30.0 release QA: a lead corner only the best lap has reached can rank since #750 (the
+    next-pass step), and its theme line read "Start with C4: +0.19 s, and only 1 of 12 laps have
+    matched it" on a synthetic older-day session (seed 30, C4 planted). One lap HAS matched it;
+    two or more still HAVE."""
+    one = [_ranked_row(4, 0.189, 0.05, reach=K.REACH_RARE, n_laps=12, reach_laps=1)]
+    acts = K.theme_actions(K.headline_theme(one), one)
+    assert acts[-1] == "Start with C4: +0.19 s, and only 1 of 12 laps has matched it.", acts[-1]
+    two = [_ranked_row(4, 0.189, 0.05, reach=K.REACH_RARE, n_laps=20, reach_laps=2)]
+    acts = K.theme_actions(K.headline_theme(two), two)
+    assert acts[-1] == "Start with C4: +0.19 s, and only 2 of 20 laps have matched it.", acts[-1]
+    print(f"ok singular reach: {acts[-1]!r}")
+
+
 # The working set's RANKED rows, biggest loss first, as the QA r4 ADVICE lane extracted them through
 # the real (jailed) loader on 13099c4 (qa-2026-09-28-r4/ADVICE/adv_<KEY>.pkl):
 # (cid, time lost s, IQR s, counted laps, laps at the target, reach).
@@ -4497,6 +4533,49 @@ def test_a_rows_compare_says_the_rows_own_time_lost():
     assert not bad, f"{len(bad)} of {checked} rows:\n" + "\n".join(bad)
     assert checked >= 20, checked
     print(f"ok status = row Time lost on all {checked} enabled Compares of {len(sessions)} sessions")
+
+
+def test_a_sized_rows_compare_says_what_its_figure_is_measured_from():
+    """0.30.0 release QA: a row ranked only through the next-pass step prints its loss to the
+    SECOND-quickest pass (#750, `Evidence.one_off_s`), but its Compare puts the best lap's pass in
+    pane B. On a synthetic session (seed 52, C4 planted with one clean lap) the status read "lap 10
+    3.06 s vs lap 5 2.85 s (best lap) … typical loss through C4: +0.12 s" and the hero counted
+    "Δbest +0.21 s since C4 entry" at the exit: 0.09 s apart, past the step, with no word saying
+    why. The status now names the baseline, as the row does; every other row's is unchanged."""
+    from studio import coaching_panel as cp
+    from studio.coaching_panel import OpportunitiesPanel
+
+    def opp(gap):
+        ev = K.Evidence(n_laps=9, reach_laps=1, reach=K.REACH_RARE, iqr=0.02, abstain="",
+                        one_off_s=gap)
+        return K.Opportunity(cid=4, direction=1, time_lost=0.12, entry_dist=0.0,
+                             reason=K.Reason(K.REASON_APEX, 0.1, 3.0, 0.0, 0.0, 0.1), evidence=ev)
+    assert K.compare_lost_text(opp(0.0)) == K.lost_text(opp(0.0)) == "+0.12 s"
+    for gap in (0.094, 0.04):     # past the step or under it: the row's clause says which
+        assert K.compare_lost_text(opp(gap)) == "+0.12 s to your second-quickest", gap
+    # Through the page's own Compare buttons: a sized row emits the named figure, the rest the row's.
+    sized = plain = 0
+    for name, s in _sweep_sessions().items():
+        page = OpportunitiesPanel(s)
+        got: list = []
+        page.compare_requested.connect(lambda *a, into=got: into.append(a))
+        for o in page._all_rows:
+            btn = page._cmp_button(o)
+            if not btn.isEnabled():
+                continue
+            got.clear()
+            btn.click()
+            status = cp.compare_status(*got[0])
+            if o.evidence.one_off_s > 0.0:
+                sized += 1
+                assert status.endswith(K.compare_lost_text(o)) and "second-quickest" in status, (
+                    name, o.cid, status)
+            else:
+                plain += 1
+                assert status.endswith(f"typical loss through C{o.cid}: {K.lost_text(o)}"), status
+        page.deleteLater()
+    assert sized >= 1 and plain >= 10, (sized, plain)
+    print(f"ok a sized row's Compare names its baseline ({sized} sized, {plain} plain rows)")
 
 
 def _land_compare_at_c1(v, s, button, typical: int = 3, status: str | None = None) -> float:

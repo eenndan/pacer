@@ -277,11 +277,13 @@ release. [DECISIONS.md](DECISIONS.md) records each one, sections 8 to 31. The ru
 - **Release QA on the merged tree, and it held releases.** At 0.24.0 and 0.25.0 it found defects
   that existed only between green pull requests: a cut lap raced first, then a cut lap crowned
   session best. Each tag waited for the fix (sections 27 and 28).
-- **Four deliberate golden re-cuts, each reviewed.** Coaching's level step (#587) re-cut 18
+- **Six deliberate golden re-cuts, each reviewed.** Coaching's level step (#587) re-cut 18
   leaves at 0.12.0 (section 13); the per-lap receiver shift (#676) re-cut the sector leaves at
   0.22.0 (section 25); the time-aware smoother (#715) re-cut leaves at 0.26.0, and no lap-time leaf
   moved (section 29); Coaching ranking only past the 0.07 s step (#740) re-cut 144 coaching leaves
-  at 0.29.0, and no timing leaf moved (section 32).
+  at 0.29.0, and no timing leaf moved (section 32); the reach gate's next-pass step (#750) re-cut
+  coaching leaves twice at 0.30.0, all in one phase's `coaching_opportunities` plus one new
+  schema field, and no timing leaf moved (section 33).
 
 What the record says went wrong: 0.25.0 flagged laps beside a missing GPS fix rather than fix the
 smoother, and at 2 % of fixes rejected that flagged 8 of 14 laps and read the session low; 0.26.0
