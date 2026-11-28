@@ -1243,6 +1243,18 @@ def pb_standing_text(standing: dict, fmt_time) -> str:
     return f"First session logged at {track}: best lap {best}, the time to beat next time."
 
 
+# EVERY FIRST OPEN SAYS WHERE IT STANDS (cool/every-session-says-where-it-stands). The standing was
+# decided on every first open, but only a debrief or a celebration card ever said it: a heat 0.34 s
+# slower than the PB with nothing ranked raised neither, and landed on the Laps grid with no word
+# of the one question a driver asks between heats. The session notice says it then — the debrief's
+# own sentence, so the three surfaces say one thing one way; a clause of a line joined by " · ",
+# so it carries no full stop of its own.
+def pb_standing_notice(standing: dict, fmt_time) -> str:
+    """The session notice's clause for a ``pb_standing_for`` result no debrief or card states:
+    ``pb_standing_text``'s sentence, without its full stop."""
+    return pb_standing_text(standing, fmt_time).rstrip(".")
+
+
 class Verdict(enum.Enum):
     """THE FIRST-OPEN VERDICT, one state per load (QA r4 CODE-3). `LibraryController.update_library`
     used to decide it as six flags reset and set in turn, and every consumer read a flag back, so a
