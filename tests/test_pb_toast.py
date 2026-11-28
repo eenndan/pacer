@@ -85,6 +85,31 @@ def _controls(toast):
             if w is not None]
 
 
+def test_a_longer_body_widens_the_card_instead_of_growing_it():
+    """Review F5 (cool/quicker-than-last-heat): the previous session's clause wrapped the body to a
+    third line, and the card grew 14 px up into the lap rows (298x122 → 298x136 at 1280x800 and
+    1440x900). The body widens within the anchor instead, so the card keeps its two-line height;
+    a body that already fits keeps the card's width exactly."""
+    body = ("Synthetic demo circuit — 0:45.395, 0.10 s faster than your previous best (0:45.500).")
+    longer = body.rstrip(".") + " · 0.30 s quicker than your 11:40 session (0:45.700)."
+    rects = []
+    for text in (body, longer):
+        host = QWidget()
+        host.resize(1280, 800)
+        host.show()
+        toast = PBToast("New personal best!", text, on_progress=lambda: None,
+                        on_share=lambda: None, parent=host, on_compare=lambda: None)
+        toast.show_for(host)
+        _APP.processEvents()
+        rects.append(toast.geometry())
+        toast.dismiss()
+        host.close()
+    short, long_ = rects
+    assert long_.height() == short.height(), (short, long_)
+    assert long_.width() > short.width() and long_.width() <= 1280, (short, long_)
+    print(f"ok two lines: {short.width()}x{short.height()} → {long_.width()}x{long_.height()}")
+
+
 def test_every_toast_control_clears_the_hit_floor():
     """The 24x24 pointer-target floor, on the card that deletes itself: ✕ was 20x19 and
     "See your progress →" 133x19 (both under it) while the primary share button passed at 130x30 —

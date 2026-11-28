@@ -69,6 +69,35 @@ def test_previous_is_the_latest_session_that_started_before_this_one():
     print("ok previous: by start, latest earlier, trusted, this track and way only")
 
 
+def test_previous_is_ordered_by_the_start_clock_not_a_stored_day():
+    """Review F2: a row stored under another time zone's local day ("2026-06-02" for a 13:00 UTC
+    start) outranked a later-starting row stored "2026-06-01" (13:30 UTC), and the clause named
+    "your 2 Jun session" on a 1 Jun session. Two clocks order two rows; the day only without one."""
+    t13, t1330, t14 = T10 + 3 * 3_600_000, T10 + 3 * 3_600_000 + 1_800_000, T10 + 4 * 3_600_000
+    rows = [_row("TZ", 45.4, t13, date="2026-06-02"), _row("B", 45.5, t1330)]
+    got = library.previous_session({"entries": rows}, "Stadium", "N", DAY, t14)
+    assert got["fingerprint"] == "B", got
+    print("ok order: the start clock, not the stored day")
+
+
+def test_a_same_day_row_with_no_clock_makes_previous_unknowable():
+    """Review F3: a same-day row with no start clock was dropped by the ordering filter before the
+    "can't tell which came last" check saw it, so the clause named "your 31 May session" though a
+    heat of today may be the previous one. Now it makes the previous session unknowable: no clause."""
+    rows = [_row("P", 44.9, date="2026-05-20"), _row("M", 45.4, T10 - 86_400_000, date="2026-05-31"),
+            _row("L", 45.5, date=DAY)]
+    assert library.previous_session({"entries": rows}, "Stadium", "N", DAY, T12) is None
+    print("ok ambiguity: a clockless row of today means no clause")
+
+
+def test_a_session_starting_within_a_minute_is_the_same_heat():
+    """Review F4: two cameras on one heat start seconds apart; neither is the other's previous."""
+    rows = [_row("H2", 45.4, T1040), _row("CAM2", 45.1, T1120 - 20_000)]
+    got = library.previous_session({"entries": rows}, "Stadium", "CAM1", DAY, T1120)
+    assert got["fingerprint"] == "H2", got
+    print("ok same heat: a start within 60 s is skipped")
+
+
 # ------------------------------------------------------------------------------------ 2. words
 def test_the_clause_says_quicker_slower_or_level_and_names_the_session():
     pb = _row("H1", 45.00, T10)

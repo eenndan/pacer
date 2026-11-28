@@ -1116,28 +1116,52 @@ def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = No
 # (`recorded_after`), never the last row opened: heats opened out of order are still ordered by
 # the clock they were driven on. Best laps only — the session-median comparison stays refused
 # (studio/docs/refused-2026-09.md §8).
+# Two recordings starting closer than this on one day are ONE heat (two cameras on it): neither is
+# the other's previous session (review F4).
+SAME_HEAT_MS = 60_000
+
+
 def previous_session(index: dict, track: str | None, fingerprint_key: str | None = None,
                      date: str | None = None, start_ms: int | None = None,
                      rotation: int | None = None) -> dict | None:
     """The library ROW of the latest session at `track` recorded BEFORE this one (`date`,
     `start_ms`, ``recorded_after``) whose best the PB comparison would admit (``_a_best_at``:
-    trustworthy, a best, this track), never this recording's own row (`fingerprint_key`) nor one
-    known to run the other way round (``other_way``). None when there is none, or when which one
-    came last cannot be told: two rows of its day, one with no start clock."""
+    trustworthy, a best, this track), never this recording's own row (`fingerprint_key`), one
+    known to run the other way round (``other_way``), nor one starting within ``SAME_HEAT_MS`` of
+    this one (the same heat, filmed twice). None when there is none, or when which one came last
+    cannot be told.
+
+    ORDERED BY THE START CLOCK (review F2): two rows that both carry one are ordered by it, never
+    by their stored day, which is the LOCAL day of wherever the row was written — a 13:00 UTC start
+    stored "06-02" is still earlier than a 13:30 UTC one stored "06-01". The day orders only a row
+    without a clock, and a row without a clock on the day that would hold the answer makes it
+    unknowable (review F3): a row of THIS session's day with no clock may be the heat just before,
+    so no clause is better than naming an older one."""
     if not track:
         return None
     rows = [e for e in index.get("entries", [])
             if _a_best_at(e, track)
             and not (fingerprint_key and e.get("fingerprint") == fingerprint_key)
-            and not other_way(e, rotation)
-            and recorded_after(date, start_ms, e.get("date"), e.get("start_ms"))]
-    if not rows:
+            and not other_way(e, rotation)]
+    mine, my_day = _start_ms({"start_ms": start_ms}), _iso_day(date)
+    if my_day is not None and any(_iso_day(e.get("date")) == my_day and _start_ms(e) is None
+                                  for e in rows):
         return None
-    latest = max(rows, key=lambda e: (_iso_day(e.get("date")) or "", _start_ms(e) or 0))
-    day = _iso_day(latest.get("date"))
-    same = [e for e in rows if _iso_day(e.get("date")) == day]
-    if len(same) > 1 and any(_start_ms(e) is None for e in same):
-        return None
+    if mine is not None:
+        rows = [e for e in rows
+                if (t := _start_ms(e)) is None or abs(t - mine) > SAME_HEAT_MS]
+    rows = [e for e in rows if recorded_after(date, start_ms, e.get("date"), e.get("start_ms"))]
+    clocked = [e for e in rows if _start_ms(e) is not None]
+    bare = [e for e in rows if _start_ms(e) is None]
+    latest = max(clocked, key=lambda e: _start_ms(e) or 0) if clocked else None
+    if bare:
+        bare_day = max(_iso_day(e.get("date")) or "" for e in bare)
+        on_it = [e for e in bare if (_iso_day(e.get("date")) or "") == bare_day]
+        clock_day = (_iso_day(latest.get("date")) or "") if latest is not None else ""
+        if latest is None or bare_day > clock_day:
+            return on_it[0] if len(on_it) == 1 else None
+        if bare_day == clock_day:
+            return None
     return latest
 
 
