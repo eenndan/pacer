@@ -2458,6 +2458,28 @@ def test_t4_a_lead_that_clears_the_spread_still_reads_exactly_as_before():
     print(f"ok T4 clear lead: {acts[-1]!r}")
 
 
+def test_the_stats_reconciliation_names_best_passes_when_a_summed_row_is_sized():
+    """0.30.0 release QA: over a session whose ranked row is sized to the second-quickest pass
+    (#750), Coaching's headline says "… vs best passes" but Stats ▸ CORNERS (and the report's
+    CORNERS note) said "The Coaching tab measures the SAME corners against your best lap: its
+    headline totals 0.12 s" (synthetic seed 52, C4 planted with one clean lap). It now names the
+    baseline the headline names; with no sized row the sentence is unchanged."""
+    sized = plain = 0
+    for name, s in {**_sweep_sessions(), "demo": _level_sessions()["demo"]}.items():
+        opps = s.coaching_opportunities()
+        text = K.corners_reconciliation(opps, 0)
+        if not text:
+            continue
+        if any(r.evidence.one_off_s > 0.0 for r in K.ranked_shown(opps)):
+            sized += 1
+            assert "measures the SAME corners against your best passes:" in text, (name, text)
+        else:
+            plain += 1
+            assert "measures the SAME corners against your best lap:" in text, (name, text)
+    assert sized >= 1 and plain >= 1, (sized, plain)
+    print(f"ok reconciliation baseline: {sized} sized, {plain} plain sessions")
+
+
 def test_a_lead_only_one_lap_matched_reads_in_the_singular():
     """0.30.0 release QA: a lead corner only the best lap has reached can rank since #750 (the
     next-pass step), and its theme line read "Start with C4: +0.19 s, and only 1 of 12 laps have

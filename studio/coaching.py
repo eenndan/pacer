@@ -2713,8 +2713,11 @@ def corners_reconciliation(opps: Opportunities | None, left_out: int, *, page: b
     def shown_sum(rs) -> str:
         return f"{shown_total(rs):.2f} s"
 
+    # A ranked row sized to its second-quickest pass (`Evidence.one_off_s`) is not measured from the
+    # best lap: name the baseline the headline names then ("vs best passes", 0.30.0 release QA).
+    sized = any(getattr(getattr(r, "evidence", None), "one_off_s", 0.0) > 0.0 for r in rows)
     coach = ("The Coaching tab" if page else "The COACHING section above") + (
-        f" measures the SAME corners against your best lap{same}: "
+        f" measures the SAME corners against your best {'passes' if sized else 'lap'}{same}: "
         f"its headline totals {shown_sum(top)} over {plural(len(top), 'corner')}")
     if more:
         coach += (f", {len(more)} more ranked "
