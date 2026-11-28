@@ -52,7 +52,7 @@ RUL-6 to RUL-8 were not re-asked (his instruction of 2026-09-28). The freeze end
 and their freeze-end defaults were applied 2026-11-12; any reply of his overrules them (section 6).
 
 RUL-8, COACHING-4 amendment (1) (a corner one lap short at the two-lap line drops out of the
-ranking): amended 2026-11-28 by coordinator ruling (wave 27, PR #PRNUM), see the 0.30.0 release
+ranking): amended 2026-11-28 by coordinator ruling (wave 27, PR #750), see the 0.30.0 release
 section. Reversible by one constant, `coaching.SECOND_PASS_STEP_S = None`.
 
 ## 2. Owner acts
