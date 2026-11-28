@@ -234,8 +234,9 @@ def test_every_coaching_string_is_page_texts_in_the_pages_order():
     muted = [r for r in got["rows"] if not r[4]]
     assert len(muted) == 5 and all(r[3].startswith("Not ranked: ") for r in muted), muted
     tie = _assert_page_text_on_page(_sessions()["tie"])
-    # C1, C7, C5 since cool/coaching-reach-within-the-step ranked the planted C1 (C7, C5, C3 before).
-    assert any(a.startswith("Start with C1, C7 or C5:") and "this cannot rank them" in a
+    # C1, C7, C5, C3 since cool/coaching-reach-within-the-step ranked the planted C1 and sized it from
+    # its next-quickest pass (C7, C5, C3 before; C1, C7, C5 before the sizing).
+    assert any(a.startswith("Start with C1, C7, C5 or C3:") and "this cannot rank them" in a
                for a in tie["actions"]), tie["actions"]
     print("ok coaching: page_text row for row on the demo and on a tie")
 
@@ -273,7 +274,8 @@ def test_provisional_and_degraded_timing_stamp_the_coaching_rows():
     stamp = f"Timing: {export_data.timing_meta(prov, where='on this page')}"
     # The stamp, then the totals pointer (it has an IDEAL LAP section and two ranked corners).
     assert "PROVISIONAL" in stamp and got["notes"][-2] == stamp, got["notes"]
-    assert got["notes"][-1].startswith("0.37 s is how far your typical pass through these 2 ")
+    # 0.35 s: its C3, reached once, is sized from its next-quickest pass (0.37 s before the sizing).
+    assert got["notes"][-1].startswith("0.35 s is how far your typical pass through these 2 ")
     s = _sessions()["demo"]
     saved = s._timing_quality
     try:
