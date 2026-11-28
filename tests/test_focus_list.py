@@ -198,6 +198,32 @@ def test_a_change_inside_the_corners_own_spread_is_not_a_change():
     print(f"ok spread gate: {F.outcome_sentence(inside)}")
 
 
+def test_a_same_day_baseline_is_named_by_its_session_not_the_day():
+    """cool/same-day-verdict-names-the-session: a list set on the 11:00 heat and read on the same
+    day's 12:00 heat said "faster than 1 Jun" — the day it was read on, not which heat. On one
+    calendar day the line names the baseline's session by its LOCAL start clock (`clock_hhmm`, as
+    the Library rows print it); another day, or a baseline with no clock, reads as before."""
+    import dataclasses
+
+    from studio import library
+    ms = 1780308000000                       # 1 Jun 2026, 10:00 UTC
+    alike = _records(("GX0060", _record()), ("GX0062", _record()))
+    same_day = {**_now(), "date": "2026-06-01", "start_ms": ms + 3_600_000}
+    item = dataclasses.replace(_item(median=4.537, iqr=0.129, date="2026-06-01"), start_ms=ms)
+    o = F.verdict([item], same_day, [_sample(4.237, iqr=0.120)], alike).outcomes[0]
+    text = F.outcome_sentence(o)
+    assert f"0.30 s faster than your {library.clock_hhmm(ms)} session (4.54 → 4.24 s" in text, text
+    # another day: the day, as every verdict has said it
+    o = F.verdict([dataclasses.replace(item, date="2026-05-25")], same_day,
+                  [_sample(4.237, iqr=0.120)], alike).outcomes[0]
+    assert "0.30 s faster than 25 May (" in F.outcome_sentence(o), F.outcome_sentence(o)
+    # the same day but no start clock stored (a list set before the stamp): the day, never a guess
+    o = F.verdict([dataclasses.replace(item, start_ms=0)], same_day, [_sample(4.237, iqr=0.120)],
+                  alike).outcomes[0]
+    assert "0.30 s faster than 1 Jun (" in F.outcome_sentence(o), F.outcome_sentence(o)
+    print(f"ok same-day verdict: {text}")
+
+
 def test_a_real_improvement_is_stated_with_its_number_and_its_sample():
     alike = _records(("GX0060", _record()), ("GX0062", _record()))
     o = F.verdict([_item(median=4.537, iqr=0.129)], _now(),
