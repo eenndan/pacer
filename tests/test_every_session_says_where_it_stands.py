@@ -95,6 +95,33 @@ def test_the_controller_says_it_only_when_nothing_else_did():
     print("ok controller: unsaid only, live best only, never a ⚠ best")
 
 
+def test_a_best_lap_not_counted_in_the_bests_claims_no_standing_anywhere():
+    """Review F1: with every valid lap flagged the best falls back to a ⚠ dropout lap
+    (`bests.best_candidate_ids`) and its row is stored `dropout: true` (not a trusted best). The
+    card read "New personal best! … 0.45 s faster than your previous best" from it. No card, no
+    debrief line and no standing from such a lap: the status line says the lap card's own words
+    for it instead (`data_quality.not_counted_line`), and nothing more."""
+    from studio.library_controller import LibraryController
+    idx = {"entries": [_entry("GX0001", 45.5)]}
+    session = SimpleNamespace(timing_verified=True, timing_quality=SimpleNamespace(degraded=False),
+                              best_lap_id=lambda: 3, lap_time=lambda _i: 45.053,
+                              lap_warnings=lambda: {0: None, 3: None, 6: None, 9: None})
+    ctl = LibraryController(SimpleNamespace(session=session), 0)
+    ctl.verdict = library.Verdict.DECIDED
+    moment, ctl.pb_standing = ctl._pb_decision(_entry("GX0002", 45.053, dropout=True), idx)
+    assert moment is None and ctl.pb_standing is None, (moment, ctl.pb_standing)
+    assert ctl.previous_pb is None and ctl.debrief_pb_line() is None
+    ctl.leave_standing(said=False)
+    said = ctl.standing_notice()
+    assert said == data_quality.not_counted_line(session, 3) == \
+        "⚠ GPS dropout — not counted in your bests", said
+    # the same lap counted (no ⚠, a trusted row): the beat it is
+    session.lap_warnings = lambda: {}
+    moment, _standing = ctl._pb_decision(_entry("GX0002", 45.053), idx)
+    assert moment["kind"] == "beat", moment
+    print("ok ⚠ best: no card, no line, the lap card's words in the notice")
+
+
 def test_the_trust_gates_leave_nothing_to_say():
     idx = {"entries": [_entry("GX0001", 47.0)]}
     for kw in ({"verified": False}, {"degraded": True}):
@@ -180,6 +207,64 @@ def test_the_real_window_says_it_once_where_nothing_else_does():
             win.deleteLater()
             _APP.processEvents()
     print("ok window: behind and level in the notice; no card, no debrief, no modal")
+
+
+def test_no_stale_standing_survives_a_drag_a_sector_edit_or_save_as_track():
+    """The status line is re-decided on every timing edit while the standing was decided at the
+    load. A sector edit re-times no lap, so the sentence stays (still true). A start-line drag
+    re-times every lap: a sentence about the old best would be about no lap on screen, so it goes.
+    Save as track renames the circuit: a sentence naming the old one goes too."""
+    from PySide6.QtWidgets import QInputDialog
+    from test_debrief_lands_right import _drag_start_line
+
+    from studio import track_db
+    from studio.dev import make_demo as md
+    from studio.dev import synth_gopro as sg
+    seed_line = next(e["start"] for e in track_db.SEED if e["name"] == _DEMO_CIRCUIT)
+    ask = QInputDialog.getText
+    with tempfile.TemporaryDirectory(prefix="stands_stale_") as folder, _fresh_app_support():
+        rec = sg.generate(os.path.join(folder, "gen"), md.DEMO_SEED, md.DEMO_LAPS, chapters=1,
+                          origin=md.DEMO_ORIGIN)
+        paths = []
+        for n in ("9201", "9202", "9203"):
+            paths.append(os.path.join(folder, n, f"GX01{n}.MP4"))
+            os.makedirs(os.path.dirname(paths[-1]))
+            shutil.copyfile(rec.paths[0], paths[-1])
+        win = _window()
+        try:
+            _open(win, paths[0])
+            best = win.session.lap_time(win.session.best_lap_id())
+            fp, = (e["fingerprint"] for e in library.load()["entries"])
+            _set_pb(fp, best - 0.34)
+            _open(win, paths[1])
+            assert "0.34 s off your personal best" in win.statusBar().currentMessage()
+            # a sector edit: no lap re-timed, the sentence is still true and still said
+            win.view.map._add_sector()
+            from test_debrief_landing import _settle
+            _settle(0.3)
+            assert win.session.lap_time(win.session.best_lap_id()) == best
+            assert "0.34 s off your personal best" in win.statusBar().currentMessage()
+            # a start-line drag 23 m along the straight re-times every lap
+            _drag_start_line(win, [(lat, lon + 0.0003) for lat, lon in seed_line])
+            moved = win.session.lap_time(win.session.best_lap_id())
+            assert abs(moved - best) > 5e-4, (moved, best)
+            assert "personal best" not in (win.statusBar().currentMessage() or ""), \
+                win.statusBar().currentMessage()
+            # Save as track renames the circuit the sentence names
+            _open(win, paths[2])
+            assert "personal best" in win.statusBar().currentMessage()
+            QInputDialog.getText = staticmethod(lambda *a, **k: ("Renamed circuit", True))
+            win._save_as_track()
+            _settle(0.3)
+            assert win.session.track_name == "Renamed circuit", win.session.track_name
+            assert "personal best" not in (win.statusBar().currentMessage() or ""), \
+                win.statusBar().currentMessage()
+        finally:
+            QInputDialog.getText = ask
+            win.close()
+            win.deleteLater()
+            _APP.processEvents()
+    print("ok stale: kept through a sector edit, gone after a drag and after Save as track")
 
 
 def test_a_debrief_says_it_and_the_notice_does_not():
