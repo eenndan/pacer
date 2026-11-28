@@ -2223,6 +2223,20 @@ class LibraryDialog(QDialog):
             self._forget_row(date_item)
 
     def _forget_row(self, date_item: QTableWidgetItem):
+        """Confirm, then forget the row (`_confirm_and_forget`) — ONE AT A TIME. A second ⌫ that
+        reaches the table before the confirmation has the focus (offscreen, a box that never takes
+        it) used to open a second "Forget …?" on top of the first, and Yes on both forgot the row
+        and then acted again on the item the first forget had already re-rendered away. While a
+        confirmation is open, the menu item and the keys do nothing."""
+        if getattr(self, "_forget_open", False):
+            return
+        self._forget_open = True
+        try:
+            self._confirm_and_forget(date_item)
+        finally:
+            self._forget_open = False
+
+    def _confirm_and_forget(self, date_item: QTableWidgetItem):
         """Confirm, then forget the row: the injected callback removes the index entry + deletes its
         sidecar (guarded in the app) and returns the fresh index, from which the table re-renders."""
         fp = date_item.data(FP_ROLE)

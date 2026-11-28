@@ -639,6 +639,68 @@ def test_backspace_and_delete_forget_the_selected_row_from_the_keyboard(monkeypa
             _APP.processEvents()
 
 
+def test_a_second_backspace_never_stacks_a_second_forget_confirmation(monkeypatch):
+    """Review of #745: offscreen the confirmation does not take the focus, so a second ⌫ reached
+    the table and opened a second "Forget …?" on top of the first; Yes on both forgot the row and
+    then forgot it AGAIN from a stale item. `_forget_row` (the menu item's path too) now refuses to
+    start while its own confirmation is open: two presses, one box, one forget, no error."""
+    from PySide6.QtCore import QEvent, Qt, QTimer
+    from PySide6.QtGui import QKeyEvent
+    with tempfile.TemporaryDirectory() as d:
+        monkeypatch.setattr(library, "_app_support_dir", lambda: d)
+        library.save({"version": library.VERSION,
+                      "entries": [_entry("GX010001", date="2024-05-01"),
+                                  _entry("GX010002", date="2024-05-02")]})
+        forgotten: list[str] = []
+
+        def forget(entry):
+            forgotten.append(entry["stem"])
+            idx = library.load()
+            assert library.remove(idx, entry["fingerprint"]), f"{entry['stem']} forgotten twice"
+            library.save(idx)
+            return idx
+
+        errors: list = []
+        monkeypatch.setattr(sys, "excepthook", lambda *exc: errors.append(exc))
+        dlg = LibraryDialog(library.load(), open_recording=lambda _p: None,
+                            forget_recording=forget, clear_library=library.empty_index)
+        dlg.show()
+        dlg.activateWindow()
+        t = dlg.table
+        boxes: list = []
+
+        def tick():
+            m = QApplication.activeModalWidget()
+            if not isinstance(m, QMessageBox) or m in boxes:
+                return
+            boxes.append(m)
+            m.button(QMessageBox.Yes).click()
+        timer = QTimer()
+        timer.setInterval(10)
+        timer.timeout.connect(tick)
+        try:
+            t.selectRow(0)
+            t.setFocus()
+            _APP.processEvents()
+            assert QApplication.focusWidget() is t, QApplication.focusWidget()
+            timer.start()
+            # Two presses queued before the first box can take the focus: the second is delivered
+            # from inside the first confirmation's own event loop, to the table that still has it.
+            for _ in range(2):
+                for kind in (QEvent.KeyPress, QEvent.KeyRelease):
+                    QApplication.postEvent(t, QKeyEvent(kind, Qt.Key_Backspace, Qt.NoModifier))
+            _APP.processEvents()
+            _APP.processEvents()
+        finally:
+            timer.stop()
+            dlg.close()
+            dlg.deleteLater()
+            _APP.processEvents()
+        assert len(boxes) == 1, f"{len(boxes)} confirmations stacked"
+        assert forgotten == ["GX010002"] and not errors, (forgotten, errors)
+        assert [e["stem"] for e in library.load()["entries"]] == ["GX010001"]
+
+
 def test_dialog_clear_routes_through_callback_and_empties(monkeypatch):
     """Clear library: the dialog confirms, calls the injected clear callback, and re-renders to the
     empty state (0 rows), the Clear button disabling itself when empty."""
