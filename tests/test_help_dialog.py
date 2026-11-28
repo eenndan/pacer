@@ -177,9 +177,10 @@ def test_every_group_shares_one_key_column():
     # the live readout over the fullscreen video (cool/fullscreen-readout); 37-38: + ⌘Space and
     # ⇧↓ · ⇧↑, the Laps table's multi-select keys (cool/arrows-and-table-cursor); 39-50: + the
     # Controls group, the press rule and the eleven pointer-only commands
-    # (cool/buttons-press-from-the-keyboard); 51: + ⌫ · ⌦, forget the selected Library row
+    # (cool/buttons-press-from-the-keyboard); 51: + View ▸ Colour-blind-safe cues, no key
+    # (cool/shortcuts-name-the-colour-blind-cues); 52: + ⌫ · ⌦, forget the selected Library row
     # (cool/library-forget-from-the-keyboard)
-    assert len(want) == 51, len(want)
+    assert len(want) == 52, len(want)
     for size in (None, "minimum"):
         d = _shown(ShortcutsDialog())
         if size:
@@ -378,6 +379,25 @@ def test_card_glyphs_match_the_live_bindings():
     assert stats == QKeySequence("Ctrl+Shift+S").toString(QKeySequence.NativeText), stats
     win.deleteLater()   # never shown; close() would run closeEvent's session teardown
     print("test_card_glyphs_match_the_live_bindings OK")
+
+
+def test_the_card_names_the_colour_blind_cues_and_the_palette_runs_them():
+    """cool/shortcuts-name-the-colour-blind-cues: View ▸ Colour-blind-safe cues had no door but the
+    View menu, and nothing on the card said it exists. The card names it by its menu path, in one
+    row with no key (the toggle has none), and ⌘K runs it: the palette harvests the live View menu
+    action, so the row carries no `run` (one would list the toggle twice)."""
+    from studio import command_palette
+    title = help_dialog.COLOURBLIND_MENU_ITEM
+    rows = [(g, k, d) for g, group_rows in SHORTCUT_GROUPS for k, d in group_rows
+            if d.startswith(f"View ▸ {title}")]
+    assert len(rows) == 1 and rows[0][1] == "", rows
+    assert [c.run for c in help_dialog.COMMANDS if c.title == rows[0][2]] == [None]
+    win, _live = _live_bindings()
+    assert win._colorblind_action.text() == title, win._colorblind_action.text()
+    hits = [e for e in command_palette.entries(win) if e.title == title]
+    assert len(hits) == 1 and hits[0].action is win._colorblind_action and hits[0].enabled, hits
+    win.deleteLater()   # never shown; close() would run closeEvent's session teardown
+    print(f"test_the_card_names_the_colour_blind_cues OK ({rows[0][0]}: {rows[0][2]!r})")
 
 
 # ------------------------------------------------- L1-05: the copy cards refuse to be truncated

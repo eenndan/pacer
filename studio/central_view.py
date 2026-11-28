@@ -186,6 +186,17 @@ CONTINUOUS_HOLD_S = 0.25
 # lap's START (75 km/h under "Δideal +1.48 s" on MK_18_09) — two instants on one line. At rest the
 # speed slot says whose number the Δ is instead; the speed returns with the first move.
 HERO_AT_REST_TAG = "whole lap"
+# The same slot during a Coaching row's Compare (`_corner_readout`): the Δ is counted from the
+# corner's entry, and the slot says so ("Δbest +0.14 s     since C4 entry"), painted as the at-rest
+# tag is. In the speed's place so the line keeps the floor `_hero_min_width` sized: measured at the
+# hero face, "Δbest −10.14 s ▼     since C12 entry" paints 334 px in the 338 px the 354 px floor
+# leaves inside its padding, with the tag at the speed's 15 px (it paints at 13 px).
+HERO_CORNER_TAG = "since {corner} entry"
+
+
+def _is_hero_tag(tail: str) -> bool:
+    """Is the hero's tail a label about the Δ (at rest, or a corner compare's) rather than a value?"""
+    return tail == HERO_AT_REST_TAG or (tail.startswith("since ") and tail.endswith(" entry"))
 _BEST_LAP_BEST_NOTE = (
     "\nThis IS your best lap, so it is the reference this Δ is measured against: it reads exactly "
     "zero for the whole lap. Pick another lap for a number that moves.")
@@ -464,10 +475,29 @@ class _HeroReadout(QLabel):
         self._label_font = theme.mono_font(theme.BODY, theme.W_REGULAR)
 
     def tail_style(self, tail: str) -> tuple:
-        """(font, colour) the run after the Δ paints in: "whole lap" dim, the speed in text."""
-        if tail == HERO_AT_REST_TAG:
+        """(font, colour) the run after the Δ paints in: a tag ("whole lap", "since C4 entry")
+        dim, the speed in text."""
+        if _is_hero_tag(tail):
             return self._label_font, theme.C.text_dim
         return self._speed_font, theme.C.text
+
+    def sizeHint(self):  # noqa: N802 (Qt override)
+        """QLabel's hint, except with a corner compare's tag: QLabel prices the whole line in the
+        hero face, and "since C4 entry" there is 392 px of the 354 px floor, so the box grew 38 px
+        and shoved the charts header for as long as the compare held. Painted at its own size the
+        line fits the floor (HERO_CORNER_TAG's note), so the box keeps it. The at-rest tag keeps
+        QLabel's hint: `_hero_min_width` measures that one, and the floor must stay what it was."""
+        return self._keep_floor(super().sizeHint())
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt override)
+        """As sizeHint: the header's layout reads this one too (measured, 392 px without it)."""
+        return self._keep_floor(super().minimumSizeHint())
+
+    def _keep_floor(self, hint):
+        tail = self.text().partition("     ")[2]
+        if tail != HERO_AT_REST_TAG and _is_hero_tag(tail) and self.minimumWidth() > 0:
+            hint.setWidth(min(hint.width(), self.minimumWidth()))
+        return hint
 
     def delta_colour(self) -> str | None:
         """The colour the Δ run paints in, or None (all neutral)."""
@@ -2444,6 +2474,9 @@ class CentralView(QWidget):
         # The keys that leave it, as the typical-pass compare names them (measured at 1280x800 on
         # the demo: the longest of the seven rows is 1003 px of the bar's 1263).
         self._hold_status(_HELD_CORNER, compare_status(tp, lost) + COACHING_COMPARE_KEYS)
+        # The hero reads this corner from its entry, as the seam does (`_corner_readout`).
+        self._corner_readout_cid = int(cid)
+        self._refresh_diff_box()
         return True
 
     def _enter_pass_pair(self, cid: int, a: int, b: int, pass_a: float, pass_b: float,
@@ -2587,6 +2620,31 @@ class CentralView(QWidget):
         that named the pair is cleared at once rather than lingering its 6 s over a new view."""
         self._corner_compare = None
         self._release_status(_HELD_CORNER)
+        if getattr(self, "_corner_readout_cid", None) is not None:
+            self._corner_readout_cid = None
+            self._refresh_diff_box()      # the lap-start Δ again, without waiting for a move
+
+    def _refresh_diff_box(self) -> None:
+        """Re-render the hero for the current moment (no tick needed)."""
+        if getattr(self, "_playback", None) is not None:
+            self._update_diff_box(self._playback.applied_t, self._last_diff_speed,
+                                  self._last_diff_lap)
+
+    def _corner_readout(self, t: float):
+        """(corner label, Δ, neutral) while a Coaching row's Compare holds its corner
+        (`compare_at_corner`), else None: the hero then reads the Δ since that corner's entry —
+        the seam's number (`CompareController.anchored_delta`), so the big readout agrees in sign
+        and size with the row that sent him there. It read the Δ since the lap start: "Δbest
+        −0.06 s" at C4's entry under a row saying +0.15 s, and +0.08 s at its exit (wave 27).
+        Only that compare: a typical-pass compare's pane B is not the best lap, so its seam is not
+        a Δbest."""
+        cid = getattr(self, "_corner_readout_cid", None)
+        compare = getattr(self, "compare", None)
+        anchor = None if compare is None or cid is None else compare.anchor
+        if anchor is None or anchor.key != cid or not self._comparing():
+            return None
+        got = compare.anchored_delta(t)
+        return None if got is None else (anchor.label, *got)
 
     def _on_corner_compare_left(self, on: bool):
         """compareToggled: a compare of this pass with the typical one was left (C, the button,
@@ -3123,7 +3181,25 @@ class CentralView(QWidget):
                       and self._plots_baseline_kind != plots_view.DELTA_BASELINE_IDEAL)
         reference = self.session.has_reference()
         unit = self._speed_unit
-        if stitched and self.ideal_readout_btn.isChecked() and not chart_best:
+        corner = self._corner_readout(t_delta)
+        if corner is not None:
+            # A Coaching row's Compare: the Δ since the corner's entry against the best lap (pane
+            # B), the seam's number by the seam's rule — none in the lead-in, the held gap after
+            # the exit, neutral where the seam is — and the speed slot names the datum.
+            label, lead, neutral = corner
+            lead_kind = ("corner", label)
+            tag = HERO_CORNER_TAG.format(corner=label)
+
+            def render(v):
+                run = theme.format_delta_run(v, arrow=not neutral)
+                return (_name_hero_baseline(f"{run}     {tag}", False),
+                        None if neutral else theme.delta_colour(v))
+
+            text, sem_colour = render(lead)
+            tip = (f"Δ to your best lap since {label}'s entry, as the seam under the videos counts "
+                   f"it: no number before the entry, the gap through {label} held after its exit. "
+                   "C or Esc leaves the compare, and this goes back to the Δ since the lap start.")
+        elif stitched and self.ideal_readout_btn.isChecked() and not chart_best:
             lead, lead_kind = d_ideal, "ideal"
 
             def render(v):
