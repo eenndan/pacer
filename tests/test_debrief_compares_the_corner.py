@@ -177,6 +177,78 @@ def test_esc_from_a_ranked_debrief_lands_on_coaching():
     print("ok: Esc from a ranked debrief lands on Coaching; the remembered tab stays Corners")
 
 
+def _leaves_focus_where_a_mouse_compare_would(press, label):
+    """Leave the debrief by `press(win, view)`; then no button holds the focus (none rings, and
+    #739's rule would not let Space press it anyway) and Space is play/pause."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QAbstractButton
+
+    from studio import app as A
+    played = []
+    orig = A.StudioWindow.toggle_playback
+    A.StudioWindow.toggle_playback = lambda self: played.append(1)   # bound by the shortcut
+    try:
+        with tempfile.TemporaryDirectory(prefix="debrief_cmp_") as folder, _fresh_app_support():
+            a, _b = _two_recordings(folder)
+            win = _window()
+            try:
+                _open(win, a)
+                v = win.view
+                assert v.is_debrief()
+                win.activateWindow()
+                press(win, v)
+                _settle(0.3)
+                assert not v.is_debrief(), label
+                fw = _APP.focusWidget()
+                assert not isinstance(fw, QAbstractButton), (
+                    f"{label}: focus left on a button the user never tabbed to",
+                    type(fw).__name__, getattr(fw, "text", lambda: "")())
+                played.clear()
+                QTest.keyClick(fw or win, Qt.Key_Space)
+                _settle(0.1)
+                assert played == [1], (f"{label}: Space did not play", fw)
+            finally:
+                win.close()
+                win.deleteLater()
+                _APP.processEvents()
+    finally:
+        A.StudioWindow.toggle_playback = orig
+
+
+def test_leaving_by_compare_or_esc_leaves_no_button_focused_and_space_plays():
+    """The row's Compare is rebuilt when the debrief ends; Qt handed the focus on to the next tab
+    stop, the video's maximize button, which then painted a ring nobody tabbed to. A mouse-driven
+    Compare from the docked row leaves none, and Space plays: so must every way off the debrief."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from studio import coaching_panel as cp
+
+    def by_mouse(win, v):
+        b = v.opportunities.table.cellWidget(0, cp._PANEL_COL_CMP)
+        QTest.mouseClick(b, Qt.LeftButton, Qt.NoModifier, b.rect().center())
+
+    def by_keyboard(win, v):
+        t = v.opportunities.table
+        t.cellWidget(0, cp._PANEL_COL_GO).jump.setFocus(Qt.MouseFocusReason)
+        _settle(0.1)
+        QTest.keyClick(_APP.focusWidget(), Qt.Key_Tab)
+        _settle(0.1)
+        assert _APP.focusWidget() is t.cellWidget(0, cp._PANEL_COL_CMP)
+        QTest.keyClick(_APP.focusWidget(), Qt.Key_Space)
+
+    def by_esc_from_compare_focus(win, v):
+        b = v.opportunities.table.cellWidget(0, cp._PANEL_COL_CMP)
+        b.setFocus(Qt.MouseFocusReason)
+        QTest.keyClick(win, Qt.Key_Escape)
+
+    for press, label in ((by_mouse, "Compare by mouse"), (by_keyboard, "Compare by Tab+Space"),
+                         (by_esc_from_compare_focus, "Esc")):
+        _leaves_focus_where_a_mouse_compare_would(press, label)
+    print("ok: Compare (mouse, Tab+Space) and Esc leave no button focused; Space plays")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
