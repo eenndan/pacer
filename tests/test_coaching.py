@@ -2193,6 +2193,35 @@ def test_a_sized_figure_is_labelled_against_the_second_quickest_pass():
     print("ok sized labels: card baseline and the Time-lost hover")
 
 
+def test_a_corner_ranked_by_the_next_pass_step_is_not_called_held_back():
+    """#751 meets #750: a corner past the step that only the best lap reached is named by the
+    held-back headline ("C1 +0.50 s: only your best lap was that quick") while it is a one-off,
+    and only then. With the next-pass step (the switch on) the same corner ranks, sized from its
+    second-quickest pass, and the headline is its total, "vs best passes"; with the switch off it is
+    the held-back form again. The golden GoPro's C3 (+0.08 s, 0.05 s behind its next-quickest pass)
+    stays held back under either (`test_a_level_session_says_so_in_one_sentence`)."""
+    corners, best = _corners(2), [10.0, 5.0]
+    times = [[10.0, 5.0], [10.30, 5.0]] + [[10.5, 5.03] for _ in range(6)]
+
+    def opps():
+        return K.summarize(corners, list(range(len(times))), [sum(t) for t in times], times, best,
+                           sigmas_by_cid={1: 0.05, 2: 0.05}, **_levers(times, best, apex=95.0))
+    on = opps()
+    assert K.held_back_one_off(on) is None
+    assert K.headline(on) == ("Whole session · 0.20 s in your worst corner vs best passes "
+                              "(median of 8 clean laps)"), K.headline(on)
+    saved = K.SECOND_PASS_STEP_S
+    try:
+        K.SECOND_PASS_STEP_S = None
+        off = opps()
+    finally:
+        K.SECOND_PASS_STEP_S = saved
+    assert K.held_back_one_off(off).cid == 1
+    assert K.headline(off) == ("Whole session · C1 +0.50 s: only your best lap was that quick "
+                               "(median of 8 clean laps)"), K.headline(off)
+    print(f"ok held-back vs ranked: {K.headline(on)!r} / {K.headline(off)!r}")
+
+
 def test_the_headline_says_best_passes_when_a_summed_row_is_sized():
     """#750 re-review B (coordinator's ruling): the headline's total includes a row measured to the
     second-quickest pass, so "vs your best lap" was untrue of it; it says "vs best passes" when
