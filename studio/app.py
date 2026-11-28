@@ -1478,14 +1478,20 @@ class StudioWindow(QMainWindow):
         # app-support dir — the clause was in `_session_notice()` and still not on the status bar,
         # because the only call that would have shown it had already run.
         moment = self.library_ctl.update_library(paths)
+        # A recording's first open lands on its debrief, which states the PB itself: the card is
+        # raised only when there is no debrief to carry it (replace, not add — PS-B1). Neither, and
+        # the notice states where the session stands (`LibraryController.standing_notice`), so the
+        # landing is decided BEFORE the notice.
+        landed = self._land_on_debrief()
+        if not landed and moment is not None:
+            self.library_ctl.show_pb_moment(moment)
+        self.library_ctl.leave_standing(said=landed or moment is not None)
         # One-line, non-fatal: on the status bar, and in the session log, which outlives the bar.
         notice = self._apply_session_notice()
         if notice:
-            _log.warning("session notice: %s", notice)
-        # A recording's first open lands on its debrief, which states the PB itself: the card is
-        # raised only when there is no debrief to carry it (replace, not add — PS-B1).
-        if not self._land_on_debrief() and moment is not None:
-            self.library_ctl.show_pb_moment(moment)
+            # The standing alone is news, not a warning: the log keeps WARNING for a problem.
+            alone = notice == self.library_ctl.standing_notice()
+            _log.log(logging.INFO if alone else logging.WARNING, "session notice: %s", notice)
         self.loadFinished.emit()
 
     def _land_on_debrief(self) -> bool:
@@ -1654,7 +1660,9 @@ class StudioWindow(QMainWindow):
         # the only place a lap that never got a crossing is named (TimingQuality.outside_laps).
         quality = getattr(session, "timing_quality", None)
         outside = quality.outside_laps() if hasattr(quality, "outside_laps") else ""
-        notice = " · ".join(p for p in (notice, verdict.clause, outside) if p) or None
+        # Where a first open's best lap stands against the PB, when no debrief or card said it.
+        standing = self.library_ctl.standing_notice()
+        notice = " · ".join(p for p in (notice, verdict.clause, standing, outside) if p) or None
         # Its OWN clause, not a branch of the chain above: a detected track keeps timing_verified
         # True, so a discarded sidecar would otherwise be stated nowhere at all on exactly the
         # recording whose saved lines the user cared enough to place by hand.
