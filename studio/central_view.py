@@ -33,6 +33,7 @@ from PySide6.QtGui import (
     QPainter,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QLabel,
     QMenu,
     QPushButton,
@@ -1685,6 +1686,8 @@ class CentralView(QWidget):
         sizes = self._saved_splitter_sizes
         if sizes is None:
             return
+        if getattr(self, "_debrief", False):
+            self._release_debrief_focus()   # before the resize hides the button it sits on
         self._main_splitter.setSizes(sizes[0])
         self._left_splitter.setSizes(sizes[1])
         self._right_splitter.setSizes(sizes[2])
@@ -2789,13 +2792,30 @@ class CentralView(QWidget):
 
     def _end_debrief(self, restore_tab: bool) -> None:
         """The page is ordinary again; `restore_tab` puts the lap panel back on the tab the view
-        opened on, unless the driver has already moved it."""
+        opened on, unless the driver has already moved it — or the debrief ranked a corner: then
+        the lap panel stays on Coaching, the page he was reading, docked. Esc used to drop him on
+        Laps, and a row's Compare (which leaves the debrief for the grid the same way) took the
+        reason that sent him there off the screen with it (wave 27). Still quiet: the remembered
+        tab stays his."""
+        ranked = bool(self.opportunities.shortlist_cids())
+        self._release_debrief_focus()
         self._debrief = False
         self._debrief_pending = False
         self.opportunities.set_debrief(False)
-        back = self._debrief_return_tab
+        back = None if ranked else self._debrief_return_tab
         if restore_tab and back is not None and back != 3 and self.tab_bar.currentIndex() == 3:
             self._quiet_tab(back)
+
+    def _release_debrief_focus(self) -> None:
+        """Let a focused debrief row button (the Compare just clicked, by mouse or by Tab + Space)
+        go before the debrief ends. Leaving it hides that button — the docked page's column budget
+        drops the Compare column the moment the grid comes back, and the rows rebuild — and Qt
+        handed the focus on to the next tab stop, the video's maximize button, which then painted
+        a ring nobody tabbed to. Leaving now ends where a docked Compare by mouse does: no button
+        holds the focus, and Space is play/pause."""
+        focus = QApplication.focusWidget()
+        if focus is not None and self.opportunities.table.isAncestorOf(focus):
+            focus.clearFocus()
 
     def _quiet_tab(self, index: int) -> None:
         """Select a lap-panel tab without telling the window to persist it."""

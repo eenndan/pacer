@@ -4150,7 +4150,7 @@ def _land_compare_at_c1(v, s, button, typical: int = 3, status: str | None = Non
 
 
 def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corner():
-    """The published demo in the real window, offscreen: the debrief has no Compare (RUL-7); the C
+    """The published demo in the real window, offscreen: the debrief's row Compares too; the C
     key's pair is unchanged; a ranked row's Compare pins (lap 4, the typical C1 pass; lap 13, the
     best lap), seeks each pane to its own entry to C1, frames the charts on C1 as N frames a loss,
     rings C1 and names both passes; its figures reconcile with the row; it ends a race; a lap pick
@@ -4176,11 +4176,15 @@ def test_a_rows_compare_shows_the_typical_pass_against_the_best_lap_at_the_corne
             _open(win, path)
             v, s = win.view, win.session
             page, t = v.opportunities, v.opportunities.table
-            # THE DEBRIEF HAS NO COMPARE: a hidden column, not a narrow one (Jump is on screen).
+            # THE DEBRIEF'S RANKED ROW OFFERS THE SAME COMPARE (corner-first, so RUL-7 does not
+            # keep it off: coordinator ruling, wave 27): its own column beside Jump, and its click
+            # lands what the docked row's lands, on the docked Coaching page whose row says why.
             assert page.is_debrief() and t.rowCount() >= 1
-            assert t.isColumnHidden(cp._PANEL_COL_CMP) and not t.isColumnHidden(cp._PANEL_COL_GO)
-            assert not any(t.cellWidget(r, cp._PANEL_COL_GO).is_stacked()
-                           for r in range(t.rowCount())), "the debrief stacked a Compare"
+            assert not t.isColumnHidden(cp._PANEL_COL_CMP)
+            assert not t.isColumnHidden(cp._PANEL_COL_GO)
+            _land_compare_at_c1(v, s, t.cellWidget(0, cp._PANEL_COL_CMP))
+            assert not page.is_debrief() and v.tab_bar.currentIndex() == 3
+            win.toggle_compare()
             _open(win, path)
             win._escape_out()
             v, s = win.view, win.session                 # a load builds a new view
