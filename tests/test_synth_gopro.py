@@ -478,7 +478,10 @@ def test_the_stats_tiles_and_the_coaching_page_are_populated():
     level = [r.cid for r in ops.rows if r.evidence.abstain == coaching.ABSTAIN_LEVEL]
     assert level == [7, 2, 4], [(r.cid, r.time_lost, r.evidence.abstain) for r in ops.rows]
     assert coaching.theme_lines(ops) == (coaching.no_focus_sentence(ops), []) != ("", [])
-    assert "no corner stands out" in coaching.headline(ops), coaching.headline(ops)
+    # Its C3 (+0.08 s) is held back as a one-off, so the headline names it rather than saying no
+    # corner stands out (cool/coaching-headline-names-the-held-back-corner).
+    assert coaching.headline(ops).startswith(
+        "Whole session · C3 +0.08 s: only your best lap was that quick"), coaching.headline(ops)
 
 
 def test_the_imu_is_one_rigid_motion_with_the_gps():
