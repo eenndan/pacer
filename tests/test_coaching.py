@@ -2246,6 +2246,7 @@ def test_the_headline_says_best_passes_when_a_summed_row_is_sized():
     sized_widest = widest.replace(K.LOSS_BASELINE, K.SIZED_LOSS_BASELINE)
     assert fm.horizontalAdvance(sized_widest) <= fm.horizontalAdvance(widest), (
         fm.horizontalAdvance(sized_widest), fm.horizontalAdvance(widest))
+    _close_pages()
     print(f"ok sized headline: {fm.horizontalAdvance(sized_widest):.1f} px within the reserved "
           f"{fm.horizontalAdvance(widest):.1f} px")
 
@@ -3844,6 +3845,7 @@ def test_the_held_back_headline_fits_the_strip_and_the_card():
         assert line == text, (font.pixelSize(), line)
     finally:
         p.end()
+    _close_pages()
     print(f"ok held-back headline: {fm.horizontalAdvance(text):.0f} px against the reserved "
           f"{fm.horizontalAdvance(widest):.0f} px; whole on the card at "
           f"{share_card._NO_OPP_PX_STEPS[-1]} px")
