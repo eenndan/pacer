@@ -718,6 +718,17 @@ class CompareController:
         compare."""
         return None if self._anchor is None else self._anchor.label
 
+    def anchored_delta(self, t: float) -> tuple[float | None, bool] | None:
+        """Pane A's readout at pane-A time `t` under the pass anchor — the seam's number, by the
+        same rule and from the same datum (`PassAnchor.value`, its Δ at the entry) — and whether it
+        prints neutral (a held gap shown as measured, `held_neutral`). None with no anchor. Read
+        off `t` alone, not the arming: the hero reads it before this tick's badges do."""
+        anchor, a, b = self._anchor, self._compare_a, self._compare_b
+        if anchor is None or a is None or b is None:
+            return None
+        live = self.session.delta_between(a, b, t)
+        return anchor.value(0, t, live), anchor.held_neutral and anchor.held(0, t)
+
     @property
     def anchor(self) -> PassAnchor | None:
         """The pass the compare is anchored at, its readout rule and its windows, or None."""

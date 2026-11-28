@@ -125,12 +125,22 @@ class Command(NamedTuple):
     palette_key: str | None = None
 
 
+#: The View menu item's text (app.py builds the action from it), so the card's row names the item
+#: exactly as the menu bar and ⌘K paint it.
+COLOURBLIND_MENU_ITEM = "Colour-blind-safe cues"
+
 COMMANDS: list[Command] = [
     Command("File", QKeySequence.StandardKey.Open, "Open a recording"),
     # ⌘L — File ▸ Library…, the front door to everything analysed before today. `run` stays None
     # for the same reason the row above it does: the palette harvests the menu action itself, with
     # the accelerator Qt paints for it, so a `run` here would list the Library twice.
     Command("File", QKeySequence("Ctrl+L"), "Open the session library"),
+    # The Library table's own keys (library_dialog: a QShortcut on the table, so no `run`): the
+    # right-click menu's "Forget this recording…", asking its confirmation. Qt's NativeText, so
+    # the cell reads ⌫ · ⌦ on a Mac and the source sweep finds each key.
+    Command("File", "  ·  ".join(QKeySequence(k).toString(QKeySequence.NativeText)
+                                 for k in ("Backspace", "Delete")),
+            "Library: forget the selected recording (asks first)"),
     Command("Playback", "Space", "Play / pause the video", run="toggle_playback"),
     Command("Playback", "M", "Mute / unmute", run="toggle_mute"),
     # Slow motion, the most-asked-for thing this transport did not do: inputs happen faster than
@@ -232,6 +242,11 @@ COMMANDS: list[Command] = [
     Command("Layout", "I", "Live readout over the fullscreen video: lap, lap clock, Δ, speed",
             run="toggle_live_readout"),
     Command("Layout", "Drag", "Drag any splitter: resize the panels (the layout is remembered)"),
+    # View ▸ Colour-blind-safe cues: no key, and until this row no door but the View menu. Named by
+    # its menu path, the item's own words (`COLOURBLIND_MENU_ITEM`, which app.py's action reads);
+    # `run` stays None because the palette harvests the live menu action (one would list it twice).
+    Command("Layout", "",
+            f"View ▸ {COLOURBLIND_MENU_ITEM}: blue/orange instead of red/green"),
     # CONTROLS: the toolbar buttons that had no way in but the pointer (StudioWindow's "toolbar
     # controls, as named commands"). The first row is the rule a Tab-focused button now follows
     # (widgets.KeyboardPress); the rest have no key — ⌘K is their door, by the name each button's
