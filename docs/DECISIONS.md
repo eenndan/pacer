@@ -2802,10 +2802,12 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     theme sentence. True, but it does not say the typical pass sits within 0.07 s of the
     next-quickest, which is why it is held back; the row says that.
 - **The media.** Re-captured at 0.30.0 from the pinned demo: `debrief.png` changed (#744: Compare
-  beside Jump), `report.png` changed (#742's level-row words); `hero.png` and `og.png` changed by
-  a 7 px shift of the Δ chart's left axis that a capture from v0.29.0's own `studio/` reproduces
-  byte for byte today, so it is the render environment, not this release; `map.png`,
-  `moments.png`, `accuracy.png`, `quickest.png` and `lapstrip.png` are byte-identical. The
+  beside Jump), `report.png` changed (#742's level-row words); `hero.png`, `og.png`, `map.png`,
+  `moments.png`, `accuracy.png`, `quickest.png` and `lapstrip.png` are byte-identical (one
+  `lapstrip.png` capture differed in the known 442 pixels, a second reproduced the committed file).
+  Captured inside the agent sandbox, `hero.png` and `og.png` came out with the Δ chart's left axis
+  7 px narrower, from v0.29.0's own `studio/` too; outside it they reproduce the committed bytes,
+  so the committed pixels are kept. The
   waivers of `data-trust.png`, `ideal-lap.png`, `overlay.jpg`, `best-lap.jpg` and `best-lap.mp4`
   are renewed, their captions' capture versions unchanged: demo renders of the data-trust and
   ideal-lap shots are byte-identical to v0.29.0's, and the demo export is byte-identical.
@@ -2826,8 +2828,7 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   - **CI machine stalls**: in two waves three different tests timed out once each and passed on
     re-run (`test_export_polish` at import, `test_studio_features` "both loads never settled",
     `test_export_pickers`); a reliability lane is planned.
-  - **`og.png` changed bytes** (the 7 px axis shift above); the social preview on GitHub is his to
-    re-upload, and nothing it shows is different in substance.
+  - **`og.png` is unchanged**, so the social preview needs no re-upload for this release.
 - **Open for the owner** (carried from section 32, re-checked against 0.30.0's diff, which touches
   none of them): a brake point can move by several metres from a hole of two fixes at either rate
   (section 43); the stuck-row memory is not persisted; the lap strip's ⚠ best cue is drawn by no

@@ -102,7 +102,7 @@ lowers the ideal too, so part of the gap is timing luck.*
   recording's first open, once its timing is trusted, lands on it as a **debrief** and puts its top
   corners on the track's **focus list**, for the next session there to re-measure.
 
-<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, led by the best lap's time, large, beside its speed-coloured line with its focus corner ringed; under it a first line saying nothing is saved, C1, the one corner Pacer put on the focus list, with its baseline and a Remove, and the one ranked corner with its reason and a Jump to the video">
+<img src="docs/media/debrief.png" width="880" alt="The synthetic demo's first open, on its debrief: the Coaching page full-window, led by the best lap's time, large, beside its speed-coloured line with its focus corner ringed; under it a first line saying nothing is saved, C1, the one corner Pacer put on the focus list, with its baseline and a Remove, and the one ranked corner with its reason, a Jump to the video and a Compare of your typical pass with your best lap's there">
 
 - **Your quickest pass through each corner, one click from the video.** Corners ▸ **Quickest
   passes** lists each corner's quickest time and the lap it was on; a click plays that pass from
@@ -134,7 +134,7 @@ this still says "0% of moving fixes rejected".*
   every lap of the session on one image, and the overlay comes in two styles, Classic or
   Broadcast, with a ghost of your best lap and corner cards as extras you tick.
 
-<img src="docs/media/report.png" width="660" alt="The first screen of the synthetic demo's session report, as File ▸ Export ▸ Session report (HTML)… writes it: the recording, track, date, 14 laps, best lap 0:44.950 (lap 13) and verified timing; the lap card with its +0.30 s to the ideal lap and C1 +0.36 s as the biggest opportunity; and COACHING: 0.36 s in your worst corner, apex speed the common thread with all of that time in C1, its one ranked corner, and the corners held back as level with the best lap or not ranked, each with its reason">
+<img src="docs/media/report.png" width="660" alt="The first screen of the synthetic demo's session report, as File ▸ Export ▸ Session report (HTML)… writes it: the recording, track, date, 14 laps, best lap 0:44.950 (lap 13) and verified timing; the lap card with its +0.30 s to the ideal lap and C1 +0.36 s as the biggest opportunity; and COACHING: 0.36 s in your worst corner, apex speed the common thread with all of that time in C1, its one ranked corner, and the corners held back, each with its reason: your typical pass level with your best lap, or only your best lap that quick">
 
 <img src="docs/media/overlay.jpg" width="880" alt="A frame of a real exported overlay video on Sandown 3h: LAP 23, its elapsed 0:19.799 and a live Δ +0.05 burned into the top-left of the GoPro footage, a g-meter reading 0.3 g top-right, a mini track map bottom-right and 57 km/h bottom-left">
 
