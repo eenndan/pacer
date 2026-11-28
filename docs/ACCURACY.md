@@ -294,8 +294,12 @@ of its own recording carries the same σ.
 the best lap prints under 0.07 s is listed as level with the best lap and is never a focus corner.
 On 188 synthetic race days at recording C's noise (habit-free, and with one corner planted 0.05,
 0.10 or 0.20 s slower a lap), 42 % of the corners the list named before truly lost under 0.03 s;
-with the step, 1 of the 102 it names. It drops 11 % of the corners that truly lose 0.07 s or more,
-and never a corner planted 0.10 or 0.20 s slower.
+with the step, 1 of the 102 it names. It drops 11 % of the corners that truly lose 0.07 s or more.
+Of the planted corners Coaching was already ranking, it keeps every one planted 0.20 s slower and
+40 of 45 planted 0.10 s slower (on the grid below). An earlier edition of this page said it never
+drops a planted corner; that counted only the planted corners the reach test, next, had let
+through, and that test held the planted corner back on 26 of 72 days at 0.20 s and 27 of 72 at
+0.10 s.
 
 **A target your best lap alone has reached counts when the claim clears the step against your
 next-quickest pass too.** Coaching ranks a corner only if a target is repeatable, and that used to
@@ -306,7 +310,9 @@ synthetic race days at recording C's noise (120 habit-free, 72 each with one cor
 0.10 or 0.20 s slower a lap), the corner planted 0.20 s slower is ranked on 72 of 72 days instead
 of 46, and the one planted 0.10 s slower on 66 instead of 40. Of the corners ranked, 6 of 368 truly
 lose under 0.03 s, against 2 of 200 under the strict match. A plain 0.07 s tolerance on the second
-lap would have ranked 16 of 457 such corners.
+lap would have ranked 16 of 457 such corners. On 168 more days with seeds used nowhere else, the
+planted 0.20 s corner is ranked on 36 of 36 (22 before), and 5 of 201 ranked corners truly lose
+under 0.03 s (4 of 106 before).
 
 **Two speeds.** The Corners table's Δapex column differences two laps' apex speeds, km/h. An apex
 speed is the lowest GPS fix in the corner, so its noise is at most one fix's, and one fix's speed

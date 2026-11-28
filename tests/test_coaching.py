@@ -2031,6 +2031,49 @@ def test_a_target_only_the_best_lap_reached_ranks_past_the_step_to_the_next_pass
     print("ok reach within the step: a one-lap target ranks past the step to the next-quickest")
 
 
+def test_the_reach_switch_off_is_the_strict_match_exactly():
+    """`SECOND_PASS_STEP_S = None` restores the strict "matched or beat" gate (it amends an owner
+    ruling by the coordinator's, so it must be reversible by one constant): over random corners
+    `corner_evidence` then equals the rule it replaced, inline here, and the two-lap line's corner
+    drops out again with its sentence (COACHING-4 amendment (1))."""
+    saved = K.SECOND_PASS_STEP_S
+    rng = np.random.default_rng(20261128)
+    try:
+        K.SECOND_PASS_STEP_S = None
+        differs = 0
+        for _ in range(3000):
+            n = int(rng.integers(0, 12))
+            times = rng.normal(5.0, 0.2, n).tolist()
+            target = float(min(times)) if times and rng.random() < 0.8 else float(rng.normal(5, .3))
+            loss = float(abs(rng.normal(0.1, 0.1)))
+            ev = K.corner_evidence(times, target, loss)
+            t = np.asarray(times, float)
+            reach = int(np.count_nonzero(t <= target + 1e-9))
+            iqr = float(np.subtract(*np.percentile(t, [75, 25]))) if n >= 2 else 0.0
+            want = (K.ABSTAIN_FEW_LAPS if n < K.MIN_CORNER_LAPS else
+                    K.ABSTAIN_ONE_OFF if reach < K.MIN_REACH_LAPS else
+                    K.ABSTAIN_SPREAD if loss < K.SPREAD_MARGIN * iqr else
+                    K.ABSTAIN_LEVEL if K.loss_is_level(loss) else K.ABSTAIN_NONE)
+            assert ev.abstain == want, (times, target, loss, ev)
+            K.SECOND_PASS_STEP_S = saved
+            differs += K.corner_evidence(times, target, loss).abstain != want
+            K.SECOND_PASS_STEP_S = None
+        moved = K._one_lap_over(_corner(1, 0.2, 19, 2).evidence)
+        assert (moved.reach_laps, moved.abstain) == (1, K.ABSTAIN_ONE_OFF), moved
+        rows = [_corner(1, 0.4, 19, 2), _corner(2, 0.3, 19, 6), _corner(3, 0.3, 19, 0)]
+        said = K.theme_sentence(K.headline_theme(rows), rows)
+        assert said.endswith("one lap fewer at its target and it would not count."), said
+        one_off = K.corner_evidence([5.0, 5.45, 5.5, 5.55, 5.6], 5.0, 0.5)
+        assert K.abstain_sentence(K.Opportunity(
+            cid=1, direction=1, time_lost=0.5, entry_dist=0.0,
+            reason=K.Reason(K.REASON_APEX, 0.1, 3.0, 0.0, 0.0, 0.1), evidence=one_off)).startswith(
+            "Not ranked: no second lap has matched your best here")
+    finally:
+        K.SECOND_PASS_STEP_S = saved
+    assert differs > 0, "the switch on moved no corner of the sweep"
+    print(f"ok reach switch off == strict on 3000 corners (on, {differs} of them rank differently)")
+
+
 def test_abstained_rows_sink_below_the_ranked_ones_and_are_never_summed():
     """Order + arithmetic. An abstained corner is SHOWN (never silently dropped — a row that says
     why it is not ranked is worth more than a missing row), but it sits below every row that

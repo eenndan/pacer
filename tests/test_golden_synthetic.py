@@ -916,6 +916,42 @@ def test_synthetic_fingerprint_matches_baseline():
           f"{_census_line(fp)}")
 
 
+# What `drift_band`'s coaching theme was under the strict reach match (the baseline before
+# cool/coaching-reach-within-the-step's re-cut): its two rows both one-offs, nothing ranked.
+_STRICT_DRIFT_BAND_THEME = {"cause": "none", "cause_cids": [], "cause_share": 0.0,
+                            "execution_s": 0.0, "kind": "none", "lead_cid": None,
+                            "n_abstained": 2, "n_ranked": 0, "pace_s": 0.0, "share": 0.0}
+
+
+def test_the_reach_switch_off_restores_the_strict_gate():
+    """`coaching.SECOND_PASS_STEP_S` is the one switch cool/coaching-reach-within-the-step added,
+    and it amends an owner ruling (COACHING-4 amendment (1)) by the coordinator's: set to None it
+    must give back the strict "matched or beat" gate EXACTLY. On every golden phase the switched-off
+    fingerprint equals the committed baseline but in the 12 coaching leaves the re-cut moved, which
+    read as they did before it (drift_band's two rows one-offs, its theme none) — and those leaves
+    do move, so the check is not vacuous."""
+    import copy
+
+    with open(BASELINE) as f:
+        baseline = json.load(f)
+    saved = coaching.SECOND_PASS_STEP_S
+    coaching.SECOND_PASS_STEP_S = None
+    try:
+        fp = json.loads(json.dumps(synthetic_fingerprint()))
+    finally:
+        coaching.SECOND_PASS_STEP_S = saved
+    strict = copy.deepcopy(baseline)
+    band = strict["drift_band"]["coaching_opportunities"]
+    for row in band["rows"]:
+        row["evidence"]["abstain"] = coaching.ABSTAIN_ONE_OFF
+    band["theme"] = dict(_STRICT_DRIFT_BAND_THEME)
+    diffs, _stats = _compare(strict, fp)
+    assert not diffs, "the switch off is not the strict gate:\n  " + "\n  ".join(diffs[:20])
+    moved, _ = _compare(baseline, fp)
+    assert moved and all(".drift_band.coaching_opportunities." in d for d in moved), moved
+    print(f"ok reach switch off: the strict gate on every phase ({len(moved)} leaves revert)")
+
+
 def _write_baseline():
     """Re-cut the baseline and say what moved. It used to rewrite silently, so a leaf that had
     turned NaN or fallen to a placeholder could be accepted by a re-cut without anyone seeing it."""
@@ -977,6 +1013,7 @@ if __name__ == "__main__":
         test_gopro_phases_reach_what_the_seeded_phases_cannot,
         test_coaching_thirds_are_the_phase_report_rows_in_every_phase,
         test_synthetic_fingerprint_matches_baseline,
+        test_the_reach_switch_off_restores_the_strict_gate,
     ]
     for t in tests:
         t()

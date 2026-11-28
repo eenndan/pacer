@@ -51,6 +51,10 @@ and they name items in the maintainers' private notes, which are not in this rep
 RUL-6 to RUL-8 were not re-asked (his instruction of 2026-09-28). The freeze ended on 2026-11-09,
 and their freeze-end defaults were applied 2026-11-12; any reply of his overrules them (section 6).
 
+RUL-8, COACHING-4 amendment (1) (a corner one lap short at the two-lap line drops out of the
+ranking): amended 2026-11-28 by coordinator ruling (wave 27, PR #PRNUM), see the 0.30.0 release
+section. Reversible by one constant, `coaching.SECOND_PASS_STEP_S = None`.
+
 ## 2. Owner acts
 
 Only he can do these. None has a default, and the work goes ahead without them. This public page
@@ -2586,7 +2590,12 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
   step**; a level corner is listed muted with its reason and is never put on the focus list. The
   synthetic sweep #740 measured: before the rule, 156 of 375 focus corners (42 %) truly lost under
   0.03 s; after it, 1 of the 102 it names. It drops 10 of the 92 truly lossy corners (11 %), and a
-  corner planted 0.10 or 0.20 s slower is never dropped (40 of 40 kept). **The cost, plainly**: a
+  corner planted 0.10 or 0.20 s slower is never dropped (40 of 40 kept).
+  *Corrected 2026-11-28 (wave 27, cool/coaching-reach-within-the-step): the 40 of 40 counted only
+  planted corners the reach gate had already ranked. On that PR's grid (72 days per plant) the
+  level rule kept 46 of 46 planted 0.20 s corners and 40 of 45 planted 0.10 s ones, but the reach
+  gate held the planted corner back on 26 of 72 days at 0.20 s and 27 of 72 at 0.10 s; the 0.30.0
+  release section records it.* **The cost, plainly**: a
   real habit worth under the step goes unranked, and on habit-free synthetic days over half the
   sessions rank nothing, so their first open shows no debrief and no focus list. Open to the owner's
   overrule, and reversible (one threshold, one golden re-cut).

@@ -281,6 +281,12 @@ ABSTAIN_LEVEL = "level"         # the loss itself is inside the timing step (`lo
 # 127 more under 0.07 s; after, 1 and 19. Of the 92 that truly lost 0.07 s or more, 10 leave the
 # list. A planted 0.10 or 0.20 s corner never leaves it (40 of 40 kept); a planted 0.05 s one
 # leaves on 7 of 10 days. 103 of the 188 days rank no corner after (habit-free 14 laps: 28 of 40).
+# CORRECTED (cool/coaching-reach-within-the-step, 2026-11-28): "never leaves it" counted only the
+# planted corners the reach gate had already let onto the list. On that PR's grid (72 days per
+# plant), of the planted corners the strict reach gate ranked, the level rule kept 46 of 46 at
+# 0.20 s and 40 of 45 at 0.10 s; but the reach gate itself held the planted corner back on 26 of 72
+# days at 0.20 s and 27 of 72 at 0.10 s, under 0.29.0. With `SECOND_PASS_STEP_S` it holds it back
+# on 0 and 1 of 72 (the table above that constant).
 LOSS_STEP_S = stats_service.PB_PRECISION_S   # = stats.corner_delta_step(False)
 
 
@@ -315,25 +321,35 @@ def loss_is_level(time_lost: float) -> bool:
 #   Q70      449         300        134  15 (3.3 %)    54             227/282  29 / 66 / 71
 #
 # R was chosen on the first half of the days (S 1 false of 99, R 4 of 189, T70 9 of 231) and held
-# on the second, disjoint half (S 1 of 101, R 2 of 179, T70 7 of 226). Against S its false share
+# on the second, disjoint half (S 1 of 101, R 2 of 179, T70 7 of 226), and again on a third batch
+# whose seeds no other day and no other plant size shares (60 habit-free days, 36 per plant): S 4
+# false of 106, R 5 of 201; planted kept 8 / 14 / 22 of 36 strict, 14 / 35 / 36 with R. Against S its false share
 # is within noise (p 0.42; T70's is p 0.05, T35's 0.11), it keeps every planted 0.20 s corner (S:
 # 46 of 72) and 66 of 72 planted 0.10 s ones (S: 40), and a habit-free day ranks nothing on 53 of
 # 120 days instead of 86. A within-0.07 s tolerance alone ranks the most, but more than doubles the
 # false share; half the step misses planted 0.20 s corners on 4 of 72 days. The demo does not
 # move: its C3 (+0.08 s, only the best lap at its target) is 0.05 s behind its next-quickest pass.
-SECOND_PASS_STEP_S = LOSS_STEP_S
+#
+# THE SWITCH, AND WHOSE RULING IT AMENDS. This amends the owner's COACHING-4 amendment (1) (a
+# corner one lap short at the two-lap line takes itself off the ranking) by the coordinator's
+# ruling on this measurement (wave 27; docs/DECISIONS.md). Set SECOND_PASS_STEP_S = None and the
+# strict match is back exactly: no one-lap target ranks, `_one_lap_over` abstains again at the
+# two-lap line and the theme says "one lap fewer at its target and it would not count" (the golden
+# gate's `test_the_reach_switch_off_restores_the_strict_gate` holds that).
+SECOND_PASS_STEP_S: float | None = LOSS_STEP_S
 
 
 def loss_to_next_is_level(times, target: float, time_lost: float) -> bool:
     """Whether a corner the best lap alone has matched (its pass the quickest of `times`, every
     other one slower than `target`) is LEVEL against its next-quickest pass, at
-    `SECOND_PASS_STEP_S`, on the printed figure as `loss_is_level` decides: the typical pass's
+    `SECOND_PASS_STEP_S` (never None here), on the printed figure as `loss_is_level` decides: the
+    typical pass's
     loss to the best lap, less the next-quickest pass's own gap to it. True: no repeatable target
     (ABSTAIN_ONE_OFF). A corner no lap reached (the best lap's own pass not counted) stays a
     one-off in `corner_evidence` and never asks."""
     t = np.sort(np.asarray(times, float))
     gap = max(0.0, float(t[1]) - float(target))
-    return float(f"{float(time_lost) - gap:.2f}") < SECOND_PASS_STEP_S
+    return float(f"{float(time_lost) - gap:.2f}") < float(SECOND_PASS_STEP_S or 0.0)
 
 
 @dataclass(frozen=True)
@@ -404,7 +420,8 @@ def corner_evidence(times, target: float, time_lost: float) -> Evidence:
     if n < MIN_CORNER_LAPS:
         abstain = ABSTAIN_FEW_LAPS
     elif reach_laps < MIN_REACH_LAPS and (
-            reach_laps == 0 or loss_to_next_is_level(t, float(target), float(time_lost))):
+            reach_laps == 0 or SECOND_PASS_STEP_S is None
+            or loss_to_next_is_level(t, float(target), float(time_lost))):
         abstain = ABSTAIN_ONE_OFF
     elif float(time_lost) < SPREAD_MARGIN * iqr:
         abstain = ABSTAIN_SPREAD
@@ -875,12 +892,16 @@ def _one_lap_over(ev: Evidence) -> Evidence | None:
     leaves the best lap alone at the target, and until cool/coaching-reach-within-the-step that
     took the row off the ranking (ABSTAIN_ONE_OFF). It no longer does: the moved lap lands just
     over the target, so the typical pass loses its whole ranked loss against it too, past the step
-    (`loss_to_next_is_level`), and the row stays ranked, as pace work."""
+    (`loss_to_next_is_level`), and the row stays ranked, as pace work. With the switch off
+    (SECOND_PASS_STEP_S None) it abstains as it did."""
     if not ev.ranked:
         return None
     line = reach_line(ev.n_laps)
     if ev.reach == REACH_REPEAT and ev.reach_laps == line:
-        return replace(ev, reach_laps=ev.reach_laps - 1, reach=REACH_RARE)
+        k = ev.reach_laps - 1
+        if k < MIN_REACH_LAPS and SECOND_PASS_STEP_S is None:
+            return replace(ev, reach_laps=k, reach=REACH_RARE, abstain=ABSTAIN_ONE_OFF)
+        return replace(ev, reach_laps=k, reach=REACH_RARE)
     if ev.reach == REACH_RARE and ev.reach_laps == line - 1 >= MIN_REACH_LAPS:
         return replace(ev, reach_laps=line, reach=REACH_REPEAT)
     return None
@@ -1658,6 +1679,9 @@ def abstain_sentence(opp: Opportunity) -> str:
     if ev.abstain == ABSTAIN_ONE_OFF:
         # The rule's own words (`loss_to_next_is_level`): one lap at the target, and against the
         # next-quickest pass the typical pass is inside the step — a target reached once.
+        if SECOND_PASS_STEP_S is None:     # the strict match (the switch off): its own words
+            return ("Not ranked: no second lap has matched your best here, so there is no "
+                    "repeatable target to aim at.")
         return ("Not ranked: only your best lap has been this quick here, and your typical pass is "
                 f"within {SECOND_PASS_STEP_S:.2f} s of your next-quickest, so there is no "
                 "repeatable target to aim at.")
@@ -1945,10 +1969,15 @@ def _split_sentence(theme: Theme, tipping: Opportunity | None = None,
            "reached")
     if tipping is None:
         return out + "."
-    # Amendment (1)'s "one lap fewer at its target and it would not count" went with
-    # cool/coaching-reach-within-the-step: a lap moved off the target no longer un-ranks the corner
-    # (`_one_lap_over`), so every tipping corner sits between the two sides.
-    return out + f" — C{tipping.cid} sits on the line between the two."
+    corner_label = f"C{tipping.cid}"
+    moved = _one_lap_over(tipping.evidence)
+    if moved is not None and not moved.ranked:
+        # Amendment (1): at the MIN_REACH_LAPS line a lap fewer takes the corner off the ranking.
+        # Only with the reach switch off (SECOND_PASS_STEP_S None): with it on, a lap moved off the
+        # target leaves the corner ranked (`_one_lap_over`) and it sits between the two sides.
+        return out + (f" — {corner_label} sits on the line: one lap fewer at its target and it "
+                      "would not count.")
+    return out + f" — {corner_label} sits on the line between the two."
 
 
 # ------------------------------------------------------- when the lead corner is not a lead

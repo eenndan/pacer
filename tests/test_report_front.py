@@ -44,8 +44,10 @@ _SESSIONS: dict = {}
 def _sessions() -> dict:
     """demo (verified, planted C1 habit), tie (verified: seed 1 at 10 laps with
     `_synthetic.sweep_habits` planted, a three-way tie at the top), twoprov (a DIFFERENT drive,
-    seed 3 at 10 laps planted the same way, at an unknown origin: PROVISIONAL, and two ranked
-    corners — the shortlist-of-two case). Until cool/coaching-ranks-past-the-step both were the
+    seed 3 at 10 laps with the first two of those habits planted, C1 and C3, at an unknown origin:
+    PROVISIONAL, and two ranked corners — the shortlist-of-two case; all five planted ranked two
+    until cool/coaching-reach-within-the-step ranked the planted corners the strict match held
+    back). Until cool/coaching-ranks-past-the-step both were the
     habit-free seed 7 at 12 laps, at two origins; it ranks nothing past the timing step, and no one
     planted drive is both a three-way tie and a shortlist of two, twolaps (under coaching.MIN_LAPS: the empty state), onelap (seed
     3, one lap, driven in reverse: the ideal is that lap, every corner one pass), onedonor (seed
@@ -72,7 +74,8 @@ def _sessions() -> dict:
             # a fixed fraction of the drive) and the session reads low. Reversed, it lands clear.
             rec = sg.generate(os.path.join(tmp.name, name), seed, laps, chapters=1, origin=origin,
                               reverse=name == "onelap",
-                              habit=sweep_habits(laps) if name in ("tie", "twoprov") else None)
+                              habit=(sweep_habits(laps) if name == "tie" else
+                                     sweep_habits(laps)[:2] if name == "twoprov" else None))
             _SESSIONS[name] = Session.load(rec.paths)
     return _SESSIONS
 
@@ -231,7 +234,8 @@ def test_every_coaching_string_is_page_texts_in_the_pages_order():
     muted = [r for r in got["rows"] if not r[4]]
     assert len(muted) == 5 and all(r[3].startswith("Not ranked: ") for r in muted), muted
     tie = _assert_page_text_on_page(_sessions()["tie"])
-    assert any(a.startswith("Start with C7, C5 or C3:") and "this cannot rank them" in a
+    # C1, C7, C5 since cool/coaching-reach-within-the-step ranked the planted C1 (C7, C5, C3 before).
+    assert any(a.startswith("Start with C1, C7 or C5:") and "this cannot rank them" in a
                for a in tie["actions"]), tie["actions"]
     print("ok coaching: page_text row for row on the demo and on a tie")
 
