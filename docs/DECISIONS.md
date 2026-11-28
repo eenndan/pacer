@@ -2734,7 +2734,7 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     the one condition where both gates are poor. The planted corner moved to C6 or C2: 59 ranked,
     1 false. Two corners planted: 60 ranked, 0 false. A pace trend across the session: 71 ranked,
     1 false.
-  - **The sizing rule** (review M2): measured on 569 ranked rows of all three batches, 263 of them
+  - **The sizing rule** (from the review): measured on 569 ranked rows of all three batches, 263 of them
     sized, printed minus true loss on the sized rows went from **+0.0125 s on average (max
     +0.084) to −0.0200 s (max +0.061)**: from over-stating to slightly under-stating. The first
     ranked corner is the truly worst on 346 of 404 days either way.

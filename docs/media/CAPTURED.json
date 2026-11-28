@@ -62,11 +62,11 @@
     },
     "hero.png": {
       "captured": "2026-11-28",
-      "commit": "33b9cf14",
+      "commit": "e544894a",
       "derived": null,
       "sha256": "f15c4448a8e0ff615ceefb4c05331372f4c15b0deea438b7afc212c7377ed4cf",
       "shot": "hero",
-      "source": "demo (pacer-demo)",
+      "source": "synthetic demo (pacer-demo)",
       "version": "0.30.0",
       "waiver": null
     },
@@ -95,11 +95,11 @@
     },
     "map.png": {
       "captured": "2026-11-28",
-      "commit": "33b9cf14",
+      "commit": "e544894a",
       "derived": null,
       "sha256": "9da927a62ffad6d7a520de87ea4c58b7716022782260b284e394ec3d157d4ae9",
       "shot": "map",
-      "source": "demo (pacer-demo)",
+      "source": "synthetic demo (pacer-demo)",
       "version": "0.30.0",
       "waiver": null
     },
@@ -115,7 +115,7 @@
     },
     "og.png": {
       "captured": "2026-11-28",
-      "commit": "33b9cf14",
+      "commit": "e544894a",
       "derived": null,
       "sha256": "52238749881de78a31c09e8159c310a39fa54aec9623466e8d632d3ad21dce23",
       "shot": "og",
