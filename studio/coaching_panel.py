@@ -1787,8 +1787,10 @@ class OpportunitiesPanel(QWidget):
     focus_show_requested = Signal()
 
     # A row's Compare: the corner's typical pass against the best lap's (a stats.TypicalPass), at
-    # the corner — CentralView.compare_at_corner. Never on the debrief (RUL-7: no lap-first
-    # buttons there), where the column stays hidden.
+    # the corner — CentralView.compare_at_corner. On the debrief too: RUL-7 keeps LAP-first
+    # buttons ("Export best lap", "Compare with your PB") off it, and this one is CORNER-first —
+    # it shows the loss the row names, at that corner (coordinator ruling, wave 27, to be recorded
+    # in the 0.30.0 DECISIONS section).
     compare_requested = Signal(object, str)   # (TypicalPass, the row's Time lost as printed)
 
     _COLUMNS = ["Corner", "Time lost", "Done it?", "How to find it", PHASE_HEADER, "", ""]
@@ -2251,15 +2253,15 @@ class OpportunitiesPanel(QWidget):
                 shown.add(col)
                 room -= self._col_px[col]
             # The Compare column only where a row's Compare cannot sit under its Jump (ActionCell):
-            # where some row is too short for two buttons (one-line rows, full-window). Never on the
-            # debrief (compare_requested). Stacked, a docked page keeps main's row heights exactly;
+            # where some row is too short for two buttons (one-line rows, full-window). The debrief
+            # too (compare_requested): its one-line rows take the column beside Jump.
+            # Stacked, a docked page keeps main's row heights exactly;
             # the column there took the demo's rows from 58 to 89 px at a 676 px page.
             # Where neither fits (rows too short to stack, no room for the column) the row keeps
             # its Jump alone, as on main: buttons under the hit floor (18 px measured) clip their
             # descenders, and the design system allows nothing clickable under it.
-            self._stack_ok = (_PANEL_COL_GO in shown and not self._debrief
-                              and self._stack_fits(room))
-            if (_PANEL_COL_GO in shown and not self._debrief and not self._stack_ok
+            self._stack_ok = _PANEL_COL_GO in shown and self._stack_fits(room)
+            if (_PANEL_COL_GO in shown and not self._stack_ok
                     and room - self._col_px[_PANEL_COL_CMP] >= REASON_MIN_PX):
                 shown.add(_PANEL_COL_CMP)
             for col in _OPTIONAL_COLS:
@@ -2331,9 +2333,9 @@ class OpportunitiesPanel(QWidget):
     def _sync_stacked(self) -> None:
         """Show each row's stacked Compare exactly while the Jump column is on screen, the Compare
         column is not, and every row is tall enough for both (`_stack_fits`, decided by the column
-        budget) — never on the debrief (RUL-7)."""
+        budget), on the debrief as on the docked page (``compare_requested``)."""
         t = self.table
-        stacked = (self._stack_ok and not self._debrief and not t.isColumnHidden(_PANEL_COL_GO)
+        stacked = (self._stack_ok and not t.isColumnHidden(_PANEL_COL_GO)
                    and t.isColumnHidden(_PANEL_COL_CMP))
         if stacked == self._stacked:
             return

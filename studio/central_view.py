@@ -2731,11 +2731,16 @@ class CentralView(QWidget):
 
     def _end_debrief(self, restore_tab: bool) -> None:
         """The page is ordinary again; `restore_tab` puts the lap panel back on the tab the view
-        opened on, unless the driver has already moved it."""
+        opened on, unless the driver has already moved it — or the debrief ranked a corner: then
+        the lap panel stays on Coaching, the page he was reading, docked. Esc used to drop him on
+        Laps, and a row's Compare (which leaves the debrief for the grid the same way) took the
+        reason that sent him there off the screen with it (wave 27). Still quiet: the remembered
+        tab stays his."""
+        ranked = bool(self.opportunities.shortlist_cids())
         self._debrief = False
         self._debrief_pending = False
         self.opportunities.set_debrief(False)
-        back = self._debrief_return_tab
+        back = None if ranked else self._debrief_return_tab
         if restore_tab and back is not None and back != 3 and self.tab_bar.currentIndex() == 3:
             self._quiet_tab(back)
 
