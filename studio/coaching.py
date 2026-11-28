@@ -1604,9 +1604,15 @@ def abstain_sentence(opp: Opportunity) -> str:
 
 def no_focus_sentence(opps: Opportunities) -> str:
     """What the page says where it would state a theme when NO corner is ranked and at least one
-    shown corner was held back only because its loss is inside the timing step — "" otherwise
-    (nothing level, or something ranked). A real answer, not an empty panel: nothing here separates
+    shown corner was held back only because its loss is inside the timing step, or a corner past
+    the step was held back as a one-off (`held_back_one_off`) — "" otherwise (something ranked, or
+    every row held back by its spread). A real answer, not an empty panel: nothing here separates
     the corners from the best lap, and it points at what this session can still measure."""
+    held = held_back_one_off(opps)
+    if held is not None:
+        return (f"No corner is ranked: C{held.cid}'s typical pass is {lost_text(held)} off your "
+                "best lap's, but no other lap has been as quick there, so there is no repeatable "
+                "target yet. Look at your consistency and your ideal lap instead.")
     if not _nothing_stands_out(opps):
         return ""
     return (f"No corner is ranked: each is within timing precision ({LOSS_STEP_S:.2f} s) of your "
@@ -1617,11 +1623,37 @@ def no_focus_sentence(opps: Opportunities) -> str:
 NOTHING_STANDS_OUT = f"no corner stands out {LOSS_BASELINE}"
 
 
+def held_back_one_off(opps: Opportunities) -> Opportunity | None:
+    """The biggest shown corner past the timing step that the second-witness gate held back
+    (ABSTAIN_ONE_OFF), when nothing shown is ranked — else None.
+
+    "No corner stands out" was false of it (0.29.0 QA, the habit-free demo circuit): the headline
+    said so while the top row read "C4 +0.22 s — Not ranked: no second lap has matched your best".
+    C4 does stand out against the best lap; what it lacks is a second lap there, and the headline,
+    the sentence under it, the report and the share card now say that instead."""
+    shown = shown_rows(opps) if opps.enough else []
+    if not shown or any(r.evidence.ranked for r in shown):
+        return None
+    held = [r for r in shown if r.evidence.abstain == ABSTAIN_ONE_OFF
+            and not loss_is_level(r.time_lost)]
+    return max(held, key=lambda r: r.time_lost, default=None)
+
+
+def held_back_headline(opp: Opportunity) -> str:
+    """The headline's words for `held_back_one_off`'s corner: "C4 +0.22 s: only your best lap was
+    that quick". Within `widest_headline`'s width at any corner number and loss, so no other page
+    moves: measured in the strip's font at a two-digit corner and the widest digits, 476 px against
+    the reserved 489 px ("…, but only your best lap…" was 496 px and would have widened it)."""
+    return f"C{opp.cid} {lost_text(opp)}: only your best lap was that quick"
+
+
 def _nothing_stands_out(opps: Opportunities) -> bool:
-    """Nothing shown is ranked and at least one shown row is held back only by the timing step."""
+    """Nothing shown is ranked, at least one shown row is held back only by the timing step, and no
+    corner past the step was held back as a one-off (`held_back_one_off`: that one stands out)."""
     shown = shown_rows(opps) if opps.enough else []
     kinds = {r.evidence.abstain for r in shown}
-    return bool(shown) and ABSTAIN_NONE not in kinds and ABSTAIN_LEVEL in kinds
+    return (bool(shown) and ABSTAIN_NONE not in kinds and ABSTAIN_LEVEL in kinds
+            and held_back_one_off(opps) is None)
 
 
 def reason_sentence(opp: Opportunity, unit: str | None = None, reach: bool = True) -> str:
@@ -2164,7 +2196,10 @@ def headline(opps: Opportunities) -> str:
     # 3.93 s on the Stats CORNERS table, and corner by corner run 1.3x to 2450x apart — not a
     # rounding question the reader can resolve by looking harder. The scope, measured: on D24 lap 6
     # a headline that named neither understated the lap's own +2.08 s as "0.21 s".
-    if not rows and _nothing_stands_out(opps):
+    held = held_back_one_off(opps) if not rows else None
+    if held is not None:
+        gains = held_back_headline(held)
+    elif not rows and _nothing_stands_out(opps):
         gains = NOTHING_STANDS_OUT
     elif not rows:
         gains = "no corner clears its own lap-to-lap spread"
