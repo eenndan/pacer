@@ -665,6 +665,12 @@ def brake_direction_line(d: BrakeDirection | None) -> str | None:
 # prints the same loss next to its "+0.32 s vs your ideal lap": two gaps with two baselines, and a
 # loss with no baseline beside one with a baseline read as a part bigger than its whole.
 LOSS_BASELINE = "vs your best lap"
+# The headline's baseline when a ranked row in its sum is measured to the second-quickest pass
+# (`Evidence.one_off_s`, #750 re-review B; coordinator's wording). Sized to the strip: at the worst
+# case (widest digits, 148 laps, top-3 form) it is 483.7 px against `widest_headline`'s reserved
+# 488.6 px, so no other page moves ("vs your best passes", 510.5 px, moved the docked lap column
+# from 498 to 520 px at 1280x800). tests/test_coaching.py measures it.
+SIZED_LOSS_BASELINE = "vs best passes"
 
 
 @dataclass(frozen=True)
@@ -2322,7 +2328,8 @@ def headline(opps: Opportunities) -> str:
         total = shown_total(rows)
         gains = (f"{total:.2f} s in your worst corner" if len(rows) == 1
                  else f"{total:.2f} s across your top {len(rows)} corners")
-        gains += f" {LOSS_BASELINE}"
+        sized = any(getattr(r.evidence, "one_off_s", 0.0) > 0.0 for r in rows)
+        gains += f" {SIZED_LOSS_BASELINE if sized else LOSS_BASELINE}"
     return f"{SCOPE_PREFIX} · {gains} ({clean_laps_phrase(opps.n_laps)})"
 
 

@@ -2190,6 +2190,34 @@ def test_a_sized_figure_is_labelled_against_the_second_quickest_pass():
     print("ok sized labels: card baseline and the Time-lost hover")
 
 
+def test_the_headline_says_best_passes_when_a_summed_row_is_sized():
+    """#750 re-review B (coordinator's ruling): the headline's total includes a row measured to the
+    second-quickest pass, so "vs your best lap" was untrue of it; it says "vs best passes" when
+    any ranked row in its sum is sized, "vs your best lap" when none is. The sized form fits the
+    width the strip reserves (`widest_headline`) in the strip's font at the worst case."""
+    from PySide6.QtGui import QFontMetricsF
+    _qapp()
+    corners, best = _corners(2), [10.0, 5.0]
+    times = [[10.0, 5.0], [10.30, 5.0]] + [[10.5, 5.25] for _ in range(6)]
+    sized = K.summarize(corners, list(range(len(times))), [sum(t) for t in times], times, best,
+                        sigmas_by_cid={1: 0.05, 2: 0.05}, **_levers(times, best, apex=95.0))
+    assert K.headline(sized) == ("Whole session · 0.45 s across your top 2 corners vs best "
+                                 "passes (median of 8 clean laps)"), K.headline(sized)
+    plain = _populated_opps()
+    assert K.headline(plain).endswith(" vs your best lap (median of 5 clean laps)"), K.headline(plain)
+    page = _full_window_page(sized)
+    label = page.summary_label
+    assert label.text() == K.headline(sized)
+    fm = QFontMetricsF(label.font())
+    d = max("0123456789", key=fm.horizontalAdvance)
+    widest = K.widest_headline(148).replace("0.00 s", f"{d}.{d}{d} s")
+    sized_widest = widest.replace(K.LOSS_BASELINE, K.SIZED_LOSS_BASELINE)
+    assert fm.horizontalAdvance(sized_widest) <= fm.horizontalAdvance(widest), (
+        fm.horizontalAdvance(sized_widest), fm.horizontalAdvance(widest))
+    print(f"ok sized headline: {fm.horizontalAdvance(sized_widest):.1f} px within the reserved "
+          f"{fm.horizontalAdvance(widest):.1f} px")
+
+
 def test_the_step_to_the_next_pass_is_decided_on_the_printed_figure():
     """#750 review, L3: a mutant comparing the UNROUNDED loss-to-next-pass with the step survived
     test_coaching. On the printed figure, as `loss_is_level` decides: 0.0649 prints 0.06 (a one-off),
