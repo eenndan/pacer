@@ -1106,6 +1106,85 @@ def previous_pb(index: dict, track: str | None, fingerprint_key: str | None = No
     return best_entry({"entries": others}, track)
 
 
+# THAN LAST HEAT (cool/quicker-than-last-heat). Between heats the second question is "was I
+# quicker than last time?", and the PB line answered only "than my best": a 12:00 heat 0.21 s
+# quicker than the 11:20 one read "0.13 s off your personal best" and nothing else. So the PB
+# sentence carries a second clause when the session that STARTED last before this one, at this
+# track, run this way round, holds a trustworthy best that is not the PB itself (the PB half
+# already names that one): the same best-lap-against-best-lap comparison, the same 0.07 s level
+# rule and the same trust as the PB comparison. "Previous" is by recording start
+# (`recorded_after`), never the last row opened: heats opened out of order are still ordered by
+# the clock they were driven on. Best laps only — the session-median comparison stays refused
+# (studio/docs/refused-2026-09.md §8).
+def previous_session(index: dict, track: str | None, fingerprint_key: str | None = None,
+                     date: str | None = None, start_ms: int | None = None,
+                     rotation: int | None = None) -> dict | None:
+    """The library ROW of the latest session at `track` recorded BEFORE this one (`date`,
+    `start_ms`, ``recorded_after``) whose best the PB comparison would admit (``_a_best_at``:
+    trustworthy, a best, this track), never this recording's own row (`fingerprint_key`) nor one
+    known to run the other way round (``other_way``). None when there is none, or when which one
+    came last cannot be told: two rows of its day, one with no start clock."""
+    if not track:
+        return None
+    rows = [e for e in index.get("entries", [])
+            if _a_best_at(e, track)
+            and not (fingerprint_key and e.get("fingerprint") == fingerprint_key)
+            and not other_way(e, rotation)
+            and recorded_after(date, start_ms, e.get("date"), e.get("start_ms"))]
+    if not rows:
+        return None
+    latest = max(rows, key=lambda e: (_iso_day(e.get("date")) or "", _start_ms(e) or 0))
+    day = _iso_day(latest.get("date"))
+    same = [e for e in rows if _iso_day(e.get("date")) == day]
+    if len(same) > 1 and any(_start_ms(e) is None for e in same):
+        return None
+    return latest
+
+
+def _with_previous(result: dict | None, index: dict, track: str | None,
+                   fingerprint_key: str | None, date: str | None, start_ms: int | None,
+                   rotation: int | None) -> dict | None:
+    """`result` (a ``pb_moment`` or ``pb_standing_for`` dict) with ``"previous"`` — the best,
+    day, clock and whether it is this session's day, of ``previous_session`` — when that session
+    is not the PB the sentence already quotes; `result` unchanged otherwise."""
+    if not result or result.get("kind") == "first":
+        return result
+    row = previous_session(index, track, fingerprint_key, date, start_ms, rotation)
+    if row is None:
+        return result
+    prior = result.get("prior")
+    if prior is not None and abs(float(row["best"]) - float(prior)) < 1e-9:
+        return result
+    mine, theirs = _iso_day(date), _iso_day(row.get("date"))
+    return {**result, "previous": {"best": float(row["best"]), "date": row.get("date"),
+                                   "start_ms": _start_ms(row),
+                                   "same_day": mine is not None and mine == theirs}}
+
+
+def previous_clause(result: dict, fmt_time) -> str:
+    """"0.21 s quicker than your 12:20 session (0:45.395)" / "… slower than …" / "level with your
+    12:20 session (0:45.395)" for a result carrying ``"previous"`` (``_with_previous``), else "".
+    The session is named by its start clock on this session's day, by its day otherwise."""
+    prev = result.get("previous")
+    if not prev:
+        return ""
+    clock = clock_hhmm(prev["start_ms"]) if prev.get("same_day") and prev.get("start_ms") else None
+    name = f"your {clock or _short_day(prev.get('date'))} session"
+    then = fmt_time(prev["best"])
+    gap = float(result["best"]) - float(prev["best"])
+    if within_timing_precision(gap):
+        return f"level with {name} ({then})"
+    return f"{abs(gap):.2f} s {'quicker' if gap < 0 else 'slower'} than {name} ({then})"
+
+
+def _and_previous(sentence: str, result: dict, fmt_time) -> str:
+    """`sentence` with ``previous_clause`` before its full stop, after " · "."""
+    clause = previous_clause(result, fmt_time)
+    if not clause:
+        return sentence
+    return f"{sentence.removesuffix('.')} · {clause}."
+
+
 def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | None,
                   degraded: bool = False, fingerprint_key: str | None = None,
                   date: str | None = None, start_ms: int | None = None,
@@ -1128,10 +1207,19 @@ def pb_moment_for(verified: bool, index: dict, track: str | None, best: float | 
     priors (see there too), and `rotation` which way round its laps ran (see there as well)."""
     if not verified or degraded:
         return None
-    return pb_moment(index, track, best, fingerprint_key, date, start_ms, rotation)
+    return _with_previous(pb_moment(index, track, best, fingerprint_key, date, start_ms,
+                                    rotation),
+                          index, track, fingerprint_key, date, start_ms, rotation)
 
 
 def pb_moment_text(moment: dict, fmt_time) -> tuple[str, str]:
+    """(title, body) for a ``pb_moment`` result (``_pb_moment_words``), the body carrying the
+    previous session's clause when there is one (``previous_clause``)."""
+    title, body = _pb_moment_words(moment, fmt_time)
+    return title, _and_previous(body, moment, fmt_time)
+
+
+def _pb_moment_words(moment: dict, fmt_time) -> tuple[str, str]:
     """(title, body) copy for a ``pb_moment`` result, formatting lap times through the injected
     `fmt_time` (studio._signal.fmt_time — kept out of this pacer-free module so it stays Qt/format-
     agnostic and testable). A "beat" leads with the celebration + the gap to the old PB — unless the
@@ -1215,11 +1303,19 @@ def pb_standing_for(verified: bool, index: dict, track: str | None, best: float 
     if prior is None or best < prior:
         return None
     way = _this_way(entries, track, rotation)
-    return {"kind": "behind", "track": track, "best": float(best), "prior": float(prior),
-            "gap": float(best) - float(prior), **way}
+    return _with_previous({"kind": "behind", "track": track, "best": float(best),
+                           "prior": float(prior), "gap": float(best) - float(prior), **way},
+                          index, track, fingerprint_key, date, start_ms, rotation)
 
 
 def pb_standing_text(standing: dict, fmt_time) -> str:
+    """The debrief's PB sentence (``_pb_standing_words``) with the previous session's clause
+    when there is one (``previous_clause``): the one function the card, the debrief and the
+    session notice all read it through."""
+    return _and_previous(_pb_standing_words(standing, fmt_time), standing, fmt_time)
+
+
+def _pb_standing_words(standing: dict, fmt_time) -> str:
     """The debrief's PB sentence for a ``pb_standing_for`` result — ``pb_moment_text``'s facts in
     one line, since the debrief replaces the card rather than repeating it. A best lap within timing
     precision of the PB, either side of it, is "level with your personal best there": one rule in
