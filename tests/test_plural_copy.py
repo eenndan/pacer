@@ -296,10 +296,6 @@ ALLOWED = {
         "`brake_directions` drops a corner under MIN_BRAKE_LAPS (3) laps",
     ("coaching", "theme_actions", "ev.n_laps", "laps"):
         "`lead` is ranked, so its evidence clears MIN_CORNER_LAPS (3)",
-    ("coaching", "theme_actions", "ev.n_laps", "laps have matched"):
-        "`lead` is ranked, so its evidence clears MIN_CORNER_LAPS (3)",
-    ("coaching", "theme_actions", "ev.reach_laps", "laps have matched"):
-        "`lead` is ranked, so it reached its target on MIN_REACH_LAPS (2) laps",
     ("coaching_panel", "_reach_tip", "of", "clean laps"):
         "the table is filled only when Opportunities.enough: `of` >= MIN_LAPS (3)",
     ("coaching_panel", "_reason_cell", "d.n_laps", "clean laps that"):
