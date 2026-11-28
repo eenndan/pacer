@@ -1810,59 +1810,119 @@ def test_async_load_settles_off_ui_thread():
     print("test_async_load_settles_off_ui_thread OK")
 
 
-def test_reentrant_load_applies_only_latest():
-    """C1 reentrancy/supersede: two quick _load calls in a row must apply ONLY the latest result
-    (the earlier worker's result is dropped by token), with no crash and a single coherent session.
-    Both _load calls target the same sample here; the token guard is what makes the second supersede
-    the first regardless of which worker finishes first."""
-    os.environ.setdefault("PACER_NO_MEDIA", "1")
-    from PySide6.QtWidgets import QMessageBox
+def _supersede_one_load(overlap):
+    """Open the bundled sample twice in a row, the second open landing at a FORCED point of the first
+    worker's life, and return what each load delivered (see test_reentrant_load_applies_only_latest).
 
+    `overlap` names that point. "in_read": the first worker is held at the top of its run() until
+    the second open has asked it to stop, so its read starts already cancelled and it MUST report
+    through `failed` (LoadCancelled). "returned": the first worker's run() has returned, its `loaded`
+    queued but not yet delivered, when the second open lands, so it reports through `loaded` with a
+    token that is stale by then. Threading events order the two threads; nothing waits on a clock."""
+    import threading
+
+    from studio import workers
     from studio.app import StudioWindow
-    orig_critical = QMessageBox.critical  # never block the headless suite on a load-failure dialog
-    QMessageBox.critical = staticmethod(lambda *a, **k: QMessageBox.Ok)
+    from studio.ingest import LoadCancelled
+    real_run = workers.SessionLoadWorker.run
+    release, returned = threading.Event(), threading.Event()
     w = StudioWindow([])  # welcome state, no in-flight load
-    try:
-        applied_tokens, delivered_tokens = [], []
-        _orig = w._on_session_loaded
+    held = w._load_token + 1  # the token the first _load below will carry
 
-        def _spy(token, paths, session):
-            # Record only tokens that pass the staleness guard (i.e. actually APPLIED), by replaying
-            # the guard before delegating — a stale (superseded) result must not be applied.
-            # delivered_tokens records EVERY completion, stale or not: it is what tells the wait
-            # below that both workers have reported in.
-            delivered_tokens.append(token)
-            if token == w._load_token:
-                applied_tokens.append(token)
-            _orig(token, paths, session)
-        w._on_session_loaded = _spy
+    def _run(worker):
+        if worker._token != held:
+            return real_run(worker)
+        if overlap == "in_read":
+            release.wait()  # until the superseding open has called cancel() on this worker
+        real_run(worker)
+        returned.set()
+    workers.SessionLoadWorker.run = _run
+    try:
+        delivered, applied, surfaced = [], [], []
+        orig_loaded, orig_failed = w._on_session_loaded, w._on_load_failed_async
+        # A delivery the window APPLIES ends in `loadFinished`, emitted inside the slot; a stale one
+        # returns before it. Observed, not replayed: a spy that re-ran the token check itself would
+        # stay green with the window's own check deleted.
+        delivering = [None]
+        w.loadFinished.connect(lambda: applied.append(delivering[0]))
+
+        def _loaded(token, paths, session):
+            delivered.append((token, "loaded"))
+            delivering[0] = token
+            orig_loaded(token, paths, session)
+
+        def _failed(token, paths, exc):
+            delivered.append((token, "failed", type(exc)))
+            delivering[0] = token
+            orig_failed(token, paths, exc)
+        # Instance attributes before _load: _start_load_worker connects whatever these name.
+        w._on_session_loaded, w._on_load_failed_async = _loaded, _failed
+        # A failure the window would SURFACE is recorded, not shown: `_on_load_failed` raises its
+        # box with exec(), a modal that would hold the headless suite (the QMessageBox.critical
+        # stub this test once carried no longer covers it).
+        w._on_load_failed = lambda paths, exc: surfaced.append(exc)
 
         w._load([_BUNDLED_SAMPLE])
         first_token = w._load_token
-        w._load([_BUNDLED_SAMPLE])  # supersede before the first worker finishes
+        assert first_token == held, (first_token, held)
+        if overlap == "returned":
+            # A plain blocking wait, NOT an event pump: pumping would deliver the first result while
+            # it is still current. The worker emits into the GUI thread's queue without needing it.
+            assert returned.wait(30), "the first load's read never returned"
+        w._load([_BUNDLED_SAMPLE])  # supersede it
         latest_token = w._load_token
         assert latest_token == first_token + 1, (first_token, latest_token)
+        release.set()
 
-        # Wait for BOTH completions to be DELIVERED, not for `w.view is not None`. The view appears
-        # the moment ANY result is applied, which is the LATEST one — so waiting on it can run the
-        # assertions before the superseded worker has reported at all, leaving the "a stale result
-        # is never applied" claim below untested (and blind to a regression that applies it late).
-        # The two loads only serialise while the first worker is still running: measured on this
-        # sample, ~1 run in 6 starts both concurrently, and then the completion order is a genuine
-        # race. Waiting on the deliveries themselves is the condition this test actually needs.
-        assert _pump_until(lambda: {first_token, latest_token} <= set(delivered_tokens)), \
-            f"both loads never settled: delivered={delivered_tokens}"
-        # Only the LATEST token may have been applied; the stale (first) worker's result was dropped
-        # by the token guard. No crash, one coherent session.
-        assert applied_tokens == [latest_token], applied_tokens
-        assert first_token not in applied_tokens, applied_tokens
-        assert getattr(w, "session", None) is not None
-        assert w.view is not None
-    finally:
-        w._drain_load_workers()  # drain BOTH workers (incl. the superseded one) before teardown
+        # EVERY started load reports exactly once, through `loaded` or `failed`: the second open's
+        # card, single load slot and spinner all depend on it. Wait on the deliveries themselves —
+        # a view appears the moment the LATEST result applies, before the stale one need report.
+        assert _pump_until(lambda: {first_token, latest_token} <= {d[0] for d in delivered}), \
+            f"both loads never settled: delivered={delivered}"
+        return w, first_token, latest_token, delivered, applied, surfaced, LoadCancelled
+    except BaseException:
+        release.set()
+        w._drain_load_workers()
         w.close()
         w.deleteLater()
-        QMessageBox.critical = orig_critical
+        raise
+    finally:
+        workers.SessionLoadWorker.run = real_run
+
+
+def test_reentrant_load_applies_only_latest():
+    """C1 reentrancy/supersede: two quick _load calls in a row must apply ONLY the latest result,
+    with no crash, no error box and a single coherent session — whichever way the first one ends.
+
+    A superseded load ends one of two ways, and the product allows both: its read is stopped
+    (S5a: `_load` cancels the running worker, which then reports `failed` with LoadCancelled), or it
+    had already finished its read when the cancel landed and reports a stale `loaded`. Which one
+    happens on its own is a race over a few milliseconds — on the 0.1 MB bundled sample the whole
+    read takes ~7 ms — and this test used to leave it to the clock, recording only `loaded`: on a
+    loaded CI VM the cancel landed inside the read and the test reported the correct outcome as
+    "both loads never settled: delivered=[2]". Each ending is now forced in turn (see
+    `_supersede_one_load`), and both token guards are under test, not whichever the clock picked."""
+    os.environ.setdefault("PACER_NO_MEDIA", "1")
+    for overlap, first_ends in (("in_read", "failed"), ("returned", "loaded")):
+        w, first, latest, delivered, applied, surfaced, LoadCancelled = _supersede_one_load(overlap)
+        try:
+            kinds = {d[0]: d[1:] for d in delivered}
+            assert len(delivered) == 2, (overlap, delivered)  # each load reported once, no more
+            # The first load ended the forced way: stopped mid-read, or finished before the cancel.
+            want_first = ("failed", LoadCancelled) if first_ends == "failed" else ("loaded",)
+            assert kinds[first] == want_first, (overlap, delivered)
+            assert kinds[latest] == ("loaded",), (overlap, delivered)
+            # Only the LATEST was applied; the stale result — a session or a cancellation — was
+            # dropped by its slot's token guard, so no error box either.
+            assert applied == [latest], (overlap, applied)
+            assert surfaced == [], (overlap, surfaced)
+            assert getattr(w, "session", None) is not None, overlap
+            assert w.view is not None, overlap
+            assert w._loading_token is None and w._pending_load is None, overlap
+        finally:
+            w._drain_load_workers()  # drain BOTH workers (incl. the superseded one) before teardown
+            w.close()
+            w.deleteLater()
     print("test_reentrant_load_applies_only_latest OK")
 
 
