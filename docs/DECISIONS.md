@@ -2681,9 +2681,9 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
 
 ## 33. Recorded at the 0.30.0 release, 2026-11-28
 
-- **v0.30.0 is a minor release**: 10 pull requests, #742 to #751, Wave 27 of the campaign section 8
-  records, its theme "the five minutes between heats", plus the release pull request's QA fixes
-  (#752).
+- **v0.30.0 is a minor release**: 11 pull requests, #742 to #751 and #753, Wave 27 of the campaign
+  section 8 records, its theme "the five minutes between heats", plus the release pull request's
+  QA fixes (#752).
   - #742: a level Coaching row says it is the typical pass that is level with the best lap; the
     Time lost header's hover says the number is that median, one lap's gap being on Corners.
   - #743: a first open with no debrief and no personal-best card states its PB standing in the
@@ -2703,6 +2703,8 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     schema field on every phase with rows; no timing leaf moved.
   - #751: with nothing ranked and a corner past the step held back as a one-off, the headline names
     it: "C3 +0.08 s: only your best lap was that quick".
+  - #753 (internal, test-only): `test_studio_features` forces both endings of a superseded load
+    instead of leaving them to the clock.
 - **The coordinator's amendment of an owner ruling: Coaching's reach gate.** RUL-8 builds
   COACHING-4, and its amendment (1) has a corner that only one lap (the best lap) reached at its
   target leave the ranking as a one-off. Under the owner's standing delegation ("continue and
@@ -2825,9 +2827,13 @@ write each decision down, and keep going." Each item below is recorded 2026-11-1
     still treats the other camera's recording as an earlier session.
   - **Full Keyboard Access on a real Mac** was not checked.
   - **The burned export Δ still has no non-hue cue** (refusal section 44).
-  - **CI machine stalls**: in two waves three different tests timed out once each and passed on
-    re-run (`test_export_polish` at import, `test_studio_features` "both loads never settled",
-    `test_export_pickers`); a reliability lane is planned.
+  - **One-off CI failures**: in two waves three different tests failed once each and passed on
+    re-run. The `test_studio_features` one ("both loads never settled") was a test-timing defect:
+    a cancelled superseded load reports through `failed` and the test listened only to `loaded`;
+    it reproduced 50 of 50 with the worker delayed 20 ms and was fixed test-only in #753.
+    `test_export_polish` (stalled at its own module import) and `test_export_pickers` (a 480 s
+    timeout, not investigated) remain unexplained, most likely CI machine stalls; a reliability
+    lane is still planned for them.
   - **`og.png` is unchanged**, so the social preview needs no re-upload for this release.
 - **Open for the owner** (carried from section 32, re-checked against 0.30.0's diff, which touches
   none of them): a brake point can move by several metres from a hole of two fixes at either rate
